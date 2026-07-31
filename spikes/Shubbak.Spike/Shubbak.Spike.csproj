@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>preview</LangVersion>
+    <RootNamespace>Shubbak.Spike</RootNamespace>
+    <AssemblyName>shubbak-spike</AssemblyName>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Shubbak targets Windows 10 1703+ (per-monitor DPI awareness V2). -->
+    <SupportedOSPlatformVersion>10.0.15063.0</SupportedOSPlatformVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SelfContained>true</SelfContained>
+
+    <!-- S3: NativeAOT viability. Publish with -p:PublishAot=true. -->
+    <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+
+    <!-- Invariant 3: hot paths must not be perturbed by tiered JIT warmup. -->
+    <TieredPGO>true</TieredPGO>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>
