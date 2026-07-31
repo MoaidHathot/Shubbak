@@ -1,0 +1,16 @@
+# Normalise to LF in the repository and in the working tree.
+# Shubbak is Windows-only, but LF keeps diffs clean and avoids ^M artefacts
+# leaking into source files regardless of anyone's core.autocrlf setting.
+* text=auto eol=lf
+
+# Windows-only scripts that some tooling insists on CRLF for.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdb binary
+*.exe binary
+*.dll binary
