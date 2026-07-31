@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/spikes/">
+    <Project Path="spikes/Shubbak.Spike/Shubbak.Spike.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -105,7 +105,7 @@ internal static class S2AnimationTiming
         {
             Console.WriteLine("WARNING: high-resolution waitable timer unavailable; " +
                               "falling back to timeBeginPeriod(1) + Sleep.");
-            PInvoke.timeBeginPeriod(1);
+            _ = PInvoke.timeBeginPeriod(1);
         }
 
         // Raise thread priority: the real animation thread will do the same.
@@ -167,7 +167,7 @@ internal static class S2AnimationTiming
 
         PInvoke.SetThreadPriority(PInvoke.GetCurrentThread(),
             THREAD_PRIORITY.THREAD_PRIORITY_NORMAL);
-        if (!highResTimer) PInvoke.timeEndPeriod(1);
+        if (!highResTimer) _ = PInvoke.timeEndPeriod(1);
 
         var gc = noGcPressure ? default : pressure.Stop();
         DestroyTestWindows();
