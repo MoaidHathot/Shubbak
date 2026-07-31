@@ -1,0 +1,25 @@
+<Project>
+
+  <PropertyGroup>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- We do not require an XML doc comment on every public member. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!--
+      Shubbak ships as NativeAOT (see docs/adr/0001-language-choice.md).
+      Enabling the analyzers everywhere - including in the pure library - keeps
+      the "zero IL#### warnings" property from ADR 0001 from silently regressing.
+    -->
+    <IsAotCompatible Condition="'$(IsTestProject)' != 'true'">true</IsAotCompatible>
+    <EnableAotAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+</Project>
