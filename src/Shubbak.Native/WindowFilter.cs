@@ -20,6 +20,7 @@ public enum ExclusionReason
     ShellWindow,
     NoTitle,
     ExcludedClass,
+    ExcludedProcess,
     Elevated,
 }
 
@@ -48,6 +49,7 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
         ExclusionReason.ShellWindow => "window belongs to the shell (desktop or Progman)",
         ExclusionReason.NoTitle => "window has no title",
         ExclusionReason.ExcludedClass => "window class is excluded by default",
+        ExclusionReason.ExcludedProcess => "window belongs to a shell process that is excluded by default",
         ExclusionReason.Elevated => "window belongs to an elevated process and Shubbak is not elevated",
         _ => "unknown",
     };
@@ -74,6 +76,37 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
 public static class WindowFilter
 {
     /// <summary>
+    /// Processes whose windows are never managed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Shell surfaces that present as ordinary top-level windows. The language and
+    /// keyboard-layout switcher raised by Win+Space is the clearest example: it is
+    /// hosted by <c>TextInputHost.exe</c>, has a title, is visible, is not a tool
+    /// window and passes the Alt+Tab test - so nothing short of knowing the process
+    /// excludes it, and tiling it makes the switcher unusable.
+    /// </para>
+    /// <para>
+    /// Matched on the executable name without extension, case-insensitively.
+    /// </para>
+    /// </remarks>
+    private static readonly HashSet<string> s_excludedProcesses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "TextInputHost",              // Win+Space language switcher, IME candidates, emoji panel
+        "ShellExperienceHost",        // action centre, some flyouts
+        "StartMenuExperienceHost",    // Start
+        "SearchHost",                 // Windows 11 search
+        "SearchApp",                  // Windows 10 search
+        "SearchUI",
+        "PeopleExperienceHost",
+        "LockApp",
+        "ShellHost",
+        "InputApp",
+        "Windows.Internal.ShellExperience",
+        "WindowsInternal.ComposableShell.Experiences.TextInput.InputApp",
+    };
+
+    /// <summary>
     /// Window classes excluded unconditionally.
     /// </summary>
     /// <remarks>
@@ -93,6 +126,14 @@ public static class WindowFilter
         "MultitaskingViewFrame",        // task view
         "ForegroundStaging",
         "XamlExplorerHostIslandWindow", // Alt+Tab and snap assist in Windows 11
+        "Windows.UI.Composition.DesktopWindowContentBridge", // XAML flyout host
+        "Windows.UI.Input.InputSite.WindowClass",
+        "IME",
+        "MSCTFIME UI",
+        "Default IME",
+        "TaskManagerWindow",
+        "OleMainThreadWndClass",
+        "CicMarshalWndClass",
         "TaskListThumbnailWnd",
         "TaskListOverlayWnd",
         "EdgeUiInputTopWndClass",
@@ -142,6 +183,11 @@ public static class WindowFilter
         if (s_excludedClasses.Contains(className))
             return ManageDecision.No(ExclusionReason.ExcludedClass);
 
+        // Checked after the cheap style and class tests, because it costs a process
+        // handle - but before the Alt+Tab test, which some of these windows pass.
+        if (IsExcludedProcess(handle))
+            return ManageDecision.No(ExclusionReason.ExcludedProcess);
+
         // Cloaking has to be read three ways, not as a boolean.
         //
         // The shell cloaks suspended UWP apps and everything on other Windows
@@ -178,6 +224,18 @@ public static class WindowFilter
             return ManageDecision.No(ExclusionReason.ZeroSized);
 
         return ManageDecision.Yes;
+    }
+
+    /// <summary>Whether the owning executable is one Shubbak never manages.</summary>
+    private static bool IsExcludedProcess(nint handle)
+    {
+        uint processId = Win32Window.GetProcessId(handle);
+        if (processId == 0) return false;
+
+        string? path = Win32Window.GetProcessPath(processId);
+        if (path is null) return false;
+
+        return s_excludedProcesses.Contains(Path.GetFileNameWithoutExtension(path));
     }
 
     /// <summary>

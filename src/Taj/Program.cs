@@ -110,7 +110,7 @@ internal static class Program
                 model.AddSource(source);
 
             var bar = new BarWindow(model, index);
-            var connection = new WmConnection(model);
+            var connection = new WmConnection(model, index);
 
             int monitorIndex = index;
 

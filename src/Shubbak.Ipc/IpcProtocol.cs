@@ -47,7 +47,9 @@ public sealed record WorkspaceInfo(
     bool HasWindows,
     string Monitor,
     string Layout,
-    int WindowCount);
+    int WindowCount,
+    int SortIndex,
+    int MonitorIndex);
 
 /// <summary>A monitor as described to clients.</summary>
 public sealed record MonitorInfoDto(

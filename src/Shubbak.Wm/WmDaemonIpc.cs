@@ -123,7 +123,7 @@ internal sealed partial class WmDaemonIpc
                     IpcJsonContext.Default.IReadOnlyListWindowInfo),
 
                 "workspaces" => JsonSerializer.Serialize(
-                    (IReadOnlyList<WorkspaceInfo>)[.. wm.Root.AllWorkspaces().Select(StateProjection.Describe)],
+                    (IReadOnlyList<WorkspaceInfo>)[.. StateProjection.DescribeWorkspaces(wm)],
                     IpcJsonContext.Default.IReadOnlyListWorkspaceInfo),
 
                 "monitors" => JsonSerializer.Serialize(

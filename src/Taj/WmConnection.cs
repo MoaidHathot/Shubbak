@@ -28,6 +28,7 @@ public sealed class WmConnection : IAsyncDisposable
 {
     private readonly BarModel _model;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly int _monitorIndex;
 
     private IpcClient? _client;
     private Task? _pump;
@@ -35,8 +36,22 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>Raised when the active workspace changes, so profiles can switch.</summary>
     public event Action<string>? ActiveWorkspaceChanged;
 
-    public WmConnection(BarModel model) =>
+    /// <param name="model">The bar model to feed.</param>
+    /// <param name="monitorIndex">
+    /// Which monitor this bar is on. Used to show only that monitor's workspaces,
+    /// which is what makes a per-monitor bar useful rather than several identical
+    /// copies of one list.
+    /// </param>
+    public WmConnection(BarModel model, int monitorIndex = -1)
+    {
         _model = model ?? throw new ArgumentNullException(nameof(model));
+        _monitorIndex = monitorIndex;
+    }
+
+    /// <summary>
+    /// Whether to show only this monitor's workspaces.
+    /// </summary>
+    public bool OwnMonitorOnly { get; set; } = true;
 
     /// <summary>True while connected to a window manager.</summary>
     public bool IsConnected { get; private set; }
@@ -198,7 +213,7 @@ public sealed class WmConnection : IAsyncDisposable
 
             if (state is null) return;
 
-            List<WorkspacesWidget.WorkspaceEntry> entries = [];
+            List<WorkspaceInfo> visible = [];
             string active = string.Empty;
 
             foreach (WorkspaceInfo workspace in state.Workspaces)
@@ -207,11 +222,29 @@ public sealed class WmConnection : IAsyncDisposable
                 // unchanged, but it is not something the user switches to.
                 if (workspace.Name.StartsWith("__", StringComparison.Ordinal)) continue;
 
-                entries.Add(new WorkspacesWidget.WorkspaceEntry(
-                    workspace.Name, workspace.DisplayName, workspace.Active, workspace.HasWindows));
+                // The active workspace of this monitor is what selects the bar
+                // profile, so it is noted before any filtering.
+                if (workspace.Active && workspace.MonitorIndex == _monitorIndex && active.Length == 0)
+                    active = workspace.Name;
 
-                if (workspace.Active && active.Length == 0) active = workspace.Name;
+                if (OwnMonitorOnly && _monitorIndex >= 0 && workspace.MonitorIndex != _monitorIndex)
+                    continue;
+
+                visible.Add(workspace);
             }
+
+            // Declared order, not creation order and not whichever monitor a
+            // workspace currently sits on. alt+1 is first because the user wrote it
+            // first, and that has to hold however the workspaces move around.
+            visible.Sort(static (a, b) => a.SortIndex != b.SortIndex
+                ? a.SortIndex.CompareTo(b.SortIndex)
+                : string.CompareOrdinal(a.Name, b.Name));
+
+            List<WorkspacesWidget.WorkspaceEntry> entries =
+            [
+                .. visible.Select(w => new WorkspacesWidget.WorkspaceEntry(
+                    w.Name, w.DisplayName, w.Active, w.HasWindows)),
+            ];
 
             _model.SetValue("workspaces", WorkspacesWidget.Encode(entries));
             _model.SetValue("window.title", state.FocusedWindow?.Title ?? string.Empty);
