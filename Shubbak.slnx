@@ -6,6 +6,7 @@
     <Project Path="src/Shubbak.Config/Shubbak.Config.csproj" />
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
     <Project Path="src/Shubbak.Native/Shubbak.Native.csproj" />
+    <Project Path="src/Shubbak.Wm/Shubbak.Wm.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
