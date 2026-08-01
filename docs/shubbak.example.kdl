@@ -1,0 +1,196 @@
+// Shubbak configuration.
+//
+// This file is the KDL translation of the author's GlazeWM config. Two things it
+// does that the original could not:
+//
+//   * `for-each "workspace"` generates the per-workspace bindings, replacing
+//     40 lines of near-identical entries with six.
+//   * every mistake is reported with a line, a column and a caret when the config
+//     loads, rather than silently doing nothing when a key is eventually pressed.
+
+general {
+    // Switch back to the previous workspace when re-focusing the active one.
+    toggle-workspace-on-refocus #true
+
+    focus-follows-cursor #false
+
+    // New windows start tiled.
+    initial-window-state "tiling"
+
+    cursor-jump {
+        enabled #true
+        // "monitor" jumps only when focus crosses displays; "window" jumps on
+        // every focus change.
+        trigger "monitor"
+    }
+
+    startup-command "shell-exec pwsh -WindowStyle Hidden -Command Restart-Taj"
+}
+
+gaps {
+    inner 6
+
+    outer {
+        // A tall top gap reserves room for the bar.
+        top 26
+        right 4
+        bottom 4
+        left 4
+    }
+}
+
+window-effects {
+    border #true
+    focused-colour "#8dbcff"
+    unfocused-colour "#a1a1a1"
+}
+
+// ---------------------------------------------------------------------------
+// Named app definitions. Rules reference these by name so they read
+// semantically instead of as a wall of inline regexes.
+// ---------------------------------------------------------------------------
+
+app "taj" {
+    process = "taj"
+}
+
+app "browser-picture-in-picture" {
+    // Raw strings (r"...") need no backslash escaping, which matters for regexes.
+    title regex=r"[Pp]icture.in.[Pp]icture"
+    class regex=r"Chrome_WidgetWin_1|MozillaDialogClass"
+}
+
+app "powertoys-accent" {
+    process = "PowerToys.PowerAccent"
+}
+
+app "lively-wallpaper" {
+    process = "Lively"
+    class regex=r"HwndWrapper.*"
+}
+
+app "powerpoint-slideshow" {
+    // Note: no slashes around the pattern. Shubbak warns if you add them, because
+    // they would be matched literally - the bug this config used to have.
+    title regex=r"[Pp]ower[Pp]oint [Ss]lide [Ss]how"
+}
+
+app "command-palette" {
+    title = "Command Palette"
+}
+
+rules {
+    rule "ignore chrome" {
+        match {
+            app "taj"
+            app "browser-picture-in-picture"
+            app "powertoys-accent"
+            app "lively-wallpaper"
+            app "powerpoint-slideshow"
+            app "command-palette"
+        }
+        do { ignore }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces. Declared workspaces persist when empty, so their bindings keep
+// working; workspaces created on demand are reaped once their last window goes.
+// ---------------------------------------------------------------------------
+
+workspaces {
+    workspace "1"  display-name="Firefox"      monitor=0
+    workspace "2"  display-name="Edge"         monitor=0
+    workspace "3"  display-name="Code"         monitor=0
+    workspace "4"
+    workspace "5"
+    workspace "6"
+    workspace "7"  monitor=0
+    workspace "8"  monitor=0
+    workspace "9"
+    workspace "0"  display-name="Docs"         monitor=0
+    workspace "-"  display-name="Chat"
+    workspace "\\" display-name="Presentation" monitor=0
+    workspace "="  display-name="Notes"
+    workspace "]"  display-name="Mail"         monitor=0
+    workspace "/"  display-name="Second"       monitor=1
+    workspace "`"  display-name="System"       monitor=1
+    workspace "'"  display-name="AI"           monitor=0
+    workspace ";"  display-name="Slides"       monitor=0
+    workspace "["  display-name="Recording"    monitor=2
+}
+
+// ---------------------------------------------------------------------------
+// Keybindings
+// ---------------------------------------------------------------------------
+
+keybindings {
+    // Focus.
+    bind "alt+h" { focus --direction left }
+    bind "alt+l" { focus --direction right }
+    bind "alt+y" { focus --recent-workspace }
+
+    // Move the focused window.
+    bind "alt+shift+h" { move --direction left }
+    bind "alt+shift+l" { move --direction right }
+    bind "alt+shift+k" { move --direction up }
+    bind "alt+shift+j" { move --direction down }
+
+    // Resize.
+    bind "alt+u" { resize --width -2% }
+    bind "alt+p" { resize --width +2% }
+    bind "alt+o" { resize --height +2% }
+    bind "alt+i" { resize --height -2% }
+
+    // Modes.
+    bind "alt+r"       { wm-enable-binding-mode --name resize }
+    bind "alt+shift+p" { wm-enable-binding-mode --name pause }
+
+    // Structure.
+    bind "alt+v"       { toggle-tiling-direction }
+    bind "alt+shift+n" { toggle-floating }
+    bind "alt+shift+m" { toggle-tiling }
+    bind "alt+x"       { toggle-fullscreen }
+    bind "alt+m"       { toggle-minimized }
+    bind "alt+shift+q" { close }
+
+    // Move the current workspace between monitors.
+    bind "alt+a" { move-workspace --direction left }
+    bind "alt+f" { move-workspace --direction right }
+    bind "alt+d" { move-workspace --direction up }
+    bind "alt+s" { move-workspace --direction down }
+
+    // Lifecycle.
+    bind "alt+shift+r" { wm-reload-config }
+    bind "alt+shift+w" { wm-redraw }
+    bind "alt+shift+e" { wm-exit }
+
+    // Per-workspace bindings, generated from the workspaces declared above.
+    // This one block replaces 40 hand-written lines, and can never drift out of
+    // sync with the workspace list.
+    for-each "workspace" {
+        bind "alt+{name}"       { focus --workspace "{name}" }
+        bind "alt+shift+{name}" { move --workspace "{name}"; focus --workspace "{name}" }
+    }
+}
+
+binding-modes {
+    // Resize with HJKL or the arrow keys until escape or enter.
+    mode "resize" {
+        bind "h"      { resize --width -2% }
+        bind "left"   { resize --width -2% }
+        bind "l"      { resize --width +2% }
+        bind "right"  { resize --width +2% }
+        bind "k"      { resize --height +2% }
+        bind "up"     { resize --height +2% }
+        bind "j"      { resize --height -2% }
+        bind "down"   { resize --height -2% }
+        bind "escape" { wm-disable-binding-mode }
+        bind "enter"  { wm-disable-binding-mode }
+    }
+
+    // Swallow everything except the key that resumes.
+    mode "pause" {
+        bind "alt+shift+p" { wm-disable-binding-mode }
+    }
+}
