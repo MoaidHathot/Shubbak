@@ -79,6 +79,19 @@ public sealed record ShubbakConfig
 
     public WindowEffects Effects { get; init; } = new();
 
+    /// <summary>
+    /// Whether to cloak rather than hide the windows of inactive workspaces.
+    /// </summary>
+    /// <remarks>
+    /// Cloaking is strongly preferred: a cloaked window is still visible to
+    /// <c>IsWindowVisible</c>, so if Shubbak exits or is killed the next run adopts
+    /// it and un-cloaks it. A hidden window is rejected by the filter as invisible
+    /// and cannot be recovered at all. The option exists only because the compositor
+    /// is unavailable in some remote sessions, and because an individual application
+    /// may misbehave - in which case a config switch beats a rebuild.
+    /// </remarks>
+    public bool UseCloaking { get; init; } = true;
+
     /// <summary>Minimum level written to the log sinks.</summary>
     public Core.Diagnostics.LogLevel LogLevel { get; init; } = Core.Diagnostics.LogLevel.Information;
 

@@ -119,6 +119,7 @@ public sealed class ConfigLoader
             CursorJumpOnMonitorFocus = CursorJump(node, "monitor"),
             CursorJumpOnWindowFocus = CursorJump(node, "window"),
             InitialWindowState = InitialState(node, config.InitialWindowState),
+            UseCloaking = HideMethod(node, config.UseCloaking),
             DefaultLayout = Text(node, "default-layout", config.DefaultLayout),
             StartupCommands = startup,
         };
@@ -150,6 +151,35 @@ public sealed class ConfigLoader
                     $"Unknown initial window state '{text}'.",
                     SpanOf(node, "initial-window-state"),
                     "Use 'tiling' or 'floating'."));
+                return fallback;
+        }
+    }
+
+    /// <summary>
+    /// Reads <c>hide-method</c>: <c>"cloak"</c> or <c>"hide"</c>.
+    /// </summary>
+    /// <remarks>
+    /// An unrecognised value is an error rather than a silent fallback, because
+    /// getting this wrong has a severe consequence - with <c>hide</c>, a crash leaves
+    /// windows unreachable - and a typo should not quietly select it.
+    /// </remarks>
+    private bool HideMethod(KdlNode node, bool fallback)
+    {
+        string? text = Text(node, "hide-method", null);
+        if (text is null) return fallback;
+
+        switch (text.ToLowerInvariant())
+        {
+            case "cloak": return true;
+            case "hide": return false;
+
+            default:
+                Report(Diagnostic.Error(
+                    "SHB0423",
+                    $"Unknown hide method '{text}'.",
+                    SpanOf(node, "hide-method"),
+                    "Use \"cloak\" (recommended) or \"hide\"."));
+
                 return fallback;
         }
     }
