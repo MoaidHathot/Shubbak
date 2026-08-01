@@ -1,0 +1,99 @@
+// CsWin32 manifest for the Taj bar.
+//
+// The renderer is GDI: a bar draws filled rectangles, borders and text, and GDI does
+// all three with no COM interop. The ITajRenderer seam means Direct2D can replace it
+// later without touching anything above.
+
+// --- window -------------------------------------------------------------------
+RegisterClassEx
+WNDCLASSEXW
+CreateWindowEx
+DestroyWindow
+DefWindowProc
+ShowWindow
+SHOW_WINDOW_CMD
+SetWindowPos
+SET_WINDOW_POS_FLAGS
+WINDOW_STYLE
+WINDOW_EX_STYLE
+GetClientRect
+InvalidateRect
+UpdateWindow
+GetModuleHandle
+PostQuitMessage
+DestroyIcon
+
+// --- message loop --------------------------------------------------------------
+GetMessage
+PeekMessage
+PEEK_MESSAGE_REMOVE_TYPE
+TranslateMessage
+DispatchMessage
+PostThreadMessage
+GetCurrentThreadId
+WM_QUIT
+WM_PAINT
+WM_DESTROY
+WM_CLOSE
+WM_LBUTTONDOWN
+WM_RBUTTONDOWN
+WM_MOUSEWHEEL
+WM_MOUSEMOVE
+WM_MOUSELEAVE
+WM_DISPLAYCHANGE
+WM_DPICHANGED
+WM_APP
+TrackMouseEvent
+TRACKMOUSEEVENT
+TRACKMOUSEEVENT_FLAGS
+
+// --- painting ------------------------------------------------------------------
+BeginPaint
+EndPaint
+PAINTSTRUCT
+CreateCompatibleDC
+CreateCompatibleBitmap
+SelectObject
+DeleteObject
+DeleteDC
+BitBlt
+ROP_CODE
+CreateSolidBrush
+FillRect
+RoundRect
+Rectangle
+CreatePen
+PEN_STYLE
+SetBkMode
+BACKGROUND_MODE
+SetTextColor
+DrawText
+DRAW_TEXT_FORMAT
+CreateFont
+FONT_WEIGHT
+FONT_CHARSET
+FONT_OUTPUT_PRECISION
+FONT_CLIP_PRECISION
+FONT_QUALITY
+GetTextExtentPoint32W
+GetDC
+ReleaseDC
+SelectClipRgn
+CreateRectRgn
+SetStretchBltMode
+GetStockObject
+GET_STOCK_OBJECT_FLAGS
+
+// --- monitors and DPI -----------------------------------------------------------
+EnumDisplayMonitors
+GetMonitorInfo
+MONITORINFOEXW
+SetProcessDpiAwarenessContext
+DPI_AWARENESS_CONTEXT
+GetDpiForWindow
+
+// --- appbar reservation ----------------------------------------------------------
+SHAppBarMessage
+APPBARDATA
+DwmSetWindowAttribute
+DWMWINDOWATTRIBUTE

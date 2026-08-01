@@ -222,3 +222,66 @@ binding-modes {
         bind "alt+shift+p" { wm-disable-binding-mode }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Taj - the bar. Same file, same parser, same diagnostics as everything above.
+//
+// Widgets bind to sources with {{ name }} templates and re-render only when a
+// source they use actually changes, so an idle desktop does not repaint.
+// ---------------------------------------------------------------------------
+
+bar {
+    // Sources produce the values widgets display. clock and date exist by
+    // default; declaring one here overrides or adds to them.
+    //
+    // The interval is how often the value is *checked*, not how often the bar
+    // redraws - an unchanged value is suppressed. So a clock showing seconds can
+    // be polled at 200ms for a prompt tick without causing five redraws a second.
+    source "clock"   kind="time" format="HH:mm:ss" interval=200
+    source "date"    kind="time" format="ddd d MMM" interval=30000
+
+    // Any program that writes lines to stdout can drive a widget. This is the
+    // extension point that means Taj never has to grow a widget for everything.
+    // source "weather" kind="command" command="pwsh -NoProfile -File weather.ps1"
+
+    profile "default" {
+        height 26
+        background "#1e1e2e"
+        foreground "#cdd6f4"
+        font "Segoe UI"
+        font-size 12
+
+        // Zones are just flex containers. Three is a convention, not a limit.
+        zone "left" justify="start" gap=4 {
+            workspaces active-background="#8dbcff" active-colour="#1e1e2e"
+        }
+
+        zone "centre" justify="center" grow=1 {
+            text template="{{ window.title | truncate:90 }}"
+        }
+
+        zone "right" justify="end" gap=10 {
+            text id="mode"   template="{{ binding_mode }}" colour="#f9e2af"
+            text id="layout" template="{{ layout }}"       colour="#7f849c"
+            text id="date"   template="{{ date }}"
+            text id="clock"  template="{{ clock }}"
+        }
+    }
+
+    // A slimmer, quieter bar for presenting. xtends inherits everything not
+    // overridden, so a variant is a few lines rather than a duplicate.
+    profile "presentation" extends="default" {
+        height 20
+
+        zone "left" justify="start" gap=4 {
+            workspaces active-background="#8dbcff" active-colour="#1e1e2e"
+        }
+
+        zone "right" justify="end" gap=10 {
+            text id="clock" template="{{ clock }}"
+        }
+    }
+
+    // First matching rule wins. The Presentation workspace gets the slim bar.
+    rule use="presentation" workspace="\\"
+}
