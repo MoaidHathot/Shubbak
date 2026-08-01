@@ -45,6 +45,9 @@ public sealed class WmDaemon : IDisposable
     /// <summary>Window geometry captured when a mouse drag started.</summary>
     private readonly Dictionary<nint, Rect> _dragOrigin = [];
 
+    /// <summary>The window currently wearing the focused border.</summary>
+    private WindowNode? _borderedWindow;
+
     private WinEventSource? _winEvents;
     private KeyboardSource? _keyboard;
 
@@ -59,6 +62,7 @@ public sealed class WmDaemon : IDisposable
     private bool _restoring;
 
     private long _lastSessionSaveTicks;
+    private long _lastMonitorSyncTicks;
 
     /// <summary>
     /// Whether the log level came from the command line, and so must not be
@@ -197,6 +201,7 @@ public sealed class WmDaemon : IDisposable
 
             if (_animation.IsAnimating) AdvanceAnimation(deltaMs);
 
+            MaybeSyncMonitors(now);
             MaybeSaveSession(now);
         }
         catch (Exception ex)
@@ -516,6 +521,8 @@ public sealed class WmDaemon : IDisposable
         _ignored.Remove(handle);
 
         if (!_managed.Remove(handle, out WindowNode? window)) return;
+
+        if (ReferenceEquals(_borderedWindow, window)) _borderedWindow = null;
 
         _committer.Forget(handle);
         _animation.Remove(window.Handle);
@@ -962,6 +969,13 @@ public sealed class WmDaemon : IDisposable
                 continue;
             }
 
+            // Visibility is applied here, separately from geometry, because an
+            // animated window never reaches Commit - the animation engine drives it
+            // frame by frame instead. Leaving the reveal to Commit meant a window
+            // whose position changed was animated into place while still concealed,
+            // so a workspace that had been switched away from came back empty.
+            _committer.Reveal(handle);
+
             // Where the window is now: mid-flight position if it is already moving,
             // otherwise its real position on screen.
             Rect current = _animation.TryGetCurrent(placement.Window.Handle, out Rect inFlight)
@@ -972,8 +986,7 @@ public sealed class WmDaemon : IDisposable
 
             if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
             {
-                // Animated: the tick loop will drive it. Visibility still has to be
-                // applied now, which Commit does for the placements it is given.
+                // Animated: the tick loop drives the geometry from here.
                 continue;
             }
 
@@ -996,6 +1009,75 @@ public sealed class WmDaemon : IDisposable
         {
             WindowActions.Focus((nint)focused.Handle);
         }
+
+        ApplyFocusBorder();
+    }
+
+    /// <summary>
+    /// Periodically re-reads the monitor layout.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The work area is not static. Taj reserves its strip through the shell's appbar
+    /// API, and if the bar starts after the window manager - which it does, since the
+    /// window manager launches it - the work area shrinks <i>after</i> the initial
+    /// read. Without this, windows are tiled underneath the bar until something else
+    /// happens to trigger a relayout.
+    /// </para>
+    /// <para>
+    /// The same path covers everything else that moves the work area: the taskbar
+    /// being resized or set to auto-hide, a resolution change, DPI changes, and
+    /// monitors being plugged or unplugged.
+    /// </para>
+    /// <para>
+    /// Polled rather than driven by <c>WM_SETTINGCHANGE</c> because the daemon has no
+    /// window to receive it, and enumerating a handful of monitors twice a second is
+    /// far cheaper than creating and pumping one just for this.
+    /// </para>
+    /// </remarks>
+    private void MaybeSyncMonitors(long now)
+    {
+        const double IntervalMs = 2_000;
+
+        if (_lastMonitorSyncTicks != 0 &&
+            (now - _lastMonitorSyncTicks) * 1000.0 / Stopwatch.Frequency < IntervalMs)
+        {
+            return;
+        }
+
+        _lastMonitorSyncTicks = now;
+
+        if (MonitorLayoutChanged()) SyncMonitors();
+    }
+
+    /// <summary>
+    /// Whether the monitor layout differs from what the tree records.
+    /// </summary>
+    /// <remarks>
+    /// Checked before syncing because <see cref="SyncMonitors"/> publishes events and
+    /// marks the layout dirty, and doing that twice a second regardless would keep
+    /// the window manager permanently busy on an idle desktop.
+    /// </remarks>
+    private bool MonitorLayoutChanged()
+    {
+        IReadOnlyList<MonitorInfo> current = MonitorSource.Enumerate();
+
+        if (current.Count != _wm.Root.Monitors.Count) return true;
+
+        foreach (MonitorInfo info in current)
+        {
+            MonitorNode? existing = _wm.Root.FindMonitor(info.DeviceId);
+
+            if (existing is null ||
+                existing.Bounds != info.Bounds ||
+                existing.WorkArea != info.WorkArea ||
+                existing.Dpi != info.Dpi)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1044,6 +1126,102 @@ public sealed class WmDaemon : IDisposable
         _committer.CommitFrame(_frameScratch.AsSpan(0, count));
     }
 
+    /// <summary>
+    /// Marks the focused window with a coloured border.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the two windows whose state changed are touched, not every managed
+    /// window. Re-applying a border that is already correct is a compositor round
+    /// trip per window per focus change, and with a dozen windows open that is
+    /// noticeable.
+    /// </para>
+    /// <para>
+    /// When no unfocused colour is configured, unfocused windows have their border
+    /// cleared rather than being given one - a border on everything is visual noise
+    /// and defeats the purpose of marking the focused window at all.
+    /// </para>
+    /// </remarks>
+    private void ApplyFocusBorder()
+    {
+        if (!_config.Effects.Enabled) return;
+
+        WindowNode? focused = _wm.FocusedWindow;
+        if (ReferenceEquals(focused, _borderedWindow)) return;
+
+        if (_borderedWindow is { } previous && Win32Window.Exists((nint)previous.Handle))
+            ApplyBorder(previous, _config.Effects.UnfocusedColour);
+
+        if (focused is not null) ApplyBorder(focused, _config.Effects.FocusedColour);
+
+        _borderedWindow = focused;
+    }
+
+    private static void ApplyBorder(WindowNode window, string? colour)
+    {
+        nint handle = (nint)window.Handle;
+
+        if (colour is null || !TryParseColour(colour, out byte r, out byte g, out byte b))
+        {
+            WindowActions.ClearBorderColour(handle);
+            return;
+        }
+
+        WindowActions.SetBorderColour(handle, r, g, b);
+    }
+
+    /// <summary>Parses <c>#RGB</c> or <c>#RRGGBB</c>.</summary>
+    private static bool TryParseColour(string text, out byte r, out byte g, out byte b)
+    {
+        r = g = b = 0;
+
+        ReadOnlySpan<char> span = text.AsSpan().Trim();
+        if (span.Length > 0 && span[0] == '#') span = span[1..];
+
+        switch (span.Length)
+        {
+            case 3:
+                if (!Nibble(span[0], out int sr) || !Nibble(span[1], out int sg) || !Nibble(span[2], out int sb))
+                    return false;
+
+                // #abc means #aabbcc.
+                r = (byte)(sr * 17);
+                g = (byte)(sg * 17);
+                b = (byte)(sb * 17);
+                return true;
+
+            case 6 or 8:
+                return Byte(span[0], span[1], out r)
+                    && Byte(span[2], span[3], out g)
+                    && Byte(span[4], span[5], out b);
+
+            default:
+                return false;
+        }
+
+        static bool Nibble(char c, out int value)
+        {
+            value = c switch
+            {
+                >= '0' and <= '9' => c - '0',
+                >= 'a' and <= 'f' => c - 'a' + 10,
+                >= 'A' and <= 'F' => c - 'A' + 10,
+                _ => -1,
+            };
+
+            return value >= 0;
+        }
+
+        static bool Byte(char high, char low, out byte value)
+        {
+            value = 0;
+            if (!Nibble(high, out int h) || !Nibble(low, out int l)) return false;
+
+            value = (byte)((h << 4) | l);
+            return true;
+        }
+    }
+
     // ---- monitors ----------------------------------------------------------
 
     private void SyncMonitors()
@@ -1078,12 +1256,18 @@ public sealed class WmDaemon : IDisposable
         }
 
         CreateConfiguredWorkspaces();
+
+        // The work area may have shrunk - a bar appearing, the taskbar moving - so
+        // everything has to be re-placed against the new bounds.
+        _layoutDirty = true;
     }
 
     private void CreateConfiguredWorkspaces()
     {
-        foreach (WorkspaceConfig declared in _config.Workspaces)
+        for (int index = 0; index < _config.Workspaces.Count; index++)
         {
+            WorkspaceConfig declared = _config.Workspaces[index];
+
             if (_wm.Root.FindWorkspace(declared.Name) is not null) continue;
 
             ILayout? layout = declared.Layout is not null &&
@@ -1096,6 +1280,10 @@ public sealed class WmDaemon : IDisposable
                 DisplayName = declared.DisplayName,
                 PreferredMonitorIndex = declared.BindToMonitor,
                 IsTransient = false,
+
+                // Declaration order, so the bar shows workspaces in the order the
+                // user thinks in rather than the order they happened to be created.
+                SortIndex = index,
             };
 
             _wm.AddWorkspace(workspace);

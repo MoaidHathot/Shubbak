@@ -39,6 +39,17 @@ public sealed class WorkspaceNode : ContainerNode
     /// <summary>Human-facing label for the bar; falls back to <see cref="Name"/>.</summary>
     public string? DisplayName { get; set; }
 
+    /// <summary>
+    /// Position in the declared order, used to sort the bar.
+    /// </summary>
+    /// <remarks>
+    /// Config order is the order the user thinks in - alt+1 first, then alt+2 - and
+    /// it must not depend on which workspace happened to be created first or which
+    /// monitor a workspace currently sits on. Workspaces created on demand sort after
+    /// declared ones, which is where a user expects something they never named.
+    /// </remarks>
+    public int SortIndex { get; init; } = int.MaxValue;
+
     /// <summary>What the bar should render.</summary>
     public string Label => DisplayName ?? Name;
 

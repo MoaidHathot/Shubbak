@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -7,7 +7,13 @@
     <RootNamespace>Taj</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!--
+      Globalization is on: timezone identifiers need it. On Windows 10 and later
+      .NET uses the operating system's ICU rather than embedding its own, so the
+      cost is a few hundred kilobytes rather than the tens of megabytes that made
+      invariant mode attractive in the first place.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
   </PropertyGroup>

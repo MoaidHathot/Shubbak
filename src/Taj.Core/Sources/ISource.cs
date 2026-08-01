@@ -129,6 +129,100 @@ public sealed class IntervalSource : SourceBase
 }
 
 /// <summary>
+/// A clock, optionally in another timezone.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Split out from the general interval source because a second clock showing a
+/// colleague's or a datacentre's local time is one of the most common things anyone
+/// puts on a bar, and expressing it as "run a script every second" would be a poor
+/// answer to something so ordinary.
+/// </para>
+/// <para>
+/// The interval is how often the value is <i>checked</i>, not how often the bar
+/// redraws - <see cref="SourceBase.Publish"/> suppresses unchanged values, so a clock
+/// showing minutes polled twice a second still causes one redraw a minute.
+/// </para>
+/// </remarks>
+public sealed class ClockSource : SourceBase
+{
+    private readonly string _format;
+    private readonly TimeZoneInfo? _timeZone;
+    private readonly TimeSpan _interval;
+
+    private Timer? _timer;
+
+    /// <param name="name">Name templates refer to.</param>
+    /// <param name="format">A .NET date and time format string.</param>
+    /// <param name="interval">How often to re-evaluate.</param>
+    /// <param name="timeZoneId">
+    /// A Windows or IANA timezone identifier, or null for local time. Both are
+    /// accepted because people copy identifiers from wherever they find them, and
+    /// "America/Los_Angeles" failing on Windows while "Pacific Standard Time" works
+    /// is an unhelpful distinction to impose.
+    /// </param>
+    public ClockSource(string name, string format, TimeSpan interval, string? timeZoneId = null)
+        : base(name)
+    {
+        _format = string.IsNullOrWhiteSpace(format) ? "HH:mm" : format;
+        _interval = interval < TimeSpan.FromMilliseconds(100) ? TimeSpan.FromMilliseconds(100) : interval;
+        _timeZone = ResolveTimeZone(timeZoneId, name);
+    }
+
+    public override void Start()
+    {
+        Tick(null);
+        _timer = new Timer(Tick, null, _interval, _interval);
+    }
+
+    private void Tick(object? _)
+    {
+        try
+        {
+            DateTimeOffset now = _timeZone is null
+                ? DateTimeOffset.Now
+                : TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, _timeZone);
+
+            Publish(now.ToString(_format, System.Globalization.CultureInfo.InvariantCulture));
+        }
+        catch (FormatException ex)
+        {
+            Log.Error(LogCategory.Config, $"clock '{Name}' has an invalid format '{_format}'", ex);
+            Publish("!");
+        }
+    }
+
+    private static TimeZoneInfo? ResolveTimeZone(string? id, string sourceName)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById(id);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+        }
+        catch (InvalidTimeZoneException)
+        {
+        }
+
+        // Falling back to local time keeps the widget showing something useful,
+        // which beats a blank space the user has to investigate.
+        Log.Warn(LogCategory.Config,
+            $"clock '{sourceName}': unknown timezone '{id}'; using local time");
+
+        return null;
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _timer?.Dispose();
+        base.Dispose(disposing);
+    }
+}
+
+/// <summary>
 /// A value set from outside, typically by the window manager event stream.
 /// </summary>
 public sealed class PushSource : SourceBase

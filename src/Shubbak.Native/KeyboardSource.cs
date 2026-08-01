@@ -71,6 +71,15 @@ public sealed class KeyboardSource : IDisposable
     private long _read;
     private long _dropped;
 
+    /// <summary>
+    /// Virtual keys whose press was swallowed, indexed by code.
+    /// </summary>
+    /// <remarks>
+    /// A fixed 256-entry array so the hot path neither allocates nor hashes. Written
+    /// only from the hook thread, so no synchronisation is needed.
+    /// </remarks>
+    private readonly bool[] _swallowed = new bool[256];
+
     private UnhookWindowsHookExSafeHandle? _hook;
     private BindingProbe? _probe;
     private volatile bool _suspended;
@@ -162,37 +171,88 @@ public sealed class KeyboardSource : IDisposable
 
         uint message = (uint)wParam.Value;
         bool isKeyDown = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
+        var virtualKey = (ushort)info->vkCode;
 
-        // GetKeyState is a cheap read of thread-local state, not a system call that
-        // can block, so it is safe here. GetAsyncKeyState would not be: it can
-        // contend with the raw input thread.
-        KeyModifiers modifiers = KeyModifiers.None;
-        if ((PInvoke.GetKeyState((int)VIRTUAL_KEY.VK_MENU) & 0x8000) != 0) modifiers |= KeyModifiers.Alt;
-        if ((PInvoke.GetKeyState((int)VIRTUAL_KEY.VK_CONTROL) & 0x8000) != 0) modifiers |= KeyModifiers.Control;
-        if ((PInvoke.GetKeyState((int)VIRTUAL_KEY.VK_SHIFT) & 0x8000) != 0) modifiers |= KeyModifiers.Shift;
-        if ((PInvoke.GetKeyState((int)VIRTUAL_KEY.VK_LWIN) & 0x8000) != 0 ||
-            (PInvoke.GetKeyState((int)VIRTUAL_KEY.VK_RWIN) & 0x8000) != 0) modifiers |= KeyModifiers.Windows;
+        KeyModifiers modifiers = ReadModifiers();
+
+        // A key-up must be swallowed if its key-down was, or the application is left
+        // believing the key is still held. Tracked rather than re-evaluated, because
+        // the modifiers may have been released between the two edges - which would
+        // make the combination look unbound on the way up.
+        if (!isKeyDown)
+        {
+            if (source.WasSwallowed(virtualKey))
+            {
+                source.ClearSwallowed(virtualKey);
+                return new LRESULT(1);
+            }
+
+            return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+        }
 
         var key = new KeyEvent(
-            (ushort)info->vkCode,
+            virtualKey,
             modifiers,
             isKeyDown,
             (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0);
 
-        bool bound = source._probe is { } probe && probe(key.VirtualKey, modifiers, isKeyDown);
+        bool bound = source._probe is { } probe && probe(virtualKey, modifiers, true);
 
         if (bound)
         {
             source.Enqueue(in key);
+            source.MarkSwallowed(virtualKey);
 
-            // Swallow the keystroke so the focused application never sees it.
-            // Both edges must be swallowed: passing the key-up through leaves
-            // applications with a stuck modifier.
+            // Swallow, so the focused application never sees the keystroke.
             return new LRESULT(1);
         }
 
         return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
     }
+
+    /// <summary>
+    /// Reads which modifiers are physically held.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>GetAsyncKeyState</c>, not <c>GetKeyState</c>. The latter reports the state
+    /// as of the last message the <i>calling thread</i> retrieved, and a low-level
+    /// hook thread never retrieves the keystrokes it is inspecting - they are
+    /// delivered to whichever application has focus. Its answer is therefore stale
+    /// whenever focus has recently moved.
+    /// </para>
+    /// <para>
+    /// The symptom is precise and maddening: after interacting with something
+    /// Shubbak does not manage - the Start menu, a system flyout - the first
+    /// modified keystroke reports no modifiers, so it matches no binding and is
+    /// passed through. Press it a second time and it works.
+    /// </para>
+    /// <para>
+    /// Still allocation-free and still microseconds: this is four reads of a state
+    /// table, not a system call that can block.
+    /// </para>
+    /// </remarks>
+    private static KeyModifiers ReadModifiers()
+    {
+        KeyModifiers modifiers = KeyModifiers.None;
+
+        if (IsHeld(VIRTUAL_KEY.VK_MENU)) modifiers |= KeyModifiers.Alt;
+        if (IsHeld(VIRTUAL_KEY.VK_CONTROL)) modifiers |= KeyModifiers.Control;
+        if (IsHeld(VIRTUAL_KEY.VK_SHIFT)) modifiers |= KeyModifiers.Shift;
+        if (IsHeld(VIRTUAL_KEY.VK_LWIN) || IsHeld(VIRTUAL_KEY.VK_RWIN)) modifiers |= KeyModifiers.Windows;
+
+        return modifiers;
+    }
+
+    private static bool IsHeld(VIRTUAL_KEY key) =>
+        (PInvoke.GetAsyncKeyState((int)key) & 0x8000) != 0;
+
+    /// <summary>Records that a key's press was swallowed, so its release is too.</summary>
+    private void MarkSwallowed(ushort virtualKey) => _swallowed[virtualKey] = true;
+
+    private bool WasSwallowed(ushort virtualKey) => _swallowed[virtualKey];
+
+    private void ClearSwallowed(ushort virtualKey) => _swallowed[virtualKey] = false;
 
     /// <summary>Single-producer enqueue. Wait-free and allocation-free.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

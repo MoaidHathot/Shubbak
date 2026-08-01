@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+    <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

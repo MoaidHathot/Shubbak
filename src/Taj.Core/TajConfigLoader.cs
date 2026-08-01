@@ -1,12 +1,11 @@
 using Shubbak.Config;
 using Shubbak.Config.Kdl;
 using Shubbak.Core.Diagnostics;
-using Taj.Core;
 using Taj.Core.Layout;
 using Taj.Core.Sources;
 using Taj.Core.Widgets;
 
-namespace Taj;
+namespace Taj.Core;
 
 /// <summary>Everything Taj needs to run.</summary>
 /// <param name="Profiles">Bar profiles by name.</param>
@@ -24,7 +23,9 @@ public sealed record TajConfig(
 /// <param name="Kind">time, command, or wm.</param>
 /// <param name="Argument">Format string or command line.</param>
 /// <param name="Interval">How often to poll, for pull sources.</param>
-public sealed record SourceSpec(string Name, string Kind, string Argument, TimeSpan Interval);
+/// <param name="TimeZone">Timezone id for a clock, or null for local time.</param>
+public sealed record SourceSpec(
+    string Name, string Kind, string Argument, TimeSpan Interval, string? TimeZone = null);
 
 /// <summary>
 /// Reads Taj's section of the Shubbak config.
@@ -72,7 +73,7 @@ public static class TajConfigLoader
 
         foreach (KdlNode node in bar.ChildrenNamed("rule"))
         {
-            string? profileName = node.Property("use")?.AsString() ?? node.Argument(0)?.AsString();
+            string? profileName = SettingText(node, "use") ?? node.Argument(0)?.AsString();
 
             if (profileName is null)
             {
@@ -93,8 +94,8 @@ public static class TajConfigLoader
 
             rules.Add(new BarRule(
                 profileName,
-                node.Property("workspace")?.AsString(),
-                node.Property("monitor") is { } m && m.TryAsInt(out int index) ? index : null));
+                SettingText(node, "workspace"),
+                SettingInt(node, "monitor")));
         }
 
         BarProfile fallbackProfile =
@@ -113,15 +114,43 @@ public static class TajConfigLoader
             return null;
         }
 
-        string kind = node.Property("kind")?.AsString() ?? "time";
-        string argument = node.Property("format")?.AsString()
-            ?? node.Property("command")?.AsString()
-            ?? string.Empty;
+        string kind = SettingText(node, "kind") ?? "time";
+        string argument = SettingText(node, "format") ?? SettingText(node, "command") ?? string.Empty;
 
-        int intervalMs = node.Property("interval") is { } i && i.TryAsInt(out int ms) ? ms : 1000;
+        int intervalMs = SettingInt(node, "interval") ?? 1000;
 
-        return new SourceSpec(name, kind, argument, TimeSpan.FromMilliseconds(intervalMs));
+        return new SourceSpec(
+            name,
+            kind,
+            argument,
+            TimeSpan.FromMilliseconds(intervalMs),
+            SettingText(node, "timezone"));
     }
+
+    /// <summary>
+    /// Reads a setting written either as a child node or as a property.
+    /// </summary>
+    /// <remarks>
+    /// <c>height 34</c> and <c>height=34</c> are both natural to write, and the rest
+    /// of the config uses the child-node form for block settings - <c>general</c> and
+    /// <c>gaps</c> both do. Accepting only one silently ignored the other, which is
+    /// how an entire profile's appearance came to be discarded while the config
+    /// validated cleanly.
+    /// </remarks>
+    private static KdlValue? Setting(KdlNode node, string name) =>
+        node.Child(name)?.Argument(0) ?? node.Property(name);
+
+    private static string? SettingText(KdlNode node, string name) =>
+        Setting(node, name)?.AsString();
+
+    private static int? SettingInt(KdlNode node, string name) =>
+        Setting(node, name) is { } value && value.TryAsInt(out int result) ? result : null;
+
+    private static double? SettingDouble(KdlNode node, string name) =>
+        Setting(node, name) is { } value && value.TryAsDouble(out double result) ? result : null;
+
+    private static bool? SettingBool(KdlNode node, string name) =>
+        Setting(node, name) is { } value && value.TryAsBool(out bool result) ? result : null;
 
     private static BarProfile? ParseProfile(
         KdlNode node,
@@ -138,28 +167,27 @@ public static class TajConfigLoader
 
         // `extends` lets a profile change one thing about another, which is what
         // makes a per-workspace variant a few lines rather than a duplicate.
-        BarProfile? parent = node.Property("extends") is { } e && existing.TryGetValue(e.AsString(), out BarProfile? found)
+        BarProfile? parent = SettingText(node, "extends") is { } parentName &&
+                             existing.TryGetValue(parentName, out BarProfile? found)
             ? found
             : null;
 
-        BarEdge edge = (node.Property("edge")?.AsString() ?? "top").Equals("bottom", StringComparison.OrdinalIgnoreCase)
+        BarEdge edge = string.Equals(SettingText(node, "edge"), "bottom", StringComparison.OrdinalIgnoreCase)
             ? BarEdge.Bottom
             : parent?.Edge ?? BarEdge.Top;
 
-        int height = node.Property("height") is { } h && h.TryAsInt(out int value)
-            ? value
-            : parent?.Height ?? 26;
+        int height = SettingInt(node, "height") ?? parent?.Height ?? 26;
 
-        Colour background = ParseColour(node.Property("background")?.AsString())
+        Colour background = ParseColour(SettingText(node, "background"))
             ?? parent?.Background
             ?? new Colour(0x1E, 0x1E, 0x2E);
 
-        Colour foreground = ParseColour(node.Property("foreground")?.AsString())
+        Colour foreground = ParseColour(SettingText(node, "foreground"))
             ?? new Colour(0xCD, 0xD6, 0xF4);
 
         var font = new FontStyle(
-            node.Property("font")?.AsString() ?? "Segoe UI",
-            node.Property("font-size") is { } fs && fs.TryAsInt(out int size) ? size : 12);
+            SettingText(node, "font") ?? "Segoe UI",
+            SettingInt(node, "font-size") ?? 12);
 
         List<BarZone> zones = [];
 
@@ -171,7 +199,9 @@ public static class TajConfigLoader
 
         if (zones.Count == 0 && parent is not null) zones = [.. parent.Zones];
 
-        return new BarProfile(name, edge, height, background, Edges.Symmetric(6, 0), zones);
+        int padding = SettingInt(node, "padding") ?? 6;
+
+        return new BarProfile(name, edge, height, background, Edges.Symmetric(padding, 0), zones);
     }
 
     private static BarZone? ParseZone(
@@ -179,7 +209,7 @@ public static class TajConfigLoader
     {
         string id = node.Argument(0)?.AsString() ?? "zone";
 
-        JustifyContent justify = (node.Property("justify")?.AsString() ?? "start").ToLowerInvariant() switch
+        JustifyContent justify = (SettingText(node, "justify") ?? "start").ToLowerInvariant() switch
         {
             "center" or "centre" => JustifyContent.Center,
             "end" => JustifyContent.End,
@@ -188,8 +218,8 @@ public static class TajConfigLoader
             _ => JustifyContent.Start,
         };
 
-        double grow = node.Property("grow") is { } g && g.TryAsDouble(out double value) ? value : 0;
-        int gap = node.Property("gap") is { } gp && gp.TryAsInt(out int gapValue) ? gapValue : 6;
+        double grow = SettingDouble(node, "grow") ?? 0;
+        int gap = SettingInt(node, "gap") ?? 6;
 
         List<IWidget> widgets = [];
 
@@ -205,15 +235,14 @@ public static class TajConfigLoader
     private static IWidget? ParseWidget(
         KdlNode node, Colour foreground, FontStyle font, List<Diagnostic> diagnostics)
     {
-        string id = node.Property("id")?.AsString() ?? node.Name;
+        string id = SettingText(node, "id") ?? node.Name;
 
         var style = VisualStyle.Default with
         {
-            Foreground = ParseColour(node.Property("colour")?.AsString()
-                ?? node.Property("color")?.AsString()) ?? foreground,
-            Background = ParseColour(node.Property("background")?.AsString()) ?? Colour.Transparent,
+            Foreground = ParseColour(SettingText(node, "colour") ?? SettingText(node, "color")) ?? foreground,
+            Background = ParseColour(SettingText(node, "background")) ?? Colour.Transparent,
             Font = font,
-            CornerRadius = node.Property("radius") is { } r && r.TryAsInt(out int radius) ? radius : 0,
+            CornerRadius = SettingInt(node, "radius") ?? 0,
         };
 
         var box = new BoxStyle(Padding: Edges.Symmetric(6, 0));
@@ -225,26 +254,27 @@ public static class TajConfigLoader
                 {
                     ActiveStyle = style with
                     {
-                        Background = ParseColour(node.Property("active-background")?.AsString())
+                        Background = ParseColour(SettingText(node, "active-background"))
                             ?? new Colour(0x8D, 0xBC, 0xFF),
-                        Foreground = ParseColour(node.Property("active-colour")?.AsString())
+                        Foreground = ParseColour(SettingText(node, "active-colour")
+                            ?? SettingText(node, "active-color"))
                             ?? new Colour(0x1E, 0x1E, 0x2E),
                         CornerRadius = 4,
                     },
                     OccupiedStyle = style,
                     EmptyStyle = style with { Foreground = style.Foreground.WithAlpha(110) },
-                    HideEmpty = node.Property("hide-empty")?.TryAsBool(out bool hide) == true && hide,
+                    HideEmpty = SettingBool(node, "hide-empty") ?? false,
                 };
 
             case "spacer":
                 return new SpacerWidget(
                     id,
-                    node.Property("width") is { } w && w.TryAsInt(out int width) ? width : null,
-                    node.Property("grow") is { } g && g.TryAsDouble(out double grow) ? grow : 1);
+                    SettingInt(node, "width"),
+                    SettingDouble(node, "grow") ?? 1);
 
             case "text":
             {
-                string? template = node.Property("template")?.AsString() ?? node.Argument(0)?.AsString();
+                string? template = SettingText(node, "template") ?? node.Argument(0)?.AsString();
 
                 if (template is null)
                 {
@@ -256,7 +286,7 @@ public static class TajConfigLoader
 
                 return new TemplateWidget(id, template, style, box)
                 {
-                    OnClick = node.Property("on-click")?.AsString(),
+                    OnClick = SettingText(node, "on-click"),
                 };
             }
 
@@ -353,12 +383,9 @@ public static class TajConfigLoader
             switch (spec.Kind.ToLowerInvariant())
             {
                 case "time":
-                {
-                    string format = spec.Argument.Length > 0 ? spec.Argument : "HH:mm";
-                    yield return new IntervalSource(
-                        spec.Name, spec.Interval, () => DateTime.Now.ToString(format, null));
+                    yield return new ClockSource(
+                        spec.Name, spec.Argument, spec.Interval, spec.TimeZone);
                     break;
-                }
 
                 case "command":
                     if (spec.Argument.Length > 0)

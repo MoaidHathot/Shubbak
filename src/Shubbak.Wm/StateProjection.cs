@@ -28,7 +28,7 @@ internal static class StateProjection
         window.Rect.Width,
         window.Rect.Height);
 
-    public static WorkspaceInfo Describe(WorkspaceNode workspace) => new(
+    public static WorkspaceInfo Describe(WorkspaceNode workspace, int monitorIndex = -1) => new(
         workspace.Id.Value,
         workspace.Name,
         workspace.Label,
@@ -36,7 +36,9 @@ internal static class StateProjection
         !workspace.HasNoWindows,
         workspace.Monitor?.DeviceId ?? string.Empty,
         workspace.Layout.Name,
-        workspace.DescendantWindows().Count());
+        workspace.DescendantWindows().Count(),
+        workspace.SortIndex,
+        monitorIndex);
 
     public static MonitorInfoDto Describe(MonitorNode monitor) => new(
         monitor.Id.Value,
@@ -55,7 +57,7 @@ internal static class StateProjection
 
         return new StateSnapshot(
             [.. wm.Root.Monitors.Select(Describe)],
-            [.. wm.Root.AllWorkspaces().Select(Describe)],
+            [.. DescribeWorkspaces(wm)],
             [.. wm.Root.DescendantWindows().Select(w => Describe(w, focused))],
             focused is null ? null : Describe(focused, focused),
             wm.BindingMode,
@@ -63,6 +65,21 @@ internal static class StateProjection
     }
 
     /// <summary>Serialises an event's payload for publication.</summary>
+    /// <summary>
+    /// Describes every workspace, tagged with the index of the monitor it is on.
+    /// </summary>
+    /// <remarks>
+    /// The index lets the bar show only its own monitor''s workspaces, which is what
+    /// makes a per-monitor bar useful rather than three identical copies of the same
+    /// list.
+    /// </remarks>
+    public static IEnumerable<WorkspaceInfo> DescribeWorkspaces(WindowManager wm)
+    {
+        for (int index = 0; index < wm.Root.Monitors.Count; index++)
+            foreach (WorkspaceNode workspace in wm.Root.Monitors[index].Workspaces)
+                yield return Describe(workspace, index);
+    }
+
     public static string Payload(WmEvent wmEvent, WindowManager wm)
     {
         WindowNode? focused = wm.FocusedWindow;

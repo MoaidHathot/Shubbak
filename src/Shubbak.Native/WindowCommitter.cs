@@ -148,6 +148,31 @@ public sealed class WindowCommitter
     }
 
     /// <summary>
+    /// Brings a window back into view without moving it.
+    /// </summary>
+    /// <remarks>
+    /// Visibility and geometry have to be separable, because a window whose position
+    /// is being animated does not go through <see cref="Commit"/> - the animation
+    /// engine drives it frame by frame instead. Without an independent reveal, such
+    /// a window is animated into place while still concealed, and the workspace
+    /// appears empty.
+    /// </remarks>
+    public void Reveal(nint handle)
+    {
+        if (handle == 0 || !Win32Window.Exists(handle)) return;
+
+        Show(handle);
+    }
+
+    /// <summary>Takes a window out of view without moving it.</summary>
+    public void Conceal(nint handle)
+    {
+        if (handle == 0 || !Win32Window.Exists(handle)) return;
+
+        Hide(handle);
+    }
+
+    /// <summary>
     /// Applies a whole frame of placements in one atomic transaction.
     /// </summary>
     /// <param name="placements">Target rectangles and visibility.</param>
