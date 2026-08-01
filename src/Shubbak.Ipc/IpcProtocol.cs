@@ -94,6 +94,7 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(IReadOnlyList<WorkspaceInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<MonitorInfoDto>))]
 [JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(IReadOnlyList<string>))]
 public sealed partial class IpcJsonContext : JsonSerializerContext;
 
 /// <summary>Shared protocol constants.</summary>

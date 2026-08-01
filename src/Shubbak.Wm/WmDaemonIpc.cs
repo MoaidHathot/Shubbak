@@ -136,8 +136,8 @@ internal sealed partial class WmDaemonIpc
                     : "null",
 
                 "layouts" => JsonSerializer.Serialize(
-                    string.Join('\n', Core.Layouts.LayoutRegistry.CanonicalNames),
-                    IpcJsonContext.Default.String),
+                    (IReadOnlyList<string>)[.. Core.Layouts.LayoutRegistry.CanonicalNames],
+                    IpcJsonContext.Default.IReadOnlyListString),
 
                 _ => string.Empty,
             };

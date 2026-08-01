@@ -1,14 +1,15 @@
 # Shubbak
 
-A tiling window manager for Windows, with an animation engine and a
-diagnostics-first configuration language.
+A tiling window manager for Windows, with an animation engine, a status bar, and a
+configuration language that tells you when you have made a mistake.
 
-Named for شبّاك — "window".
+Named for شبّاك — "window". The bar is **Taj** (تاج, crown).
 
 ## Status
 
-Working and usable. The window manager tiles, animates, and is fully scriptable.
-The companion bar (Taj) is not built yet.
+Feature complete and working. Not yet battle-tested — see
+[Troubleshooting](docs/troubleshooting.md) if something misbehaves, and
+`shubbak diagnose` if you want to report it.
 
 | Phase | | |
 | --- | --- | --- |
@@ -16,25 +17,28 @@ The companion bar (Taj) is not built yet.
 | P1 | Core, platform layer, config, daemon, IPC/CLI | done |
 | P2 | Layout strategies | done |
 | P3 | Animation engine | done |
-| P4 | Taj (the bar) | not started |
-| P5 | Tags, scratchpads, session persistence | not started |
+| P4 | Taj — the bar | done |
+| P5 | Tags, scratchpad, session persistence | done |
+
+**392 tests**, ~330 ms. Everything except the platform layer and the renderer runs
+headless.
 
 ## Why .NET
 
-Not the obvious choice for a window manager, so it was measured rather than
-assumed. [ADR 0001](docs/adr/0001-language-choice.md) has the numbers; the summary:
+Not the obvious choice for a window manager, so it was measured rather than assumed.
+[ADR 0001](docs/adr/0001-language-choice.md) has the numbers; the summary:
 
 - **Keyboard hook latency** — p99.9 of **0.8 µs** against Windows' 300 ms unhook
-  threshold, measured under ~1300 forced blocking Gen2 collections. The hazard is
+  threshold, measured under ~1,300 forced blocking Gen2 collections. The hazard is
   real but does not materialise, because the callback never allocates.
 - **Animation** — zero dropped frames at 144 Hz, with **managed code accounting for
   2.5–5.3% of frame time** and Win32 taking the rest. The unbatched control group
   dropped 33–42% of frames with *identical* managed code, so `DeferWindowPos`
   batching — not language choice — is what determines whether motion looks smooth.
-- **Distribution** — 3.2 MB single NativeAOT executable, no runtime prerequisite,
-  zero trim/AOT warnings.
+- **Distribution** — single NativeAOT executables, no runtime prerequisite, zero
+  trim/AOT warnings.
 
-## Building
+## Building and running
 
 ```
 dotnet build
@@ -42,11 +46,9 @@ dotnet test
 dotnet publish src/Shubbak.Wm -c Release -r win-x64 -p:PublishAot=true
 ```
 
-## Running
-
 ```
-shubbak-wm --config path/to/shubbak.kdl
-shubbak-wm --check-config        # validate without touching any window
+shubbak-wm --config path/to/shubbak.kdl      # the window manager
+taj                                          # the bar (or launch it from startup-command)
 ```
 
 Config is searched for at `--config`, then `$SHUBBAK_CONFIG`, then
@@ -57,7 +59,8 @@ windows are detected and reported, but cannot be moved.
 
 ## Configuration
 
-KDL, with diagnostics that point at the problem:
+One KDL file for both the window manager and the bar, with diagnostics that point at
+the problem:
 
 ```
 shubbak.kdl:8:20: error SHB0305: Unknown command 'focuss'.
@@ -69,11 +72,9 @@ shubbak.kdl:8:20: error SHB0305: Unknown command 'focuss'.
 [`docs/shubbak.example.kdl`](docs/shubbak.example.kdl) is a complete config,
 translated from a real GlazeWM setup.
 
-Two things it does that the original could not:
-
-**`for-each` generates repetitive bindings.** 19 workspaces × 2 bindings each is
-40 hand-written lines in GlazeWM; here it is six, and it cannot drift out of sync
-with the workspace list.
+**`for-each` generates repetitive bindings.** 19 workspaces × 2 bindings is 40
+hand-written lines in GlazeWM; here it is six, and it cannot drift out of sync with
+the workspace list:
 
 ```kdl
 for-each "workspace" {
@@ -83,54 +84,99 @@ for-each "workspace" {
 ```
 
 **Silent failures are reported.** The source config contained a regex wrapped in
-slashes, which are matched literally — so the rule had never once fired, and
-nothing said so. Shubbak warns and prints the corrected pattern.
+slashes, which are matched literally — so the rule had never once fired, and nothing
+said so. Shubbak warns and prints the corrected pattern. Likewise duplicate
+bindings, unknown commands, and rules that would match every window.
 
 ## Diagnostics
 
 ```
-shubbak inspect
+shubbak inspect              # why is this window not being tiled?
+shubbak diagnose -o r.md     # one file to attach to a bug report
+shubbak log-level trace      # raise logging on the running WM, no restart
+shubbak check-config         # validate, with carets
 ```
 
-Prints every matchable attribute of a window, whether Shubbak will tile it **and
-why not if it will not**, and which rules and app definitions matched. This is the
-answer to "why is this window not being tiled?", which neither GlazeWM nor komorebi
-can give.
+`inspect` prints every matchable attribute of a window, whether Shubbak will tile it
+**and why not if it will not**, and which rules matched. Neither GlazeWM nor
+komorebi can answer that question.
+
+See [Troubleshooting](docs/troubleshooting.md).
+
+## Features
+
+**Layouts** — `splith` `splitv` `fibonacci` `fibonacci-v` `fibonacci-mirrored`
+`master-left` `master-right` `master-top` `master-bottom` `grid` `monocle`.
+
+Layout is a property of a **container**, not a workspace, so a fibonacci region can
+sit inside a columns region with no special case. `layout --cycle` walks a short list
+ordered so each entry looks obviously different from the last.
+
+**Tags** — the AwesomeWM model: a window can belong to several workspaces and appears
+in whichever you are viewing. A Windows window has one position on one monitor, so
+membership means the window *relocates* to whichever tagged workspace you last
+activated — the same thing AwesomeWM does.
+
+**Scratchpad** — named slots, so several windows can be stashed and summoned
+independently.
+
+**Session persistence** — a restart or reboot puts windows back on their workspaces.
+Titles are hashed rather than stored.
+
+**Animation** — per-event durations and cubic-bezier curves. Re-targeting blends from
+the current position, so rapid layout changes never make windows jump backwards.
+
+## Taj
+
+Four layers, each independently replaceable:
 
 ```
-shubbak check-config      # validate, with carets
-shubbak query state       # full state as JSON
-shubbak sub               # tail the event stream
+L1 transport    Shubbak's IPC
+L2 sources      reactive values: WM events, timers, external processes
+L3 widget tree  renderer-agnostic model + flex layout
+L4 renderer     ITajRenderer — currently GDI
 ```
 
-## Layouts
+L2 and L3 contain no drawing code and are covered by tests that run with no window on
+screen. Swapping the renderer means implementing one interface.
 
-`splith` `splitv` `fibonacci` `fibonacci-v` `fibonacci-mirrored` `master-left`
-`master-right` `master-top` `master-bottom` `grid` `monocle`
+**Adding a widget needs no renderer code**, and usually no code at all:
 
-Layout is a property of a **container**, not of a workspace, so a fibonacci region
-can sit inside a columns region with no special case. `layout --cycle` walks a short
-list ordered so each entry looks obviously different from the last.
+| Tier | Effort |
+|---|---|
+| KDL template bound to a source | a few lines of config |
+| External program writing lines to stdout | any language |
+| `IWidget` implementation | only for custom drawing |
+
+Widgets re-render only when a source they use actually changes, so an idle desktop
+does not repaint. Clicking a workspace sends the same command a keybinding would.
+
+The bar consumes the window manager's event stream and never inspects windows itself.
+That is the structural fix for Zebar's stale titles: `EVENT_OBJECT_NAMECHANGE` fires
+on browser tab switches, twice as often as focus changes, so a bar listening only for
+focus misses two thirds of title updates.
 
 ## Architecture
 
 ```
 src/
-  Shubbak.Core/     tree, layouts, animation, state machine   — zero Win32
+  Shubbak.Core/     tree, layouts, animation, state machine, logging  — zero Win32
   Shubbak.Native/   Win32: hooks, window control, monitors
   Shubbak.Config/   KDL parser, schema, diagnostics
   Shubbak.Ipc/      protocol, named-pipe server and client
   Shubbak.Wm/       the daemon
   Shubbak.Cli/      shubbak
-tests/              240 tests, ~110 ms
+  Taj.Core/         widget tree, flex layout, sources          — no drawing code
+  Taj/              bar host + GDI renderer
+tests/              392 tests
 ```
 
-`Shubbak.Core` contains no Win32 at all. That is the highest-leverage decision in
-the project: the entire behavioural surface — tree, layout, focus, animation, the
-state machine — is deterministically testable headlessly, in milliseconds, with no
-window manager running. It is also what contains the risk: if a hot path ever did
-fail in managed code, it could be replaced behind the `Shubbak.Native` boundary
-without touching any of the logic.
+`Shubbak.Core` contains no Win32 at all. That is the highest-leverage decision in the
+project: the entire behavioural surface — tree, layout, focus, animation, tags,
+sessions, the state machine — is deterministically testable headlessly, in
+milliseconds, with no window manager running. It is also what contains the risk: if a
+hot path ever did fail in managed code, it could be replaced behind the
+`Shubbak.Native` boundary without touching any of the logic.
 
 ## Licence
 

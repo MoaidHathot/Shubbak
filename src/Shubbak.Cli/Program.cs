@@ -30,7 +30,7 @@ internal static class Program
                 "query" => await QueryAsync(args).ConfigureAwait(false),
                 "sub" or "subscribe" => await SubscribeAsync(args).ConfigureAwait(false),
                 "check-config" => CheckConfig(args),
-                "layouts" => await QueryAsync(["query", "layouts"]).ConfigureAwait(false),
+                "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
@@ -87,6 +87,30 @@ internal static class Program
         }
 
         Console.WriteLine(response.Data);
+        return 0;
+    }
+
+    /// <summary>Lists the available layouts, one per line.</summary>
+    /// <remarks>
+    /// A convenience over <c>query layouts</c>: the query returns JSON for scripts,
+    /// whereas this is for a human at a prompt deciding what to type next.
+    /// </remarks>
+    private static async Task<int> LayoutsAsync()
+    {
+        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+        IpcResponse response = await client.SendAsync("query", "layouts").ConfigureAwait(false);
+
+        if (!response.Ok || response.Data is null)
+        {
+            Console.Error.WriteLine($"shubbak: {response.Error}");
+            return 1;
+        }
+
+        IReadOnlyList<string>? layouts = System.Text.Json.JsonSerializer.Deserialize(
+            response.Data, IpcJsonContext.Default.IReadOnlyListString);
+
+        foreach (string layout in layouts ?? []) Console.WriteLine(layout);
+
         return 0;
     }
 
