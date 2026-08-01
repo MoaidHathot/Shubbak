@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
+    <Project Path="src/Shubbak.Native/Shubbak.Native.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />

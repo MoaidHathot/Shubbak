@@ -1,0 +1,208 @@
+using Shubbak.Core.Tree;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.WindowsAndMessaging;
+
+namespace Shubbak.Native;
+
+/// <summary>Why a window is not managed.</summary>
+public enum ExclusionReason
+{
+    None,
+    NotAWindow,
+    NotVisible,
+    Cloaked,
+    ChildWindow,
+    ToolWindow,
+    NotInAltTabList,
+    ZeroSized,
+    ShellWindow,
+    NoTitle,
+    ExcludedClass,
+    Elevated,
+}
+
+/// <summary>The verdict for one window, with the reason attached.</summary>
+/// <param name="Manageable">Whether Shubbak should tile this window.</param>
+/// <param name="Reason">Why not, when <paramref name="Manageable"/> is false.</param>
+public readonly record struct ManageDecision(bool Manageable, ExclusionReason Reason)
+{
+    public static ManageDecision Yes => new(true, ExclusionReason.None);
+
+    public static ManageDecision No(ExclusionReason reason) => new(false, reason);
+
+    /// <summary>A human-readable explanation, used by <c>shubbak inspect</c>.</summary>
+    public string Explain() => Reason switch
+    {
+        ExclusionReason.None => "manageable",
+        ExclusionReason.NotAWindow => "handle is not a live window",
+        ExclusionReason.NotVisible => "window is not visible",
+        ExclusionReason.Cloaked => "window is cloaked by the shell (usually a suspended UWP app)",
+        ExclusionReason.ChildWindow => "window is a child, not top-level",
+        ExclusionReason.ToolWindow => "window has WS_EX_TOOLWINDOW and not WS_EX_APPWINDOW",
+        ExclusionReason.NotInAltTabList => "window is owned by another window, so it is not an Alt+Tab target",
+        ExclusionReason.ZeroSized => "window has no area",
+        ExclusionReason.ShellWindow => "window belongs to the shell (desktop or Progman)",
+        ExclusionReason.NoTitle => "window has no title",
+        ExclusionReason.ExcludedClass => "window class is excluded by default",
+        ExclusionReason.Elevated => "window belongs to an elevated process and Shubbak is not elevated",
+        _ => "unknown",
+    };
+}
+
+/// <summary>
+/// Decides which windows Shubbak will tile.
+/// </summary>
+/// <remarks>
+/// <para>
+/// This is where tiling window managers on Windows most often feel flaky, because
+/// "is this a real application window?" has no single API answer. The checks below
+/// are ordered cheapest-first and each one is justified: a window manager that tiles
+/// too eagerly reserves screen space for invisible phantoms, and one that tiles too
+/// timidly leaves real windows floating.
+/// </para>
+/// <para>
+/// Crucially, every rejection carries a <see cref="ExclusionReason"/>. That is what
+/// makes <c>shubbak inspect</c> able to answer "why is this window not being
+/// tiled?" - the single most common question a user has, and one neither GlazeWM
+/// nor komorebi can answer.
+/// </para>
+/// </remarks>
+public static class WindowFilter
+{
+    /// <summary>
+    /// Window classes excluded unconditionally.
+    /// </summary>
+    /// <remarks>
+    /// Shell surfaces that are technically top-level, visible and untitled-or-not,
+    /// but are part of the desktop rather than applications. Tiling any of these
+    /// breaks the shell in ways that are hard to recover from without a reboot.
+    /// </remarks>
+    private static readonly HashSet<string> s_excludedClasses = new(StringComparer.Ordinal)
+    {
+        "Progman",                      // desktop
+        "Shell_TrayWnd",                // taskbar
+        "Shell_SecondaryTrayWnd",       // taskbar on secondary monitors
+        "WorkerW",                      // desktop wallpaper host
+        "Windows.UI.Core.CoreWindow",   // UWP shell surfaces
+        "ApplicationManager_immersiveApplicationWindow",
+        "Windows.Internal.Shell.TabProxyWindow",
+        "MultitaskingViewFrame",        // task view
+        "ForegroundStaging",
+        "XamlExplorerHostIslandWindow", // Alt+Tab and snap assist in Windows 11
+        "TaskListThumbnailWnd",
+        "TaskListOverlayWnd",
+        "EdgeUiInputTopWndClass",
+        "NarratorHelperWindow",
+        "Xaml_WindowedPopupClass",
+    };
+
+    /// <summary>
+    /// Whether Shubbak should manage this window, and why not if it should not.
+    /// </summary>
+    /// <param name="handle">Native window handle.</param>
+    /// <param name="requireTitle">
+    /// Whether an empty title disqualifies a window. On by default: untitled
+    /// top-level windows are overwhelmingly splash screens, invisible message-only
+    /// helpers and IME candidate hosts, none of which should occupy a tile.
+    /// </param>
+    public static ManageDecision Evaluate(nint handle, bool requireTitle = true)
+    {
+        var hwnd = new HWND(handle);
+
+        if (handle == 0 || !PInvoke.IsWindow(hwnd))
+            return ManageDecision.No(ExclusionReason.NotAWindow);
+
+        if (hwnd == PInvoke.GetShellWindow() || hwnd == PInvoke.GetDesktopWindow())
+            return ManageDecision.No(ExclusionReason.ShellWindow);
+
+        if (!PInvoke.IsWindowVisible(hwnd))
+            return ManageDecision.No(ExclusionReason.NotVisible);
+
+        WINDOW_STYLE style = Win32Window.GetStyle(handle);
+
+        if ((style & WINDOW_STYLE.WS_CHILD) != 0)
+            return ManageDecision.No(ExclusionReason.ChildWindow);
+
+        WINDOW_EX_STYLE exStyle = Win32Window.GetExStyle(handle);
+
+        // A tool window is a palette or utility surface. WS_EX_APPWINDOW is the
+        // documented way for an application to say "despite that, treat me as a
+        // normal window", and some legitimate apps rely on it.
+        if ((exStyle & WINDOW_EX_STYLE.WS_EX_TOOLWINDOW) != 0 &&
+            (exStyle & WINDOW_EX_STYLE.WS_EX_APPWINDOW) == 0)
+        {
+            return ManageDecision.No(ExclusionReason.ToolWindow);
+        }
+
+        string className = Win32Window.GetClassName(handle);
+        if (s_excludedClasses.Contains(className))
+            return ManageDecision.No(ExclusionReason.ExcludedClass);
+
+        // Cloaked windows are composited out by the shell - typically a suspended
+        // UWP app. They report as visible, so without this check we would reserve
+        // screen space for something the user cannot see or focus.
+        if (Win32Window.IsCloaked(handle))
+            return ManageDecision.No(ExclusionReason.Cloaked);
+
+        if (!IsAltTabWindow(hwnd))
+            return ManageDecision.No(ExclusionReason.NotInAltTabList);
+
+        if (requireTitle && Win32Window.GetTitle(handle).Length == 0)
+            return ManageDecision.No(ExclusionReason.NoTitle);
+
+        // Minimised windows legitimately report a zero or off-screen rectangle, so
+        // the size check must not apply to them.
+        if (!PInvoke.IsIconic(hwnd) && Win32Window.GetBounds(handle).IsEmpty)
+            return ManageDecision.No(ExclusionReason.ZeroSized);
+
+        return ManageDecision.Yes;
+    }
+
+    /// <summary>
+    /// The standard test for "would this window appear in Alt+Tab?".
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Documented by Raymond Chen and used by every shell replacement. The idea: a
+    /// window belongs in the list only if it is the visible representative of its
+    /// owner chain. Walking <c>GetLastActivePopup</c> from the root owner finds that
+    /// representative; if it is not this window, then this window is a subordinate
+    /// dialog and the owner should be tiled instead.
+    /// </para>
+    /// <para>
+    /// Without it, modal dialogs and their parents both get tiles, so a save prompt
+    /// shrinks the document window it belongs to.
+    /// </para>
+    /// </remarks>
+    private static bool IsAltTabWindow(HWND hwnd)
+    {
+        HWND root = PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER);
+
+        HWND walk = HWND.Null;
+        HWND candidate = root;
+
+        while (candidate != walk)
+        {
+            walk = candidate;
+            candidate = PInvoke.GetLastActivePopup(walk);
+            if (PInvoke.IsWindowVisible(candidate)) break;
+        }
+
+        return candidate == hwnd;
+    }
+
+    /// <summary>
+    /// The state a newly discovered window should start in.
+    /// </summary>
+    /// <remarks>
+    /// A window that is already minimised or maximised when Shubbak starts must keep
+    /// that state, or starting the window manager would visibly disturb every open
+    /// window - the first impression that makes people uninstall.
+    /// </remarks>
+    public static WindowState InitialStateFor(nint handle, WindowState fallback)
+    {
+        if (Win32Window.IsMinimised(handle)) return WindowState.Minimised;
+        return fallback;
+    }
+}
