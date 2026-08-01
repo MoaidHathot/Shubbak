@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using Shubbak.Config;
+using Shubbak.Core.Animation;
+using Shubbak.Core.Geometry;
 using Shubbak.Core.Commands;
 using Shubbak.Core.Layouts;
 using Shubbak.Core.Tree;
@@ -33,6 +35,7 @@ public sealed class WmDaemon : IDisposable
     private readonly BindingTable _bindings = new();
     private readonly WindowCommitter _committer = new();
     private readonly MessageLoop _loop = new();
+    private readonly AnimationEngine _animation = new();
 
     private readonly Dictionary<nint, WindowNode> _managed = [];
     private readonly HashSet<nint> _ignored = [];
@@ -46,8 +49,19 @@ public sealed class WmDaemon : IDisposable
     private bool _layoutDirty;
     private bool _disposed;
 
+    private long _lastTickTicks;
+
     private readonly WinEventNotification[] _eventScratch = new WinEventNotification[256];
     private readonly KeyEvent[] _keyScratch = new KeyEvent[64];
+
+    /// <summary>
+    /// Per-frame animation output. Pre-allocated because the tick path must not
+    /// allocate (docs/adr/0001-language-choice.md, constraint 2).
+    /// </summary>
+    private AnimationFrame[] _frameScratch = new AnimationFrame[128];
+
+    /// <summary>Reused across frames so committing never allocates either.</summary>
+    private readonly List<Placement> _commitScratch = [];
 
     public WmDaemon()
     {
@@ -103,6 +117,12 @@ public sealed class WmDaemon : IDisposable
     {
         try
         {
+            long now = Stopwatch.GetTimestamp();
+            double deltaMs = _lastTickTicks == 0
+                ? 0
+                : (now - _lastTickTicks) * 1000.0 / Stopwatch.Frequency;
+            _lastTickTicks = now;
+
             DrainKeyboard();
             DrainWindowEvents();
 
@@ -111,6 +131,8 @@ public sealed class WmDaemon : IDisposable
                 _layoutDirty = false;
                 ApplyLayout();
             }
+
+            if (_animation.IsAnimating) AdvanceAnimation(deltaMs);
         }
         catch (Exception ex)
         {
@@ -449,7 +471,42 @@ public sealed class WmDaemon : IDisposable
     {
         IReadOnlyList<Placement> placements = _wm.ComputePlacements();
 
-        _committer.Commit(placements, static p => (nint)p.Window.Handle);
+        _commitScratch.Clear();
+
+        foreach (Placement placement in placements)
+        {
+            nint handle = (nint)placement.Window.Handle;
+
+            // Hidden windows are never animated: moving something the user cannot
+            // see is wasted work, and it would keep the animation engine busy for
+            // every window on every inactive workspace.
+            if (!placement.Visible)
+            {
+                _animation.Remove(placement.Window.Handle);
+                _commitScratch.Add(placement);
+                continue;
+            }
+
+            // Where the window is now: mid-flight position if it is already moving,
+            // otherwise its real position on screen.
+            Rect current = _animation.TryGetCurrent(placement.Window.Handle, out Rect inFlight)
+                ? inFlight
+                : Win32Window.GetBounds(handle);
+
+            AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : AnimationKind.WindowMove;
+
+            if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
+            {
+                // Animated: the tick loop will drive it. Visibility still has to be
+                // applied now, which Commit does for the placements it is given.
+                continue;
+            }
+
+            _commitScratch.Add(placement);
+        }
+
+        if (_commitScratch.Count > 0)
+            _committer.Commit(_commitScratch, static p => (nint)p.Window.Handle);
 
         // Focus is applied after geometry: focusing a window that is about to move
         // makes it flash at its old position first.
@@ -458,6 +515,20 @@ public sealed class WmDaemon : IDisposable
         {
             WindowActions.Focus((nint)focused.Handle);
         }
+    }
+
+    /// <summary>Drives one frame of in-flight window motion.</summary>
+    private void AdvanceAnimation(double deltaMs)
+    {
+        if (_frameScratch.Length < _animation.ActiveCount)
+            _frameScratch = new AnimationFrame[Math.Max(_animation.ActiveCount * 2, 128)];
+
+        int count = _animation.Tick(deltaMs, _frameScratch);
+        if (count == 0) return;
+
+        // One atomic transaction per frame, exactly as in the S2 spike: the
+        // unbatched alternative dropped 33-42% of frames at 144 Hz.
+        _committer.CommitFrame(_frameScratch.AsSpan(0, count));
     }
 
     // ---- monitors ----------------------------------------------------------
@@ -545,6 +616,7 @@ public sealed class WmDaemon : IDisposable
 
         _config = result.Config;
         _wm.Options = _config.ToWmOptions();
+        _animation.Options = _config.Animation;
         _bindings.Load(_config);
 
         if (!initial)

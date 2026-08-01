@@ -1,3 +1,4 @@
+using Shubbak.Core.Animation;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Layouts;
 using Windows.Win32;
@@ -194,6 +195,75 @@ public sealed class WindowCommitter
             {
                 _driving.Remove(handle);
                 _lastCommitted[handle] = rect;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Applies one frame of animation as a single atomic transaction.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The hot path: called every tick while anything is moving. Takes a
+    /// <see cref="Span{T}"/> over a caller-owned buffer and allocates nothing, per
+    /// ADR 0001 constraint 2.
+    /// </para>
+    /// <para>
+    /// Unlike <see cref="Commit"/> this does not skip windows already at their
+    /// target, because an animation frame is by definition a new position, and it
+    /// does not touch visibility, which the layout pass has already settled.
+    /// </para>
+    /// </remarks>
+    public void CommitFrame(ReadOnlySpan<AnimationFrame> frames)
+    {
+        if (frames.Length == 0) return;
+
+        HDWP batch = PInvoke.BeginDeferWindowPos(frames.Length);
+
+        if (batch.IsNull)
+        {
+            foreach (AnimationFrame frame in frames)
+                MoveSingle((nint)frame.Handle, frame.Rect);
+        }
+        else
+        {
+            bool ok = true;
+
+            foreach (AnimationFrame frame in frames)
+            {
+                batch = PInvoke.DeferWindowPos(
+                    batch, new HWND((nint)frame.Handle), HWND.Null,
+                    frame.Rect.X, frame.Rect.Y, frame.Rect.Width, frame.Rect.Height,
+                    (SET_WINDOW_POS_FLAGS)DefaultFlags);
+
+                if (batch.IsNull)
+                {
+                    ok = false;
+                    break;
+                }
+            }
+
+            if (ok) PInvoke.EndDeferWindowPos(batch);
+            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect);
+        }
+
+        lock (_lastCommitted)
+        {
+            foreach (AnimationFrame frame in frames)
+            {
+                nint handle = (nint)frame.Handle;
+
+                // While a window is mid-flight every position is ours, so it stays
+                // in the driving set until the final frame lands.
+                if (frame.IsFinal)
+                {
+                    _driving.Remove(handle);
+                    _lastCommitted[handle] = frame.Rect;
+                }
+                else
+                {
+                    _driving.Add(handle);
+                }
             }
         }
     }
