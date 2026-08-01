@@ -1,0 +1,178 @@
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.Accessibility;
+using Windows.Win32.UI.WindowsAndMessaging;
+
+namespace Shubbak.Native;
+
+/// <summary>What kind of window change a <see cref="WinEventNotification"/> reports.</summary>
+public enum WinEventKind
+{
+    Created,
+    Destroyed,
+    Shown,
+    Hidden,
+    TitleChanged,
+    LocationChanged,
+    Cloaked,
+    Uncloaked,
+    Foreground,
+    MinimiseStart,
+    MinimiseEnd,
+    MoveSizeStart,
+    MoveSizeEnd,
+}
+
+/// <summary>A single window change reported by the operating system.</summary>
+public readonly record struct WinEventNotification(WinEventKind Kind, nint Handle);
+
+/// <summary>
+/// Subscribes to system-wide window events.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The hook callback runs on the message-pump thread and must be cheap. S4 measured
+/// the raw stream at ~130 events/second during ordinary use, of which only 47% are
+/// <c>OBJID_WINDOW</c>; <c>EVENT_OBJECT_NAMECHANGE</c> in particular is <b>93%</b>
+/// child-object noise. So the object-id test is the first statement in the callback,
+/// before any string or handle work
+/// (docs/adr/0001-language-choice.md, constraint 8).
+/// </para>
+/// <para>
+/// Surviving events are queued rather than dispatched inline, so that a slow
+/// consumer can never stall the hook.
+/// </para>
+/// </remarks>
+public sealed class WinEventSource : IDisposable
+{
+    private static WinEventSource? s_instance;
+
+    private readonly List<UnhookWinEventSafeHandle> _hooks = [];
+    private readonly Queue<WinEventNotification> _queue = new();
+    private readonly Lock _gate = new();
+    private bool _disposed;
+
+    private static readonly (uint Id, WinEventKind Kind)[] Subscriptions =
+    [
+        (PInvoke.EVENT_OBJECT_CREATE, WinEventKind.Created),
+        (PInvoke.EVENT_OBJECT_DESTROY, WinEventKind.Destroyed),
+        (PInvoke.EVENT_OBJECT_SHOW, WinEventKind.Shown),
+        (PInvoke.EVENT_OBJECT_HIDE, WinEventKind.Hidden),
+        (PInvoke.EVENT_OBJECT_NAMECHANGE, WinEventKind.TitleChanged),
+        (PInvoke.EVENT_OBJECT_LOCATIONCHANGE, WinEventKind.LocationChanged),
+        (PInvoke.EVENT_OBJECT_CLOAKED, WinEventKind.Cloaked),
+        (PInvoke.EVENT_OBJECT_UNCLOAKED, WinEventKind.Uncloaked),
+        (PInvoke.EVENT_SYSTEM_FOREGROUND, WinEventKind.Foreground),
+        (PInvoke.EVENT_SYSTEM_MINIMIZESTART, WinEventKind.MinimiseStart),
+        (PInvoke.EVENT_SYSTEM_MINIMIZEEND, WinEventKind.MinimiseEnd),
+        (PInvoke.EVENT_SYSTEM_MOVESIZESTART, WinEventKind.MoveSizeStart),
+        (PInvoke.EVENT_SYSTEM_MOVESIZEEND, WinEventKind.MoveSizeEnd),
+    ];
+
+    /// <summary>
+    /// Installs the hooks. Must be called on a thread that runs a message pump:
+    /// <c>WINEVENT_OUTOFCONTEXT</c> callbacks are delivered through its queue.
+    /// </summary>
+    public unsafe void Start()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (Interlocked.CompareExchange(ref s_instance, this, null) is not null)
+            throw new InvalidOperationException("A WinEventSource is already active in this process.");
+
+        foreach ((uint id, _) in Subscriptions)
+        {
+            UnhookWinEventSafeHandle hook = PInvoke.SetWinEventHook(
+                id, id, null, &Callback, 0, 0,
+                PInvoke.WINEVENT_OUTOFCONTEXT | PInvoke.WINEVENT_SKIPOWNPROCESS);
+
+            if (!hook.IsInvalid) _hooks.Add(hook);
+        }
+
+        if (_hooks.Count == 0)
+            throw new InvalidOperationException("Failed to install any WinEvent hook.");
+    }
+
+    /// <summary>Removes up to <paramref name="max"/> queued notifications.</summary>
+    public int Drain(Span<WinEventNotification> destination, int max)
+    {
+        int count = 0;
+        int limit = Math.Min(max, destination.Length);
+
+        lock (_gate)
+        {
+            while (count < limit && _queue.Count > 0)
+                destination[count++] = _queue.Dequeue();
+        }
+
+        return count;
+    }
+
+    /// <summary>How many notifications are waiting.</summary>
+    public int PendingCount
+    {
+        get { lock (_gate) return _queue.Count; }
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static unsafe void Callback(
+        HWINEVENTHOOK hook, uint eventId, HWND hwnd, int idObject, int idChild,
+        uint threadId, uint eventTime)
+    {
+        try
+        {
+            // FIRST. S4 showed NAMECHANGE is 93% child-object noise; doing anything
+            // before this test would multiply the cost of the whole stream.
+            if (idObject != (int)OBJECT_IDENTIFIER.OBJID_WINDOW || idChild != 0) return;
+            if (hwnd.IsNull) return;
+
+            WinEventSource? source = s_instance;
+            if (source is null) return;
+
+            WinEventKind? kind = MapKind(eventId);
+            if (kind is null) return;
+
+            source.Enqueue(new WinEventNotification(kind.Value, (nint)hwnd.Value));
+        }
+        catch
+        {
+            // An exception escaping an UnmanagedCallersOnly callback tears down the
+            // process (docs/adr/0001-language-choice.md, constraint 4).
+        }
+    }
+
+    private static WinEventKind? MapKind(uint eventId)
+    {
+        foreach ((uint id, WinEventKind kind) in Subscriptions)
+            if (id == eventId) return kind;
+
+        return null;
+    }
+
+    private void Enqueue(WinEventNotification notification)
+    {
+        lock (_gate)
+        {
+            // Bound the queue. A burst - dragging a window generates ~122
+            // LOCATIONCHANGE per second on its own - must never grow without limit
+            // if the consumer stalls. Dropping the oldest is correct here because
+            // these events are level-triggered: the newest reflects reality.
+            if (_queue.Count >= 4096) _queue.Dequeue();
+
+            _queue.Enqueue(notification);
+        }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        foreach (UnhookWinEventSafeHandle hook in _hooks) hook.Dispose();
+        _hooks.Clear();
+
+        Interlocked.CompareExchange(ref s_instance, null, this);
+    }
+}

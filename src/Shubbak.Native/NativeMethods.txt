@@ -1,0 +1,120 @@
+// CsWin32 generation manifest for Shubbak.Native.
+//
+// Every entry is API the window manager genuinely needs. Keeping the list tight
+// keeps the generated surface small, which keeps NativeAOT output small and keeps
+// the trim analyser quiet.
+
+// --- window enumeration and query --------------------------------------------
+EnumWindows
+IsWindow
+IsWindowVisible
+IsIconic
+IsZoomed
+GetWindowRect
+GetClientRect
+GetWindowTextLength
+GetWindowText
+GetClassName
+GetWindowThreadProcessId
+GetWindowLong
+WINDOW_STYLE
+WINDOW_EX_STYLE
+WINDOW_LONG_PTR_INDEX
+GetAncestor
+GET_ANCESTOR_FLAGS
+GetLastActivePopup
+GetShellWindow
+GetDesktopWindow
+GetForegroundWindow
+
+// Cloaking: UWP windows stay "visible" while cloaked by the shell, so
+// IsWindowVisible alone would have us managing invisible phantoms.
+DwmGetWindowAttribute
+DWMWINDOWATTRIBUTE
+DwmSetWindowAttribute
+
+// Process identity, for rules and for the inspector.
+OpenProcess
+PROCESS_ACCESS_RIGHTS
+QueryFullProcessImageName
+PROCESS_NAME_FORMAT
+CloseHandle
+
+// --- window manipulation -------------------------------------------------------
+SetWindowPos
+BeginDeferWindowPos
+DeferWindowPos
+EndDeferWindowPos
+SET_WINDOW_POS_FLAGS
+ShowWindow
+ShowWindowAsync
+SHOW_WINDOW_CMD
+SetForegroundWindow
+BringWindowToTop
+AttachThreadInput
+SetWindowLong
+PostMessage
+SendMessageTimeout
+SEND_MESSAGE_TIMEOUT_FLAGS
+WM_CLOSE
+SetLayeredWindowAttributes
+LAYERED_WINDOW_ATTRIBUTES_FLAGS
+
+// --- monitors -------------------------------------------------------------------
+EnumDisplayMonitors
+GetMonitorInfo
+MONITORINFOEXW
+MonitorFromWindow
+MonitorFromPoint
+MONITOR_FROM_FLAGS
+GetDpiForMonitor
+MONITOR_DPI_TYPE
+SetProcessDpiAwarenessContext
+GetDpiForWindow
+
+// --- hooks -----------------------------------------------------------------------
+SetWinEventHook
+UnhookWinEvent
+EVENT_OBJECT_CREATE
+EVENT_OBJECT_DESTROY
+EVENT_OBJECT_SHOW
+EVENT_OBJECT_HIDE
+EVENT_OBJECT_NAMECHANGE
+EVENT_OBJECT_LOCATIONCHANGE
+EVENT_OBJECT_CLOAKED
+EVENT_OBJECT_UNCLOAKED
+EVENT_SYSTEM_FOREGROUND
+EVENT_SYSTEM_MINIMIZESTART
+EVENT_SYSTEM_MINIMIZEEND
+EVENT_SYSTEM_MOVESIZESTART
+EVENT_SYSTEM_MOVESIZEEND
+WINEVENT_OUTOFCONTEXT
+WINEVENT_SKIPOWNPROCESS
+OBJECT_IDENTIFIER
+
+SetWindowsHookEx
+UnhookWindowsHookEx
+CallNextHookEx
+WINDOWS_HOOK_ID
+KBDLLHOOKSTRUCT
+KBDLLHOOKSTRUCT_FLAGS
+GetKeyState
+VIRTUAL_KEY
+MapVirtualKey
+MAP_VIRTUAL_KEY_TYPE
+
+// --- message loop -----------------------------------------------------------------
+GetMessage
+PeekMessage
+PEEK_MESSAGE_REMOVE_TYPE
+TranslateMessage
+DispatchMessage
+PostThreadMessage
+PostQuitMessage
+GetCurrentThreadId
+WM_QUIT
+WM_KEYDOWN
+WM_KEYUP
+WM_SYSKEYDOWN
+WM_SYSKEYUP
+WM_APP
