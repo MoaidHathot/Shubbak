@@ -99,6 +99,53 @@ title regex="/[Pp]ower[Pp]oint.*/"      # wrong - the slashes are matched litera
 title regex="[Pp]ower[Pp]oint.*"        # right
 ```
 
+## "Windows have disappeared"
+
+They are almost certainly **cloaked**, not closed. Windows on inactive workspaces are
+concealed with a DWM cloak, which removes them from the screen, Alt+Tab and the
+taskbar while leaving the process running.
+
+The important property is that this is **recoverable**: a cloaked window still reports
+as visible to Win32, so simply starting Shubbak again adopts it and un-cloaks it when
+its workspace becomes active.
+
+```
+shubbak-wm            # restart; concealed windows come back
+```
+
+Shubbak also un-cloaks everything on a clean exit. If it was killed outright, the
+restart above is the recovery.
+
+If cloaking misbehaves with a particular application, fall back:
+
+```kdl
+general { hide-method "hide" }
+```
+
+Be aware that `hide` is genuinely unrecoverable - a hidden window is rejected by the
+filter as invisible and cannot be re-adopted - so only use it if cloaking is broken in
+your environment, which mainly means remote sessions with no compositor.
+
+## "Dragging a window did the wrong thing"
+
+Dropping a tiled window is resolved against the tree:
+
+| Where you drop | What happens |
+|---|---|
+| middle of another window | the two swap places |
+| near its left/right edge | inserted beside it, horizontally |
+| near its top/bottom edge | stacked with it, vertically |
+| far from any window | nothing; it snaps back |
+
+The edge zone is the outer quarter of each side, leaving the middle half as the swap
+zone. A drop landing in the gap between two tiles still resolves to the nearest one.
+
+Dragging a **border** resizes instead, converting the new size back into the tree's
+ratios. A move of fewer than 8px, or a size change of fewer than 4px, is ignored -
+otherwise clicking a title bar would rearrange the layout.
+
+Run with `--log-level debug` to see each drop resolved.
+
 ## "Windows jump around" / "the layout is wrong"
 
 The window tree in the diagnostic report shows the nesting, the layout on each
@@ -190,9 +237,8 @@ These are design constraints, not bugs:
 - **No whole-desktop workspace transitions.** Windows gives no compositor access.
   Per-window move, resize and fade animations work; sliding the entire desktop does
   not. Komorebi has the same ceiling.
-- **Dragging a tiled window snaps it back.** Drag-to-swap needs hit-testing against
-  the tree and is not implemented. Float the window first (`alt+shift+n` in the
-  example config) to position it freely.
+- **Drag-to-swap has no live preview.** The drop is resolved when you release the
+  mouse, so there is no highlight showing where the window will land while you drag.
 - **Elevated windows need an elevated Shubbak.** They are detected and reported, but
   cannot be moved.
 - **A window cannot be on two workspaces at once.** Tags relocate a window to

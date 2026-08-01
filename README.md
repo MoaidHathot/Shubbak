@@ -20,7 +20,7 @@ Feature complete and working. Not yet battle-tested — see
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**392 tests**, ~330 ms. Everything except the platform layer and the renderer runs
+**459 tests**, ~670 ms. Everything except the platform layer and the renderer runs
 headless.
 
 ## Why .NET
@@ -143,6 +143,16 @@ Titles are hashed rather than stored.
 **Animation** — per-event durations and cubic-bezier curves. Re-targeting blends from
 the current position, so rapid layout changes never make windows jump backwards.
 
+**Mouse** — drag a tiled window onto the middle of another to swap them, or near an
+edge to insert beside it. Drag a border to resize, which writes back to the tree''s
+ratios rather than being undone by the next layout pass.
+
+**Recoverable concealment** — windows on inactive workspaces are cloaked rather than
+hidden. A cloaked window still reports as visible to Win32, so if Shubbak exits,
+crashes or is killed, the next run adopts it and un-cloaks it. Hiding, which is what
+this originally did, is unrecoverable: the filter rejects invisible windows, so they
+stay stranded with their process still running.
+
 ## Taj
 
 Four layers, each independently replaceable:
@@ -185,7 +195,7 @@ src/
   Shubbak.Cli/      shubbak
   Taj.Core/         widget tree, flex layout, sources          — no drawing code
   Taj/              bar host + GDI renderer
-tests/              392 tests
+tests/              459 tests
 ```
 
 `Shubbak.Core` contains no Win32 at all. That is the highest-leverage decision in the

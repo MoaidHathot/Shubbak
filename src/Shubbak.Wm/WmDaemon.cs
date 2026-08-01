@@ -42,6 +42,9 @@ public sealed class WmDaemon : IDisposable
     private readonly Dictionary<nint, WindowNode> _managed = [];
     private readonly HashSet<nint> _ignored = [];
 
+    /// <summary>Window geometry captured when a mouse drag started.</summary>
+    private readonly Dictionary<nint, Rect> _dragOrigin = [];
+
     private WinEventSource? _winEvents;
     private KeyboardSource? _keyboard;
 
@@ -352,6 +355,12 @@ public sealed class WmDaemon : IDisposable
                     Publish(_wm.SetWindowState(restoring, WindowState.Tiling));
                 break;
 
+            case WinEventKind.MoveSizeStart:
+                // The starting geometry is what distinguishes a move from a resize,
+                // and a real drag from a click on a title bar.
+                if (_managed.ContainsKey(handle)) _dragOrigin[handle] = Win32Window.GetBounds(handle);
+                break;
+
             case WinEventKind.MoveSizeEnd:
                 HandleUserMove(handle);
                 break;
@@ -371,21 +380,77 @@ public sealed class WmDaemon : IDisposable
     /// Handles the user finishing a drag or resize with the mouse.
     /// </summary>
     /// <remarks>
-    /// For a floating window the new geometry is simply adopted. For a tiled window
-    /// the move is undone by the next layout pass - dragging a tile is a request to
-    /// swap it, which needs hit-testing against the tree and is P2 work. Snapping it
-    /// back is the honest behaviour meanwhile; leaving it displaced would look like
-    /// the window manager had lost track of it.
+    /// <para>
+    /// Three outcomes, decided by comparing the geometry against what it was when the
+    /// drag started:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><b>Floating</b> - the new geometry is simply adopted.</item>
+    ///   <item><b>Resized</b> - the new size is converted back into the tree's size
+    ///   ratios, so dragging a border behaves as it does in any tiling manager.</item>
+    ///   <item><b>Moved</b> - resolved against the tree: dropping on the middle of
+    ///   another window swaps them, dropping near an edge inserts beside it.</item>
+    /// </list>
+    /// <para>
+    /// A drag that resolves to nothing simply relayouts, putting the window back -
+    /// which is honest, because the alternative is guessing.
+    /// </para>
     /// </remarks>
     private void HandleUserMove(nint handle)
     {
         if (!_managed.TryGetValue(handle, out WindowNode? window)) return;
 
+        Rect before = _dragOrigin.TryGetValue(handle, out Rect recorded) ? recorded : window.Rect;
+        _dragOrigin.Remove(handle);
+
+        Rect after = Win32Window.GetBounds(handle);
+
         if (window.State == WindowState.Floating)
         {
-            window.FloatingRect = Win32Window.GetBounds(handle);
+            window.FloatingRect = after;
             _committer.Forget(handle);
             return;
+        }
+
+        if (!window.IsTiled)
+        {
+            _layoutDirty = true;
+            return;
+        }
+
+        if (DragResolver.IsResize(before, after))
+        {
+            Publish(_wm.ResizeFromDrag(window, after));
+            _layoutDirty = true;
+            return;
+        }
+
+        if (!DragResolver.IsMove(before, after))
+        {
+            // A click on a title bar, not a drag. Nothing to do beyond letting the
+            // next layout pass put the window back where it belongs.
+            _layoutDirty = true;
+            return;
+        }
+
+        // The cursor, not the window's corner: the user grabbed the title bar at an
+        // arbitrary offset, so the window's top-left may be far from where they are
+        // pointing.
+        if (Win32Window.GetCursorPosition() is not { } cursor)
+        {
+            _layoutDirty = true;
+            return;
+        }
+
+        WmResult result = _wm.DropWindow(window, cursor.X, cursor.Y);
+        Publish(result);
+
+        if (Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.Debug(LogCategory.Window,
+                result.Succeeded
+                    ? $"dropped \"{Truncate(window.Identity.Title, 32)}\" at {cursor.X},{cursor.Y}"
+                    : $"drop rejected: {result.RejectionReason}");
         }
 
         _layoutDirty = true;
@@ -454,6 +519,7 @@ public sealed class WmDaemon : IDisposable
 
         _committer.Forget(handle);
         _animation.Remove(window.Handle);
+        _dragOrigin.Remove(handle);
         Publish(_wm.UnmanageWindow(window));
 
         Log.Info(LogCategory.Window,

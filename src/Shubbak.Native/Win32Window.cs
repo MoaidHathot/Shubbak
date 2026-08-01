@@ -169,8 +169,22 @@ public static class Win32Window
         }
     }
 
-    public static uint GetProcessId(nint handle)
+    /// <summary>
+    /// The cursor position, in virtual-desktop coordinates.
+    /// </summary>
+    /// <remarks>
+    /// Read when a drag finishes. The window's own rectangle is not enough to decide
+    /// where it was dropped: the user grabs a title bar at an arbitrary offset, so
+    /// the window's top-left can be a long way from the point they are pointing at.
+    /// </remarks>
+    public static (int X, int Y)? GetCursorPosition()
     {
+        if (!PInvoke.GetCursorPos(out System.Drawing.Point point)) return null;
+
+        return (point.X, point.Y);
+    }
+
+    public static uint GetProcessId(nint handle)    {
         uint processId = 0;
         unsafe { _ = PInvoke.GetWindowThreadProcessId(new HWND(handle), &processId); }
         return processId;

@@ -60,6 +60,8 @@ WM_CLOSE
 SetLayeredWindowAttributes
 LAYERED_WINDOW_ATTRIBUTES_FLAGS
 
+GetCursorPos
+
 // --- monitors -------------------------------------------------------------------
 EnumDisplayMonitors
 GetMonitorInfo
