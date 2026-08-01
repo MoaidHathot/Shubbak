@@ -51,8 +51,25 @@ shubbak-wm --config path/to/shubbak.kdl      # the window manager
 taj                                          # the bar (or launch it from startup-command)
 ```
 
-Config is searched for at `--config`, then `$SHUBBAK_CONFIG`, then
-`%USERPROFILE%\.config\shubbak\shubbak.kdl`.
+Config is searched for in this order, first match wins:
+
+1. `--config <path>`
+2. `$SHUBBAK_CONFIG` — a file, or a directory containing `shubbak.kdl`
+3. `$XDG_CONFIG_HOME/shubbak/shubbak.kdl`
+4. each entry of `$XDG_CONFIG_DIRS`
+5. `%USERPROFILE%\.config\shubbak\shubbak.kdl`
+6. `%APPDATA%\shubbak\shubbak.kdl`
+
+XDG is honoured on Windows. The specification is nominally Unix, but people who keep
+dotfiles in a repository and symlink them per machine set `XDG_CONFIG_HOME` on
+Windows too, and every tool that ignores it needs its own bespoke variable instead.
+
+```
+shubbak config-path      # which file is in effect, or everywhere that was searched
+```
+
+The window manager, the CLI and the bar share one resolver, so they cannot disagree
+about which file is loaded.
 
 Run elevated to manage windows belonging to elevated processes. Without it those
 windows are detected and reported, but cannot be moved.

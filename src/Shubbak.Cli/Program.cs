@@ -30,6 +30,7 @@ internal static class Program
                 "query" => await QueryAsync(args).ConfigureAwait(false),
                 "sub" or "subscribe" => await SubscribeAsync(args).ConfigureAwait(false),
                 "check-config" => CheckConfig(args),
+                "config-path" => ShowConfigPath(args),
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
@@ -313,16 +314,24 @@ internal static class Program
 
     private static int CheckConfig(string[] args)
     {
-        string? path = args.Length > 1 ? args[1] : ResolveConfigPath();
+        ConfigLocation location = ConfigPathResolver.Resolve(args.Length > 1 ? args[1] : null);
 
-        if (path is null)
+        if (!location.Found)
         {
-            Console.Error.WriteLine("shubbak: no config file found.");
+            Console.Error.Write(location.DescribeSearch());
+            return 1;
+        }
+
+        string path = location.Path!;
+
+        if (!File.Exists(path))
+        {
+            Console.Error.WriteLine($"shubbak: config file not found: {path}");
             return 1;
         }
 
         ConfigLoadResult result = ConfigLoader.LoadFile(path);
-        string source = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        string source = File.ReadAllText(path);
 
         foreach (Diagnostic diagnostic in result.Diagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
@@ -333,22 +342,28 @@ internal static class Program
         Console.WriteLine(
             errors == 0 && warnings == 0
                 ? $"{path}: ok - {result.Config.Keybindings.Count} keybindings, " +
-                  $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules"
+                  $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules " +
+                  $"(found via {location.Origin})"
                 : $"{path}: {errors} error(s), {warnings} warning(s)");
 
         return errors == 0 ? 0 : 1;
     }
 
-    private static string? ResolveConfigPath()
+    /// <summary>Reports where the config was found, and everywhere that was tried.</summary>
+    private static int ShowConfigPath(string[] args)
     {
-        if (Environment.GetEnvironmentVariable("SHUBBAK_CONFIG") is { Length: > 0 } fromEnvironment)
-            return fromEnvironment;
+        ConfigLocation location = ConfigPathResolver.Resolve(args.Length > 1 ? args[1] : null);
 
-        string standard = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".config", "shubbak", "shubbak.kdl");
+        if (!location.Found)
+        {
+            Console.Error.Write(location.DescribeSearch());
+            return 1;
+        }
 
-        return File.Exists(standard) ? standard : null;
+        Console.WriteLine(location.Path);
+        Console.Error.WriteLine($"(found via {location.Origin})");
+
+        return 0;
     }
 
     private static void PrintUsage() => Console.WriteLine("""
@@ -388,6 +403,9 @@ internal static class Program
 
           check-config [path]  Validate a config file, with carets under any
                                problems. Exits non-zero only for errors.
+
+          config-path          Print which config file is in effect, or list
+                               everywhere that was searched if none was found.
 
           status               Report whether a window manager is running.
 
