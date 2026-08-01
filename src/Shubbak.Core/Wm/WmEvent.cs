@@ -79,6 +79,16 @@ public sealed record WindowStateChanged(
     public override string Topic => "window.state_changed";
 }
 
+/// <summary>A window''s workspace membership changed.</summary>
+/// <param name="Window">The window.</param>
+/// <param name="Tags">Workspaces it now also belongs to.</param>
+/// <param name="IsSticky">Whether it follows every workspace on its monitor.</param>
+public sealed record WindowTagsChanged(
+    WindowNode Window, IReadOnlyList<string> Tags, bool IsSticky) : WmEvent
+{
+    public override string Topic => "window.tags_changed";
+}
+
 /// <summary>A window changed position in the tree, possibly across workspaces.</summary>
 public sealed record WindowMoved(
     WindowNode Window, WorkspaceNode? From, WorkspaceNode To) : WmEvent

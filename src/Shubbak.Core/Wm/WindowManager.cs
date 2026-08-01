@@ -256,6 +256,14 @@ public sealed class WindowManager
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
+        if (workspace.IsScratchpad)
+        {
+            // Activating it would display every stashed window at once, which is the
+            // opposite of what stashing them was for.
+            Emit(new CommandRejected("focus-workspace", "The scratchpad cannot be activated."));
+            return false;
+        }
+
         MonitorNode? monitor = workspace.Monitor;
         if (monitor is null)
         {
@@ -288,6 +296,10 @@ public sealed class WindowManager
         monitor.ActiveWorkspace = workspace;
         FocusedMonitor = monitor;
 
+        // Tagged and sticky windows follow, before focus is decided, so that
+        // FocusPolicy can consider them as candidates.
+        GatherTaggedWindows(workspace);
+
         Emit(new WorkspaceActivated(workspace, deactivated, monitor));
 
         SetFocus(FocusPolicy.OnWorkspaceActivated(workspace));
@@ -295,6 +307,42 @@ public sealed class WindowManager
         if (deactivated is not null) ReapIfTransient(deactivated);
 
         return true;
+    }
+
+    /// <summary>
+    /// Moves tagged and sticky windows into the workspace being activated.
+    /// </summary>
+    /// <remarks>
+    /// A window cannot occupy two places on screen, so membership of several
+    /// workspaces is realised by relocation: the window moves to whichever tagged
+    /// workspace was most recently activated. See <see cref="WindowNode.Tags"/>.
+    /// </remarks>
+    private void GatherTaggedWindows(WorkspaceNode workspace)
+    {
+        List<WindowNode>? incoming = null;
+
+        foreach (WindowNode window in Root.DescendantWindows())
+        {
+            if (!window.HasTags) continue;
+            if (ReferenceEquals(window.Workspace, workspace)) continue;
+            if (!window.BelongsTo(workspace)) continue;
+
+            (incoming ??= []).Add(window);
+        }
+
+        if (incoming is null) return;
+
+        foreach (WindowNode window in incoming)
+        {
+            WorkspaceNode? from = window.Workspace;
+
+            TreeOps.Detach(window);
+            TreeOps.InsertByLayout(workspace, window, workspace.LastFocused);
+
+            Emit(new WindowMoved(window, from, workspace));
+
+            if (from is not null) ReapIfTransient(from);
+        }
     }
 
     /// <summary>Activates the workspace that previously had focus on this monitor.</summary>
@@ -587,6 +635,189 @@ public sealed class WindowManager
         if (source is not null) ReapIfTransient(source);
 
         return Complete();
+    }
+
+    // ---- tags --------------------------------------------------------------
+
+    /// <summary>
+    /// Adds, removes or toggles the focused window's membership of a workspace.
+    /// </summary>
+    /// <param name="workspaceName">The workspace to tag to.</param>
+    /// <param name="mode">Whether to add, remove or toggle.</param>
+    /// <remarks>
+    /// Distinct from <see cref="MoveToWorkspace"/>: moving relocates a window,
+    /// tagging makes it a member of somewhere else <i>as well</i>. The two are bound
+    /// to different keys because they express different intentions - "put this away"
+    /// versus "I want this here too".
+    /// </remarks>
+    public WmResult Tag(string workspaceName, TagMode mode)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(workspaceName);
+
+        if (FocusedWindow is not { } window)
+            return Reject("tag", "No focused window.");
+
+        bool tagged = window.Tags.Contains(workspaceName);
+
+        bool add = mode switch
+        {
+            TagMode.Add => true,
+            TagMode.Remove => false,
+            _ => !tagged,
+        };
+
+        if (add)
+        {
+            // Tagging a window to the workspace it already sits in is meaningless
+            // and would leave a tag that can never be satisfied by relocation.
+            if (string.Equals(window.Workspace?.Name, workspaceName, StringComparison.OrdinalIgnoreCase))
+                return Reject("tag", $"The window is already on workspace '{workspaceName}'.");
+
+            // The tag set records the *complete* membership, including where the
+            // window currently is. Without that the relationship is one-way: the
+            // window would follow to the new workspace and then have no tag for the
+            // one it came from, so it could never come back.
+            if (window.Workspace is { } current) window.AddTag(current.Name);
+
+            window.AddTag(workspaceName);
+        }
+        else
+        {
+            window.RemoveTag(workspaceName);
+
+            // A set naming only the workspace the window sits in says nothing more
+            // than the default, so it is cleared rather than left as a confusing
+            // remnant that shows up in the bar.
+            if (window.Tags.Count <= 1) window.ClearTags();
+        }
+
+        Emit(new WindowTagsChanged(window, [.. window.Tags], window.IsSticky));
+        return Complete();
+    }
+
+    /// <summary>
+    /// Toggles whether the focused window follows every workspace on its monitor.
+    /// </summary>
+    public WmResult ToggleSticky()
+    {
+        if (FocusedWindow is not { } window)
+            return Reject("sticky", "No focused window.");
+
+        window.IsSticky = !window.IsSticky;
+
+        Emit(new WindowTagsChanged(window, [.. window.Tags], window.IsSticky));
+        return Complete();
+    }
+
+    /// <summary>Removes every tag from the focused window.</summary>
+    public WmResult ClearTags()
+    {
+        if (FocusedWindow is not { } window)
+            return Reject("tag", "No focused window.");
+
+        window.ClearTags();
+        window.IsSticky = false;
+
+        Emit(new WindowTagsChanged(window, [], false));
+        return Complete();
+    }
+
+    // ---- scratchpad --------------------------------------------------------
+
+    /// <summary>
+    /// The workspace name used to hold scratchpad windows.
+    /// </summary>
+    /// <remarks>
+    /// A reserved name rather than a separate mechanism: a scratchpad is simply a
+    /// workspace that is never activated, so everything that already works for
+    /// workspaces - the tree, focus, layout, reaping - works for it unchanged.
+    /// </remarks>
+    public const string ScratchpadWorkspace = "__scratchpad";
+
+    /// <summary>
+    /// Sends the focused window to the scratchpad, or brings a scratchpad window
+    /// back to the current workspace.
+    /// </summary>
+    /// <param name="name">
+    /// Which scratchpad slot. Named slots let several windows be stashed and
+    /// summoned independently, which is the difference between a scratchpad that
+    /// gets used and one that does not.
+    /// </param>
+    public WmResult ToggleScratchpad(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        WorkspaceNode? pad = Root.FindWorkspace(ScratchpadWorkspace);
+
+        // Summon: if the named window is already stashed, bring it here.
+        if (pad is not null)
+        {
+            WindowNode? stashed = pad.DescendantWindows()
+                .FirstOrDefault(w => string.Equals(w.ScratchpadName, name, StringComparison.OrdinalIgnoreCase));
+
+            if (stashed is not null)
+            {
+                if (FocusedWorkspace is not { } destination)
+                    return Reject("scratchpad", "No focused workspace to summon into.");
+
+                TreeOps.Detach(stashed);
+                stashed.ScratchpadName = null;
+                stashed.State = WindowState.Floating;
+
+                TreeOps.InsertByLayout(destination, stashed, FocusedWindow);
+
+                Emit(new WindowMoved(stashed, pad, destination));
+                SetFocus(stashed);
+
+                return Complete();
+            }
+        }
+
+        // Stash: send the focused window away under this name.
+        if (FocusedWindow is not { } window)
+            return Reject("scratchpad", "No focused window to stash.");
+
+        pad ??= CreateScratchpad();
+        if (pad is null) return Reject("scratchpad", "No monitor available.");
+
+        WorkspaceNode? source = window.Workspace;
+        WindowNode? successor = FocusPolicy.SuccessorFor(window);
+
+        TreeOps.Detach(window);
+        window.ScratchpadName = name;
+        pad.Add(window);
+
+        Emit(new WindowMoved(window, source, pad));
+        SetFocus(successor);
+
+        if (source is not null) ReapIfTransient(source);
+
+        return Complete();
+    }
+
+    private WorkspaceNode? CreateScratchpad()
+    {
+        MonitorNode? monitor = FocusedMonitor ?? Root.PrimaryMonitor;
+        if (monitor is null) return null;
+
+        // Not transient: reaping it the moment it empties would destroy the slot
+        // names the user is about to summon by.
+        var pad = new WorkspaceNode(ScratchpadWorkspace) { IsTransient = false };
+
+        monitor.AddWorkspace(pad);
+        Emit(new WorkspaceCreated(pad, monitor));
+
+        return pad;
+    }
+
+    /// <summary>Windows currently stashed, with their slot names.</summary>
+    public IEnumerable<(string Name, WindowNode Window)> ScratchpadContents()
+    {
+        WorkspaceNode? pad = Root.FindWorkspace(ScratchpadWorkspace);
+        if (pad is null) yield break;
+
+        foreach (WindowNode window in pad.DescendantWindows())
+            if (window.ScratchpadName is { } name) yield return (name, window);
     }
 
     // ---- sizing ------------------------------------------------------------

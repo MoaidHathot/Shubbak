@@ -51,6 +51,12 @@ public sealed class WmDaemon : IDisposable
     private bool _layoutDirty;
     private bool _disposed;
 
+    private Session? _session;
+    private readonly HashSet<int> _claimedSessionEntries = [];
+    private bool _restoring;
+
+    private long _lastSessionSaveTicks;
+
     /// <summary>
     /// Whether the log level came from the command line, and so must not be
     /// overridden by config.
@@ -85,8 +91,12 @@ public sealed class WmDaemon : IDisposable
     private readonly Queue<Action> _inbox = new();
     private readonly Lock _inboxGate = new();
 
-    public WmDaemon()
+    /// <summary>Where the session is stored; null uses the default location.</summary>
+    private readonly string? _sessionPath;
+
+    public WmDaemon(string? sessionPath = null)
     {
+        _sessionPath = sessionPath;
         _wm = new WindowManager();
         _executor = new CommandExecutor(_wm);
     }
@@ -133,6 +143,10 @@ public sealed class WmDaemon : IDisposable
             $"{_config.Rules.Count} rules");
 
         _loop.Run(TimeSpan.FromMilliseconds(8));
+
+        // A clean shutdown is the one chance to record the arrangement exactly as
+        // the user left it, rather than as it was up to thirty seconds earlier.
+        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath);
     }
 
     public void Stop() => _loop.Stop();
@@ -160,6 +174,8 @@ public sealed class WmDaemon : IDisposable
             }
 
             if (_animation.IsAnimating) AdvanceAnimation(deltaMs);
+
+            MaybeSaveSession(now);
         }
         catch (Exception ex)
         {
@@ -394,7 +410,10 @@ public sealed class WmDaemon : IDisposable
             State = WindowFilter.InitialStateFor(handle, _config.InitialWindowState),
         };
 
-        WorkspaceNode? workspace = WorkspaceFor(handle);
+        // A saved session wins during the initial adoption pass, so a restart puts
+        // windows back where they were rather than piling them onto whichever
+        // workspace happens to be active.
+        WorkspaceNode? workspace = (_restoring ? RestoredWorkspaceFor(window) : null) ?? WorkspaceFor(handle);
 
         _managed[handle] = window;
         Publish(_wm.ManageWindow(window, workspace));
@@ -544,11 +563,61 @@ public sealed class WmDaemon : IDisposable
         return monitor?.ActiveWorkspace;
     }
 
+    /// <summary>
+    /// The workspace a window should be restored to from the saved session.
+    /// </summary>
+    /// <remarks>
+    /// Only consulted while adopting the windows that existed at startup. Applying
+    /// it later would mean a window opened an hour into a session could be yanked
+    /// onto a workspace the user was not looking at.
+    /// </remarks>
+    private WorkspaceNode? RestoredWorkspaceFor(WindowNode window)
+    {
+        if (_session is null) return null;
+
+        RememberedWindow? remembered = SessionStore.Match(_session, window.Identity, _claimedSessionEntries);
+        if (remembered is null) return null;
+
+        WorkspaceNode? workspace = _wm.Root.FindWorkspace(remembered.Workspace);
+        if (workspace is null) return null;
+
+        foreach (string tag in remembered.Tags) window.AddTagForRestore(tag);
+        window.IsSticky = remembered.Sticky;
+
+        if (Enum.TryParse(remembered.State, out WindowState state) && state != WindowState.Minimised)
+            window.State = state;
+
+        Log.Debug(LogCategory.Window,
+            $"restored \"{Truncate(window.Identity.Title, 32)}\" to workspace {workspace.Name}");
+
+        return workspace;
+    }
+
     /// <summary>Brings windows that already exist under management at startup.</summary>
     private void AdoptExistingWindows()
     {
-        foreach (nint handle in Win32Window.EnumerateTopLevel())
-            TryManage(handle);
+        _session = SessionStore.Load(_sessionPath);
+
+        if (_session is not null)
+        {
+            Log.Info(LogCategory.Wm,
+                $"session loaded: {_session.Windows.Count} remembered windows from {_session.SavedAt:g}");
+        }
+
+        _restoring = true;
+
+        try
+        {
+            foreach (nint handle in Win32Window.EnumerateTopLevel()) TryManage(handle);
+        }
+        finally
+        {
+            // Restoration applies only to the initial adoption pass. A window opened
+            // later must land where the user is, not where an old session says.
+            _restoring = false;
+            _session = null;
+            _claimedSessionEntries.Clear();
+        }
     }
 
     // ---- rules -------------------------------------------------------------
@@ -842,6 +911,38 @@ public sealed class WmDaemon : IDisposable
         {
             WindowActions.Focus((nint)focused.Handle);
         }
+    }
+
+    /// <summary>
+    /// Periodically writes the session, so a crash or a power cut does not lose the
+    /// arrangement.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Time-based rather than change-based. Saving on every change would write the
+    /// file dozens of times while dragging a window, and the arrangement genuinely
+    /// worth preserving is the settled one, not every intermediate state.
+    /// </para>
+    /// <para>
+    /// Skipped while windows are animating, so a save never lands mid-transition and
+    /// records geometry that was never really the layout.
+    /// </para>
+    /// </remarks>
+    private void MaybeSaveSession(long now)
+    {
+        if (_animation.IsAnimating) return;
+
+        const double IntervalMs = 30_000;
+
+        if (_lastSessionSaveTicks != 0 &&
+            (now - _lastSessionSaveTicks) * 1000.0 / Stopwatch.Frequency < IntervalMs)
+        {
+            return;
+        }
+
+        _lastSessionSaveTicks = now;
+
+        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath);
     }
 
     /// <summary>Drives one frame of in-flight window motion.</summary>

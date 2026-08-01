@@ -176,6 +176,18 @@ keybindings {
     bind "alt+d" { move-workspace --direction up }
     bind "alt+s" { move-workspace --direction down }
 
+    // Tags: make a window a member of several workspaces at once. Unlike `move`,
+    // which relocates a window, tagging means "I want this here too" - the window
+    // then follows to whichever tagged workspace you switch to.
+    bind "alt+t"       { tag --toggle "-" }      // also show on the Chat workspace
+    bind "alt+shift+t" { sticky }                // follow every workspace
+    bind "alt+ctrl+t"  { tag --clear }
+
+    // Scratchpad: stash a window out of sight, summon it back on top. Named slots
+    // let several windows be stashed independently.
+    bind "alt+n" { scratchpad --name notes }
+    bind "alt+ctrl+n" { scratchpad --name terminal }
+
     // Lifecycle.
     bind "alt+shift+r" { wm-reload-config }
     bind "alt+shift+w" { wm-redraw }

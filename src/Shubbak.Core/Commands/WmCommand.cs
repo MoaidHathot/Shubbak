@@ -70,6 +70,32 @@ public sealed record MoveWorkspaceToMonitorCommand(Direction Direction) : WmComm
     public override string Name => "move-workspace";
 }
 
+// ---- tags ------------------------------------------------------------------
+
+/// <summary><c>tag --add 3</c> / <c>tag --remove 3</c> / <c>tag --toggle 3</c></summary>
+public sealed record TagCommand(string Workspace, Wm.TagMode Mode) : WmCommand
+{
+    public override string Name => "tag";
+}
+
+/// <summary><c>sticky</c> - follow every workspace on this monitor.</summary>
+public sealed record ToggleStickyCommand : WmCommand
+{
+    public override string Name => "sticky";
+}
+
+/// <summary><c>scratchpad --name notes</c> - stash or summon.</summary>
+public sealed record ScratchpadCommand(string Slot) : WmCommand
+{
+    public override string Name => "scratchpad";
+}
+
+/// <summary><c>tag --clear</c></summary>
+public sealed record ClearTagsCommand : WmCommand
+{
+    public override string Name => "tag-clear";
+}
+
 // ---- sizing ----------------------------------------------------------------
 
 /// <summary>

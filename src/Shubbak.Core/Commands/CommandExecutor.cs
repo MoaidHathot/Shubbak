@@ -101,6 +101,11 @@ public sealed class CommandExecutor
             MoveToWorkspaceCommand c => new(_wm.MoveToWorkspace(c.Workspace)),
             MoveWorkspaceToMonitorCommand c => new(_wm.MoveWorkspaceToMonitor(c.Direction)),
 
+            TagCommand c => new(_wm.Tag(c.Workspace, c.Mode)),
+            ToggleStickyCommand => new(_wm.ToggleSticky()),
+            ClearTagsCommand => new(_wm.ClearTags()),
+            ScratchpadCommand c => new(_wm.ToggleScratchpad(c.Slot)),
+
             ResizeCommand c => new(_wm.Resize(c.Axis, c.Delta)),
             EqualiseCommand => new(_wm.EqualiseSiblings()),
 
