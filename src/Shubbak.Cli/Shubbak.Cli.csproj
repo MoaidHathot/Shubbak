@@ -3,26 +3,19 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <AssemblyName>shubbak-wm</AssemblyName>
-    <RootNamespace>Shubbak.Wm</RootNamespace>
+    <AssemblyName>shubbak</AssemblyName>
+    <RootNamespace>Shubbak.Cli</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-
-    <!-- Published as NativeAOT per ADR 0001: ~1.7 MB, no runtime prerequisite. -->
     <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
-
-    <!-- The animation and hook paths must not be perturbed by server GC. -->
-    <ServerGarbageCollection>false</ServerGarbageCollection>
-    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />
+    <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\Shubbak.Native\Shubbak.Native.csproj" />
     <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
-    <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
   </ItemGroup>
 
 </Project>
