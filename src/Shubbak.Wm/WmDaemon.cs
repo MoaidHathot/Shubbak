@@ -6,6 +6,7 @@ using Shubbak.Core.Commands;
 using Shubbak.Core.Layouts;
 using Shubbak.Core.Tree;
 using Shubbak.Core.Wm;
+using Shubbak.Ipc;
 using Shubbak.Native;
 
 namespace Shubbak.Wm;
@@ -63,6 +64,19 @@ public sealed class WmDaemon : IDisposable
     /// <summary>Reused across frames so committing never allocates either.</summary>
     private readonly List<Placement> _commitScratch = [];
 
+    private IpcServer? _ipc;
+
+    /// <summary>
+    /// Work handed in by IPC threads, to be run on the daemon thread.
+    /// </summary>
+    /// <remarks>
+    /// The tree must never be touched from a pipe thread: an arrange pass running
+    /// concurrently with a mutation would observe a half-changed tree and produce
+    /// geometry that is essentially impossible to reproduce or debug.
+    /// </remarks>
+    private readonly Queue<Action> _inbox = new();
+    private readonly Lock _inboxGate = new();
+
     public WmDaemon()
     {
         _wm = new WindowManager();
@@ -98,6 +112,9 @@ public sealed class WmDaemon : IDisposable
         _keyboard = new KeyboardSource();
         _keyboard.Start(_bindings.IsBound);
 
+        _ipc = new IpcServer();
+        _ipc.Start(new WmDaemonIpc(this).HandleAsync);
+
         RunStartupCommands();
 
         _layoutDirty = true;
@@ -125,6 +142,7 @@ public sealed class WmDaemon : IDisposable
 
             DrainKeyboard();
             DrainWindowEvents();
+            DrainInbox();
 
             if (_layoutDirty)
             {
@@ -168,6 +186,49 @@ public sealed class WmDaemon : IDisposable
 
         for (int i = 0; i < count; i++)
             HandleWindowEvent(_eventScratch[i]);
+    }
+
+    /// <summary>Runs work queued by IPC threads, on the daemon thread.</summary>
+    private void DrainInbox()
+    {
+        while (true)
+        {
+            Action? work;
+
+            lock (_inboxGate)
+            {
+                if (_inbox.Count == 0) return;
+                work = _inbox.Dequeue();
+            }
+
+            try
+            {
+                work();
+            }
+            catch (Exception ex)
+            {
+                Log($"error handling IPC request: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> on the daemon thread and awaits its result.
+    /// </summary>
+    internal Task<T> InvokeAsync<T>(Func<T> work)
+    {
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        lock (_inboxGate)
+        {
+            _inbox.Enqueue(() =>
+            {
+                try { completion.SetResult(work()); }
+                catch (Exception ex) { completion.SetException(ex); }
+            });
+        }
+
+        return completion.Task;
     }
 
     private void HandleWindowEvent(WinEventNotification notification)
@@ -389,6 +450,106 @@ public sealed class WmDaemon : IDisposable
 
             if (outcome.Events.Count > 0) _layoutDirty = true;
         }
+    }
+
+    /// <summary>Runs one command, for IPC. Must be called on the daemon thread.</summary>
+    internal CommandOutcome RunCommand(WmCommand command)
+    {
+        CommandOutcome outcome = _executor.Execute(command);
+
+        Publish(outcome.Result);
+        PerformHostAction(outcome);
+
+        if (outcome.Events.Count > 0) _layoutDirty = true;
+
+        return outcome;
+    }
+
+    /// <summary>
+    /// Explains how Shubbak sees a window.
+    /// </summary>
+    /// <remarks>
+    /// Reports every matchable attribute, whether the window is manageable and why
+    /// not if it is not, and which configured rules match. This is the answer to
+    /// "why is this window not being tiled?", which is otherwise diagnosed only by
+    /// trial and error.
+    /// </remarks>
+    internal string Inspect(nint handle)
+    {
+        var report = new System.Text.StringBuilder();
+
+        WindowAttributes attributes = ToAttributes(handle);
+        ManageDecision decision = WindowFilter.Evaluate(handle);
+        Rect bounds = Win32Window.GetBounds(handle);
+
+        report.AppendLine($"handle       0x{handle:X}");
+        report.AppendLine($"title        {attributes.Title}");
+        report.AppendLine($"class        {attributes.ClassName}");
+        report.AppendLine($"process      {attributes.ProcessName}");
+        report.AppendLine($"path         {attributes.ProcessPath ?? "(unreadable - elevated process?)"}");
+        report.AppendLine($"rect         {bounds}");
+        report.AppendLine($"style        0x{Win32Window.GetStyleBits(handle):X8}");
+        report.AppendLine($"ex-style     0x{Win32Window.GetExStyleBits(handle):X8}");
+        report.AppendLine($"visible      {Win32Window.IsVisible(handle)}");
+        report.AppendLine($"cloaked      {Win32Window.IsCloaked(handle)}");
+        report.AppendLine($"minimised    {Win32Window.IsMinimised(handle)}");
+        report.AppendLine();
+
+        report.AppendLine($"manageable   {(decision.Manageable ? "yes" : "no")} - {decision.Explain()}");
+
+        if (_managed.TryGetValue(handle, out WindowNode? window))
+        {
+            report.AppendLine($"managed      yes");
+            report.AppendLine($"  node       #{window.Id}");
+            report.AppendLine($"  state      {window.State}");
+            report.AppendLine($"  workspace  {window.Workspace?.Name ?? "(none)"}");
+            report.AppendLine($"  focused    {ReferenceEquals(window, _wm.FocusedWindow)}");
+        }
+        else
+        {
+            report.AppendLine($"managed      no{(_ignored.Contains(handle) ? " (excluded by a rule)" : "")}");
+        }
+
+        report.AppendLine();
+        report.AppendLine("rules");
+
+        if (_config.Rules.Count == 0)
+        {
+            report.AppendLine("  (none configured)");
+        }
+        else
+        {
+            foreach (WindowRule rule in _config.Rules)
+            {
+                bool matched = rule.Matches(attributes, _config.Apps);
+                report.AppendLine($"  [{(matched ? "x" : " ")}] {rule.Name} (line {rule.Span.Start.Line})");
+            }
+        }
+
+        // Listing apps separately is what turns "my rule does not fire" into a
+        // one-glance diagnosis: the rule is fine, the app definition is what missed.
+        if (_config.Apps.Count > 0)
+        {
+            report.AppendLine();
+            report.AppendLine("apps");
+
+            foreach ((string name, AppDefinition app) in _config.Apps)
+            {
+                bool matched = app.Matches(attributes);
+                report.AppendLine($"  [{(matched ? "x" : " ")}] {name}");
+
+                if (!matched)
+                {
+                    foreach (WindowMatcher matcher in app.Matchers)
+                    {
+                        bool ok = matcher.Matches(attributes.Get(matcher.Target));
+                        if (!ok) report.AppendLine($"        failed: {matcher}");
+                    }
+                }
+            }
+        }
+
+        return report.ToString();
     }
 
     private void PerformHostAction(CommandOutcome outcome)
@@ -651,6 +812,8 @@ public sealed class WmDaemon : IDisposable
             // and the lookup table, which enforces it.
             if (wmEvent is BindingModeChanged mode) _bindings.SetMode(mode.Mode);
             if (wmEvent is CommandRejected rejected) Log($"{rejected.Command}: {rejected.Reason}");
+
+            _ipc?.Publish(wmEvent.Topic, StateProjection.Payload(wmEvent, _wm));
         }
 
         _layoutDirty = true;
@@ -667,5 +830,6 @@ public sealed class WmDaemon : IDisposable
 
         _keyboard?.Dispose();
         _winEvents?.Dispose();
+        if (_ipc is not null) _ipc.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 }

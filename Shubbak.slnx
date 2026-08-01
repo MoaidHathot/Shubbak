@@ -3,8 +3,10 @@
     <Project Path="spikes/Shubbak.Spike/Shubbak.Spike.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Shubbak.Cli/Shubbak.Cli.csproj" />
     <Project Path="src/Shubbak.Config/Shubbak.Config.csproj" />
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
+    <Project Path="src/Shubbak.Ipc/Shubbak.Ipc.csproj" />
     <Project Path="src/Shubbak.Native/Shubbak.Native.csproj" />
     <Project Path="src/Shubbak.Wm/Shubbak.Wm.csproj" />
   </Folder>
