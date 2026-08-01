@@ -11,7 +11,8 @@ public enum ExclusionReason
     None,
     NotAWindow,
     NotVisible,
-    Cloaked,
+    CloakedByShell,
+    CloakedByOwner,
     ChildWindow,
     ToolWindow,
     NotInAltTabList,
@@ -37,7 +38,9 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
         ExclusionReason.None => "manageable",
         ExclusionReason.NotAWindow => "handle is not a live window",
         ExclusionReason.NotVisible => "window is not visible",
-        ExclusionReason.Cloaked => "window is cloaked by the shell (usually a suspended UWP app)",
+        ExclusionReason.CloakedByShell =>
+            "window is cloaked by the shell - a suspended UWP app, or a window on another Windows virtual desktop",
+        ExclusionReason.CloakedByOwner => "window is cloaked because its owner is",
         ExclusionReason.ChildWindow => "window is a child, not top-level",
         ExclusionReason.ToolWindow => "window has WS_EX_TOOLWINDOW and not WS_EX_APPWINDOW",
         ExclusionReason.NotInAltTabList => "window is owned by another window, so it is not an Alt+Tab target",
@@ -139,11 +142,29 @@ public static class WindowFilter
         if (s_excludedClasses.Contains(className))
             return ManageDecision.No(ExclusionReason.ExcludedClass);
 
-        // Cloaked windows are composited out by the shell - typically a suspended
-        // UWP app. They report as visible, so without this check we would reserve
-        // screen space for something the user cannot see or focus.
-        if (Win32Window.IsCloaked(handle))
-            return ManageDecision.No(ExclusionReason.Cloaked);
+        // Cloaking has to be read three ways, not as a boolean.
+        //
+        // The shell cloaks suspended UWP apps and everything on other Windows
+        // virtual desktops - reserving screen space for those produces phantom tiles
+        // and steals windows from other desktops, so both are rejected.
+        //
+        // An *application-level* cloak, by contrast, is what Shubbak itself uses to
+        // conceal inactive workspaces. Those windows must stay manageable, because
+        // adopting and un-cloaking them is precisely how a restart recovers from a
+        // crash that left windows concealed.
+        switch (Win32Window.GetCloakState(handle))
+        {
+            case Win32Window.CloakState.Shell:
+                return ManageDecision.No(ExclusionReason.CloakedByShell);
+
+            case Win32Window.CloakState.Inherited:
+                return ManageDecision.No(ExclusionReason.CloakedByOwner);
+
+            case Win32Window.CloakState.App:
+            case Win32Window.CloakState.None:
+            default:
+                break;
+        }
 
         if (!IsAltTabWindow(hwnd))
             return ManageDecision.No(ExclusionReason.NotInAltTabList);

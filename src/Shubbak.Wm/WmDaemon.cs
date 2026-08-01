@@ -147,6 +147,25 @@ public sealed class WmDaemon : IDisposable
         // A clean shutdown is the one chance to record the arrangement exactly as
         // the user left it, rather than as it was up to thirty seconds earlier.
         if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath);
+
+        RestoreConcealedWindows();
+    }
+
+    /// <summary>
+    /// Brings every concealed window back before exiting.
+    /// </summary>
+    /// <remarks>
+    /// Without this, every window on an inactive workspace is left off screen when
+    /// Shubbak stops - process still running, nothing in Alt+Tab or the taskbar, and
+    /// no way for the user to reach it. Cloaking makes that recoverable on the next
+    /// run, but leaving the desktop as it was found is the correct behaviour.
+    /// </remarks>
+    private void RestoreConcealedWindows()
+    {
+        int restored = _committer.RestoreAll();
+
+        if (restored > 0)
+            Log.Info(LogCategory.Window, $"restored {restored} concealed window(s) on shutdown");
     }
 
     public void Stop() => _loop.Stop();
@@ -720,7 +739,7 @@ public sealed class WmDaemon : IDisposable
         report.AppendLine($"style        0x{Win32Window.GetStyleBits(handle):X8}");
         report.AppendLine($"ex-style     0x{Win32Window.GetExStyleBits(handle):X8}");
         report.AppendLine($"visible      {Win32Window.IsVisible(handle)}");
-        report.AppendLine($"cloaked      {Win32Window.IsCloaked(handle)}");
+        report.AppendLine($"cloaked      {Win32Window.GetCloakState(handle)}");
         report.AppendLine($"minimised    {Win32Window.IsMinimised(handle)}");
         report.AppendLine();
 
@@ -1045,6 +1064,7 @@ public sealed class WmDaemon : IDisposable
         _config = result.Config;
         _wm.Options = _config.ToWmOptions();
         _animation.Options = _config.Animation;
+        _committer.UseCloaking = _config.UseCloaking;
         _bindings.Load(_config);
 
         ApplyLoggingConfig(initial);
@@ -1126,6 +1146,18 @@ public sealed class WmDaemon : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // Belt and braces: Run() restores on its way out, but Dispose is also
+        // reached after an exception or a Ctrl+C that unwound differently. Restoring
+        // twice is harmless; restoring never is not.
+        try
+        {
+            RestoreConcealedWindows();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(LogCategory.Window, "could not restore concealed windows", ex);
+        }
 
         _keyboard?.Dispose();
         _winEvents?.Dispose();

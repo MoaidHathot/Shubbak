@@ -40,6 +40,35 @@ public sealed class WindowCommitter
     private readonly HashSet<nint> _driving = [];
 
     /// <summary>
+    /// Windows currently concealed, and how.
+    /// </summary>
+    /// <remarks>
+    /// Tracked so <see cref="RestoreAll"/> can undo exactly what was done. Cloaking
+    /// and hiding are not interchangeable at restore time: un-cloaking a window that
+    /// was hidden leaves it hidden, and vice versa.
+    /// </remarks>
+    private readonly Dictionary<nint, ConcealMethod> _concealed = [];
+
+    /// <summary>How a window was taken off screen.</summary>
+    private enum ConcealMethod
+    {
+        Cloaked,
+        Hidden,
+    }
+
+    /// <summary>
+    /// Whether to cloak rather than hide.
+    /// </summary>
+    /// <remarks>
+    /// Cloaking is the default and is strongly preferred - see
+    /// <see cref="Win32Window.Cloak"/> for why. The switch exists because the
+    /// compositor is not universally available (remote sessions, some virtual
+    /// display drivers) and because an individual application may misbehave, and in
+    /// that situation a config option is far better than a rebuild.
+    /// </remarks>
+    public bool UseCloaking { get; set; } = true;
+
+    /// <summary>
     /// Whether a location change for this window was caused by us.
     /// </summary>
     /// <remarks>
@@ -65,7 +94,57 @@ public sealed class WindowCommitter
         {
             _lastCommitted.Remove(handle);
             _driving.Remove(handle);
+            _concealed.Remove(handle);
         }
+    }
+
+    /// <summary>How many windows are currently concealed.</summary>
+    public int ConcealedCount
+    {
+        get { lock (_lastCommitted) return _concealed.Count; }
+    }
+
+    /// <summary>
+    /// Brings every concealed window back into view.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called on shutdown - clean exit, Ctrl+C, and after an unhandled exception.
+    /// Without it, every window on an inactive workspace stays off screen after
+    /// Shubbak stops, with its process still running and no way for the user to
+    /// reach it. That is the failure mode that makes people uninstall a window
+    /// manager and not come back.
+    /// </para>
+    /// <para>
+    /// Cloaking makes this recoverable even when it is <i>not</i> called - a killed
+    /// process leaves cloaked windows that the next run adopts and un-cloaks - but
+    /// leaving the desktop tidy on the way out is still the right behaviour.
+    /// </para>
+    /// </remarks>
+    /// <returns>How many windows were restored.</returns>
+    public int RestoreAll()
+    {
+        KeyValuePair<nint, ConcealMethod>[] concealed;
+
+        lock (_lastCommitted)
+        {
+            concealed = [.. _concealed];
+            _concealed.Clear();
+        }
+
+        int restored = 0;
+
+        foreach ((nint handle, ConcealMethod method) in concealed)
+        {
+            if (!Win32Window.Exists(handle)) continue;
+
+            if (method == ConcealMethod.Cloaked) Win32Window.Uncloak(handle);
+            else PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+
+            restored++;
+        }
+
+        return restored;
     }
 
     /// <summary>
@@ -268,19 +347,78 @@ public sealed class WindowCommitter
         }
     }
 
-    private static void Show(nint handle)
+    /// <summary>
+    /// Brings a window back into view, undoing whatever concealed it.
+    /// </summary>
+    private void Show(nint handle)
     {
+        // A minimised window was minimised by the user; restoring it here would
+        // override a deliberate choice every time the layout was recomputed.
         if (Win32Window.IsMinimised(handle)) return;
-        if (Win32Window.IsVisible(handle)) return;
 
-        // Async so a hung application cannot stall the whole relayout.
-        PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+        ConcealMethod? method;
+
+        lock (_lastCommitted)
+        {
+            method = _concealed.TryGetValue(handle, out ConcealMethod recorded)
+                ? recorded
+                : null;
+
+            _concealed.Remove(handle);
+        }
+
+        if (method == ConcealMethod.Cloaked)
+        {
+            Win32Window.Uncloak(handle);
+            return;
+        }
+
+        if (method == ConcealMethod.Hidden)
+        {
+            // Async so a hung application cannot stall the whole relayout.
+            PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+            return;
+        }
+
+        // Not concealed by us. It may still be cloaked from a previous run that was
+        // killed before it could restore, in which case un-cloaking it here is
+        // exactly the recovery that makes cloaking worth using.
+        if (Win32Window.GetCloakState(handle) == Win32Window.CloakState.App)
+        {
+            Win32Window.Uncloak(handle);
+            return;
+        }
+
+        if (!Win32Window.IsVisible(handle))
+            PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
     }
 
-    private static void Hide(nint handle)
+    /// <summary>
+    /// Takes a window off screen.
+    /// </summary>
+    /// <remarks>
+    /// Cloaks by preference, falling back to <c>SW_HIDE</c> if the compositor
+    /// refuses - which happens on some remote sessions and virtual display drivers.
+    /// The method used is recorded per window, because restoring with the wrong one
+    /// leaves the window off screen.
+    /// </remarks>
+    private void Hide(nint handle)
     {
+        lock (_lastCommitted)
+        {
+            if (_concealed.ContainsKey(handle)) return;
+        }
+
+        if (UseCloaking && Win32Window.Cloak(handle))
+        {
+            lock (_lastCommitted) _concealed[handle] = ConcealMethod.Cloaked;
+            return;
+        }
+
         if (!Win32Window.IsVisible(handle)) return;
 
         PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_HIDE);
+
+        lock (_lastCommitted) _concealed[handle] = ConcealMethod.Hidden;
     }
 }

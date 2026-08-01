@@ -20,11 +20,44 @@ namespace Shubbak.Native;
 /// </remarks>
 public static class Win32Window
 {
-    /// <summary>
-    /// <c>DWMWA_CLOAKED</c>. Not present in the CsWin32 enum in all metadata
-    /// versions, so it is spelled out.
-    /// </summary>
+    /// <summary>Who cloaked a window, if anyone.</summary>
+    /// <remarks>
+    /// The distinction matters enormously. A window Shubbak cloaked to hide an
+    /// inactive workspace must still be recognised and managed; a window the shell
+    /// cloaked - a suspended UWP app, or anything on a different Windows virtual
+    /// desktop - must not be.
+    /// </remarks>
+    public enum CloakState
+    {
+        /// <summary>Not cloaked.</summary>
+        None,
+
+        /// <summary>
+        /// Cloaked at the application level. This is what Shubbak's own cloak
+        /// reports as, so these windows are still managed and are un-cloaked when
+        /// their workspace becomes active.
+        /// </summary>
+        App,
+
+        /// <summary>
+        /// Cloaked by the shell: a suspended UWP app, or a window on another
+        /// Windows virtual desktop. Not ours to manage.
+        /// </summary>
+        Shell,
+
+        /// <summary>Cloaked because its owner is. Not ours to manage.</summary>
+        Inherited,
+    }
+
+    /// <summary><c>DWMWA_CLOAK</c> - write to cloak or un-cloak a window.</summary>
+    private const uint DwmwaCloak = 13;
+
+    /// <summary><c>DWMWA_CLOAKED</c> - read to discover who cloaked it.</summary>
     private const uint DwmwaCloaked = 14;
+
+    private const uint DwmCloakedApp = 0x00000001;
+    private const uint DwmCloakedShell = 0x00000002;
+    private const uint DwmCloakedInherited = 0x00000004;
 
     public static bool Exists(nint handle) => PInvoke.IsWindow(new HWND(handle));
 
@@ -37,22 +70,71 @@ public static class Win32Window
     public static unsafe nint GetForeground() => (nint)PInvoke.GetForegroundWindow().Value;
 
     /// <summary>
-    /// True when the shell has cloaked the window.
+    /// Reports who cloaked a window.
     /// </summary>
     /// <remarks>
-    /// UWP and some Electron windows remain "visible" by <c>IsWindowVisible</c>
-    /// while cloaked - they exist but are not composited. Managing them produces
-    /// phantom tiles: space is reserved on screen for a window that cannot be seen
-    /// or focused. This check is the standard remedy and is why every serious
-    /// Windows tiling manager carries it.
+    /// A cloaked window still reports <see cref="IsVisible"/> as true - it exists
+    /// and is "shown", it is simply not composited. That property is what makes
+    /// cloaking recoverable: a restarted Shubbak re-adopts its own cloaked windows
+    /// through the ordinary path and un-cloaks them, whereas a window hidden with
+    /// <c>SW_HIDE</c> would be rejected as invisible and stranded for good.
     /// </remarks>
-    public static unsafe bool IsCloaked(nint handle)
+    public static unsafe CloakState GetCloakState(nint handle)
     {
         uint cloaked = 0;
         HRESULT hr = PInvoke.DwmGetWindowAttribute(
             new HWND(handle), (DWMWINDOWATTRIBUTE)DwmwaCloaked, &cloaked, sizeof(uint));
 
-        return hr.Succeeded && cloaked != 0;
+        if (hr.Failed || cloaked == 0) return CloakState.None;
+
+        // Checked in order of authority: a shell cloak outranks an app cloak, and
+        // an inherited one means the decision was really made about the owner.
+        if ((cloaked & DwmCloakedShell) != 0) return CloakState.Shell;
+        if ((cloaked & DwmCloakedInherited) != 0) return CloakState.Inherited;
+        if ((cloaked & DwmCloakedApp) != 0) return CloakState.App;
+
+        return CloakState.None;
+    }
+
+    /// <summary>
+    /// Cloaks a window so it stops being composited.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// How Shubbak hides the windows of an inactive workspace. Preferred over
+    /// <c>ShowWindow(SW_HIDE)</c> for two reasons.
+    /// </para>
+    /// <para>
+    /// First, recoverability: a cloaked window is still visible to
+    /// <c>IsWindowVisible</c>, so if Shubbak exits, crashes or is killed, the next
+    /// run adopts it normally and un-cloaks it. A hidden window is rejected by the
+    /// filter as invisible and can never be recovered - it vanishes from Alt+Tab and
+    /// the taskbar with the process still running.
+    /// </para>
+    /// <para>
+    /// Second, compatibility: some applications treat <c>WM_SHOWWINDOW</c> with
+    /// <c>FALSE</c> as a signal that the user dismissed them, and behave oddly
+    /// afterwards. Cloaking happens below the application entirely.
+    /// </para>
+    /// </remarks>
+    /// <returns>False if the compositor refused, so the caller can fall back.</returns>
+    public static unsafe bool Cloak(nint handle)
+    {
+        uint value = 1;
+        HRESULT hr = PInvoke.DwmSetWindowAttribute(
+            new HWND(handle), (DWMWINDOWATTRIBUTE)DwmwaCloak, &value, sizeof(uint));
+
+        return hr.Succeeded;
+    }
+
+    /// <summary>Un-cloaks a window.</summary>
+    public static unsafe bool Uncloak(nint handle)
+    {
+        uint value = 0;
+        HRESULT hr = PInvoke.DwmSetWindowAttribute(
+            new HWND(handle), (DWMWINDOWATTRIBUTE)DwmwaCloak, &value, sizeof(uint));
+
+        return hr.Succeeded;
     }
 
     public static Rect GetBounds(nint handle)

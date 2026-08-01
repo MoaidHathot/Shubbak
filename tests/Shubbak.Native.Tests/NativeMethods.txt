@@ -1,0 +1,17 @@
+// Just enough to create throwaway top-level windows for the platform tests.
+
+RegisterClassEx
+WNDCLASSEXW
+CreateWindowEx
+DestroyWindow
+DefWindowProc
+ShowWindow
+SHOW_WINDOW_CMD
+WINDOW_STYLE
+WINDOW_EX_STYLE
+IsWindowVisible
+GetModuleHandle
+PeekMessage
+PEEK_MESSAGE_REMOVE_TYPE
+TranslateMessage
+DispatchMessage
