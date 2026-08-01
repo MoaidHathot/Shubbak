@@ -47,8 +47,24 @@ public sealed class IpcServer : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         _handler = handler;
-        _acceptLoop = Task.Run(AcceptLoopAsync);
+
+        // Several listeners run concurrently. With only one, there is a window
+        // between accepting a client and creating the next instance during which
+        // nothing is listening - so back-to-back CLI invocations fail
+        // intermittently, which is maddening to diagnose because it is timing
+        // dependent and never reproduces under a debugger.
+        _acceptLoop = Task.WhenAll(
+            Enumerable.Range(0, ListenerCount).Select(_ => Task.Run(AcceptLoopAsync)));
     }
+
+    /// <summary>
+    /// How many pipe instances listen at once.
+    /// </summary>
+    /// <remarks>
+    /// Four is ample: the CLI is one short-lived client at a time, and the bar holds
+    /// one long-lived connection per monitor.
+    /// </remarks>
+    private const int ListenerCount = 4;
 
     /// <summary>How many clients are connected.</summary>
     public int ClientCount

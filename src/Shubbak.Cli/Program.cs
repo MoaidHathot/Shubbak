@@ -32,6 +32,8 @@ internal static class Program
                 "check-config" => CheckConfig(args),
                 "layouts" => await QueryAsync(["query", "layouts"]).ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
+                "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
+                "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
         }
@@ -123,6 +125,83 @@ internal static class Program
         {
         }
 
+        return 0;
+    }
+
+    /// <summary>
+    /// Writes a self-contained diagnostic report.
+    /// </summary>
+    /// <remarks>
+    /// The command to run when something is wrong. One file, attachable to a bug
+    /// report as-is, containing the environment, the config, the live window tree
+    /// and the recent log - the last of which is captured whether or not file
+    /// logging was ever switched on, which is what makes it useful for problems
+    /// nobody expected.
+    /// </remarks>
+    private static async Task<int> DiagnoseAsync(string[] args)
+    {
+        string? output = null;
+
+        for (int i = 1; i < args.Length - 1; i++)
+            if (args[i] is "--output" or "-o") output = args[i + 1];
+
+        string reason = args.Length > 1 && !args[1].StartsWith('-') ? args[1] : "manual";
+
+        if (!IpcClient.IsServerRunning())
+        {
+            Console.Error.WriteLine("shubbak: no window manager is running.");
+            Console.Error.WriteLine("hint: a report needs the running window manager to describe its state.");
+            return 2;
+        }
+
+        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+        IpcResponse response = await client.SendAsync("diagnose", reason).ConfigureAwait(false);
+
+        if (!response.Ok)
+        {
+            Console.Error.WriteLine($"shubbak: {response.Error}");
+            return 1;
+        }
+
+        string report = response.Data ?? string.Empty;
+
+        if (output is null)
+        {
+            Console.WriteLine(report);
+            return 0;
+        }
+
+        string full = Path.GetFullPath(output);
+        string? directory = Path.GetDirectoryName(full);
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+
+        await File.WriteAllTextAsync(full, report).ConfigureAwait(false);
+
+        Console.WriteLine($"Report written to {full}");
+        Console.WriteLine($"({report.Length:N0} characters - attach this file to the bug report.)");
+
+        return 0;
+    }
+
+    /// <summary>Reads or changes the log level of a running window manager.</summary>
+    private static async Task<int> LogLevelAsync(string[] args)
+    {
+        if (args.Length < 2)
+        {
+            Console.Error.WriteLine("usage: shubbak log-level <trace|debug|info|warn|error|none>");
+            return 1;
+        }
+
+        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+        IpcResponse response = await client.SendAsync("log-level", args[1]).ConfigureAwait(false);
+
+        if (!response.Ok)
+        {
+            Console.Error.WriteLine($"shubbak: {response.Error}");
+            return 1;
+        }
+
+        Console.WriteLine($"log level is now {response.Data}");
         return 0;
     }
 
@@ -268,6 +347,15 @@ internal static class Program
             shubbak wm-reload-config
 
         DIAGNOSTICS
+          diagnose [reason]    Write a self-contained report: environment, config,
+                               the live window tree, and the recent log. This is the
+                               one command to run when something is wrong.
+                    -o <path>  Write to a file instead of stdout.
+
+          log-level <level>    Change the log level of the running window manager
+                               without restarting it.
+                               trace | debug | info | warn | error | none
+
           inspect [handle]     Describe a window and explain how Shubbak sees it:
                                every matchable attribute, whether it is manageable
                                and why not, and which rules matched.
@@ -290,5 +378,13 @@ internal static class Program
                                omit for everything.
 
             shubbak sub window.focused,window.title_changed
+
+        REPORTING A PROBLEM
+          1. shubbak log-level trace
+          2. reproduce the problem
+          3. shubbak diagnose -o report.md
+
+          Recent log entries are kept in memory even at the default level, so step 3
+          alone is often enough for something that has already happened.
         """);
 }

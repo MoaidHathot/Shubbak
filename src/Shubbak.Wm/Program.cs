@@ -1,4 +1,5 @@
 using Shubbak.Config;
+using Shubbak.Core.Diagnostics;
 
 namespace Shubbak.Wm;
 
@@ -13,6 +14,8 @@ internal static class Program
             return 0;
         }
 
+        ConfigureLogging(args);
+
         string? configPath = ResolveConfigPath(args);
 
         if (args.Contains("--check-config", StringComparer.Ordinal))
@@ -23,7 +26,18 @@ internal static class Program
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
+            Log.Info(LogCategory.Wm, "shutdown requested");
             daemon.Stop();
+        };
+
+        // A crash in a window manager strands every window it was managing, so the
+        // last thing it does is leave behind a report that explains what happened.
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception exception)
+                Log.Error(LogCategory.Wm, "unhandled exception", exception);
+
+            TryWriteCrashReport(configPath);
         };
 
         try
@@ -33,19 +47,94 @@ internal static class Program
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"fatal: {ex}");
+            Log.Error(LogCategory.Wm, "fatal", ex);
+            TryWriteCrashReport(configPath);
             return 1;
+        }
+        finally
+        {
+            Log.CloseFile();
+        }
+    }
+
+    /// <summary>
+    /// Applies logging options from the command line.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately done before anything else, so that a failure during config
+    /// loading or monitor enumeration is itself captured.
+    /// </remarks>
+    private static void ConfigureLogging(string[] args)
+    {
+        if (Value(args, "--log-level") is { } levelText)
+        {
+            if (Log.TryParseLevel(levelText, out LogLevel level))
+            {
+                Log.Level = level;
+            }
+            else
+            {
+                Console.Error.WriteLine(
+                    $"shubbak-wm: unknown log level '{levelText}'. " +
+                    "Use trace, debug, info, warn, error or none.");
+            }
+        }
+
+        if (args.Contains("--quiet", StringComparer.Ordinal)) Log.ToConsole = false;
+
+        // --log-file with no value means "the standard location", because that is
+        // what people want and remembering the path is friction.
+        int index = Array.IndexOf(args, "--log-file");
+        if (index >= 0)
+        {
+            string path = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)
+                ? args[index + 1]
+                : Log.DefaultLogPath;
+
+            try
+            {
+                Log.OpenFile(path);
+                Console.Error.WriteLine($"shubbak-wm: logging to {Log.FilePath}");
+            }
+            catch (IOException ex)
+            {
+                Console.Error.WriteLine($"shubbak-wm: could not open log file: {ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Console.Error.WriteLine($"shubbak-wm: could not open log file: {ex.Message}");
+            }
+        }
+    }
+
+    private static void TryWriteCrashReport(string? configPath)
+    {
+        try
+        {
+            var report = new DiagnosticReport("crash")
+                .AddEnvironment();
+
+            if (configPath is not null && File.Exists(configPath))
+                report.AddCodeSection("Config", File.ReadAllText(configPath), "kdl");
+
+            string path = report
+                .AddRecentLog()
+                .AddFooter()
+                .WriteTo(Path.Combine(
+                    Path.GetDirectoryName(Log.DefaultLogPath)!,
+                    $"crash-{DateTime.Now:yyyyMMdd-HHmmss}.md"));
+
+            Console.Error.WriteLine($"shubbak-wm: crash report written to {path}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Nothing useful left to do; the process is going down regardless.
         }
     }
 
     /// <summary>
     /// Validates config and exits, without touching a single window.
     /// </summary>
-    /// <remarks>
-    /// Exists so a config can be checked from an editor or a pre-commit hook. Every
-    /// diagnostic is rendered with a caret, and the exit code is non-zero only for
-    /// errors - warnings are informative, not fatal.
-    /// </remarks>
     private static int CheckConfig(string? path)
     {
         if (path is null)
@@ -77,14 +166,12 @@ internal static class Program
     /// </summary>
     /// <remarks>
     /// Search order: an explicit <c>--config</c>, then <c>SHUBBAK_CONFIG</c>, then
-    /// the standard location. The environment variable exists because the author
-    /// keeps dotfiles on a separate drive and symlinks them per machine.
+    /// the standard location. The environment variable exists because dotfiles are
+    /// often kept on a separate drive and symlinked per machine.
     /// </remarks>
     private static string? ResolveConfigPath(string[] args)
     {
-        for (int i = 0; i < args.Length - 1; i++)
-            if (string.Equals(args[i], "--config", StringComparison.Ordinal))
-                return args[i + 1];
+        if (Value(args, "--config") is { } explicitPath) return explicitPath;
 
         if (Environment.GetEnvironmentVariable("SHUBBAK_CONFIG") is { Length: > 0 } fromEnvironment)
             return fromEnvironment;
@@ -96,6 +183,15 @@ internal static class Program
         return File.Exists(standard) ? standard : null;
     }
 
+    private static string? Value(string[] args, string flag)
+    {
+        for (int i = 0; i < args.Length - 1; i++)
+            if (string.Equals(args[i], flag, StringComparison.Ordinal))
+                return args[i + 1];
+
+        return null;
+    }
+
     private static void PrintUsage() => Console.WriteLine("""
         Shubbak - a tiling window manager for Windows
 
@@ -103,11 +199,30 @@ internal static class Program
           shubbak-wm [options]
 
         OPTIONS
-          --config <path>   Config file to load.
-                            Defaults to $SHUBBAK_CONFIG, then
-                            %USERPROFILE%\.config\shubbak\shubbak.kdl
-          --check-config    Validate the config and exit without managing windows.
-          --help            Show this message.
+          --config <path>      Config file to load.
+                               Defaults to $SHUBBAK_CONFIG, then
+                               %USERPROFILE%\.config\shubbak\shubbak.kdl
+          --check-config       Validate the config and exit without managing windows.
+
+          --log-level <level>  trace | debug | info | warn | error | none
+                               Default: info.
+                               trace records every window event and command - verbose,
+                               but it is what makes a problem reproducible from a log.
+          --log-file [path]    Also write to a file. With no path, uses
+                               %LOCALAPPDATA%\Shubbak\shubbak.log
+          --quiet              Do not write to the console.
+
+          --help               Show this message.
+
+        DIAGNOSING A PROBLEM
+          Reproduce it with tracing on, then bundle everything into one file:
+
+            shubbak-wm --log-level trace --log-file
+            shubbak diagnose --output report.md
+
+          The report includes the environment, the config, the live window tree and
+          the recent log. Recent entries are kept in memory even when file logging is
+          off, so a report is still useful after an unexpected problem.
 
         NOTES
           Run elevated to manage windows belonging to elevated processes;

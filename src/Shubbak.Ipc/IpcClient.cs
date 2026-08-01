@@ -15,11 +15,34 @@ public sealed class IpcClient : IAsyncDisposable
     private int _nextId = 1;
 
     /// <summary>Whether a window manager is listening.</summary>
+    /// <remarks>
+    /// Enumerates the pipe namespace rather than calling <c>File.Exists</c> on the
+    /// pipe path. <c>File.Exists</c> on <c>\\.\pipe\name</c> is unreliable: it
+    /// reports false while the server is between accepting one client and creating
+    /// the next listening instance, which makes back-to-back CLI invocations fail
+    /// intermittently.
+    /// </remarks>
     public static bool IsServerRunning()
     {
-        // The pipe appears in the filesystem namespace, so this needs no connection
-        // attempt and therefore no timeout.
-        return File.Exists($@"\\.\pipe\{IpcProtocol.PipeName}");
+        try
+        {
+            foreach (string pipe in Directory.EnumerateFiles(@"\\.\pipe\"))
+            {
+                if (string.Equals(
+                        Path.GetFileName(pipe), IpcProtocol.PipeName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Fall through to the cruder check rather than reporting "not running"
+            // for what is really an enumeration failure.
+            return File.Exists($@"\\.\pipe\{IpcProtocol.PipeName}");
+        }
+
+        return false;
     }
 
     /// <summary>Connects, or throws if no window manager is running.</summary>

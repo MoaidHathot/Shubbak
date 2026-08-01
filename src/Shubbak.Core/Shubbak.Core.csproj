@@ -6,4 +6,12 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!--
+      Log.ResetForTests is internal on purpose: production code must never be able
+      to reset the logger, but tests must, because Log is process-wide state.
+    -->
+    <InternalsVisibleTo Include="Shubbak.Core.Tests" />
+  </ItemGroup>
+
 </Project>
