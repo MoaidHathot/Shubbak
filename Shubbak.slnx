@@ -3,10 +3,12 @@
     <Project Path="spikes/Shubbak.Spike/Shubbak.Spike.csproj" />
   </Folder>
   <Folder Name="/src/">
+    <Project Path="src/Shubbak.Config/Shubbak.Config.csproj" />
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
     <Project Path="src/Shubbak.Native/Shubbak.Native.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />
   </Folder>
 </Solution>
