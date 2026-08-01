@@ -675,6 +675,22 @@ public sealed class WindowManager
         return Complete();
     }
 
+    /// <summary>Advances the focused container to the next layout in the cycle.</summary>
+    public WmResult CycleLayout(bool forward)
+    {
+        ContainerNode? container = FocusedWindow?.ParentContainer ?? FocusedWorkspace;
+        if (container is null) return Reject("layout-cycle", "No focused container.");
+
+        ILayout next = forward
+            ? LayoutRegistry.Next(container.Layout)
+            : LayoutRegistry.Previous(container.Layout);
+
+        container.Layout = next;
+        Emit(new LayoutChanged(container, next.Name));
+
+        return Complete();
+    }
+
     // ---- window state ------------------------------------------------------
 
     /// <summary>Sets a window's state, emitting a transition event.</summary>

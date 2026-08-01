@@ -125,12 +125,15 @@ public static class CommandParser
 
             case "layout":
             {
+                if (Flag(rest, "--cycle")) { command = new CycleLayoutCommand(true); return true; }
+                if (Flag(rest, "--cycle-back")) { command = new CycleLayoutCommand(false); return true; }
+
                 string? layout = Value(rest, "--set") ?? Positional(rest);
                 if (layout is null)
                 {
                     diagnostic = Diagnostic.Error(
                         "SHB0302", $"'{text}' does not say which layout to use.", span,
-                        "Write layout --set splitv.");
+                        $"Write layout --set <name>, or layout --cycle. Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}.");
                     return false;
                 }
 

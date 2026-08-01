@@ -173,13 +173,29 @@ public sealed class CommandExecutorTests
     {
         (_, CommandExecutor executor) = Create(workspaces: "1");
 
-        CommandOutcome outcome = executor.Execute(new SetLayoutCommand("fibonacci"));
+        CommandOutcome outcome = executor.Execute(new SetLayoutCommand("hexagonal"));
 
         Assert.False(outcome.Succeeded);
         Assert.Contains(
-            "fibonacci",
+            "hexagonal",
             outcome.Events.OfType<CommandRejected>().Single().Reason,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryRegisteredLayoutCanBeSetByName()
+    {
+        // Guards the registry against a layout that exists but is unreachable from
+        // config or IPC - which would make it effectively invisible to users.
+        (WindowManager wm, CommandExecutor executor) = Create(workspaces: "1");
+        wm.Open("a");
+        wm.Open("b");
+
+        foreach (string name in Shubbak.Core.Layouts.LayoutRegistry.CanonicalNames)
+        {
+            CommandOutcome outcome = executor.Execute(new SetLayoutCommand(name));
+            Assert.True(outcome.Succeeded, $"layout '{name}' could not be set");
+        }
     }
 
     [Fact]

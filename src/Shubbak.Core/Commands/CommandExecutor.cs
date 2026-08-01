@@ -107,6 +107,7 @@ public sealed class CommandExecutor
             ToggleTilingDirectionCommand => new(_wm.ToggleTilingDirection()),
             SplitCommand c => ExecuteWithLayout(c.Layout, _wm.Split),
             SetLayoutCommand c => ExecuteWithLayout(c.Layout, _wm.SetLayout),
+            CycleLayoutCommand c => new(_wm.CycleLayout(c.Forward)),
 
             ToggleFloatingCommand => new(_wm.ToggleFloating()),
             ToggleFullscreenCommand => new(_wm.ToggleFullscreen()),
