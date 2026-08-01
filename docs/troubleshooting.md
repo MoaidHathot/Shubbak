@@ -1,0 +1,174 @@
+# Troubleshooting
+
+Shubbak is built to answer "why did it do that?" rather than leave you guessing.
+This page is the order to try things in.
+
+## The one command
+
+```
+shubbak diagnose -o report.md
+```
+
+Produces a single file containing the environment, your config as loaded, the live
+window tree drawn as indented text, and the last few thousand log entries.
+
+**Recent log entries are kept in memory even at the default log level**, so this is
+usually worth running *after* something has already gone wrong. You do not need to
+have enabled logging in advance.
+
+Attach that file to a bug report.
+
+## "This window isn't being tiled"
+
+The most common question, and the one Shubbak can answer directly:
+
+```
+shubbak inspect
+```
+
+Click the window, wait three seconds. You get every matchable attribute, the
+manageability verdict **with its reason**, and which of your rules and app
+definitions matched — including, for each app that did not match, the specific
+matcher that failed.
+
+Common verdicts and what they mean:
+
+| Reason | What is happening |
+|---|---|
+| `window has WS_EX_TOOLWINDOW and not WS_EX_APPWINDOW` | The app declares itself a palette or utility window. Usually correct to skip. |
+| `window is cloaked by the shell` | A suspended UWP app. It reports as visible but is not composited; tiling it would reserve space for nothing. |
+| `window is owned by another window` | A dialog. Its parent gets the tile — otherwise a save prompt would shrink the document behind it. |
+| `window has no title` | Splash screens and message-only helpers. |
+| `window belongs to an elevated process` | Run Shubbak elevated to manage it. |
+
+If the verdict is `manageable: yes` but a rule matched, the rule is why.
+
+## "My keybinding does nothing"
+
+```
+shubbak check-config
+```
+
+Reports unknown commands with a suggestion, unknown keys, and — the one that catches
+people out — **duplicate bindings**, naming the line that shadows yours.
+
+If the config is clean, watch the binding fire:
+
+```
+shubbak log-level debug
+```
+
+Then press the key. Every resolved binding is logged with the commands it ran. If
+nothing appears, the keystroke never reached a binding; if it appears but nothing
+happens, the command was rejected and the reason is logged.
+
+## "A rule never fires"
+
+`shubbak inspect` lists each app definition with the matcher that failed.
+
+The classic mistake, which Shubbak warns about at load time:
+
+```
+title regex="/[Pp]ower[Pp]oint.*/"      # wrong - the slashes are matched literally
+title regex="[Pp]ower[Pp]oint.*"        # right
+```
+
+## "Windows jump around" / "the layout is wrong"
+
+The window tree in the diagnostic report shows the nesting, the layout on each
+container and each node's size ratio. When a window is the wrong size, the nesting is
+almost always the answer, and an indented drawing shows it at a glance:
+
+```
+workspace "1" [active] layout=splith (4,26 3832x2130)
+  window 0x8D088C "Firefox" (firefox) Tiling ratio=0.500 (4,26 1916x2130)
+  container layout=splitv ratio=0.500 (1920,26 1916x2130)
+    window 0x4009FE "Code" (code) Tiling ratio=0.500 (1920,26 1916x1065)
+```
+
+## "Everything scattered after a reboot"
+
+Session state lives in `%LOCALAPPDATA%\Shubbak\session.json`. Windows are matched by
+process, class and a title hash — deliberately tolerant, because a browser's title
+changes constantly.
+
+If restoration puts things in the wrong place, delete that file to start clean. If it
+puts *nothing* back, check the log for `session loaded` at startup.
+
+## Capturing an intermittent problem
+
+```
+shubbak log-level trace
+```
+
+Changes the level on the **running** window manager — no restart, so you do not lose
+the state that was about to trigger the problem.
+
+Trace records every window event and every command. It is verbose (a busy desktop
+produces well over a hundred entries a second), which is precisely what makes a
+misbehaviour reproducible from a log alone.
+
+Reproduce, then:
+
+```
+shubbak diagnose -o report.md
+```
+
+For a problem that occurs during startup, tracing has to be on from the start:
+
+```
+shubbak-wm --log-level trace --log-file
+```
+
+## Reading a trace
+
+Filter by category:
+
+```powershell
+Select-String -Path report.md -Pattern " Window "     # window lifecycle
+Select-String -Path report.md -Pattern " Hook "       # keystrokes and bindings
+Select-String -Path report.md -Pattern " Command "    # what ran, what was rejected
+Select-String -Path report.md -Pattern " Rule "       # rule matches
+Select-String -Path report.md -Pattern " Layout "     # placement passes
+```
+
+`EVENT_OBJECT_LOCATIONCHANGE` is deliberately **not** traced. It fires around 120
+times a second from a single dragged window; logging it would drown everything else
+and slow down the thing being diagnosed.
+
+## If it crashes
+
+A crash writes `%LOCALAPPDATA%\Shubbak\crash-<timestamp>.md` containing the same
+report, including the log entries leading up to it. Attach that.
+
+## The bar
+
+Taj logs separately:
+
+```
+taj --log-level debug --log-file
+```
+
+- **Blank bar** — check `connected to the window manager` appears. Taj retries
+  indefinitely, so a missing WM shows as repeated connection attempts.
+- **A widget shows nothing** — a widget whose value is empty hides itself, which is
+  deliberate: an empty box with padding looks like a rendering fault. Check the
+  source name in your template matches a declared source.
+- **A widget shows `!`** — the source threw. For a `command` source, run the command
+  by hand.
+
+## Known limitations
+
+These are design constraints, not bugs:
+
+- **No whole-desktop workspace transitions.** Windows gives no compositor access.
+  Per-window move, resize and fade animations work; sliding the entire desktop does
+  not. Komorebi has the same ceiling.
+- **Dragging a tiled window snaps it back.** Drag-to-swap needs hit-testing against
+  the tree and is not implemented. Float the window first (`alt+shift+n` in the
+  example config) to position it freely.
+- **Elevated windows need an elevated Shubbak.** They are detected and reported, but
+  cannot be moved.
+- **A window cannot be on two workspaces at once.** Tags relocate a window to
+  whichever tagged workspace you last activated. A Windows window has one position on
+  one monitor; anything else would be a promise the platform cannot keep.
