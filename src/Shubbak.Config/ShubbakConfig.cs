@@ -79,6 +79,10 @@ public sealed record ShubbakConfig
 
     public WindowEffects Effects { get; init; } = new();
 
+    /// <summary>Animation durations and curves.</summary>
+    public Core.Animation.AnimationOptions Animation { get; init; } =
+        Core.Animation.AnimationOptions.Default;
+
     public IReadOnlyList<string> StartupCommands { get; init; } = [];
 
     public IReadOnlyList<WorkspaceConfig> Workspaces { get; init; } = [];

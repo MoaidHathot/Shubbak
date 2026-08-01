@@ -39,6 +39,22 @@ gaps {
     }
 }
 
+animation {
+    enabled #true
+
+    // Below this many pixels a move is applied instantly. Animating a three-pixel
+    // nudge costs a dozen frames and reads as lag rather than motion.
+    minimum-distance 8
+
+    // Curves matter more than durations for how motion feels: ease-out covers most
+    // of the distance immediately, so it reads as responsive.
+    // Available: linear, ease-in, ease-out, ease-in-out, ease-out-back, ease-out-expo
+    window-open      duration=180 curve="ease-out-expo"
+    window-move      duration=140 curve="ease-out"
+    layout-change    duration=180 curve="ease-out"
+    workspace-switch duration=120 curve="ease-out"
+}
+
 window-effects {
     border #true
     focused-colour "#8dbcff"

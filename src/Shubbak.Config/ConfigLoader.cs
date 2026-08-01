@@ -85,6 +85,7 @@ public sealed class ConfigLoader
         config = ApplyGeneral(config, document.Node("general"));
         config = ApplyGaps(config, document.Node("gaps"));
         config = ApplyEffects(config, document.Node("window-effects"));
+        config = ApplyAnimation(config, document.Node("animation"));
 
         Dictionary<string, AppDefinition> apps = ParseApps(document);
         List<WorkspaceConfig> workspaces = ParseWorkspaces(document.Node("workspaces"));
@@ -192,6 +193,58 @@ public sealed class ConfigLoader
                 Text(node, "focused-colour", null) ?? Text(node, "focused-color", null),
                 Text(node, "unfocused-colour", null) ?? Text(node, "unfocused-color", null)),
         };
+    }
+
+    private ShubbakConfig ApplyAnimation(ShubbakConfig config, KdlNode? node)
+    {
+        if (node is null) return config;
+
+        Core.Animation.AnimationOptions animation = config.Animation;
+
+        animation = animation with
+        {
+            Enabled = Bool(node, "enabled", animation.Enabled),
+            MinimumAnimatedDistance = Math.Max(
+                0, Int(node, "minimum-distance", animation.MinimumAnimatedDistance)),
+            WindowOpen = Profile(node, "window-open", animation.WindowOpen),
+            WindowMove = Profile(node, "window-move", animation.WindowMove),
+            LayoutChange = Profile(node, "layout-change", animation.LayoutChange),
+            WorkspaceSwitch = Profile(node, "workspace-switch", animation.WorkspaceSwitch),
+        };
+
+        return config with { Animation = animation };
+    }
+
+    /// <summary>
+    /// Reads one animation profile, e.g. <c>window-move duration=140 curve="ease-out"</c>.
+    /// </summary>
+    private Core.Animation.AnimationProfile Profile(
+        KdlNode parent, string name, Core.Animation.AnimationProfile fallback)
+    {
+        KdlNode? node = parent.Child(name);
+        if (node is null) return fallback;
+
+        TimeSpan duration = node.Property("duration") is { } d && d.TryAsInt(out int ms)
+            ? TimeSpan.FromMilliseconds(Math.Max(0, ms))
+            : fallback.Duration;
+
+        Core.Animation.Easing curve = fallback.Curve;
+
+        if (node.Property("curve") is { } c)
+        {
+            string curveName = c.AsString();
+
+            if (!Core.Animation.Easing.TryParse(curveName, out curve))
+            {
+                Report(Diagnostic.Warning(
+                    "SHB0421",
+                    $"Unknown easing curve '{curveName}'; using ease-out.",
+                    c.Span,
+                    "Available: linear, ease-in, ease-out, ease-in-out, ease-out-back, ease-out-expo."));
+            }
+        }
+
+        return new Core.Animation.AnimationProfile(duration, curve);
     }
 
     // ---- workspaces --------------------------------------------------------
