@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Shubbak.Config;
 using Shubbak.Core.Animation;
+using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Commands;
 using Shubbak.Core.Layouts;
@@ -49,6 +50,13 @@ public sealed class WmDaemon : IDisposable
 
     private bool _layoutDirty;
     private bool _disposed;
+
+    /// <summary>
+    /// Whether the log level came from the command line, and so must not be
+    /// overridden by config.
+    /// </summary>
+    private readonly bool _logLevelFromCommandLine =
+        Environment.GetCommandLineArgs().Contains("--log-level", StringComparer.Ordinal);
 
     private long _lastTickTicks;
 
@@ -120,8 +128,9 @@ public sealed class WmDaemon : IDisposable
         _layoutDirty = true;
         _loop.Tick += OnTick;
 
-        Log($"Shubbak started. {_managed.Count} windows adopted, " +
-            $"{_wm.Root.Monitors.Count} monitors, {_config.Keybindings.Count} keybindings.");
+        Log.Info(LogCategory.Wm, $"started: {_managed.Count} windows adopted, " +
+            $"{_wm.Root.Monitors.Count} monitors, {_config.Keybindings.Count} keybindings, " +
+            $"{_config.Rules.Count} rules");
 
         _loop.Run(TimeSpan.FromMilliseconds(8));
     }
@@ -156,7 +165,7 @@ public sealed class WmDaemon : IDisposable
         {
             // A daemon that dies leaves every managed window stranded, so the tick
             // never propagates. Anything unexpected is logged and the loop carries on.
-            Log($"error in tick: {ex}");
+            Log.Error(LogCategory.Wm, "tick failed", ex);
         }
     }
 
@@ -172,11 +181,28 @@ public sealed class WmDaemon : IDisposable
             if (!key.IsKeyDown) continue;
 
             Keybinding? binding = _bindings.Resolve(key.VirtualKey, key.Modifiers);
-            if (binding is null) continue;
+
+            if (binding is null)
+            {
+                // Reaching here means the hook claimed the keystroke but nothing
+                // resolved it - almost always a non-pass-through binding mode
+                // swallowing keys, which is worth being able to see.
+                if (Log.IsEnabled(LogLevel.Trace))
+                    Log.Trace(LogCategory.Hook,
+                        $"swallowed vk=0x{key.VirtualKey:X2} mods={key.Modifiers} (no binding)");
+
+                continue;
+            }
+
+            if (Log.IsEnabled(LogLevel.Debug))
+                Log.Debug(LogCategory.Hook, $"{binding.Key.Display} -> {Describe(binding.Commands)}");
 
             Execute(binding.Commands);
         }
     }
+
+    private static string Describe(IReadOnlyList<WmCommand> commands) =>
+        string.Join("; ", commands.Select(c => c.Name));
 
     private void DrainWindowEvents()
     {
@@ -207,7 +233,7 @@ public sealed class WmDaemon : IDisposable
             }
             catch (Exception ex)
             {
-                Log($"error handling IPC request: {ex.Message}");
+                Log.Error(LogCategory.Ipc, "request handler failed", ex);
             }
         }
     }
@@ -234,6 +260,15 @@ public sealed class WmDaemon : IDisposable
     private void HandleWindowEvent(WinEventNotification notification)
     {
         nint handle = notification.Handle;
+
+        // LOCATIONCHANGE is excluded from tracing on purpose. S4 measured 122 of
+        // them per second from a single dragged window; logging them would drown
+        // everything else and slow the very thing being diagnosed.
+        if (notification.Kind != WinEventKind.LocationChanged && Log.IsEnabled(LogLevel.Trace))
+        {
+            Log.Trace(LogCategory.Window,
+                $"{notification.Kind} 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 48)}\"");
+        }
 
         switch (notification.Kind)
         {
@@ -328,7 +363,17 @@ public sealed class WmDaemon : IDisposable
         if (_managed.ContainsKey(handle) || _ignored.Contains(handle)) return;
 
         ManageDecision decision = WindowFilter.Evaluate(handle);
-        if (!decision.Manageable) return;
+
+        if (!decision.Manageable)
+        {
+            // At trace level this is the answer to "why is that window floating?",
+            // recorded as it happens rather than reconstructed afterwards.
+            if (Log.IsEnabled(LogLevel.Trace))
+                Log.Trace(LogCategory.Window,
+                    $"skip 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\": {decision.Explain()}");
+
+            return;
+        }
 
         var attributes = ToAttributes(handle);
 
@@ -337,6 +382,10 @@ public sealed class WmDaemon : IDisposable
             // Remembered, so the same window is not re-evaluated on every one of the
             // many events it will generate over its lifetime.
             _ignored.Add(handle);
+
+            Log.Debug(LogCategory.Rule,
+                $"ignoring 0x{handle:X} \"{Truncate(attributes.Title, 40)}\" ({attributes.ProcessName})");
+
             return;
         }
 
@@ -350,6 +399,10 @@ public sealed class WmDaemon : IDisposable
         _managed[handle] = window;
         Publish(_wm.ManageWindow(window, workspace));
 
+        Log.Info(LogCategory.Window,
+            $"managed 0x{handle:X} \"{Truncate(attributes.Title, 40)}\" ({attributes.ProcessName}) " +
+            $"-> workspace {window.Workspace?.Name ?? "?"}");
+
         ApplyRules(window, attributes, RuleTrigger.OnManage);
 
         _layoutDirty = true;
@@ -362,10 +415,117 @@ public sealed class WmDaemon : IDisposable
         if (!_managed.Remove(handle, out WindowNode? window)) return;
 
         _committer.Forget(handle);
+        _animation.Remove(window.Handle);
         Publish(_wm.UnmanageWindow(window));
+
+        Log.Info(LogCategory.Window,
+            $"unmanaged 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\"");
 
         _layoutDirty = true;
     }
+
+    /// <summary>
+    /// Builds a diagnostic report describing the live window manager.
+    /// </summary>
+    /// <remarks>
+    /// Must be called on the daemon thread: it walks the tree.
+    /// </remarks>
+    internal string BuildDiagnosticReport(string reason)
+    {
+        var report = new DiagnosticReport(reason).AddEnvironment();
+
+        report.AddSection("Window manager", string.Join('\n', new[]
+        {
+            $"- **Monitors**: {_wm.Root.Monitors.Count}",
+            $"- **Workspaces**: {_wm.Root.AllWorkspaces().Count()}",
+            $"- **Managed windows**: {_managed.Count}",
+            $"- **Ignored windows**: {_ignored.Count}",
+            $"- **Focused**: {_wm.FocusedWindow?.Identity.Title ?? "(none)"}",
+            $"- **Binding mode**: {_wm.BindingMode ?? "(default)"}",
+            $"- **Paused**: {_wm.IsPaused}",
+            $"- **Animating**: {_animation.ActiveCount}",
+            $"- **Keybindings**: {_config.Keybindings.Count}",
+            $"- **Rules**: {_config.Rules.Count}",
+            $"- **IPC clients**: {_ipc?.ClientCount ?? 0}",
+        }));
+
+        report.AddCodeSection("Window tree", DescribeTree());
+
+        if (_configPath is not null && File.Exists(_configPath))
+        {
+            try
+            {
+                report.AddCodeSection($"Config ({_configPath})", File.ReadAllText(_configPath), "kdl");
+            }
+            catch (IOException ex)
+            {
+                report.AddSection("Config", $"(could not be read: {ex.Message})");
+            }
+        }
+
+        return report.AddRecentLog().AddFooter().ToString();
+    }
+
+    /// <summary>
+    /// Renders the tree as indented text.
+    /// </summary>
+    /// <remarks>
+    /// A drawing of the tree is worth far more than the same facts as JSON when the
+    /// question is "why is this window the wrong size?" - the nesting is the answer,
+    /// and nesting is what an indented rendering shows at a glance.
+    /// </remarks>
+    private string DescribeTree()
+    {
+        var output = new System.Text.StringBuilder();
+
+        foreach (MonitorNode monitor in _wm.Root.Monitors)
+        {
+            output.AppendLine(
+                $"monitor {monitor.DeviceId}{(monitor.IsPrimary ? " (primary)" : "")} " +
+                $"{monitor.Bounds} work={monitor.WorkArea} dpi={monitor.Dpi}");
+
+            foreach (WorkspaceNode workspace in monitor.Workspaces)
+            {
+                output.AppendLine(
+                    $"  workspace \"{workspace.Name}\"{(workspace.IsActive ? " [active]" : "")} " +
+                    $"layout={workspace.Layout.Name} {workspace.Rect}");
+
+                foreach (Node child in workspace.Children) DescribeNode(child, output, depth: 2);
+            }
+        }
+
+        return output.Length == 0 ? "(empty)" : output.ToString();
+    }
+
+    private void DescribeNode(Node node, System.Text.StringBuilder output, int depth)
+    {
+        string indent = new(' ', depth * 2);
+
+        switch (node)
+        {
+            case WindowNode window:
+                output.AppendLine(
+                    $"{indent}window 0x{window.Handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                    $"({window.Identity.ProcessName}) {window.State} " +
+                    $"ratio={window.SizeRatio:F3} {window.Rect}" +
+                    $"{(ReferenceEquals(window, _wm.FocusedWindow) ? " [focused]" : "")}");
+                break;
+
+            case ContainerNode container:
+                output.AppendLine(
+                    $"{indent}container layout={container.Layout.Name} " +
+                    $"ratio={container.SizeRatio:F3} {container.Rect}");
+
+                foreach (Node child in container.Children) DescribeNode(child, output, depth + 1);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    private static string Truncate(string text, int max) =>
+        text.Length <= max ? text : string.Concat(text.AsSpan(0, max - 1), "\u2026");
 
     /// <summary>
     /// Places a new window on the workspace of the monitor it appeared on.
@@ -577,7 +737,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case HostAction.Exit:
-                Log("exit requested");
+                Log.Info(LogCategory.Wm, "exit requested");
                 Stop();
                 break;
 
@@ -605,7 +765,7 @@ public sealed class WmDaemon : IDisposable
         }
         catch (Exception ex)
         {
-            Log($"shell-exec failed: {commandLine}: {ex.Message}");
+            Log.Error(LogCategory.Command, $"shell-exec failed: {commandLine}", ex);
         }
     }
 
@@ -667,7 +827,13 @@ public sealed class WmDaemon : IDisposable
         }
 
         if (_commitScratch.Count > 0)
-            _committer.Commit(_commitScratch, static p => (nint)p.Window.Handle);
+        {
+            int moved = _committer.Commit(_commitScratch, static p => (nint)p.Window.Handle);
+
+            if (moved > 0 && Log.IsEnabled(LogLevel.Debug))
+                Log.Debug(LogCategory.Layout,
+                    $"placed {moved}/{placements.Count} windows, {_animation.ActiveCount} animating");
+        }
 
         // Focus is applied after geometry: focusing a window that is about to move
         // makes it flash at its old position first.
@@ -756,7 +922,7 @@ public sealed class WmDaemon : IDisposable
     {
         if (path is null)
         {
-            Log("no config file; using defaults");
+            Log.Warn(LogCategory.Config, "no config file found; using defaults");
             _bindings.Load(_config);
             return;
         }
@@ -771,7 +937,7 @@ public sealed class WmDaemon : IDisposable
         {
             // Keeping the previous config is the safe failure mode: a typo must not
             // leave a running desktop with no keybindings.
-            Log("config has errors; keeping the previously loaded configuration");
+            Log.Error(LogCategory.Config, "config has errors; keeping the previously loaded configuration");
             return;
         }
 
@@ -780,10 +946,44 @@ public sealed class WmDaemon : IDisposable
         _animation.Options = _config.Animation;
         _bindings.Load(_config);
 
+        ApplyLoggingConfig(initial);
+
         if (!initial)
         {
             CreateConfiguredWorkspaces();
-            Log($"config reloaded: {_config.Keybindings.Count} keybindings, {_config.Rules.Count} rules");
+            Log.Info(LogCategory.Config, $"reloaded: {_config.Keybindings.Count} keybindings, {_config.Rules.Count} rules");
+        }
+    }
+
+    /// <summary>
+    /// Applies the config's logging settings.
+    /// </summary>
+    /// <remarks>
+    /// Command line flags win. Someone who launched with <c>--log-level trace</c> is
+    /// mid-investigation, and having a config reload silently drop them back to
+    /// <c>info</c> would throw away exactly the detail they were collecting.
+    /// </remarks>
+    private void ApplyLoggingConfig(bool initial)
+    {
+        if (_logLevelFromCommandLine) return;
+
+        if (Log.Level != _config.LogLevel)
+        {
+            Log.Level = _config.LogLevel;
+            Log.Info(LogCategory.Config, $"log level set to {_config.LogLevel} by config");
+        }
+
+        if (initial && _config.LogFile is { Length: > 0 } file && Log.FilePath is null)
+        {
+            try
+            {
+                Log.OpenFile(file);
+                Log.Info(LogCategory.Config, $"logging to {Log.FilePath}");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Log.Error(LogCategory.Config, $"could not open log file '{file}'", ex);
+            }
         }
     }
 
@@ -811,7 +1011,8 @@ public sealed class WmDaemon : IDisposable
             // Binding mode lives in two places: the state machine, which reports it,
             // and the lookup table, which enforces it.
             if (wmEvent is BindingModeChanged mode) _bindings.SetMode(mode.Mode);
-            if (wmEvent is CommandRejected rejected) Log($"{rejected.Command}: {rejected.Reason}");
+            if (wmEvent is CommandRejected rejected)
+                Log.Debug(LogCategory.Command, $"rejected {rejected.Command}: {rejected.Reason}");
 
             _ipc?.Publish(wmEvent.Topic, StateProjection.Payload(wmEvent, _wm));
         }
@@ -819,9 +1020,6 @@ public sealed class WmDaemon : IDisposable
         _layoutDirty = true;
         EventsProduced?.Invoke(result.Events);
     }
-
-    private static void Log(string message) =>
-        Console.Error.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {message}");
 
     public void Dispose()
     {

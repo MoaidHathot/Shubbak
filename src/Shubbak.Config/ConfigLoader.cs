@@ -86,6 +86,7 @@ public sealed class ConfigLoader
         config = ApplyGaps(config, document.Node("gaps"));
         config = ApplyEffects(config, document.Node("window-effects"));
         config = ApplyAnimation(config, document.Node("animation"));
+        config = ApplyLogging(config, document.Node("logging"));
 
         Dictionary<string, AppDefinition> apps = ParseApps(document);
         List<WorkspaceConfig> workspaces = ParseWorkspaces(document.Node("workspaces"));
@@ -245,6 +246,46 @@ public sealed class ConfigLoader
         }
 
         return new Core.Animation.AnimationProfile(duration, curve);
+    }
+
+    /// <summary>
+    /// Reads the logging section.
+    /// </summary>
+    /// <remarks>
+    /// Command line flags win over config, because the reason to raise the level is
+    /// usually "reproduce this once", and editing a config file to do so - then
+    /// remembering to change it back - is friction that stops people bothering.
+    /// </remarks>
+    private ShubbakConfig ApplyLogging(ShubbakConfig config, KdlNode? node)
+    {
+        if (node is null) return config;
+
+        Core.Diagnostics.LogLevel level = config.LogLevel;
+
+        if (node.Child("level")?.Argument(0) is { } levelValue)
+        {
+            string text = levelValue.AsString();
+
+            if (!Core.Diagnostics.Log.TryParseLevel(text, out level))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0422",
+                    $"Unknown log level '{text}'.",
+                    levelValue.Span,
+                    "Use trace, debug, info, warn, error or none."));
+
+                level = config.LogLevel;
+            }
+        }
+
+        string? file = Text(node, "file", config.LogFile);
+
+        // An empty path is a common way of writing "the default location"; honour it
+        // rather than opening a file called "".
+        if (file is not null && file.Trim().Length == 0)
+            file = Core.Diagnostics.Log.DefaultLogPath;
+
+        return config with { LogLevel = level, LogFile = file };
     }
 
     // ---- workspaces --------------------------------------------------------

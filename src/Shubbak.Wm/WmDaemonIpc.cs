@@ -28,10 +28,52 @@ internal sealed partial class WmDaemonIpc
             "command" => RunCommandAsync(request),
             "query" => QueryAsync(request),
             "inspect" => InspectAsync(request),
+            "diagnose" => DiagnoseAsync(request),
+            "log-level" => SetLogLevelAsync(request),
             "ping" => Task.FromResult(new IpcResponse(request.Id, true, "pong")),
             _ => Task.FromResult(new IpcResponse(
                 request.Id, false, null, $"unknown method '{request.Method}'")),
         };
+    }
+
+    /// <summary>
+    /// Builds a self-contained diagnostic report.
+    /// </summary>
+    /// <remarks>
+    /// Assembled inside the daemon rather than the CLI because only the daemon can
+    /// see the live tree and the log ring buffer. The result is a single file that
+    /// can be attached to a bug report as-is.
+    /// </remarks>
+    private Task<IpcResponse> DiagnoseAsync(IpcRequest request)
+    {
+        return _daemon.InvokeAsync(() =>
+            new IpcResponse(request.Id, true, _daemon.BuildDiagnosticReport(request.Payload ?? "manual")));
+    }
+
+    /// <summary>
+    /// Changes the log level on a running window manager.
+    /// </summary>
+    /// <remarks>
+    /// Being able to raise the level without restarting is what makes an
+    /// intermittent problem catchable: restarting to enable tracing usually loses
+    /// the state that was about to trigger it.
+    /// </remarks>
+    private static Task<IpcResponse> SetLogLevelAsync(IpcRequest request)
+    {
+        if (!Core.Diagnostics.Log.TryParseLevel(request.Payload, out Core.Diagnostics.LogLevel level))
+        {
+            return Task.FromResult(new IpcResponse(
+                request.Id, false, null,
+                $"unknown log level '{request.Payload}'. Use trace, debug, info, warn, error or none."));
+        }
+
+        Core.Diagnostics.LogLevel previous = Core.Diagnostics.Log.Level;
+        Core.Diagnostics.Log.Level = level;
+
+        Core.Diagnostics.Log.Info(
+            Core.Diagnostics.LogCategory.Wm, $"log level changed from {previous} to {level}");
+
+        return Task.FromResult(new IpcResponse(request.Id, true, level.ToString()));
     }
 
     /// <summary>Parses and runs a command string, exactly as a keybinding would.</summary>

@@ -79,6 +79,12 @@ public sealed record ShubbakConfig
 
     public WindowEffects Effects { get; init; } = new();
 
+    /// <summary>Minimum level written to the log sinks.</summary>
+    public Core.Diagnostics.LogLevel LogLevel { get; init; } = Core.Diagnostics.LogLevel.Information;
+
+    /// <summary>Log file path, or null for none.</summary>
+    public string? LogFile { get; init; }
+
     /// <summary>Animation durations and curves.</summary>
     public Core.Animation.AnimationOptions Animation { get; init; } =
         Core.Animation.AnimationOptions.Default;
