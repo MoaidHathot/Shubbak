@@ -17,6 +17,15 @@ general {
     // New windows start tiled.
     initial-window-state "tiling"
 
+    // How windows on inactive workspaces are concealed.
+    //
+    // "cloak" (default) is strongly preferred: a cloaked window still reports as
+    // visible to Win32, so if Shubbak exits or is killed the next run adopts it and
+    // un-cloaks it. "hide" is unrecoverable - the filter rejects invisible windows,
+    // so they stay stranded with their process still running. Only fall back to it
+    // if the compositor is unavailable, which mainly means remote sessions.
+    hide-method "cloak"
+
     cursor-jump {
         enabled #true
         // "monitor" jumps only when focus crosses displays; "window" jumps on

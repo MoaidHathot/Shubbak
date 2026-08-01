@@ -820,6 +820,164 @@ public sealed class WindowManager
             if (window.ScratchpadName is { } name) yield return (name, window);
     }
 
+    // ---- dragging ----------------------------------------------------------
+
+    /// <summary>
+    /// Places a dragged window where it was dropped.
+    /// </summary>
+    /// <param name="window">The window that was dragged.</param>
+    /// <param name="x">Cursor x, in virtual-desktop coordinates.</param>
+    /// <param name="y">Cursor y.</param>
+    /// <remarks>
+    /// Dropping on the middle of another window swaps them; dropping near an edge
+    /// inserts beside it. A drop that resolves to nothing is rejected, and the
+    /// caller puts the window back - which is the honest outcome, because the
+    /// alternative is guessing.
+    /// </remarks>
+    public WmResult DropWindow(WindowNode window, int x, int y)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        if (!window.IsTiled)
+            return Reject("drop", "Only tiling windows are placed by dragging.");
+
+        // The drop is resolved against the workspace under the cursor, not the
+        // window's own, so dragging to another monitor works.
+        WorkspaceNode? destination = WorkspaceAt(x, y) ?? window.Workspace;
+
+        if (destination is null)
+            return Reject("drop", "The window is not on a workspace.");
+
+        // Moving to a different workspace has no target to land beside if that
+        // workspace is empty, so handle it as a plain move first.
+        if (!ReferenceEquals(destination, window.Workspace) && destination.HasNoWindows)
+            return MoveWindowToWorkspace(window, destination);
+
+        if (DragResolver.Resolve(destination, window, x, y) is not { } drop)
+            return Reject("drop", "Nothing under the cursor to drop onto.");
+
+        if (drop.Kind == DropKind.Swap)
+        {
+            TreeOps.Swap(window, drop.Target);
+            Emit(new WindowMoved(window, window.Workspace, window.Workspace!));
+
+            return Complete();
+        }
+
+        return InsertBeside(window, drop);
+    }
+
+    /// <summary>
+    /// Inserts a dragged window beside the window it was dropped next to.
+    /// </summary>
+    /// <remarks>
+    /// When the target's container already runs along the requested axis, this is a
+    /// reparent. When it does not - dropping to the left of a window inside a
+    /// vertical stack - the target is first wrapped in a new container of the right
+    /// axis, which is precisely the nesting the user asked for by dropping there.
+    /// </remarks>
+    private WmResult InsertBeside(WindowNode window, DropTarget drop)
+    {
+        ContainerNode? parent = drop.Target.ParentContainer;
+        if (parent is null) return Reject("drop", "The drop target is not attached.");
+
+        WorkspaceNode? from = window.Workspace;
+
+        if (parent.Layout.PrimaryAxis == drop.Axis)
+        {
+            int index = parent.IndexOf(drop.Target);
+            if (index < 0) return Reject("drop", "The drop target moved.");
+
+            // Removing the window first would shift the target's index, so the
+            // adjustment is computed against the tree as it stands.
+            if (ReferenceEquals(window.ParentContainer, parent) &&
+                parent.IndexOf(window) < index)
+            {
+                index--;
+            }
+
+            TreeOps.Reparent(window, parent, drop.Kind == DropKind.Before ? index : index + 1);
+        }
+        else
+        {
+            SplitLayout layout = drop.Axis == Axis.Horizontal
+                ? SplitLayout.Horizontal
+                : SplitLayout.Vertical;
+
+            // Detached first, so wrapping cannot capture the dragged window along
+            // with the target when the two are already siblings.
+            ContainerNode? source = window.ParentContainer;
+            source?.Remove(window);
+
+            ContainerNode wrapper = TreeOps.Wrap(drop.Target, layout);
+            wrapper.Insert(drop.Kind == DropKind.Before ? 0 : wrapper.Count, window);
+
+            if (source is not null && !ReferenceEquals(source, wrapper)) TreeOps.Flatten(source);
+
+            Emit(new LayoutChanged(wrapper, layout.Name));
+        }
+
+        Emit(new WindowMoved(window, from, window.Workspace!));
+
+        return Complete();
+    }
+
+    /// <summary>
+    /// Applies a size change the user made by dragging a window's border.
+    /// </summary>
+    /// <param name="window">The resized window.</param>
+    /// <param name="newRect">Its geometry after the drag.</param>
+    /// <remarks>
+    /// Converts the new pixel size back into the ratio the tree stores, on whichever
+    /// axis actually changed. Doing it per axis matters: dragging a corner changes
+    /// both, and each may be governed by a different ancestor container.
+    /// </remarks>
+    public WmResult ResizeFromDrag(WindowNode window, Rect newRect)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        if (!window.IsTiled)
+            return Reject("resize", "Only tiling windows are resized by dragging.");
+
+        Rect current = window.Rect;
+        bool changed = false;
+
+        if (Math.Abs(newRect.Width - current.Width) > 2)
+            changed |= ApplyDragRatio(window, Axis.Horizontal, newRect.Width);
+
+        if (Math.Abs(newRect.Height - current.Height) > 2)
+            changed |= ApplyDragRatio(window, Axis.Vertical, newRect.Height);
+
+        return changed ? Complete() : Reject("resize", "The drag did not change any resizable axis.");
+    }
+
+    private static bool ApplyDragRatio(WindowNode window, Axis axis, int newExtent)
+    {
+        ContainerNode? container = TreeOps.NearestAncestorOnAxis(window, axis);
+        if (container is null) return false;
+
+        Node? child = TreeOps.ChildContaining(container, window);
+        if (child is null) return false;
+
+        int available = container.Rect.Extent(axis);
+        if (available <= 0) return false;
+
+        // The child may be a container holding the window, in which case the window
+        // occupies only part of it and the delta has to be applied to the child's
+        // share rather than derived from the window's own size.
+        int childExtent = child.Rect.Extent(axis);
+        int windowExtent = window.Rect.Extent(axis);
+
+        int delta = newExtent - windowExtent;
+        double ratio = (double)(childExtent + delta) / available;
+
+        container.SetChildRatio(child, ratio);
+        return true;
+    }
+
+    /// <summary>The active workspace of the monitor containing a point.</summary>
+    private WorkspaceNode? WorkspaceAt(int x, int y) => Root.MonitorAt(x, y)?.ActiveWorkspace;
+
     // ---- sizing ------------------------------------------------------------
 
     /// <summary>

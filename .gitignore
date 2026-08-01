@@ -433,3 +433,6 @@ FodyWeavers.xsd
 # P0 spike build logs (regenerate with tools/run-p0.ps1). The .md transcripts
 # ARE committed: they are the evidence behind docs/adr/0001-language-choice.md.
 docs/adr/p0-results/*.log
+
+# Published binaries (regenerate with dotnet publish -o dist).
+/dist/
