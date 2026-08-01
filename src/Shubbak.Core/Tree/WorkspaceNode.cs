@@ -61,6 +61,16 @@ public sealed class WorkspaceNode : ContainerNode
     /// <summary>The window that had focus when this workspace was last active.</summary>
     public WindowNode? LastFocused { get; set; }
 
+    /// <summary>
+    /// True when this workspace exists only to hold stashed windows.
+    /// </summary>
+    /// <remarks>
+    /// The scratchpad is a workspace so that the tree, focus, layout and reaping all
+    /// work on it unchanged - but it must never be activated or listed in the bar,
+    /// or it would appear as a workspace the user did not create and cannot use.
+    /// </remarks>
+    public bool IsScratchpad => string.Equals(Name, "__scratchpad", StringComparison.Ordinal);
+
     /// <summary>True when this is the workspace currently displayed on its monitor.</summary>
     public bool IsActive => Monitor?.ActiveWorkspace == this;
 

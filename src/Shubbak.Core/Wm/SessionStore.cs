@@ -1,0 +1,229 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Shubbak.Core.Diagnostics;
+using Shubbak.Core.Tree;
+
+namespace Shubbak.Core.Wm;
+
+/// <summary>One remembered window placement.</summary>
+/// <param name="ProcessName">Executable name, without extension.</param>
+/// <param name="ClassName">Window class.</param>
+/// <param name="TitleHash">
+/// A hash of the title rather than the title itself. Titles contain document names,
+/// URLs and file paths; storing them would turn a convenience file into a record of
+/// what the user was working on.
+/// </param>
+/// <param name="Workspace">Workspace the window was on.</param>
+/// <param name="Tags">Workspaces it also belonged to.</param>
+/// <param name="Sticky">Whether it followed every workspace.</param>
+/// <param name="State">Tiling, floating, and so on.</param>
+public sealed record RememberedWindow(
+    string ProcessName,
+    string ClassName,
+    int TitleHash,
+    string Workspace,
+    IReadOnlyList<string> Tags,
+    bool Sticky,
+    string State);
+
+/// <summary>A saved session.</summary>
+/// <param name="Version">Format version, so an old file can be rejected cleanly.</param>
+/// <param name="SavedAt">When it was written.</param>
+/// <param name="Windows">Remembered placements.</param>
+public sealed record Session(
+    int Version,
+    DateTimeOffset SavedAt,
+    IReadOnlyList<RememberedWindow> Windows);
+
+/// <summary>Source-generated serialisation for the session file.</summary>
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower,
+    WriteIndented = true)]
+[JsonSerializable(typeof(Session))]
+public sealed partial class SessionJsonContext : JsonSerializerContext;
+
+/// <summary>
+/// Remembers which workspace each window was on, across restarts.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Without this, restarting the window manager - or rebooting - scatters every
+/// window onto whichever workspace it happens to be adopted into, and a carefully
+/// arranged set of nineteen workspaces has to be rebuilt by hand. That is the
+/// single most annoying thing about running a tiling window manager on Windows.
+/// </para>
+/// <para>
+/// Windows are identified by <b>process name, class and a hash of the title</b>,
+/// scored rather than matched exactly. A window handle does not survive a restart,
+/// and a title alone is too volatile - a browser's title changes with every tab.
+/// Scoring means a browser still lands on the right workspace even though its title
+/// has changed since the session was saved.
+/// </para>
+/// </remarks>
+public sealed class SessionStore
+{
+    private const int CurrentVersion = 1;
+
+    /// <summary>Where sessions are kept by default.</summary>
+    public static string DefaultPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "Shubbak", "session.json");
+
+    /// <summary>Captures the current placement of every managed window.</summary>
+    public static Session Capture(RootNode root)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+
+        List<RememberedWindow> windows = [];
+
+        foreach (WindowNode window in root.DescendantWindows())
+        {
+            if (window.Workspace is not { } workspace) continue;
+
+            // Scratchpad contents are deliberately not remembered: restoring them
+            // would summon a hidden window into view on the next start, which is
+            // the opposite of what stashing it meant.
+            if (workspace.IsScratchpad) continue;
+
+            windows.Add(new RememberedWindow(
+                window.Identity.ProcessName,
+                window.Identity.ClassName,
+                HashTitle(window.Identity.Title),
+                workspace.Name,
+                [.. window.Tags],
+                window.IsSticky,
+                window.State.ToString()));
+        }
+
+        return new Session(CurrentVersion, DateTimeOffset.Now, windows);
+    }
+
+    /// <summary>Writes a session to disk.</summary>
+    public static bool Save(RootNode root, string? path = null)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+
+        path ??= DefaultPath;
+
+        try
+        {
+            Session session = Capture(root);
+
+            string? directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+
+            // Written to a temporary file and moved into place, so a crash midway
+            // cannot leave a truncated session that fails to parse on next start.
+            string temporary = path + ".tmp";
+
+            File.WriteAllText(
+                temporary, JsonSerializer.Serialize(session, SessionJsonContext.Default.Session));
+
+            File.Move(temporary, path, overwrite: true);
+
+            Log.Info(LogCategory.Wm, $"session saved: {session.Windows.Count} windows -> {path}");
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Log.Error(LogCategory.Wm, "could not save session", ex);
+            return false;
+        }
+    }
+
+    /// <summary>Reads a session from disk, or null if there is none to read.</summary>
+    public static Session? Load(string? path = null)
+    {
+        path ??= DefaultPath;
+
+        try
+        {
+            if (!File.Exists(path)) return null;
+
+            Session? session = JsonSerializer.Deserialize(
+                File.ReadAllText(path), SessionJsonContext.Default.Session);
+
+            if (session is null) return null;
+
+            if (session.Version != CurrentVersion)
+            {
+                Log.Warn(LogCategory.Wm,
+                    $"ignoring session file version {session.Version}; expected {CurrentVersion}");
+                return null;
+            }
+
+            return session;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
+        {
+            // A corrupt session is not worth failing startup over; the user simply
+            // gets the default placement.
+            Log.Warn(LogCategory.Wm, $"could not read session: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The workspace a window should be restored to, or null if it is unrecognised.
+    /// </summary>
+    /// <remarks>
+    /// Scored rather than matched exactly. The process and class must agree - they
+    /// are stable - and a matching title hash breaks ties between several windows of
+    /// the same application, which is what puts three browser windows back on three
+    /// different workspaces rather than all on the first one.
+    /// </remarks>
+    public static RememberedWindow? Match(Session session, WindowIdentity identity, HashSet<int> claimed)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(claimed);
+
+        int titleHash = HashTitle(identity.Title);
+
+        RememberedWindow? best = null;
+        int bestScore = 0;
+        int bestIndex = -1;
+
+        for (int i = 0; i < session.Windows.Count; i++)
+        {
+            if (claimed.Contains(i)) continue;
+
+            RememberedWindow candidate = session.Windows[i];
+
+            if (!string.Equals(candidate.ProcessName, identity.ProcessName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            if (!string.Equals(candidate.ClassName, identity.ClassName, StringComparison.Ordinal))
+                continue;
+
+            // Process and class agreeing is enough to restore; a title match on top
+            // of that is what disambiguates several windows of the same app.
+            int score = candidate.TitleHash == titleHash ? 2 : 1;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = candidate;
+                bestIndex = i;
+            }
+        }
+
+        // Each remembered entry is consumed once, so N windows of one application
+        // are distributed across the N workspaces they came from instead of all
+        // matching the first entry.
+        if (bestIndex >= 0) claimed.Add(bestIndex);
+
+        return best;
+    }
+
+    /// <summary>
+    /// Hashes a title for identification.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately not a cryptographic hash and deliberately not reversible: the
+    /// point is to compare titles without storing them, because titles contain
+    /// document names, URLs and file paths.
+    /// </remarks>
+    private static int HashTitle(string title) =>
+        string.IsNullOrEmpty(title) ? 0 : title.GetHashCode(StringComparison.OrdinalIgnoreCase);
+}

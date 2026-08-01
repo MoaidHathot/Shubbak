@@ -90,6 +90,44 @@ public static class CommandParser
             case "resize":
                 return ParseResize(rest, text, span, out command, out diagnostic);
 
+            case "tag":
+            {
+                if (Flag(rest, "--clear")) { command = new ClearTagsCommand(); return true; }
+
+                string? workspace =
+                    Value(rest, "--add") ?? Value(rest, "--remove") ??
+                    Value(rest, "--toggle") ?? Positional(rest);
+
+                if (workspace is null)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0311", $"'{text}' does not say which workspace to tag to.", span,
+                        "Write tag --toggle 3, or tag --clear to remove every tag.");
+                    return false;
+                }
+
+                Core.Wm.TagMode mode =
+                    Value(rest, "--add") is not null ? Core.Wm.TagMode.Add :
+                    Value(rest, "--remove") is not null ? Core.Wm.TagMode.Remove :
+                    Core.Wm.TagMode.Toggle;
+
+                command = new TagCommand(workspace, mode);
+                return true;
+            }
+
+            case "sticky":
+                command = new ToggleStickyCommand();
+                return true;
+
+            case "scratchpad":
+            {
+                // Named slots default to "default" so the common single-scratchpad
+                // case needs no argument.
+                string slot = Value(rest, "--name") ?? Positional(rest) ?? "default";
+                command = new ScratchpadCommand(slot);
+                return true;
+            }
+
             case "toggle-tiling-direction":
                 command = new ToggleTilingDirectionCommand();
                 return true;
@@ -438,6 +476,7 @@ public static class CommandParser
         string[] known =
         [
             "focus", "move", "move-workspace", "resize", "split", "layout", "close",
+            "tag", "sticky", "scratchpad",
             "toggle-tiling-direction", "toggle-floating", "toggle-fullscreen",
             "toggle-minimized", "equalise", "ignore", "shell-exec",
             "wm-enable-binding-mode", "wm-disable-binding-mode", "wm-toggle-pause",

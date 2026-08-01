@@ -60,14 +60,84 @@ public sealed class WindowNode : Node
     public bool IsAlwaysOnTop { get; set; }
 
     /// <summary>
-    /// Additional workspaces this window appears in beyond its home workspace.
-    /// Reserved for P5; always empty in P1.
+    /// Workspaces this window belongs to, beyond the one it currently sits in.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The AwesomeWM "tag" model: a window can be a member of several workspaces and
+    /// appears in whichever of them you are currently viewing.
+    /// </para>
+    /// <para>
+    /// It is worth being precise about what this can and cannot mean. A Windows
+    /// window has exactly one position on exactly one monitor - it physically cannot
+    /// be drawn in two places at once. So membership of several workspaces does not
+    /// duplicate the window; it means the window <i>relocates</i> to whichever
+    /// tagged workspace was most recently activated. That is also what AwesomeWM
+    /// does, and modelling it any other way would promise something the platform
+    /// cannot deliver.
+    /// </para>
+    /// <para>
+    /// Consequently the node still lives in exactly one tree at a time, and every
+    /// invariant that depends on that - focus, close handling, geometry ownership -
+    /// is untouched.
+    /// </para>
+    /// </remarks>
     public IReadOnlySet<string> Tags => _tags;
     private readonly HashSet<string> _tags = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// True when this window follows every workspace on its monitor.
+    /// </summary>
+    /// <remarks>
+    /// Equivalent to tagging it to all of them, but expressed as a flag so it keeps
+    /// working when new workspaces are created on demand.
+    /// </remarks>
+    public bool IsSticky { get; set; }
+
+    /// <summary>True when the window belongs to more than the workspace it sits in.</summary>
+    public bool HasTags => IsSticky || _tags.Count > 0;
+
+    /// <summary>Whether this window should appear on the given workspace.</summary>
+    public bool BelongsTo(WorkspaceNode workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        if (ReferenceEquals(Workspace, workspace)) return true;
+        if (IsSticky && ReferenceEquals(Monitor, workspace.Monitor)) return true;
+
+        return _tags.Contains(workspace.Name);
+    }
+
     internal bool AddTag(string tag) => _tags.Add(tag);
+
+    /// <summary>
+    /// Restores a tag from a saved session.
+    /// </summary>
+    /// <remarks>
+    /// Public because restoration happens in the daemon rather than the state
+    /// machine, and because it must bypass the checks in <c>WindowManager.Tag</c> -
+    /// the window has not been placed yet, so "is it already on that workspace?"
+    /// has no answer.
+    /// </remarks>
+    public void AddTagForRestore(string tag)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+        _tags.Add(tag);
+    }
+
     internal bool RemoveTag(string tag) => _tags.Remove(tag);
+
+    internal void ClearTags() => _tags.Clear();
+
+    /// <summary>
+    /// The scratchpad slot this window is stashed under, or null.
+    /// </summary>
+    /// <remarks>
+    /// Named slots rather than a single scratchpad, so several windows can be
+    /// stashed and summoned independently. A single unnamed scratchpad turns into a
+    /// junk drawer the moment it holds more than one thing.
+    /// </remarks>
+    public string? ScratchpadName { get; set; }
 
     /// <summary>
     /// Geometry the window uses when it is not being sized by the layout.
