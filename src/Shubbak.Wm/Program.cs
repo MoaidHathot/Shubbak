@@ -165,22 +165,18 @@ internal static class Program
     /// Finds the config file.
     /// </summary>
     /// <remarks>
-    /// Search order: an explicit <c>--config</c>, then <c>SHUBBAK_CONFIG</c>, then
-    /// the standard location. The environment variable exists because dotfiles are
-    /// often kept on a separate drive and symlinked per machine.
+    /// Delegates to <see cref="ConfigPathResolver"/> so the daemon, the CLI and the
+    /// bar cannot disagree about which file is in effect - and reports where nothing
+    /// was found, since "no config file" is useless when the file exists but the
+    /// search looked elsewhere.
     /// </remarks>
     private static string? ResolveConfigPath(string[] args)
     {
-        if (Value(args, "--config") is { } explicitPath) return explicitPath;
+        ConfigLocation location = ConfigPathResolver.ResolveAndLog(Value(args, "--config"));
 
-        if (Environment.GetEnvironmentVariable("SHUBBAK_CONFIG") is { Length: > 0 } fromEnvironment)
-            return fromEnvironment;
+        if (!location.Found) Console.Error.Write(location.DescribeSearch());
 
-        string standard = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".config", "shubbak", "shubbak.kdl");
-
-        return File.Exists(standard) ? standard : null;
+        return location.Path;
     }
 
     private static string? Value(string[] args, string flag)
@@ -199,9 +195,14 @@ internal static class Program
           shubbak-wm [options]
 
         OPTIONS
-          --config <path>      Config file to load.
-                               Defaults to $SHUBBAK_CONFIG, then
-                               %USERPROFILE%\.config\shubbak\shubbak.kdl
+          --config <path>      Config file to load. Search order:
+                                 1. --config
+                                 2. $SHUBBAK_CONFIG        (file or directory)
+                                 3. $XDG_CONFIG_HOME/shubbak/shubbak.kdl
+                                 4. $XDG_CONFIG_DIRS entries
+                                 5. %USERPROFILE%\.config\shubbak\shubbak.kdl
+                                 6. %APPDATA%\shubbak\shubbak.kdl
+                               Run `shubbak config-path` to see which one won.
           --check-config       Validate the config and exit without managing windows.
 
           --log-level <level>  trace | debug | info | warn | error | none

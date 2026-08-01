@@ -257,17 +257,16 @@ internal static class Program
         }
     }
 
-    private static string? ResolveConfigPath(string[] args)
-    {
-        if (Value(args, "--config") is { } explicitPath) return explicitPath;
-
-        if (Environment.GetEnvironmentVariable("SHUBBAK_CONFIG") is { Length: > 0 } fromEnvironment)
-            return fromEnvironment;
-
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".config", "shubbak", "shubbak.kdl");
-    }
+    /// <summary>
+    /// Finds the config file.
+    /// </summary>
+    /// <remarks>
+    /// Shares <see cref="ConfigPathResolver"/> with the window manager and the CLI,
+    /// so the bar can never end up reading a different file from the thing it is
+    /// displaying.
+    /// </remarks>
+    private static string? ResolveConfigPath(string[] args) =>
+        ConfigPathResolver.Resolve(Value(args, "--config")).Path;
 
     private static string? Value(string[] args, string flag)
     {
@@ -285,9 +284,10 @@ internal static class Program
 
         OPTIONS
           --config <path>      Config file. Taj reads the `bar` section of the same
-                               file Shubbak uses, so there is one config to learn.
-                               Defaults to $SHUBBAK_CONFIG, then
-                               %USERPROFILE%\.config\shubbak\shubbak.kdl
+                               file Shubbak uses, so there is one config to learn,
+                               and resolves it the same way - including
+                               $XDG_CONFIG_HOME. Run `shubbak config-path` to see
+                               which file is in effect.
           --log-level <level>  trace | debug | info | warn | error | none
           --log-file [path]    Also write to a file.
           --help               Show this message.

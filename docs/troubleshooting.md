@@ -43,6 +43,32 @@ Common verdicts and what they mean:
 
 If the verdict is `manageable: yes` but a rule matched, the rule is why.
 
+## "It is not loading my config"
+
+```
+shubbak config-path
+```
+
+Prints the file in effect and how it was found. If nothing was found it lists **every
+location it looked in**, which is usually enough on its own — "no config file" is a
+useless thing to be told when the file is sitting right there and the search looked
+somewhere else.
+
+Search order, first match wins:
+
+1. `--config <path>`
+2. `$SHUBBAK_CONFIG` — a file, or a directory containing `shubbak.kdl`
+3. `$XDG_CONFIG_HOME/shubbak/shubbak.kdl`
+4. each entry of `$XDG_CONFIG_DIRS`
+5. `%USERPROFILE%\.config\shubbak\shubbak.kdl`
+6. `%APPDATA%\shubbak\shubbak.kdl`
+
+An explicit `--config` is used even when the file does not exist, so you get "that
+file is missing" rather than a silent fallback to a different config.
+
+On Windows, `XDG_CONFIG_DIRS` is separated with `;` rather than `:` — a colon would
+split `C:\Users\me` at the drive letter.
+
 ## "My keybinding does nothing"
 
 ```
