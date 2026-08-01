@@ -69,15 +69,22 @@ internal static class TreeBuilder
     /// Arranges <paramref name="workspace"/> on a monitor of the given size and
     /// returns each window's rectangle keyed by title.
     /// </summary>
+    /// <remarks>
+    /// Idempotent: a workspace already attached to a monitor is reused rather than
+    /// re-attached, so a test can arrange, mutate, and arrange again.
+    /// </remarks>
     public static Dictionary<string, Rect> ArrangeToMap(
         WorkspaceNode workspace,
         ArrangeOptions? options = null,
         int width = 1920,
         int height = 1080)
     {
-        MonitorNode monitor = Monitor(width: width, height: height);
-        monitor.AddWorkspace(workspace);
-        _ = Root(monitor);
+        if (workspace.Monitor is null)
+        {
+            MonitorNode monitor = Monitor(width: width, height: height);
+            monitor.AddWorkspace(workspace);
+            _ = Root(monitor);
+        }
 
         var engine = new LayoutEngine();
         IReadOnlyList<Placement> placements =

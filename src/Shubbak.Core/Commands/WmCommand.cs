@@ -110,6 +110,12 @@ public sealed record SetLayoutCommand(string Layout) : WmCommand
     public override string Name => "layout";
 }
 
+/// <summary><c>layout --cycle</c> / <c>layout --cycle-back</c></summary>
+public sealed record CycleLayoutCommand(bool Forward) : WmCommand
+{
+    public override string Name => "layout-cycle";
+}
+
 // ---- window state ----------------------------------------------------------
 
 /// <summary><c>toggle-floating</c></summary>
