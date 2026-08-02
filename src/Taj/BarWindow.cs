@@ -321,6 +321,11 @@ public sealed class BarWindow : IDisposable
                 // No background brush: every pixel is painted from the off-screen
                 // buffer, and letting Windows erase first causes a visible flash.
                 hbrBackground = Windows.Win32.Graphics.Gdi.HBRUSH.Null,
+
+                // A class with no cursor leaves whatever the pointer was last given,
+                // which over a bar that never sets one is usually the busy cursor
+                // inherited from the application it just left. The bar is never busy.
+                hCursor = PInvoke.LoadCursor(HINSTANCE.Null, PInvoke.IDC_ARROW),
             };
 
             if (PInvoke.RegisterClassEx(in wc) == 0 && Marshal.GetLastWin32Error() != 1410)

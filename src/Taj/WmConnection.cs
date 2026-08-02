@@ -146,9 +146,19 @@ public sealed class WmConnection : IAsyncDisposable
     {
         switch (notification.Topic)
         {
-            case "window.focused":
             case "window.title_changed":
                 UpdateFocusedWindow(notification.Data);
+                break;
+
+            case "window.focused":
+                UpdateFocusedWindow(notification.Data);
+
+                // The workspace list is refreshed too, because which workspace holds
+                // focus can change without any workspace being activated. Moving
+                // between monitors is the ordinary case: both monitors' workspaces
+                // were already displayed, so nothing is activated and the only thing
+                // that changed is which one has the keyboard.
+                await RefreshAsync(client).ConfigureAwait(false);
                 break;
 
             case "workspace.activated":

@@ -50,6 +50,9 @@ public static class Win32Window
     }
 
     /// <summary><c>DWMWA_CLOAK</c> - write to cloak or un-cloak a window.</summary>
+    /// <summary><c>DWMWA_EXTENDED_FRAME_BOUNDS</c> - the frame without its shadow.</summary>
+    private const uint DwmwaExtendedFrameBounds = 9;
+
     private const uint DwmwaCloak = 13;
 
     /// <summary><c>DWMWA_CLOAKED</c> - read to discover who cloaked it.</summary>
@@ -142,6 +145,78 @@ public static class Win32Window
         if (!PInvoke.GetWindowRect(new HWND(handle), out RECT rect)) return Rect.Empty;
         return Rect.FromEdges(rect.left, rect.top, rect.right, rect.bottom);
     }
+
+    /// <summary>
+    /// How far a window's visible frame sits inside its rectangle, per edge.
+    /// </summary>
+    /// <remarks>
+    /// Four insets rather than a rectangle, because that is what they are. Expressing
+    /// them as a <see cref="Rect"/> would invite treating a seven-pixel left inset as
+    /// an x-coordinate.
+    /// </remarks>
+    public readonly record struct ShadowMargins(int Left, int Top, int Right, int Bottom)
+    {
+        /// <summary>No shadow. What a window drawing its own frame reports.</summary>
+        public static ShadowMargins None => default;
+
+        public bool IsEmpty => Left == 0 && Top == 0 && Right == 0 && Bottom == 0;
+    }
+
+    /// <summary>
+    /// The invisible margin between a window's rectangle and the frame you can see.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Since Windows Vista a window's rectangle includes its drop shadow, which is
+    /// transparent. On Windows 10 and 11 that is roughly seven pixels on the left,
+    /// right and bottom, and nothing at the top.
+    /// </para>
+    /// <para>
+    /// A tiling window manager that ignores this positions the <i>rectangles</i>
+    /// perfectly and leaves visible gaps of twice the shadow between every pair of
+    /// windows - and shrinking the configured gap barely changes them, because most
+    /// of what the user is looking at was never the gap. Compensating is what makes a
+    /// one-pixel gap actually one pixel. GlazeWM adjusts for the same thing before
+    /// every <c>SetWindowPos</c>.
+    /// </para>
+    /// </remarks>
+    public static unsafe ShadowMargins GetShadowMargins(nint handle)
+    {
+        var hwnd = new HWND(handle);
+
+        if (!PInvoke.GetWindowRect(hwnd, out RECT outer)) return ShadowMargins.None;
+
+        RECT visible;
+
+        HRESULT hr = PInvoke.DwmGetWindowAttribute(
+            hwnd, (DWMWINDOWATTRIBUTE)DwmwaExtendedFrameBounds, &visible, (uint)sizeof(RECT));
+
+        if (hr.Failed) return ShadowMargins.None;
+
+        int left = visible.left - outer.left;
+        int top = visible.top - outer.top;
+        int right = outer.right - visible.right;
+        int bottom = outer.bottom - visible.bottom;
+
+        // Sanity check, because the two calls do not always answer in the same
+        // coordinate space. GetWindowRect is virtualised for a process that is not
+        // DPI aware while the compositor reports physical pixels, and on a 150%
+        // display that yields differences in the hundreds - and negative insets,
+        // which would expand a window over its neighbour rather than under its own
+        // shadow. A real shadow is under a dozen pixels.
+        if (left < 0 || top < 0 || right < 0 || bottom < 0) return ShadowMargins.None;
+
+        if (left > MaxPlausibleShadow || top > MaxPlausibleShadow ||
+            right > MaxPlausibleShadow || bottom > MaxPlausibleShadow)
+        {
+            return ShadowMargins.None;
+        }
+
+        return new ShadowMargins(left, top, right, bottom);
+    }
+
+    /// <summary>Beyond this an inset is a measurement error, not a shadow.</summary>
+    private const int MaxPlausibleShadow = 32;
 
     public static unsafe string GetTitle(nint handle)
     {
