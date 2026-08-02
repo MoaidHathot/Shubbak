@@ -278,11 +278,22 @@ public static class TajConfigLoader
     {
         string id = SettingText(node, "id") ?? node.Name;
 
+        // Typography per widget, not only per profile. The model and the renderer
+        // have always supported size, weight and slant - the built-in default profile
+        // bolds its own clock - but no config key reached them, so a user's config
+        // could not reproduce what Taj shipped with.
+        var widgetFont = font with
+        {
+            Size = SettingInt(node, "font-size") ?? font.Size,
+            Bold = SettingBool(node, "bold") ?? font.Bold,
+            Italic = SettingBool(node, "italic") ?? font.Italic,
+        };
+
         var style = VisualStyle.Default with
         {
             Foreground = ParseColour(SettingText(node, "colour") ?? SettingText(node, "color")) ?? foreground,
             Background = ParseColour(SettingText(node, "background")) ?? Colour.Transparent,
-            Font = font,
+            Font = widgetFont,
             CornerRadius = SettingInt(node, "radius") ?? 0,
         };
 
@@ -291,21 +302,47 @@ public static class TajConfigLoader
         switch (node.Name)
         {
             case "workspaces":
+            {
+                VisualStyle activeStyle = style with
+                {
+                    Background = ParseColour(SettingText(node, "active-background"))
+                        ?? new Colour(0x8D, 0xBC, 0xFF),
+                    Foreground = ParseColour(SettingText(node, "active-colour")
+                        ?? SettingText(node, "active-color"))
+                        ?? new Colour(0x1E, 0x1E, 0x2E),
+                    CornerRadius = SettingInt(node, "radius") ?? 4,
+                };
+
+                // Only built when asked for. Falling back to the active style is
+                // right on a single monitor, where the focused workspace and the
+                // displayed one are never different.
+                Colour? focusedColour = ParseColour(
+                    SettingText(node, "focused-colour") ?? SettingText(node, "focused-color"));
+
+                Colour? focusedBackground = ParseColour(SettingText(node, "focused-background"));
+
+                VisualStyle? focusedStyle = focusedColour is null && focusedBackground is null
+                    ? null
+                    : activeStyle with
+                    {
+                        Foreground = focusedColour ?? activeStyle.Foreground,
+                        Background = focusedBackground ?? activeStyle.Background,
+                    };
+
                 return new WorkspacesWidget(id)
                 {
-                    ActiveStyle = style with
-                    {
-                        Background = ParseColour(SettingText(node, "active-background"))
-                            ?? new Colour(0x8D, 0xBC, 0xFF),
-                        Foreground = ParseColour(SettingText(node, "active-colour")
-                            ?? SettingText(node, "active-color"))
-                            ?? new Colour(0x1E, 0x1E, 0x2E),
-                        CornerRadius = 4,
-                    },
+                    ActiveStyle = activeStyle,
+                    FocusedStyle = focusedStyle,
                     OccupiedStyle = style,
-                    EmptyStyle = style with { Foreground = style.Foreground.WithAlpha(110) },
+                    EmptyStyle = style with
+                    {
+                        Foreground = ParseColour(SettingText(node, "empty-colour")
+                            ?? SettingText(node, "empty-color"))
+                            ?? style.Foreground.WithAlpha(110),
+                    },
                     HideEmpty = SettingBool(node, "hide-empty") ?? false,
                 };
+            }
 
             case "spacer":
                 return new SpacerWidget(

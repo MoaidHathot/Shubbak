@@ -144,10 +144,43 @@ public static class Template
                     argument[..comma], argument[(comma + 1)..], StringComparison.Ordinal);
             }
 
+            case "icon":
+                return LayoutIcon(input);
+
             default:
                 // An unknown filter passes the value through unchanged rather than
                 // blanking the widget, so a typo degrades gracefully.
                 return input;
         }
     }
+
+    /// <summary>
+    /// Replaces a layout name with a glyph that shows its shape.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The word "splith" says nothing at a glance, and at bar size it is a smear.
+    /// A glyph that looks like the arrangement it names is read without being read.
+    /// </para>
+    /// <para>
+    /// Box-drawing characters rather than an icon font, so it works in whatever the
+    /// bar is already set to and needs nothing installed. An unrecognised layout
+    /// keeps its name, which is what a custom layout should do.
+    /// </para>
+    /// </remarks>
+    private static string LayoutIcon(string layout) => layout switch
+    {
+        "splith" => "\u2502\u2502",              // ││  side by side
+        "splitv" => "\u2550",                    // ═   stacked
+        "fibonacci" => "\u25E7",                 // ◧
+        "fibonacci-v" => "\u25E9",               // ◩
+        "fibonacci-mirrored" => "\u25E8",        // ◨
+        "master-left" => "\u25E7",               // ◧
+        "master-right" => "\u25E8",              // ◨
+        "master-top" => "\u2580",                // ▀
+        "master-bottom" => "\u2584",             // ▄
+        "grid" => "\u229E",                      // ⊞
+        "monocle" => "\u25A0",                   // ■
+        _ => layout,
+    };
 }

@@ -28,7 +28,8 @@ internal static class StateProjection
         window.Rect.Width,
         window.Rect.Height);
 
-    public static WorkspaceInfo Describe(WorkspaceNode workspace, int monitorIndex = -1) => new(
+    public static WorkspaceInfo Describe(
+        WorkspaceNode workspace, int monitorIndex = -1, WorkspaceNode? focused = null) => new(
         workspace.Id.Value,
         workspace.Name,
         workspace.Label,
@@ -38,7 +39,8 @@ internal static class StateProjection
         workspace.Layout.Name,
         workspace.DescendantWindows().Count(),
         workspace.SortIndex,
-        monitorIndex);
+        monitorIndex,
+        ReferenceEquals(workspace, focused));
 
     public static MonitorInfoDto Describe(MonitorNode monitor) => new(
         monitor.Id.Value,
@@ -69,15 +71,20 @@ internal static class StateProjection
     /// Describes every workspace, tagged with the index of the monitor it is on.
     /// </summary>
     /// <remarks>
-    /// The index lets the bar show only its own monitor''s workspaces, which is what
+    /// The index lets the bar show only its own monitor's workspaces, which is what
     /// makes a per-monitor bar useful rather than three identical copies of the same
-    /// list.
+    /// list. The focused workspace is passed through so the bar can distinguish it
+    /// from the ones merely displayed on the other monitors.
     /// </remarks>
     public static IEnumerable<WorkspaceInfo> DescribeWorkspaces(WindowManager wm)
     {
+        ArgumentNullException.ThrowIfNull(wm);
+
+        WorkspaceNode? focused = wm.FocusedWorkspace;
+
         for (int index = 0; index < wm.Root.Monitors.Count; index++)
             foreach (WorkspaceNode workspace in wm.Root.Monitors[index].Workspaces)
-                yield return Describe(workspace, index);
+                yield return Describe(workspace, index, focused);
     }
 
     public static string Payload(WmEvent wmEvent, WindowManager wm)

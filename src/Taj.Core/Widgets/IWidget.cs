@@ -103,6 +103,18 @@ public sealed class WorkspacesWidget : IWidget
     /// <summary>Style for the workspace showing on this monitor.</summary>
     public VisualStyle ActiveStyle { get; set; } = VisualStyle.Default;
 
+    /// <summary>
+    /// Style for the workspace holding input focus, when it differs from
+    /// <see cref="ActiveStyle"/>.
+    /// </summary>
+    /// <remarks>
+    /// Null falls back to <see cref="ActiveStyle"/>, which is right for a single
+    /// monitor - there the focused workspace and the displayed one are always the
+    /// same. With several, marking every monitor's displayed workspace identically
+    /// makes it impossible to see which one the keyboard is talking to.
+    /// </remarks>
+    public VisualStyle? FocusedStyle { get; set; }
+
     /// <summary>Style for workspaces with windows on them.</summary>
     public VisualStyle OccupiedStyle { get; set; } = VisualStyle.Default;
 
@@ -142,7 +154,15 @@ public sealed class WorkspacesWidget : IWidget
         {
             if (HideEmpty && !entry.Active && !entry.HasWindows) continue;
 
-            VisualStyle style = entry.Active ? ActiveStyle : entry.HasWindows ? OccupiedStyle : EmptyStyle;
+            // Four states, most specific first. Focused is a refinement of active,
+            // so it only wins when a style has been given for it.
+            VisualStyle style = entry switch
+            {
+                { Focused: true } when FocusedStyle is { } focused => focused,
+                { Active: true } => ActiveStyle,
+                { HasWindows: true } => OccupiedStyle,
+                _ => EmptyStyle,
+            };
 
             container.Add(new VisualNode
             {
@@ -167,7 +187,12 @@ public sealed class WorkspacesWidget : IWidget
     /// <param name="Label">What to display.</param>
     /// <param name="Active">Whether it is showing on its monitor.</param>
     /// <param name="HasWindows">Whether it holds any windows.</param>
-    public readonly record struct WorkspaceEntry(string Name, string Label, bool Active, bool HasWindows);
+    /// <param name="Focused">
+    /// Whether it holds input focus. Only one workspace does, whereas one per monitor
+    /// is <paramref name="Active"/>.
+    /// </param>
+    public readonly record struct WorkspaceEntry(
+        string Name, string Label, bool Active, bool HasWindows, bool Focused = false);
 
     /// <summary>
     /// Decodes the compact workspace description.
@@ -190,7 +215,10 @@ public sealed class WorkspacesWidget : IWidget
                 fields[0],
                 fields[1],
                 fields[2] == "1",
-                fields[3] == "1");
+                fields[3] == "1",
+
+                // Optional, so a host that predates the field still decodes cleanly.
+                fields.Length > 4 && fields[4] == "1");
         }
     }
 
@@ -200,7 +228,8 @@ public sealed class WorkspacesWidget : IWidget
         ArgumentNullException.ThrowIfNull(entries);
 
         return string.Join('\t', entries.Select(e =>
-            $"{e.Name}|{e.Label}|{(e.Active ? '1' : '0')}|{(e.HasWindows ? '1' : '0')}"));
+            $"{e.Name}|{e.Label}|{(e.Active ? '1' : '0')}|" +
+            $"{(e.HasWindows ? '1' : '0')}|{(e.Focused ? '1' : '0')}"));
     }
 }
 
