@@ -43,6 +43,86 @@ public sealed class ShadowMarginTests
 
 
 
+    [Theory]
+    // The margins Windows 10 and 11 actually produce, plus the asymmetric and
+    // degenerate cases, because a sign error shows up in some of these and not others.
+    [InlineData(7, 0, 7, 7)]
+    [InlineData(8, 1, 8, 8)]
+    [InlineData(0, 0, 0, 0)]
+    [InlineData(11, 3, 5, 7)]
+    public void PlacingThenMeasuringGivesBackTheSameRectangle(
+        int left, int top, int right, int bottom)
+    {
+        // The invariant the whole scheme rests on. Placement grows a rectangle by the
+        // shadow; measurement must shrink it by exactly the same amount.
+        //
+        // It did not. Placement compensated and measurement did not, so every shadowed
+        // window read back fourteen pixels wider than it had been asked to be. The
+        // layout took that for "the window has moved" and animated it - and since a
+        // focus change re-runs the layout, focusing anything made it swell by the width
+        // of its own shadow and settle back.
+        //
+        // Written against margins directly: a plain test window has no shadow, so
+        // placing one and measuring it would agree with a broken implementation too.
+        var margins = new Win32Window.ShadowMargins(left, top, right, bottom);
+        var wanted = new Core.Geometry.Rect(300, 200, 640, 480);
+
+        Core.Geometry.Rect placed = WindowCommitter.Expand(wanted, margins);
+        Core.Geometry.Rect measured = WindowCommitter.Shrink(placed, margins);
+
+        Assert.Equal(wanted, measured);
+    }
+
+    [Fact]
+    public void MeasuringUndoesPlacingForEveryRectangle()
+    {
+        // Stated over a spread of rectangles rather than one, so an error that only
+        // appears at particular sizes or offsets cannot hide.
+        var margins = new Win32Window.ShadowMargins(7, 0, 7, 7);
+
+        Core.Geometry.Rect[] rectangles =
+        [
+            new(0, 0, 100, 100),
+            new(-1920, 0, 1920, 1080),
+            new(1920, -300, 2560, 1440),
+            new(37, 91, 613, 409),
+        ];
+
+        foreach (Core.Geometry.Rect rect in rectangles)
+        {
+            Assert.Equal(
+                rect,
+                WindowCommitter.Shrink(WindowCommitter.Expand(rect, margins), margins));
+        }
+    }
+
+    [Fact]
+    public void PlacingGrowsAndMeasuringShrinks()
+    {
+        // Pins the direction. Swapping the two would still round-trip, and would still
+        // pass every test above, while placing every window under its own shadow.
+        var margins = new Win32Window.ShadowMargins(7, 0, 7, 7);
+        var rect = new Core.Geometry.Rect(300, 200, 640, 480);
+
+        Core.Geometry.Rect grown = WindowCommitter.Expand(rect, margins);
+        Core.Geometry.Rect shrunk = WindowCommitter.Shrink(rect, margins);
+
+        Assert.Equal(new Core.Geometry.Rect(293, 200, 654, 487), grown);
+        Assert.Equal(new Core.Geometry.Rect(307, 200, 626, 473), shrunk);
+    }
+
+    [Fact]
+    public void AWindowWithNoShadowIsLeftAlone()
+    {
+        // The common case on a remote session or a plain tool window. Compensation
+        // must be exactly a no-op, not an approximate one.
+        var margins = new Win32Window.ShadowMargins(0, 0, 0, 0);
+        var rect = new Core.Geometry.Rect(10, 20, 30, 40);
+
+        Assert.Equal(rect, WindowCommitter.Expand(rect, margins));
+        Assert.Equal(rect, WindowCommitter.Shrink(rect, margins));
+    }
+
     [Fact]
     public void AnInvalidWindowReportsNothing()
     {
