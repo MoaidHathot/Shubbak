@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Windows.Win32;
@@ -45,6 +46,8 @@ internal sealed class TestWindow : IDisposable
 
     public TestWindow(string title = "Shubbak test window", bool visible = true)
     {
+        FailIfAWindowManagerIsRunning();
+
         _thread = new Thread(() => Run(title, visible))
         {
             Name = "Shubbak test window",
@@ -58,6 +61,39 @@ internal sealed class TestWindow : IDisposable
 
         if (_handle.IsNull)
             throw new InvalidOperationException("the test window never appeared");
+    }
+
+    /// <summary>
+    /// Refuses to run these tests while a window manager is live.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A test window is a real, captioned, titled top-level window, which is to say
+    /// exactly the thing a running Shubbak exists to manage. It will tile it, conceal
+    /// it on a workspace switch and reveal it again - so a test asserting where the
+    /// window is, or whether it is visible, is racing the very software it is testing.
+    /// </para>
+    /// <para>
+    /// This was not theoretical. A test window was found at (1276,7 1285x1434) when
+    /// it had been created at (100,100 320x240), and an earlier round of intermittent
+    /// failures about SW_HIDE never taking effect is best explained the same way: the
+    /// window manager was revealing the windows as fast as the tests hid them. Several
+    /// hours went into hardening the tests against a race that was a live window
+    /// manager all along.
+    /// </para>
+    /// <para>
+    /// Failing loudly is the point. A skipped test looks like a passing suite, and a
+    /// silently wrong result is what cost the time.
+    /// </para>
+    /// </remarks>
+    private static void FailIfAWindowManagerIsRunning()
+    {
+        if (Process.GetProcessesByName("shubbak-wm").Length == 0) return;
+
+        throw new InvalidOperationException(
+            "shubbak-wm is running. These tests create real windows, which it will " +
+            "manage, move and conceal - any result would be measuring the window " +
+            "manager rather than the code under test. Stop it and run them again.");
     }
 
     public unsafe nint Handle => (nint)_handle.Value;
