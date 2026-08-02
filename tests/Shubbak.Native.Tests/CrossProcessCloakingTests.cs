@@ -121,6 +121,26 @@ public sealed class CrossProcessCloakingTests(ITestOutputHelper output)
         Assert.True(Win32ApplicationView.Uncloak(foreign.Handle));
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(foreign.Handle));
     }
+
+    [Fact]
+    public void RestoringOnShutdownUncloaksAWindowWeDoNotOwn()
+    {
+        // The committer's shutdown path used the per-process un-cloak, which cannot
+        // touch a foreign window - so it counted windows as restored while leaving
+        // every one of them cloaked. The count made the log look correct, which is
+        // why it survived a clean exit going unnoticed.
+        using var foreign = ForeignWindow.Acquire(output);
+        if (foreign is null) return;
+
+        var committer = new WindowCommitter();
+
+        committer.Conceal(foreign.Handle);
+        Assert.Equal(Win32Window.CloakState.Shell, Win32Window.GetCloakState(foreign.Handle));
+
+        Assert.Equal(1, committer.RestoreAll());
+
+        Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(foreign.Handle));
+    }
 }
 
 /// <summary>

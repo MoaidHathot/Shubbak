@@ -173,8 +173,25 @@ public sealed class WindowCommitter
         {
             if (!Win32Window.Exists(handle)) continue;
 
-            if (method == ConcealMethod.Cloaked) Win32Window.Uncloak(handle);
-            else PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+            // Reversed by the same route that concealed it. Cloaking goes through the
+            // shell, so un-cloaking must too: DwmSetWindowAttribute is scoped to the
+            // owning process and silently refuses every window Shubbak manages, which
+            // made shutdown report windows restored while leaving them all cloaked.
+            switch (method)
+            {
+                case ConcealMethod.Cloaked:
+                    Win32ApplicationView.Uncloak(handle);
+                    Win32Taskbar.SetVisible(handle, visible: true);
+                    break;
+
+                case ConcealMethod.Minimised:
+                    PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_RESTORE);
+                    break;
+
+                default:
+                    PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+                    break;
+            }
 
             restored++;
         }
