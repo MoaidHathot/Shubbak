@@ -137,6 +137,12 @@ public static class WindowFilter
         "CicMarshalWndClass",
         "TaskListThumbnailWnd",
         "TaskListOverlayWnd",
+
+        // The Win+Space language switcher. Hosted by explorer, so it cannot be
+        // excluded by process without excluding File Explorer too, and it survives
+        // long enough that waiting for it to go away does not work either. Only the
+        // class identifies it.
+        "Shell_InputSwitchTopLevelWindow",
         "EdgeUiInputTopWndClass",
         "NarratorHelperWindow",
         "Xaml_WindowedPopupClass",
@@ -323,6 +329,11 @@ public static class WindowFilter
     /// <remarks>Named separately from the handle-based check so it can be tested.</remarks>
     public static bool IsExcludedProcessName(string processName) =>
         s_excludedProcesses.Contains(processName);
+
+    /// <summary>Whether windows of this class are never managed.</summary>
+    /// <remarks>Named separately from the handle-based check so it can be tested.</remarks>
+    public static bool IsExcludedClassName(string className) =>
+        s_excludedClasses.Contains(className);
 
     /// <summary>
     /// Window classes that start floating rather than tiled.

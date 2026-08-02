@@ -47,6 +47,7 @@ public sealed class WmDaemon : IDisposable
 
     /// <summary>The window currently wearing the focused border.</summary>
     private WindowNode? _borderedWindow;
+    private long _lastBorderRefreshTicks;
 
     private WinEventSource? _winEvents;
     private KeyboardSource? _keyboard;
@@ -62,17 +63,6 @@ public sealed class WmDaemon : IDisposable
     private bool _restoring;
     private int _revived;
     private int _revivalBudget;
-
-    /// <summary>How long a new window must persist before it is worth tiling.</summary>
-    /// <remarks>
-    /// Long enough that shell flyouts have come and gone, short enough that opening
-    /// an application does not feel laggy. Windows that were already open at startup
-    /// do not wait.
-    /// </remarks>
-    private const int SettleMilliseconds = 150;
-
-    private readonly Dictionary<nint, long> _settling = [];
-    private readonly List<nint> _settled = [];
 
     private long _lastSessionSaveTicks;
     private long _lastMonitorSyncTicks;
@@ -208,7 +198,6 @@ public sealed class WmDaemon : IDisposable
 
             DrainKeyboard();
             DrainWindowEvents();
-            DrainSettling();
             DrainInbox();
 
             if (_layoutDirty)
@@ -220,6 +209,7 @@ public sealed class WmDaemon : IDisposable
             if (_animation.IsAnimating) AdvanceAnimation(deltaMs);
 
             MaybeSyncMonitors(now);
+            MaybeRefreshFocusBorder(now);
             MaybeSaveSession(now);
         }
         catch (Exception ex)
@@ -318,60 +308,6 @@ public sealed class WmDaemon : IDisposable
         return completion.Task;
     }
 
-    /// <summary>
-    /// Waits for a window to settle before deciding whether to manage it.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Shell flyouts appear as ordinary top-level windows, pass every structural
-    /// test, and vanish a tenth of a second later. Tiling one resizes every window on
-    /// the workspace, then resizes them all back when it closes. The Win+Space
-    /// language switcher is the clearest case - it is titled "Input Flyout" and
-    /// hosted by <c>explorer</c>, so it cannot be excluded by process without
-    /// excluding File Explorer with it - but transient dialogs do the same.
-    /// </para>
-    /// <para>
-    /// Waiting costs a barely perceptible delay before a genuinely new window is
-    /// tiled, and removes the whole category rather than naming offenders one at a
-    /// time. Windows that were already open when Shubbak started skip this: adoption
-    /// has no reason to wait, and doing so would make startup visibly slower.
-    /// </para>
-    /// </remarks>
-    private void Defer(nint handle)
-    {
-        if (_restoring)
-        {
-            TryManage(handle);
-            return;
-        }
-
-        if (_managed.ContainsKey(handle) || _ignored.Contains(handle)) return;
-
-        _settling[handle] = Environment.TickCount64 + SettleMilliseconds;
-    }
-
-    /// <summary>Manages windows whose settling period has elapsed.</summary>
-    private void DrainSettling()
-    {
-        if (_settling.Count == 0) return;
-
-        long now = Environment.TickCount64;
-        _settled.Clear();
-
-        foreach ((nint handle, long due) in _settling)
-            if (now >= due) _settled.Add(handle);
-
-        foreach (nint handle in _settled)
-        {
-            _settling.Remove(handle);
-
-            // Gone already - which is exactly the case this exists to catch.
-            if (!Win32Window.Exists(handle)) continue;
-
-            TryManage(handle);
-        }
-    }
-
     private void HandleWindowEvent(WinEventNotification notification)
     {
         nint handle = notification.Handle;
@@ -390,7 +326,7 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Created:
             case WinEventKind.Shown:
             case WinEventKind.Uncloaked:
-                Defer(handle);
+                TryManage(handle);
                 break;
 
             case WinEventKind.Destroyed:
@@ -659,10 +595,6 @@ public sealed class WmDaemon : IDisposable
     private void TryUnmanage(nint handle)
     {
         _ignored.Remove(handle);
-
-        // A window that closed while still settling never became ours, but its entry
-        // would otherwise sit in the table until the next drain.
-        _settling.Remove(handle);
 
         if (!_managed.Remove(handle, out WindowNode? window)) return;
 
@@ -1309,6 +1241,43 @@ public sealed class WmDaemon : IDisposable
         if (focused is not null) ApplyBorder(focused, _config.Effects.FocusedColour);
 
         _borderedWindow = focused;
+    }
+
+    /// <summary>
+    /// Reasserts the focused window's border.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DWMWA_BORDER_COLOR</c> is a property of the window, not of Shubbak, and
+    /// applications are free to set it themselves. Ones that manage their own frame -
+    /// Windows Terminal and other WinUI applications especially - reset it as part of
+    /// ordinary repainting, which silently clears ours.
+    /// </para>
+    /// <para>
+    /// Setting it once when focus changes is therefore not enough: the border would
+    /// vanish partway through using a window and not return until focus moved away
+    /// and back. Reasserting on a slow timer costs one DWM call a second and makes
+    /// the border heal itself no matter what the application does.
+    /// </para>
+    /// </remarks>
+    private void MaybeRefreshFocusBorder(long now)
+    {
+        const double IntervalMs = 1_000;
+
+        if (!_config.Effects.Enabled) return;
+
+        if (_lastBorderRefreshTicks != 0 &&
+            (now - _lastBorderRefreshTicks) * 1000.0 / Stopwatch.Frequency < IntervalMs)
+        {
+            return;
+        }
+
+        _lastBorderRefreshTicks = now;
+
+        if (_borderedWindow is not { } window) return;
+        if (!Win32Window.Exists((nint)window.Handle)) return;
+
+        ApplyBorder(window, _config.Effects.FocusedColour);
     }
 
     private static void ApplyBorder(WindowNode window, string? colour)

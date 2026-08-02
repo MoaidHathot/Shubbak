@@ -361,6 +361,60 @@ public sealed class WindowManagerTests
     }
 
     [Fact]
+    public void MovingAWindowToAnotherMonitorEntersFromTheSideItArrivedAt()
+    {
+        // Pushed right, so it should appear at the neighbour's left edge - next to
+        // the monitor it came from. Appending instead threw it to the far side of
+        // the screen, which is the opposite of the direction the key describes.
+        WindowManager wm = WmFixture.Create(monitors: 2, workspaceNames: ["1"]);
+        wm.AddWorkspace(new WorkspaceNode("2"), wm.Root.Monitors[1]);
+        wm.ActivateWorkspace(wm.Root.Monitors[1].Workspaces[0]);
+
+        WindowNode browser = wm.Open("browser");
+
+        wm.ActivateWorkspace(wm.Root.Monitors[0].Workspaces[0]);
+        wm.Open("terminal");
+        WindowNode notepad = wm.Open("notepad");
+        wm.FocusWindow(notepad);
+        wm.Arrange();
+
+        wm.MoveDirection(Direction.Right);
+
+        WorkspaceNode destination = wm.Root.Monitors[1].Workspaces[0];
+
+        Assert.Equal(
+            ["notepad", "browser"],
+            destination.DescendantWindows().Select(w => w.Identity.Title));
+
+        Assert.Same(browser, destination.DescendantWindows().Last());
+    }
+
+    [Fact]
+    public void MovingAWindowLeftEntersFromTheRightEdge()
+    {
+        // The mirror image. Only window on its monitor, so there is no sibling to
+        // swap with and the move genuinely crosses - and it should land on the far
+        // side of the destination, nearest the monitor it came from.
+        WindowManager wm = WmFixture.Create(monitors: 2, workspaceNames: ["1"]);
+        wm.Open("terminal");
+        wm.Open("editor");
+
+        wm.AddWorkspace(new WorkspaceNode("2"), wm.Root.Monitors[1]);
+        wm.ActivateWorkspace(wm.Root.Monitors[1].Workspaces[0]);
+        WindowNode notepad = wm.Open("notepad");
+        wm.FocusWindow(notepad);
+        wm.Arrange();
+
+        wm.MoveDirection(Direction.Left);
+
+        WorkspaceNode destination = wm.Root.Monitors[0].Workspaces[0];
+
+        Assert.Equal(
+            ["terminal", "editor", "notepad"],
+            destination.DescendantWindows().Select(w => w.Identity.Title));
+    }
+
+    [Fact]
     public void MoveDirectionSwapsWithASibling()
     {
         WindowManager wm = WmFixture.Create();
