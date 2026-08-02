@@ -176,13 +176,81 @@ public sealed class BarAppearanceTests
     [Theory]
     [InlineData("splith", "\u2502\u2502")]
     [InlineData("splitv", "\u2261")]
-    [InlineData("grid", "\u229E")]
+    [InlineData("grid", "\u253C")]
     [InlineData("monocle", "\u25A0")]
     public void LayoutNamesBecomeGlyphs(string layout, string expected)
     {
         Assert.Equal(
             expected,
             Template.Render("{{ layout | icon }}", new Dictionary<string, string?> { ["layout"] = layout }));
+    }
+
+    [Theory]
+    [InlineData("splith")]
+    [InlineData("splitv")]
+    [InlineData("fibonacci")]
+    [InlineData("fibonacci-v")]
+    [InlineData("fibonacci-mirrored")]
+    [InlineData("master-left")]
+    [InlineData("master-right")]
+    [InlineData("master-top")]
+    [InlineData("master-bottom")]
+    [InlineData("grid")]
+    [InlineData("monocle")]
+    public void EveryLayoutIconIsAGlyphSegoeUiVariableActuallyHas(string layout)
+    {
+        // The icons are drawn in whatever font the bar is set to, and the shapes that
+        // read most obviously are missing from both Segoe UI Variable Text and Segoe
+        // UI. A missing glyph is measured at the width of the substitute box and drawn
+        // at the width of a borrowed glyph, so it came out clipped rather than absent -
+        // which reads as a rendering fault rather than a missing character.
+        //
+        // Ranges rather than a font query, so this holds on a machine without the font
+        // and states the actual constraint: box-drawing and block elements are covered,
+        // the geometric-shapes block largely is not.
+        string icon = Template.Render(
+            "{{ layout | icon }}",
+            new Dictionary<string, string?> { ["layout"] = layout });
+
+        Assert.NotEqual(layout, icon);
+
+        foreach (char c in icon)
+        {
+            bool covered =
+                (c >= '\u2500' && c <= '\u259F') ||   // box drawing and block elements
+                c == '\u25A0' || c == '\u25A1' ||     // the two squares that are present
+                c == '\u2261';                        // identical to
+
+            Assert.True(
+                covered,
+                $"'{layout}' uses U+{(int)c:X4}, which is outside the ranges the bar " +
+                "font covers; it will be borrowed from another font, mismeasured, " +
+                "and clipped");
+        }
+    }
+
+    [Theory]
+    [InlineData("fibonacci")]
+    [InlineData("master-left")]
+    [InlineData("grid")]
+    public void LayoutsThatLookDifferentGetDifferentGlyphs(string layout)
+    {
+        // master-left and fibonacci both used U+25E7, so two arrangements that look
+        // nothing alike showed the same symbol.
+        string[] all =
+        [
+            "splith", "splitv", "fibonacci", "fibonacci-v", "fibonacci-mirrored",
+            "master-left", "master-right", "master-top", "master-bottom",
+            "grid", "monocle",
+        ];
+
+        string icon = Render(layout);
+
+        Assert.Single(all, other => Render(other) == icon);
+
+        static string Render(string name) => Template.Render(
+            "{{ layout | icon }}",
+            new Dictionary<string, string?> { ["layout"] = name });
     }
 
     [Fact]
