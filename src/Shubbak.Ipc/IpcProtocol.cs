@@ -39,6 +39,12 @@ public sealed record WindowInfo(
     int Height);
 
 /// <summary>A workspace as described to clients.</summary>
+/// <remarks>
+/// <c>Active</c> and <c>Focused</c> are not the same thing. Active is true for the
+/// displayed workspace of every monitor at once; focused is true for exactly one.
+/// A bar that only receives the first has to mark them all identically, which is
+/// wrong the moment there is more than one display.
+/// </remarks>
 public sealed record WorkspaceInfo(
     long Id,
     string Name,
@@ -49,7 +55,8 @@ public sealed record WorkspaceInfo(
     string Layout,
     int WindowCount,
     int SortIndex,
-    int MonitorIndex);
+    int MonitorIndex,
+    bool Focused = false);
 
 /// <summary>A monitor as described to clients.</summary>
 public sealed record MonitorInfoDto(

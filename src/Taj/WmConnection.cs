@@ -260,10 +260,21 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    private static string FindActiveLayout(StateSnapshot state)
+    /// <summary>The layout of the workspace displayed on this bar's monitor.</summary>
+    /// <remarks>
+    /// Filtered by monitor. Taking the first active workspace in the snapshot meant
+    /// every bar on every monitor showed the first monitor's layout, so the indicator
+    /// was wrong on all but one display and changed when the user was not looking.
+    /// </remarks>
+    private string FindActiveLayout(StateSnapshot state)
     {
         foreach (WorkspaceInfo workspace in state.Workspaces)
-            if (workspace.Active) return workspace.Layout;
+        {
+            if (!workspace.Active) continue;
+            if (_monitorIndex >= 0 && workspace.MonitorIndex != _monitorIndex) continue;
+
+            return workspace.Layout;
+        }
 
         return string.Empty;
     }

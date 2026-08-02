@@ -45,6 +45,7 @@ public sealed class GdiRenderer : ITajRenderer
     private HGDIOBJ _previousBitmap;
 
     private Rect _bounds;
+    private Colour _backdrop = new(0x1E, 0x1E, 0x2E);
     private int _bufferWidth;
     private int _bufferHeight;
     private bool _disposed;
@@ -89,6 +90,7 @@ public sealed class GdiRenderer : ITajRenderer
     public void BeginFrame(Rect bounds, Colour background)
     {
         _bounds = bounds;
+        _backdrop = background;
         _windowDc = PInvoke.GetDC(_window);
 
         EnsureBuffer(bounds.Width, bounds.Height);
@@ -340,8 +342,29 @@ public sealed class GdiRenderer : ITajRenderer
     /// write red first. Getting this backwards produces a bar that looks almost
     /// right, which is the hardest kind of wrong to notice.
     /// </remarks>
-    private static COLORREF ToColorRef(Colour colour) =>
-        new((uint)(colour.R | (colour.G << 8) | (colour.B << 16)));
+    private COLORREF ToColorRef(Colour colour)
+    {
+        // Alpha is resolved by blending against the bar''s own background rather than
+        // being discarded. GDI has no compositing, so a half-transparent colour used
+        // to render fully opaque - which made `empty-colour` and the dimmed inactive
+        // workspaces indistinguishable from the active ones despite the config
+        // plainly asking for a difference.
+        Colour flat = colour.A >= 255 ? colour : Blend(colour, _backdrop);
+
+        return new((uint)(flat.R | (flat.G << 8) | (flat.B << 16)));
+    }
+
+    /// <summary>Flattens a translucent colour onto an opaque one.</summary>
+    private static Colour Blend(Colour source, Colour backdrop)
+    {
+        int alpha = source.A;
+        int inverse = 255 - alpha;
+
+        return new Colour(
+            (byte)(((source.R * alpha) + (backdrop.R * inverse)) / 255),
+            (byte)(((source.G * alpha) + (backdrop.G * inverse)) / 255),
+            (byte)(((source.B * alpha) + (backdrop.B * inverse)) / 255));
+    }
 
     private Rect ToLocal(Rect rect) => rect.Translate(-_bounds.X, -_bounds.Y);
 
