@@ -284,16 +284,21 @@ public sealed class WindowCommitter
             // between a relayout costing one SetWindowPos and costing dozens, and
             // it also suppresses a large share of the LOCATIONCHANGE echo.
             //
-            // Compared against the expanded rectangle, because that is what was
-            // actually asked for: GetWindowRect reports the window including its
-            // shadow, so comparing it with the visible rectangle we were given would
-            // never match and every window would be moved on every layout.
+            // Judged on the target alone, deliberately. Comparing against where the
+            // window actually is starts a fight with any application that adjusts its
+            // own size - a terminal snapping to whole character cells never lands
+            // exactly where it was put, so the comparison failed every time and the
+            // window was moved again on every layout. Since focus changes trigger a
+            // layout, that was a visible jump every time focus moved.
+            //
+            // A window moved by something else is handled where it should be: the
+            // location-change event, which already knows how to tell a user's drag
+            // from our own echo.
             lock (_lastCommitted)
             {
                 if (_lastCommitted.TryGetValue(handle, out Rect previous) &&
                     previous == placement.Rect &&
-                    _lastApplied.TryGetValue(handle, out Rect applied) &&
-                    Win32Window.GetBounds(handle) == applied)
+                    _lastApplied.ContainsKey(handle))
                 {
                     continue;
                 }
