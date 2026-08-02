@@ -122,6 +122,16 @@ public sealed class WorkspacesWidget : IWidget
     public VisualStyle EmptyStyle { get; set; } = VisualStyle.Default;
 
     /// <summary>
+    /// Style while the pointer is over a workspace.
+    /// </summary>
+    /// <remarks>
+    /// Workspaces are clickable, and nothing about them says so. A hover response is
+    /// how a pointer interface admits that - without it the bar reads as a readout
+    /// rather than a control.
+    /// </remarks>
+    public VisualStyle? HoverStyle { get; set; }
+
+    /// <summary>
     /// Whether to hide empty workspaces that are not active.
     /// </summary>
     /// <remarks>
@@ -171,6 +181,16 @@ public sealed class WorkspacesWidget : IWidget
                 Text = entry.Label,
                 Style = style,
                 Box = ItemBox,
+
+                // Keeps whatever the state gave it and changes only what hover says,
+                // so hovering an active workspace does not blank its accent.
+                HoverStyle = HoverStyle is { } hover
+                    ? style with
+                    {
+                        Foreground = hover.Foreground,
+                        Background = hover.Background.IsTransparent ? style.Background : hover.Background,
+                    }
+                    : null,
 
                 // Quoted, because workspace names include characters the command
                 // tokeniser would otherwise treat as syntax - the author's config

@@ -81,9 +81,16 @@ public static class TajConfigLoader
         foreach (SourceSpec builtin in DefaultSources())
             if (!declared.Contains(builtin.Name)) sources.Add(builtin);
 
+        // Typography is baked into each widget at parse time, so it is not on
+        // BarProfile to be read back. Carried alongside instead, or a profile that
+        // extends another would silently fall back to the built-in defaults - which
+        // is what made a variant render in a smaller font than the one it inherited
+        // from, for no reason visible in the config.
+        Dictionary<string, ProfileText> text = new(StringComparer.OrdinalIgnoreCase);
+
         foreach (KdlNode node in bar.ChildrenNamed("profile"))
         {
-            BarProfile? profile = ParseProfile(node, profiles, diagnostics);
+            BarProfile? profile = ParseProfile(node, profiles, text, diagnostics);
             if (profile is not null) profiles[profile.Name] = profile;
         }
 
@@ -176,9 +183,13 @@ public static class TajConfigLoader
     private static bool? SettingBool(KdlNode node, string name) =>
         Setting(node, name) is { } value && value.TryAsBool(out bool result) ? result : null;
 
+    /// <summary>Profile settings that widgets absorb and BarProfile does not keep.</summary>
+    private readonly record struct ProfileText(Colour Foreground, FontStyle Font, int Padding);
+
     private static BarProfile? ParseProfile(
         KdlNode node,
         Dictionary<string, BarProfile> existing,
+        Dictionary<string, ProfileText> inheritedText,
         List<Diagnostic> diagnostics)
     {
         string? name = node.Argument(0)?.AsString();
@@ -206,12 +217,23 @@ public static class TajConfigLoader
             ?? parent?.Background
             ?? new Colour(0x1E, 0x1E, 0x2E);
 
-        Colour foreground = ParseColour(SettingText(node, "foreground"))
-            ?? new Colour(0xCD, 0xD6, 0xF4);
+        // Everything below inherits from the profile being extended. Falling back to
+        // the built-in defaults instead makes a variant differ from its parent in
+        // ways the config never mentions - a slimmer bar that also, inexplicably,
+        // used a smaller font and a different text colour.
+        ProfileText inherited =
+            SettingText(node, "extends") is { } from && inheritedText.TryGetValue(from, out ProfileText inheritedFound)
+                ? inheritedFound
+                : new ProfileText(
+                    new Colour(0xCD, 0xD6, 0xF4),
+                    new FontStyle("Segoe UI", 12),
+                    6);
+
+        Colour foreground = ParseColour(SettingText(node, "foreground")) ?? inherited.Foreground;
 
         var font = new FontStyle(
-            SettingText(node, "font") ?? "Segoe UI",
-            SettingInt(node, "font-size") ?? 12);
+            SettingText(node, "font") ?? inherited.Font.Family,
+            SettingInt(node, "font-size") ?? inherited.Font.Size);
 
         // Zones are merged with the parent's by id, not substituted for them.
         //
@@ -240,7 +262,11 @@ public static class TajConfigLoader
             else zones.Add(zone);
         }
 
-        int padding = SettingInt(node, "padding") ?? 6;
+        int padding = SettingInt(node, "padding") ?? inherited.Padding;
+
+        // Recorded so a profile extending this one inherits what was resolved here,
+        // rather than what was written here - inheritance should chain.
+        inheritedText[name] = new ProfileText(foreground, font, padding);
 
         return new BarProfile(name, edge, height, background, Edges.Symmetric(padding, 0), zones);
     }
@@ -339,6 +365,15 @@ public static class TajConfigLoader
                         Foreground = ParseColour(SettingText(node, "empty-colour")
                             ?? SettingText(node, "empty-color"))
                             ?? style.Foreground.WithAlpha(110),
+                    },
+                    HoverStyle = style with
+                    {
+                        Foreground = ParseColour(SettingText(node, "hover-colour")
+                            ?? SettingText(node, "hover-color"))
+                            ?? style.Foreground,
+                        Background = ParseColour(SettingText(node, "hover-background"))
+                            ?? new Colour(0xFF, 0xFF, 0xFF, 0x1A),
+                        CornerRadius = SettingInt(node, "radius") ?? 4,
                     },
                     HideEmpty = SettingBool(node, "hide-empty") ?? false,
                 };

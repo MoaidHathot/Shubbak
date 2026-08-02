@@ -171,7 +171,7 @@ public static class Template
     private static string LayoutIcon(string layout) => layout switch
     {
         "splith" => "\u2502\u2502",              // ││  side by side
-        "splitv" => "\u2550",                    // ═   stacked
+        "splitv" => "\u2261",                    // ≡   stacked
         "fibonacci" => "\u25E7",                 // ◧
         "fibonacci-v" => "\u25E9",               // ◩
         "fibonacci-mirrored" => "\u25E8",        // ◨

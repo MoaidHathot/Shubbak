@@ -142,6 +142,16 @@ public sealed class VisualNode
     /// </remarks>
     public string? OnClick { get; set; }
 
+    /// <summary>
+    /// Style to use while the pointer is over this node.
+    /// </summary>
+    /// <remarks>
+    /// Null means the node does not react, which is right for anything that is not
+    /// clickable: highlighting a label the user cannot press only suggests it does
+    /// something.
+    /// </remarks>
+    public VisualStyle? HoverStyle { get; set; }
+
     /// <summary>The command for a scroll-up, if any.</summary>
     public string? OnScrollUp { get; set; }
 
