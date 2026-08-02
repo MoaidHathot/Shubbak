@@ -659,7 +659,7 @@ public sealed class WmDaemon : IDisposable
 
         Log.Info(LogCategory.Window,
             $"managed 0x{handle:X} \"{Truncate(attributes.Title, 40)}\" " +
-            $"({attributes.ProcessName}) [{attributes.ClassName}] " +
+            $"({attributes.ProcessName}) [{attributes.ClassName}] {window.State} " +
             $"-> workspace {window.Workspace?.Name ?? "?"}");
 
         ApplyRules(window, attributes, RuleTrigger.OnManage);

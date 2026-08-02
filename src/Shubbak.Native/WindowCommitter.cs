@@ -39,6 +39,20 @@ public sealed class WindowCommitter
                SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS);
 
     private readonly Dictionary<nint, Rect> _lastCommitted = [];
+
+    /// <summary>
+    /// The rectangle actually passed to Windows, shadow compensation included.
+    /// </summary>
+    /// <remarks>
+    /// Kept alongside the visible rectangle the layout asked for, because the two are
+    /// no longer the same and each answers a different question. GetWindowRect reports
+    /// this one, so this is what "is the window already where we put it?" has to
+    /// compare against - recomputing the compensation to make that comparison would
+    /// give a stale answer whenever a window's frame had changed since it was
+    /// measured, and the window would be moved again on every single layout. Which is
+    /// visible: a small jump every time focus moved.
+    /// </remarks>
+    private readonly Dictionary<nint, Rect> _lastApplied = [];
     private readonly HashSet<nint> _driving = [];
 
     /// <summary>
@@ -119,13 +133,14 @@ public sealed class WindowCommitter
         {
             if (_driving.Contains(handle)) return true;
 
-            if (!_lastCommitted.TryGetValue(handle, out Rect expected)) return false;
-
-            // Compared after expansion, because the reported rectangle comes from
-            // GetWindowRect and therefore includes the shadow, while what we recorded
-            // is the visible rectangle we asked for. Without this every echo would
+            // Compared against the rectangle actually applied, because that is what
+            // GetWindowRect reports back. The visible rectangle the layout asked for
+            // is smaller by the shadow, so comparing with that would make every echo
             // look like the user had moved the window.
-            return expected == reported || Expand(handle, expected) == reported;
+            if (_lastApplied.TryGetValue(handle, out Rect applied) && applied == reported)
+                return true;
+
+            return _lastCommitted.TryGetValue(handle, out Rect expected) && expected == reported;
         }
     }
 
@@ -135,6 +150,7 @@ public sealed class WindowCommitter
         lock (_lastCommitted)
         {
             _lastCommitted.Remove(handle);
+            _lastApplied.Remove(handle);
             _driving.Remove(handle);
             _concealed.Remove(handle);
         }
@@ -190,7 +206,7 @@ public sealed class WindowCommitter
             {
                 case ConcealMethod.Cloaked:
                     Win32ApplicationView.Uncloak(handle);
-                    Win32Taskbar.SetVisible(handle, visible: true);
+                    RestoreTaskbarButton(handle);
                     break;
 
                 case ConcealMethod.Minimised:
@@ -276,7 +292,8 @@ public sealed class WindowCommitter
             {
                 if (_lastCommitted.TryGetValue(handle, out Rect previous) &&
                     previous == placement.Rect &&
-                    Win32Window.GetBounds(handle) == Expand(handle, placement.Rect))
+                    _lastApplied.TryGetValue(handle, out Rect applied) &&
+                    Win32Window.GetBounds(handle) == applied)
                 {
                     continue;
                 }
@@ -304,6 +321,7 @@ public sealed class WindowCommitter
                 {
                     _driving.Remove(handle);
                     _lastCommitted[handle] = rect;
+                    _lastApplied[handle] = Expand(handle, rect);
                 }
             }
         }
@@ -424,6 +442,7 @@ public sealed class WindowCommitter
             {
                 _driving.Remove(handle);
                 _lastCommitted[handle] = rect;
+                _lastApplied[handle] = Expand(handle, rect);
             }
         }
     }
@@ -520,7 +539,7 @@ public sealed class WindowCommitter
         if (method == ConcealMethod.Cloaked)
         {
             Win32ApplicationView.Uncloak(handle);
-            Win32Taskbar.SetVisible(handle, visible: true);
+            RestoreTaskbarButton(handle);
             return;
         }
 
@@ -682,6 +701,22 @@ public sealed class WindowCommitter
                 $"concealed 0x{handle:X} via hide" +
                 (HideMethod == WindowHideMethod.Cloak ? " (cloak refused)" : " (configured)"));
         }
+    }
+
+    /// <summary>
+    /// Puts a taskbar button back, if we were the ones who took it away.
+    /// </summary>
+    /// <remarks>
+    /// ITaskbarList is a cross-process call into the shell. Making one per window on
+    /// every workspace switch is enough work to make the shell look busy - which is
+    /// what it did, as a spinning pointer over whatever window had focus - and when
+    /// the button was never removed it achieved nothing at all.
+    /// </remarks>
+    private void RestoreTaskbarButton(nint handle)
+    {
+        if (KeepInTaskbar) return;
+
+        Win32Taskbar.SetVisible(handle, visible: true);
     }
 
     private void Record(nint handle, ConcealMethod method)

@@ -248,8 +248,48 @@ internal static class Program
         s_models.Clear();
     }
 
+    /// <summary>
+    /// Sets up logging from the shared config, then from the command line.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Taj reads the <c>logging</c> section of the same file the window manager does,
+    /// so turning logging on is one edit rather than two - and, more to the point,
+    /// so it is on at all. Taj is normally launched by a startup command with no
+    /// arguments, which meant it had no logging whatsoever: a question about why the
+    /// bar looked wrong could not be answered, because the bar had never written
+    /// anything down.
+    /// </para>
+    /// <para>
+    /// It writes to <c>taj.log</c> rather than the window manager's file. Two
+    /// processes cannot share one, and the window manager rotates its own on start.
+    /// </para>
+    /// </remarks>
     private static void ConfigureLogging(string[] args)
     {
+        string? configuredFile = null;
+
+        if (ConfigPathResolver.Resolve(Value(args, "--config")).Path is { } configPath &&
+            File.Exists(configPath))
+        {
+            try
+            {
+                ShubbakConfig shared = ConfigLoader.LoadFile(configPath).Config;
+
+                Log.Level = shared.LogLevel;
+
+                // An empty string means "the standard place", matching how the window
+                // manager reads the same setting.
+                if (shared.LogFile is { } file)
+                    configuredFile = file.Length > 0 ? file : DefaultTajLogPath;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A bar that cannot read the config still has a default to draw.
+            }
+        }
+
+        // The command line wins, so a one-off investigation does not need a config edit.
         if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
             Log.Level = parsed;
 
@@ -257,20 +297,26 @@ internal static class Program
 
         if (index >= 0)
         {
-            string path = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)
+            configuredFile = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)
                 ? args[index + 1]
-                : Path.Combine(Path.GetDirectoryName(Log.DefaultLogPath)!, "taj.log");
+                : DefaultTajLogPath;
+        }
 
-            try
-            {
-                Log.OpenFile(path);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                Console.Error.WriteLine($"taj: could not open log file: {ex.Message}");
-            }
+        if (configuredFile is null) return;
+
+        try
+        {
+            Log.OpenFile(configuredFile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"taj: could not open log file: {ex.Message}");
         }
     }
+
+    private static string DefaultTajLogPath =>
+        Path.Combine(Path.GetDirectoryName(Log.DefaultLogPath)!, "taj.log");
+
 
     /// <summary>
     /// Finds the config file.
