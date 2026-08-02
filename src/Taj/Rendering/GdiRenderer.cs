@@ -64,6 +64,23 @@ public sealed class GdiRenderer : ITajRenderer
 
     // ---- measurement -------------------------------------------------------
 
+    /// <summary>How much room a string needs, in the font it will be drawn in.</summary>
+    /// <remarks>
+    /// <para>
+    /// Measured with <c>DT_CALCRECT</c> rather than <c>GetTextExtentPoint32</c>, because
+    /// only the former agrees with what is actually drawn. <c>GetTextExtentPoint32</c>
+    /// consults the selected font alone, while <c>DrawText</c> quietly borrows a glyph
+    /// from another font when the selected one has none.
+    /// </para>
+    /// <para>
+    /// So a character the font lacks was measured at the width of the missing-glyph box
+    /// and then drawn several pixels wider - and since the text is drawn with
+    /// <c>DT_END_ELLIPSIS</c> into the width that was measured, the glyph was cut off.
+    /// Six of the eleven layout icons have no glyph in Segoe UI Variable Text, and none
+    /// of them do in Segoe UI, so the layout indicator was a clipped smear rather than
+    /// a symbol. Any template holding an unusual character had the same fault.
+    /// </para>
+    /// </remarks>
     public Size Measure(string text, FontStyle font)
     {
         if (string.IsNullOrEmpty(text)) return Size.Empty;
@@ -73,6 +90,30 @@ public sealed class GdiRenderer : ITajRenderer
 
         try
         {
+            var native = new RECT { left = 0, top = 0, right = 0, bottom = 0 };
+
+            unsafe
+            {
+                fixed (char* p = text)
+                {
+                    // Same flags as DrawText, minus the ones that need a real rectangle.
+                    int height = PInvoke.DrawText(
+                        _measureDc,
+                        p,
+                        text.Length,
+                        ref native,
+                        DRAW_TEXT_FORMAT.DT_CALCRECT |
+                        DRAW_TEXT_FORMAT.DT_SINGLELINE |
+                        DRAW_TEXT_FORMAT.DT_LEFT |
+                        DRAW_TEXT_FORMAT.DT_NOPREFIX);
+
+                    if (height != 0)
+                        return new Size(native.right - native.left, native.bottom - native.top);
+                }
+            }
+
+            // Still worth asking: DT_CALCRECT fails on some device contexts where the
+            // simpler call succeeds, and a slightly narrow answer beats none.
             if (PInvoke.GetTextExtentPoint32W(_measureDc, text, text.Length, out SIZE size))
                 return new Size(size.cx, size.cy);
         }

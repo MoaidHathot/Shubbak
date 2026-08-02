@@ -163,23 +163,31 @@ public static class Template
     /// A glyph that looks like the arrangement it names is read without being read.
     /// </para>
     /// <para>
-    /// Box-drawing characters rather than an icon font, so it works in whatever the
-    /// bar is already set to and needs nothing installed. An unrecognised layout
-    /// keeps its name, which is what a custom layout should do.
+    /// Box-drawing and block characters rather than an icon font, so it needs nothing
+    /// installed. An unrecognised layout keeps its name, which is what a custom layout
+    /// should do.
+    /// </para>
+    /// <para>
+    /// Every glyph here is one that Segoe UI Variable Text actually has. The geometric
+    /// shapes that read most obviously - the half-filled squares at U+25E7 and U+25E8,
+    /// and U+229E for a grid - are in neither Segoe UI Variable nor Segoe UI, so six of
+    /// the eleven layouts drew a borrowed glyph from a substitute font at a width the
+    /// layout had not reserved, and came out clipped. The quadrant and box-drawing
+    /// characters below say the same thing and are present.
     /// </para>
     /// </remarks>
     private static string LayoutIcon(string layout) => layout switch
     {
         "splith" => "\u2502\u2502",              // ││  side by side
         "splitv" => "\u2261",                    // ≡   stacked
-        "fibonacci" => "\u25E7",                 // ◧
-        "fibonacci-v" => "\u25E9",               // ◩
-        "fibonacci-mirrored" => "\u25E8",        // ◨
-        "master-left" => "\u25E7",               // ◧
-        "master-right" => "\u25E8",              // ◨
+        "fibonacci" => "\u2524",                 // ┤   one large pane, the rest divided
+        "fibonacci-v" => "\u252C",               // ┬
+        "fibonacci-mirrored" => "\u251C",        // ├
+        "master-left" => "\u258C",               // ▌   master fills the left half
+        "master-right" => "\u2590",              // ▐
         "master-top" => "\u2580",                // ▀
         "master-bottom" => "\u2584",             // ▄
-        "grid" => "\u229E",                      // ⊞
+        "grid" => "\u253C",                      // ┼   divided both ways
         "monocle" => "\u25A0",                   // ■
         _ => layout,
     };
