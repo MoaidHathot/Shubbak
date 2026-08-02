@@ -213,15 +213,32 @@ public static class TajConfigLoader
             SettingText(node, "font") ?? "Segoe UI",
             SettingInt(node, "font-size") ?? 12);
 
-        List<BarZone> zones = [];
+        // Zones are merged with the parent's by id, not substituted for them.
+        //
+        // Replacing wholesale contradicts what `extends` is for. A variant that
+        // redefined only "left" and "right" lost the inherited "centre" - and with it
+        // the only zone that grows, so the remaining zones packed against the left
+        // edge and the clock appeared on the wrong side of the bar. The failure was
+        // in the layout rather than the zone that went missing, which made it look
+        // like an alignment bug.
+        //
+        // To empty a zone rather than inherit it, redeclare it with no widgets.
+        List<BarZone> zones = parent is not null ? [.. parent.Zones] : [];
 
         foreach (KdlNode zoneNode in node.ChildrenNamed("zone"))
         {
             BarZone? zone = ParseZone(zoneNode, foreground, font, diagnostics);
-            if (zone is not null) zones.Add(zone);
-        }
+            if (zone is null) continue;
 
-        if (zones.Count == 0 && parent is not null) zones = [.. parent.Zones];
+            int existingIndex = zones.FindIndex(z =>
+                string.Equals(z.Id, zone.Id, StringComparison.OrdinalIgnoreCase));
+
+            // Overridden in place, so the inherited order survives: a redefined
+            // "right" stays on the right rather than moving to wherever it was
+            // written in the file.
+            if (existingIndex >= 0) zones[existingIndex] = zone;
+            else zones.Add(zone);
+        }
 
         int padding = SettingInt(node, "padding") ?? 6;
 

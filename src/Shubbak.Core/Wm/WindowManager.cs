@@ -568,12 +568,15 @@ public sealed class WindowManager
             current = ancestor;
         }
 
-        // Case 3: the workspace edge. Hand the window to the adjacent monitor.
+        // Case 3: the workspace edge. Hand the window to the adjacent monitor,
+        // entering from the side it arrived at - a window pushed right appears at
+        // the neighbour's left edge, keeping its position relative to the cursor's
+        // travel. Appending regardless would jump it to the far side of the screen.
         if (window.Monitor is { } monitor &&
             Root.MonitorInDirection(monitor, direction) is { } neighbour &&
             neighbour.ActiveWorkspace is { } destination)
         {
-            return MoveWindowToWorkspace(window, destination);
+            return MoveWindowToWorkspace(window, destination, direction);
         }
 
         return Reject("move", $"Nothing to the {direction.ToString().ToLowerInvariant()}.");
@@ -602,7 +605,8 @@ public sealed class WindowManager
         return MoveWindowToWorkspace(window, target);
     }
 
-    private WmResult MoveWindowToWorkspace(WindowNode window, WorkspaceNode destination)
+    private WmResult MoveWindowToWorkspace(
+        WindowNode window, WorkspaceNode destination, Direction? enteringFrom = null)
     {
         WorkspaceNode? source = window.Workspace;
         if (ReferenceEquals(source, destination)) return Complete();
@@ -613,9 +617,20 @@ public sealed class WindowManager
 
         TreeOps.Detach(window);
 
-        WindowNode? reference = destination.LastFocused;
-        ContainerNode container = reference?.ParentContainer ?? destination;
-        TreeOps.InsertByLayout(container, window, reference);
+        if (enteringFrom is { } direction)
+        {
+            // Placed at the edge the window entered by, so pushing right lands it on
+            // the neighbour's left. The same rule already governs moving into a
+            // neighbouring container within a workspace.
+            int index = direction.IsForward() ? 0 : destination.Count;
+            destination.Insert(Math.Clamp(index, 0, destination.Count), window);
+        }
+        else
+        {
+            WindowNode? reference = destination.LastFocused;
+            ContainerNode container = reference?.ParentContainer ?? destination;
+            TreeOps.InsertByLayout(container, window, reference);
+        }
 
         Emit(new WindowMoved(window, source, destination));
 

@@ -223,16 +223,12 @@ public static class Log
 
         if (level < s_level) return;
 
-        string line = entry.Format();
-
-        // Handed to a background writer rather than written here. Both sinks block:
-        // a flushed disk write, and a console write that can stall for tens of
-        // milliseconds when the terminal is busy or its buffer is full.
-        //
-        // The caller is often the window manager's message loop, which also has to
-        // service the low-level keyboard hook. Blocking it delays every keystroke the
-        // user types in every application, so no sink may ever run on it.
-        Sink.Enqueue(line);
+        // The entry is handed over unformatted. Formatting builds a string, and doing
+        // that here would allocate on the caller - which is usually the window
+        // manager's message loop. Allocation there means garbage collections there,
+        // and a collection suspends every thread including the one servicing the
+        // keyboard hook.
+        Sink.Enqueue(entry);
     }
 
     /// <summary>
@@ -250,7 +246,7 @@ public static class Log
         // and a queue this deep already means the writer is hopelessly behind.
         private const int Capacity = 8192;
 
-        private static readonly ConcurrentQueue<string> s_queue = new();
+        private static readonly ConcurrentQueue<LogEntry> s_queue = new();
         private static readonly AutoResetEvent s_signal = new(false);
         private static readonly Lock s_startGate = new();
 
@@ -261,7 +257,7 @@ public static class Log
         /// <summary>Lines discarded because the writer could not keep up.</summary>
         public static int Dropped => Volatile.Read(ref s_dropped);
 
-        public static void Enqueue(string line)
+        public static void Enqueue(LogEntry entry)
         {
             EnsureStarted();
 
@@ -272,7 +268,7 @@ public static class Log
                 return;
             }
 
-            s_queue.Enqueue(line);
+            s_queue.Enqueue(entry);
             s_signal.Set();
         }
 
@@ -314,10 +310,14 @@ public static class Log
         {
             bool wrote = false;
 
-            while (s_queue.TryDequeue(out string? line))
+            while (s_queue.TryDequeue(out LogEntry entry))
             {
                 Interlocked.Decrement(ref s_depth);
                 wrote = true;
+
+                // Formatted here, on the writer, rather than on whichever thread
+                // produced the entry.
+                string line = entry.Format();
 
                 if (s_toConsole)
                 {

@@ -1,3 +1,4 @@
+using System.Runtime;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 
@@ -15,6 +16,13 @@ internal static class Program
         }
 
         ConfigureLogging(args);
+
+        // A garbage collection suspends every thread in the process, including the
+        // one servicing the low-level keyboard hook - and until that thread answers,
+        // the keystroke has not reached the focused application. Sustained low
+        // latency trades a little memory for shorter pauses, which is the right way
+        // round for something that sits between the user and every keypress.
+        GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
 
         string? configPath = ResolveConfigPath(args);
 

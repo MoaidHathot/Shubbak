@@ -74,8 +74,25 @@ public sealed class DefaultWindowRuleTests
     {
         // Stated on its own because it is tempting. The Win+Space language switcher
         // is titled "Input Flyout" and hosted by explorer, so excluding the process
-        // would take File Explorer with it. Transient shell windows are handled by
-        // waiting for a window to settle instead.
+        // would take File Explorer with it.
         Assert.False(WindowFilter.IsExcludedProcessName("explorer"));
+    }
+
+    [Fact]
+    public void TheLanguageSwitcherIsExcludedByClass()
+    {
+        // The only thing that identifies it. It is hosted by explorer, so process
+        // matching would take File Explorer with it, and it lives long enough that
+        // waiting for it to disappear does not work either - a settling delay of
+        // 150ms let it through, and lengthening that would make every window the
+        // user opens visibly late.
+        Assert.True(WindowFilter.IsExcludedClassName("Shell_InputSwitchTopLevelWindow"));
+    }
+
+    [Fact]
+    public void OrdinaryClassesAreNotExcluded()
+    {
+        Assert.False(WindowFilter.IsExcludedClassName("MozillaWindowClass"));
+        Assert.False(WindowFilter.IsExcludedClassName("CabinetWClass"));
     }
 }
