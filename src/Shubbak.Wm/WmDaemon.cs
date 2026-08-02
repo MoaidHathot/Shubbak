@@ -586,6 +586,19 @@ public sealed class WmDaemon : IDisposable
             State = WindowFilter.InitialStateFor(handle, _config.InitialWindowState),
         };
 
+        // A window that starts floating has no remembered position, and the layout
+        // engine treats a floating window's rectangle as the user's to keep - so
+        // without this it would be "kept" at the origin with no size, and the window
+        // would be flung into the corner the instant it appeared.
+        //
+        // Dialogs are the case that matters: Win+R and Save boxes size themselves to
+        // their content, which is precisely why they are not tiled.
+        if (window.State == WindowState.Floating)
+        {
+            Rect bounds = Win32Window.GetBounds(handle);
+            if (!bounds.IsEmpty) window.FloatingRect = bounds;
+        }
+
         // A saved session wins during the initial adoption pass, so a restart puts
         // windows back where they were rather than piling them onto whichever
         // workspace happens to be active.

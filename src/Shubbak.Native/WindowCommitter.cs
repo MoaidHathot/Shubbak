@@ -118,7 +118,14 @@ public sealed class WindowCommitter
         lock (_lastCommitted)
         {
             if (_driving.Contains(handle)) return true;
-            return _lastCommitted.TryGetValue(handle, out Rect expected) && expected == reported;
+
+            if (!_lastCommitted.TryGetValue(handle, out Rect expected)) return false;
+
+            // Compared after expansion, because the reported rectangle comes from
+            // GetWindowRect and therefore includes the shadow, while what we recorded
+            // is the visible rectangle we asked for. Without this every echo would
+            // look like the user had moved the window.
+            return expected == reported || Expand(handle, expected) == reported;
         }
     }
 
@@ -131,6 +138,8 @@ public sealed class WindowCommitter
             _driving.Remove(handle);
             _concealed.Remove(handle);
         }
+
+        ForgetShadow(handle);
     }
 
     /// <summary>How many windows are currently concealed.</summary>
@@ -258,11 +267,16 @@ public sealed class WindowCommitter
             // Skip windows already where we want them. This is the difference
             // between a relayout costing one SetWindowPos and costing dozens, and
             // it also suppresses a large share of the LOCATIONCHANGE echo.
+            //
+            // Compared against the expanded rectangle, because that is what was
+            // actually asked for: GetWindowRect reports the window including its
+            // shadow, so comparing it with the visible rectangle we were given would
+            // never match and every window would be moved on every layout.
             lock (_lastCommitted)
             {
                 if (_lastCommitted.TryGetValue(handle, out Rect previous) &&
                     previous == placement.Rect &&
-                    Win32Window.GetBounds(handle) == placement.Rect)
+                    Win32Window.GetBounds(handle) == Expand(handle, placement.Rect))
                 {
                     continue;
                 }
@@ -311,9 +325,11 @@ public sealed class WindowCommitter
 
         foreach ((nint handle, Rect rect) in moves)
         {
+            Rect target = Expand(handle, rect);
+
             batch = PInvoke.DeferWindowPos(
                 batch, new HWND(handle), HWND.Null,
-                rect.X, rect.Y, rect.Width, rect.Height,
+                target.X, target.Y, target.Width, target.Height,
                 (SET_WINDOW_POS_FLAGS)DefaultFlags);
 
             if (batch.IsNull)
@@ -328,11 +344,68 @@ public sealed class WindowCommitter
         PInvoke.EndDeferWindowPos(batch);
     }
 
-    private static void MoveSingle(nint handle, Rect rect) =>
+    private static void MoveSingle(nint handle, Rect rect)
+    {
+        Rect target = Expand(handle, rect);
+
         PInvoke.SetWindowPos(
             new HWND(handle), HWND.Null,
-            rect.X, rect.Y, rect.Width, rect.Height,
+            target.X, target.Y, target.Width, target.Height,
             (SET_WINDOW_POS_FLAGS)DefaultFlags);
+    }
+
+    /// <summary>
+    /// Grows a target rectangle to account for the window''s invisible shadow.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A window''s rectangle includes its drop shadow, which is transparent. Asking
+    /// for the rectangle the user should see and passing it straight to SetWindowPos
+    /// therefore insets the visible frame by the shadow on every side - so two
+    /// neighbouring windows show a gap of twice the shadow no matter what the gap is
+    /// configured to be. Shrinking the gap in config barely helps, because most of
+    /// what is being looked at was never the gap.
+    /// </para>
+    /// <para>
+    /// Measured once per window and cached. It is a compositor round trip, and this
+    /// runs for every window of every animation frame - per ADR 0001 the tick may not
+    /// allocate, and it should not be making system calls either.
+    /// </para>
+    /// </remarks>
+    private static Rect Expand(nint handle, Rect rect)
+    {
+        Win32Window.ShadowMargins margins;
+
+        lock (s_shadowGate)
+        {
+            if (!s_shadows.TryGetValue(handle, out margins))
+            {
+                margins = Win32Window.GetShadowMargins(handle);
+                s_shadows[handle] = margins;
+            }
+        }
+
+        if (margins.IsEmpty) return rect;
+
+        return new Rect(
+            rect.X - margins.Left,
+            rect.Y - margins.Top,
+            rect.Width + margins.Left + margins.Right,
+            rect.Height + margins.Top + margins.Bottom);
+    }
+
+    private static readonly Dictionary<nint, Win32Window.ShadowMargins> s_shadows = [];
+    private static readonly Lock s_shadowGate = new();
+
+    /// <summary>Forgets a window''s measured shadow.</summary>
+    /// <remarks>
+    /// Called when a window is unmanaged, so the table does not grow for the life of
+    /// the process and a recycled handle cannot inherit someone else''s margins.
+    /// </remarks>
+    private static void ForgetShadow(nint handle)
+    {
+        lock (s_shadowGate) s_shadows.Remove(handle);
+    }
 
     /// <summary>Places a single window immediately, outside any frame.</summary>
     public void CommitOne(nint handle, Rect rect)
