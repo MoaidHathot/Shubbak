@@ -139,6 +139,9 @@ public sealed class CrossProcessCloakingTests(ITestOutputHelper output)
 /// </remarks>
 internal sealed class ForeignWindow : IDisposable
 {
+    /// <summary>How long to let the shell notice a newly created window.</summary>
+    private const int SettleForShellMs = 400;
+
     private readonly Process? _spawned;
 
     private ForeignWindow(nint handle, Process? spawned)
@@ -203,6 +206,14 @@ internal sealed class ForeignWindow : IDisposable
                 nint handle = process.MainWindowHandle;
                 if (handle != 0 && Win32Window.IsVisible(handle))
                 {
+                    // The shell catalogues windows into its application-view
+                    // collection asynchronously, and a window a few milliseconds old
+                    // is often not in it yet - GetViewForHwnd answers
+                    // TYPE_E_ELEMENTNOTFOUND. Waiting here is test setup, not a
+                    // workaround: Shubbak never conceals a window this soon after it
+                    // appears, because adoption itself waits for it to settle.
+                    Thread.Sleep(SettleForShellMs);
+
                     ForeignWindow result = new(handle, process);
                     process = null;
                     return result;

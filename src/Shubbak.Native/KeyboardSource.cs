@@ -81,6 +81,8 @@ public sealed class KeyboardSource : IDisposable
     private readonly bool[] _swallowed = new bool[256];
 
     private UnhookWindowsHookExSafeHandle? _hook;
+    private Thread? _thread;
+    private uint _threadId;
     private BindingProbe? _probe;
     private volatile bool _suspended;
     private bool _disposed;
@@ -112,10 +114,30 @@ public sealed class KeyboardSource : IDisposable
     }
 
     /// <summary>
-    /// Installs the hook. Must be called on a thread that runs a message pump.
+    /// Installs the hook on a dedicated thread and begins delivering keystrokes.
     /// </summary>
     /// <param name="probe">Decides which keystrokes are bound and get swallowed.</param>
-    public unsafe void Start(BindingProbe probe)
+    /// <remarks>
+    /// <para>
+    /// The thread is the point. A <c>WH_KEYBOARD_LL</c> callback runs on the thread
+    /// that installed the hook, and that thread must be pumping messages for the
+    /// keystroke to be delivered at all. Windows gives it
+    /// <c>LowLevelHooksTimeout</c> - 300 ms by default - and until it answers,
+    /// <b>the keystroke has not reached the focused application</b>.
+    /// </para>
+    /// <para>
+    /// Installing it on the window manager's own message loop therefore puts every
+    /// keystroke the user types, in every application, behind whatever that loop is
+    /// doing: applying a layout, talking to the shell over COM, writing a log line.
+    /// Typing went sluggish system-wide, and nothing about the symptom pointed at a
+    /// window manager.
+    /// </para>
+    /// <para>
+    /// Here the hook gets a thread that does nothing else. The ring buffer was
+    /// already the handoff to the consumer, so the producer simply moved.
+    /// </para>
+    /// </remarks>
+    public void Start(BindingProbe probe)
     {
         ArgumentNullException.ThrowIfNull(probe);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -125,15 +147,71 @@ public sealed class KeyboardSource : IDisposable
 
         _probe = probe;
 
-        _hook = PInvoke.SetWindowsHookEx(
-            WINDOWS_HOOK_ID.WH_KEYBOARD_LL, &Callback, (SafeHandle?)null, 0);
+        using var ready = new ManualResetEventSlim(false);
+        Exception? failure = null;
 
-        if (_hook.IsInvalid)
+        _thread = new Thread(() => PumpUntilStopped(ready, ref failure))
+        {
+            // Named so it is identifiable in a debugger or a hang dump - the first
+            // question about input latency is which thread was busy.
+            Name = "Shubbak keyboard hook",
+            IsBackground = true,
+        };
+
+        // Above normal, because a late keystroke is a keystroke the focused
+        // application has not received yet. Not time-critical: starving the rest of
+        // the system to service a hook would be its own bug.
+        _thread.Start();
+        _thread.Priority = ThreadPriority.AboveNormal;
+
+        ready.Wait();
+
+        if (failure is not null)
         {
             Interlocked.CompareExchange(ref s_instance, null, this);
-            throw new InvalidOperationException(
-                $"SetWindowsHookEx(WH_KEYBOARD_LL) failed with error {Marshal.GetLastWin32Error()}.");
+            throw failure;
         }
+    }
+
+    private unsafe void PumpUntilStopped(ManualResetEventSlim ready, ref Exception? failure)
+    {
+        try
+        {
+            _hook = PInvoke.SetWindowsHookEx(
+                WINDOWS_HOOK_ID.WH_KEYBOARD_LL, &Callback, (SafeHandle?)null, 0);
+
+            if (_hook.IsInvalid)
+            {
+                failure = new InvalidOperationException(
+                    $"SetWindowsHookEx(WH_KEYBOARD_LL) failed with error {Marshal.GetLastWin32Error()}.");
+
+                return;
+            }
+
+            _threadId = PInvoke.GetCurrentThreadId();
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+            return;
+        }
+        finally
+        {
+            ready.Set();
+        }
+
+        // A plain blocking pump. This thread exists solely to be available the
+        // instant a keystroke arrives, so it must never do anything else.
+        while (PInvoke.GetMessage(out MSG message, default, 0, 0))
+        {
+            if (message.message == PInvoke.WM_QUIT) break;
+
+            PInvoke.TranslateMessage(in message);
+            PInvoke.DispatchMessage(in message);
+        }
+
+        _hook?.Dispose();
+        _hook = null;
     }
 
     /// <summary>Removes up to <paramref name="max"/> queued keystrokes.</summary>
@@ -277,6 +355,17 @@ public sealed class KeyboardSource : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+
+        // The hook belongs to the pump thread and must be removed there, so the
+        // thread is asked to leave rather than having the handle pulled from under it.
+        if (_threadId != 0)
+            PInvoke.PostThreadMessage(_threadId, PInvoke.WM_QUIT, default, default);
+
+        // Bounded: a pump thread that will not leave must not stop the window manager
+        // from exiting. The process is going away regardless.
+        _thread?.Join(TimeSpan.FromSeconds(2));
+        _thread = null;
+        _threadId = 0;
 
         _hook?.Dispose();
         _hook = null;

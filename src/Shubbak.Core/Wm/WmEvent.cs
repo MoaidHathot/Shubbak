@@ -128,6 +128,23 @@ public sealed record LayoutChanged(ContainerNode Container, string Layout) : WmE
     public override string Topic => "layout.changed";
 }
 
+/// <summary>A container's children were given new shares of its space.</summary>
+/// <remarks>
+/// Distinct from <see cref="LayoutChanged"/>: the layout is the same, only the
+/// division of space within it moved.
+/// <para>
+/// It exists because resizing used to report nothing at all. The tree was updated
+/// and no event was emitted, so the daemon - which marks the layout dirty from
+/// events - never re-applied it. Resizing appeared to do nothing until some
+/// unrelated event forced a relayout, which for most people meant switching
+/// workspace and back.
+/// </para>
+/// </remarks>
+public sealed record ContainerResized(ContainerNode Container) : WmEvent
+{
+    public override string Topic => "container.resized";
+}
+
 /// <summary>A monitor was attached.</summary>
 public sealed record MonitorAdded(MonitorNode Monitor) : WmEvent
 {

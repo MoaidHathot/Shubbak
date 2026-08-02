@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -89,6 +90,10 @@ public static class Log
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
 
+        // Drained before switching files, or lines belonging to the old session are
+        // written into the new one - or lost when it is rotated away.
+        Sink.Drain();
+
         lock (s_gate)
         {
             CloseFileCore();
@@ -117,7 +122,10 @@ public static class Log
                     FileAccess.Write, FileShare.ReadWrite),
                 new UTF8Encoding(false))
             {
-                AutoFlush = true,
+                // False deliberately. The writer thread flushes once per drain, which
+                // is what keeps a log line from costing a synchronous disk round trip
+                // on whichever thread happened to produce it.
+                AutoFlush = false,
             };
 
             s_filePath = path;
@@ -130,11 +138,48 @@ public static class Log
     /// <summary>Stops writing to the file.</summary>
     public static void CloseFile()
     {
+        // Drained first. Writing is buffered onto another thread, so closing without
+        // this discards whatever is still queued - which is exactly the tail of the
+        // log, the part worth keeping.
+        Sink.Drain();
+
         lock (s_gate) CloseFileCore();
+    }
+
+    /// <summary>
+    /// Writes everything still queued.
+    /// </summary>
+    /// <remarks>
+    /// Buffering moved log writes off the caller's thread, which means an abrupt exit
+    /// can lose the last few lines - exactly the lines that explain why it exited.
+    /// Called on shutdown and from the crash handler.
+    /// </remarks>
+    public static void Flush()
+    {
+        Sink.Drain();
+
+        lock (s_gate)
+        {
+            try
+            {
+                s_file?.Flush();
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+            }
+        }
     }
 
     private static void CloseFileCore()
     {
+        try
+        {
+            s_file?.Flush();
+        }
+        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+        {
+        }
+
         s_file?.Dispose();
         s_file = null;
         s_filePath = null;
@@ -180,23 +225,144 @@ public static class Log
 
         string line = entry.Format();
 
-        if (s_toConsole) Console.Error.WriteLine(line);
+        // Handed to a background writer rather than written here. Both sinks block:
+        // a flushed disk write, and a console write that can stall for tens of
+        // milliseconds when the terminal is busy or its buffer is full.
+        //
+        // The caller is often the window manager's message loop, which also has to
+        // service the low-level keyboard hook. Blocking it delays every keystroke the
+        // user types in every application, so no sink may ever run on it.
+        Sink.Enqueue(line);
+    }
 
-        if (s_file is not null)
+    /// <summary>
+    /// Writes log lines on a thread of its own.
+    /// </summary>
+    /// <remarks>
+    /// Exists because logging used to happen inline. With a file open at debug level
+    /// that meant a locked, flushed disk write per line on the message loop - and the
+    /// message loop is what answers the keyboard hook, so typing went sluggish
+    /// system-wide with nothing pointing at the cause.
+    /// </remarks>
+    private static class Sink
+    {
+        // Bounded. Logging must never become the reason memory grows without limit,
+        // and a queue this deep already means the writer is hopelessly behind.
+        private const int Capacity = 8192;
+
+        private static readonly ConcurrentQueue<string> s_queue = new();
+        private static readonly AutoResetEvent s_signal = new(false);
+        private static readonly Lock s_startGate = new();
+
+        private static Thread? s_thread;
+        private static int s_depth;
+        private static int s_dropped;
+
+        /// <summary>Lines discarded because the writer could not keep up.</summary>
+        public static int Dropped => Volatile.Read(ref s_dropped);
+
+        public static void Enqueue(string line)
         {
+            EnsureStarted();
+
+            if (Interlocked.Increment(ref s_depth) > Capacity)
+            {
+                Interlocked.Decrement(ref s_depth);
+                Interlocked.Increment(ref s_dropped);
+                return;
+            }
+
+            s_queue.Enqueue(line);
+            s_signal.Set();
+        }
+
+        private static void EnsureStarted()
+        {
+            if (s_thread is not null) return;
+
+            lock (s_startGate)
+            {
+                if (s_thread is not null) return;
+
+                s_thread = new Thread(Run)
+                {
+                    Name = "Shubbak log writer",
+                    IsBackground = true,
+
+                    // Below normal deliberately: a log line is never more urgent than
+                    // the work it describes.
+                    Priority = ThreadPriority.BelowNormal,
+                };
+
+                s_thread.Start();
+            }
+        }
+
+        private static void Run()
+        {
+            // Runs for the life of the process. A background thread, so it never
+            // holds the process open, and the timeout means a missed signal costs a
+            // quarter second of latency rather than a lost line.
+            while (true)
+            {
+                s_signal.WaitOne(250);
+                DrainOnce();
+            }
+        }
+
+        private static void DrainOnce()
+        {
+            bool wrote = false;
+
+            while (s_queue.TryDequeue(out string? line))
+            {
+                Interlocked.Decrement(ref s_depth);
+                wrote = true;
+
+                if (s_toConsole)
+                {
+                    try
+                    {
+                        Console.Error.WriteLine(line);
+                    }
+                    catch (IOException)
+                    {
+                        // A closed or redirected console is not worth a crash.
+                    }
+                }
+
+                lock (s_gate)
+                {
+                    try
+                    {
+                        s_file?.WriteLine(line);
+                    }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+                    {
+                        // A full or disconnected disk must not take the window manager
+                        // down with it.
+                    }
+                }
+            }
+
+            // Flushed once per drain rather than per line. Autoflush was what made
+            // every line a synchronous round trip to the disk.
+            if (!wrote) return;
+
             lock (s_gate)
             {
                 try
                 {
-                    s_file?.WriteLine(line);
+                    s_file?.Flush();
                 }
-                catch (IOException)
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
-                    // A full or disconnected disk must not take the window manager
-                    // down with it.
                 }
             }
         }
+
+        /// <summary>Writes everything queued. Called before the process exits.</summary>
+        public static void Drain() => DrainOnce();
     }
 
     /// <summary>

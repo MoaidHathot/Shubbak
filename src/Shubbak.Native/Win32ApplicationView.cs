@@ -101,21 +101,19 @@ public static unsafe partial class Win32ApplicationView
 
             // The shell caches its view collection, and a window created moments ago is
             // often not in it yet - it answers TYPE_E_ELEMENTNOTFOUND. RefreshCollection
-            // exists for exactly this, but one refresh is not always enough: the
-            // collection is rebuilt asynchronously, so a brand-new window can need a
-            // moment to appear. Failing here means falling back to SW_HIDE, which is
-            // the unrecoverable path, so it is worth a few milliseconds to avoid.
+            // exists for exactly this. Failing here means falling back to SW_HIDE, the
+            // unrecoverable path, so it is worth retrying.
             //
-            // Only the failure path pays. Concealment happens on workspace switches,
-            // not per frame, so this cannot affect the animation budget.
+            // Retried without sleeping, deliberately. Concealment runs on the window
+            // manager's message loop, and that loop also answers the low-level
+            // keyboard hook - blocking it delays every keystroke the user types in
+            // every application. RefreshCollection is itself a cross-process round
+            // trip, which is all the delay this needs.
             int hr = getViewForHwnd(collection, handle, &view);
 
             for (int attempt = 0; (hr < 0 || view == 0) && attempt < CollectionRetries; attempt++)
             {
-                if (attempt > 0) Thread.Sleep(RetryDelayMs);
-
                 refresh(collection);
-
                 hr = getViewForHwnd(collection, handle, &view);
             }
 
@@ -245,7 +243,6 @@ public static unsafe partial class Win32ApplicationView
     }
 
     private const int CollectionRetries = 4;
-    private const int RetryDelayMs = 15;
 
     private const int CoinitMultiThreaded = 0x0;
     private const int CoinitDisableOle1Dde = 0x4;

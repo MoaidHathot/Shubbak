@@ -104,6 +104,7 @@ internal static class StateProjection
             MonitorRemoved e => $"{{\"id\":{e.Id.Value},\"device_id\":{JsonString(e.DeviceId)}}}",
             BindingModeChanged e => e.Mode is null ? "null" : JsonString(e.Mode),
             LayoutChanged e => $"{{\"layout\":{JsonString(e.Layout)}}}",
+            ContainerResized e => $"{{\"id\":{e.Container.Id.Value}}}",
             CommandRejected e =>
                 $"{{\"command\":{JsonString(e.Command)}," +
                 $"\"reason\":{JsonString(e.Reason)}}}",
