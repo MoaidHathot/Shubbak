@@ -275,7 +275,17 @@ public sealed class WindowManager
         {
             // Re-focusing the active workspace: either bounce to the previous one or
             // just move the point of action to this monitor.
-            if (Options.ToggleWorkspaceOnRefocus &&
+            //
+            // Only a genuine re-focus bounces. A workspace can be displayed on a
+            // monitor the user is not looking at, and pressing its key then means "go
+            // there" - never "go somewhere else entirely". Testing the workspace alone
+            // sent every such press to that monitor's previous workspace instead, so
+            // the keys for whichever workspaces happened to be sitting on the other
+            // monitors were the ones that misbehaved.
+            bool alreadyThere = ReferenceEquals(FocusedMonitor, monitor);
+
+            if (alreadyThere &&
+                Options.ToggleWorkspaceOnRefocus &&
                 monitor.PreviousWorkspace is { } previous &&
                 !ReferenceEquals(previous, workspace))
             {
