@@ -48,6 +48,11 @@ public sealed class DiagnosticReport
         Line("AOT", (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported).ToString());
         Line("Version", typeof(DiagnosticReport).Assembly.GetName().Version?.ToString() ?? "unknown");
 
+        // Which binary is actually running, and when it was built. A stale executable
+        // on PATH produces bug reports that contradict the source, and there is no way
+        // to tell from the outside - so it is stated rather than inferred.
+        AddBinaryIdentity();
+
         // Elevation is the single most common explanation for "some windows just
         // will not move", so it is reported unconditionally.
         Line("Elevated", IsElevated().ToString());
@@ -58,6 +63,46 @@ public sealed class DiagnosticReport
 
         _output.AppendLine();
         return this;
+    }
+
+    /// <summary>Records the running executable and when it was built.</summary>
+    /// <remarks>
+    /// A stale binary earlier on <c>PATH</c> than the freshly built one produces bug
+    /// reports that flatly contradict the source, and neither side can tell. Reporting
+    /// the path and its timestamp settles it in one line.
+    /// </remarks>
+    private void AddBinaryIdentity()
+    {
+        string path;
+
+        try
+        {
+            // ProcessPath, not Assembly.Location: the latter is empty under NativeAOT
+            // and single-file, which is exactly how Shubbak ships.
+            path = Environment.ProcessPath ?? "(unknown)";
+        }
+        catch (Exception)
+        {
+            path = "(unavailable)";
+        }
+
+        Line("Executable", path);
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                Line("Built", File.GetLastWriteTimeUtc(path)
+                    .ToString("yyyy-MM-dd HH:mm:ss 'UTC'", CultureInfo.InvariantCulture));
+
+                Line("Size", (new FileInfo(path).Length / 1024.0 / 1024.0)
+                    .ToString("0.00 'MB'", CultureInfo.InvariantCulture));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Line("Built", "(unreadable)");
+        }
     }
 
     /// <summary>Adds an arbitrary named section.</summary>

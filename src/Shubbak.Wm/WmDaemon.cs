@@ -60,6 +60,8 @@ public sealed class WmDaemon : IDisposable
     private Session? _session;
     private readonly HashSet<int> _claimedSessionEntries = [];
     private bool _restoring;
+    private int _revived;
+    private int _revivalBudget;
 
     private long _lastSessionSaveTicks;
     private long _lastMonitorSyncTicks;
@@ -322,8 +324,19 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.Destroyed:
-            case WinEventKind.Cloaked:
                 TryUnmanage(handle);
+                break;
+
+            case WinEventKind.Cloaked:
+                // Shubbak conceals inactive workspaces by cloaking, and the shell
+                // reports that straight back as an ordinary cloak event. Unmanaging on
+                // it would drop every window on the workspace just left, so switching
+                // back would find nothing to reveal and the windows would be stranded.
+                //
+                // The Hidden case below has carried the equivalent guard for a long
+                // time. This one did not need it while cloaking silently failed for
+                // every window Shubbak managed; now that it works, it does.
+                if (!_committer.IsConcealing(handle)) TryUnmanage(handle);
                 break;
 
             case WinEventKind.Hidden:
@@ -467,7 +480,9 @@ public sealed class WmDaemon : IDisposable
     {
         if (_managed.ContainsKey(handle) || _ignored.Contains(handle)) return;
 
-        ManageDecision decision = WindowFilter.Evaluate(handle);
+        // Concealed windows are considered only during the initial adoption pass, and
+        // even then only to be reconciled against the session below.
+        ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: _restoring);
 
         if (!decision.Manageable)
         {
@@ -502,7 +517,57 @@ public sealed class WmDaemon : IDisposable
         // A saved session wins during the initial adoption pass, so a restart puts
         // windows back where they were rather than piling them onto whichever
         // workspace happens to be active.
-        WorkspaceNode? workspace = (_restoring ? RestoredWorkspaceFor(window) : null) ?? WorkspaceFor(handle);
+        WorkspaceNode? remembered = _restoring ? RestoredWorkspaceFor(window) : null;
+
+        // A window still concealed at this point was concealed by whoever ran last -
+        // us, before a crash or a kill. Revive it only when the session names it.
+        // Without that evidence it belongs to the application that hid it: a tray
+        // host, a message-only helper, a media-key listener. A desktop carries dozens.
+        //
+        // Tested against the session match, deliberately, and not against the resolved
+        // workspace. An earlier version checked the latter, which falls back to a real
+        // workspace and so is never null - the guard never fired and startup revealed
+        // eighty-four background windows on an ordinary desktop.
+        if (_restoring && WindowCommitter.IsConcealed(handle))
+        {
+            if (remembered is null)
+            {
+                // Remembered as ignored so the events these windows emit do not bring
+                // us back here for a second look.
+                _ignored.Add(handle);
+
+                if (Log.IsEnabled(LogLevel.Debug))
+                    Log.Debug(LogCategory.Window,
+                        $"leaving concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                        "alone: no session entry claims it");
+
+                return;
+            }
+
+            // A budget, not because the check above is expected to fail, but because
+            // it already did once. The session cannot justify reviving more windows
+            // than it remembers, so exceeding that is proof of a logic error and the
+            // damage is visible to the user immediately. Refusing costs a window that
+            // stays concealed; not refusing carpets the desktop.
+            if (_revived >= _revivalBudget)
+            {
+                Log.Error(LogCategory.Window,
+                    $"refusing to revive 0x{handle:X}: already revived {_revived} window(s) " +
+                    $"for a session of {_revivalBudget}. This is a bug - please report it.");
+
+                _ignored.Add(handle);
+                return;
+            }
+
+            WindowCommitter.Revive(handle);
+            _revived++;
+
+            Log.Info(LogCategory.Window,
+                $"recovered concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                $"-> workspace {remembered.Name}");
+        }
+
+        WorkspaceNode? workspace = remembered ?? WorkspaceFor(handle);
 
         _managed[handle] = window;
         Publish(_wm.ManageWindow(window, workspace));
@@ -697,6 +762,8 @@ public sealed class WmDaemon : IDisposable
         }
 
         _restoring = true;
+        _revived = 0;
+        _revivalBudget = _session?.Windows.Count ?? 0;
 
         try
         {
@@ -704,6 +771,14 @@ public sealed class WmDaemon : IDisposable
         }
         finally
         {
+            // Always reported, so a recovery that runs away is visible in the log
+            // without anyone having to think to look for it.
+            if (_revived > 0 || _revivalBudget > 0)
+            {
+                Log.Info(LogCategory.Wm,
+                    $"startup recovery: revived {_revived} of {_revivalBudget} remembered window(s)");
+            }
+
             // Restoration applies only to the initial adoption pass. A window opened
             // later must land where the user is, not where an old session says.
             _restoring = false;
@@ -1318,7 +1393,8 @@ public sealed class WmDaemon : IDisposable
         _config = result.Config;
         _wm.Options = _config.ToWmOptions();
         _animation.Options = _config.Animation;
-        _committer.UseCloaking = _config.UseCloaking;
+        _committer.HideMethod = _config.HideMethod;
+        _committer.KeepInTaskbar = _config.KeepInTaskbar;
         _bindings.Load(_config);
 
         ApplyLoggingConfig(initial);

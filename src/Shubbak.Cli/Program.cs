@@ -1,4 +1,5 @@
 using Shubbak.Config;
+using Shubbak.Core.Wm;
 using Shubbak.Ipc;
 using Shubbak.Native;
 
@@ -34,6 +35,7 @@ internal static class Program
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
+                "restore" => Restore(args),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
@@ -51,7 +53,108 @@ internal static class Program
         }
     }
 
+    /// <summary>Brings back windows that some earlier run left concealed.</summary>
+    /// <remarks>
+    /// Runs entirely locally and never contacts the window manager. The situation this
+    /// exists for is the one where the window manager is gone - killed, crashed, or an
+    /// older build that concealed windows in a way it could not undo - so depending on
+    /// it would defeat the purpose.
+    /// </remarks>
+    private static int Restore(string[] args)
+    {
+        bool dryRun = args.Contains("--dry-run") || args.Contains("-n");
+        bool all = args.Contains("--all");
+        bool cloakedOnly = args.Contains("--cloaked");
+
+        List<WindowRecovery.Candidate> candidates;
+
+        if (cloakedOnly)
+        {
+            candidates = WindowRecovery.FindCloaked();
+
+            Console.WriteLine(
+                "Windows that were cloaked rather than hidden. Applications hide their");
+            Console.WriteLine(
+                "own helper windows; Shubbak cloaks. That usually separates them, but the");
+            Console.WriteLine(
+                "shell also cloaks windows on other virtual desktops. Check the list.");
+            Console.WriteLine();
+        }
+        else if (all)
+        {
+            candidates = WindowRecovery.FindAll();
+
+            Console.WriteLine(
+                "Warning: --all cannot tell a window Shubbak concealed from one an");
+            Console.WriteLine(
+                "application hid on purpose. Most of the list below is likely to be");
+            Console.WriteLine(
+                "background helper windows that should stay hidden. Read it carefully.");
+            Console.WriteLine();
+        }
+        else
+        {
+            Session? session = SessionStore.Load();
+
+            if (session is null)
+            {
+                Console.Error.WriteLine("shubbak: no saved session was found.");
+                Console.Error.WriteLine(
+                    "hint: without one there is no way to prove which concealed windows were");
+                Console.Error.WriteLine(
+                    "      Shubbak's. Try 'shubbak restore --cloaked --dry-run', which lists");
+                Console.Error.WriteLine(
+                    "      only windows that were cloaked rather than hidden - usually just");
+                Console.Error.WriteLine(
+                    "      the real application windows. Or --all to see everything.");
+                return 1;
+            }
+
+            candidates = WindowRecovery.FindRemembered(session);
+        }
+
+        if (candidates.Count == 0)
+        {
+            Console.WriteLine("No concealed windows found.");
+            return 0;
+        }
+
+        Console.WriteLine(dryRun
+            ? $"Would restore {candidates.Count} window(s):"
+            : $"Restoring {candidates.Count} window(s):");
+
+        Console.WriteLine();
+
+        foreach (WindowRecovery.Candidate candidate in candidates)
+        {
+            Console.WriteLine(
+                $"  0x{candidate.Handle:X8}  {candidate.Reason,-16}  " +
+                $"{Truncate(candidate.ProcessName, 20),-20}  {Truncate(candidate.Title, 50)}");
+        }
+
+        Console.WriteLine();
+
+        if (dryRun)
+        {
+            Console.WriteLine("Nothing was changed. Re-run without --dry-run to restore them.");
+            return 0;
+        }
+
+        int revived = WindowRecovery.Revive(candidates);
+
+        Console.WriteLine($"Restored {revived} window(s).");
+
+        if (revived < candidates.Count)
+            Console.WriteLine($"{candidates.Count - revived} had already closed.");
+
+        return 0;
+    }
+
+    private static string Truncate(string value, int max) =>
+        value.Length <= max ? value : string.Concat(value.AsSpan(0, max - 1), "\u2026");
+
     private static async Task<IpcClient> ConnectAsync()
+
     {
         if (!IpcClient.IsServerRunning()) throw new TimeoutException();
 
@@ -390,6 +493,20 @@ internal static class Program
                                the live window tree, and the recent log. This is the
                                one command to run when something is wrong.
                     -o <path>  Write to a file instead of stdout.
+
+          restore              Bring back windows left concealed by a window manager
+                               that exited without restoring them - after a crash, a
+                               kill, or an older build. Works with nothing running.
+                               By default only restores windows the saved session
+                               proves Shubbak was managing.
+                    --dry-run  List what would be restored, and change nothing.
+                    --cloaked  Restore windows that were cloaked rather than hidden.
+                               Usually just the real application windows, since
+                               applications hide their own helpers. Use when the
+                               session is missing.
+                    --all      Restore everything concealed. Includes background
+                               helper windows that should stay hidden - read first.
+
 
           log-level <level>    Change the log level of the running window manager
                                without restarting it.
