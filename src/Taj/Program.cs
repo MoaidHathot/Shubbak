@@ -278,10 +278,13 @@ internal static class Program
 
                 Log.Level = shared.LogLevel;
 
-                // An empty string means "the standard place", matching how the window
-                // manager reads the same setting.
-                if (shared.LogFile is { } file)
-                    configuredFile = file.Length > 0 ? file : DefaultTajLogPath;
+                // Taj writes beside the window manager's log, never into it. The
+                // config resolves an empty path to the window manager's own file, and
+                // two processes cannot share one - the second to open it truncates
+                // the first's, which is worse than not logging at all.
+                if (shared.LogFile is { Length: > 0 } file)
+                    configuredFile = Path.Combine(
+                        Path.GetDirectoryName(file) ?? string.Empty, "taj.log");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {

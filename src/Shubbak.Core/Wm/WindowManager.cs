@@ -634,19 +634,22 @@ public sealed class WindowManager
 
         Emit(new WindowMoved(window, source, destination));
 
-        // Whether focus follows turns on one question: did the window go into hiding?
+        // Focus follows a directional move across a monitor boundary, and only that.
         //
-        // Moving it to a workspace that is not on screen does hide it, and dragging
-        // focus into hiding is what `follow-window-on-move #false` exists to prevent -
-        // "put this away" and "go there" are separate intentions.
+        // The window is still on screen there, so leaving focus behind would mean a
+        // second push in the same direction moved a different window - which is the
+        // whole reason for following it.
         //
-        // Moving it to another monitor does not. That monitor's active workspace is
-        // visible, so the window is still in front of the user, and leaving focus
-        // behind means a second push in the same direction moves a different window.
-        // GlazeWM keeps focus on the window for exactly this reason.
-        bool stillVisible = destination.IsActive;
+        // Moving to a *named* workspace deliberately does not, even when that
+        // workspace is visible. The idiom for "send it there and follow" is two
+        // commands on one key - `move --workspace 3; focus --workspace 3` - and if
+        // the move had already moved focus, the focus command would be re-focusing
+        // the workspace it is already on. With toggle-workspace-on-refocus that
+        // bounces to the previous workspace, so the key appeared to send the window
+        // to 3 and then show 2.
+        bool followsWindow = enteringFrom is not null && destination.IsActive;
 
-        if (Options.FollowWindowOnMove || stillVisible)
+        if (Options.FollowWindowOnMove || followsWindow)
         {
             if (!destination.IsActive) ActivateWorkspaceCore(destination);
             SetFocus(window);
