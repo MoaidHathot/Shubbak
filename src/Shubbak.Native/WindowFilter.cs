@@ -98,6 +98,7 @@ public static class WindowFilter
         "SearchHost",                 // Windows 11 search
         "SearchApp",                  // Windows 10 search
         "SearchUI",
+        "ScreenClippingHost",         // Win+Shift+S snipping overlay
         "PeopleExperienceHost",
         "LockApp",
         "ShellHost",
@@ -258,7 +259,7 @@ public static class WindowFilter
         string? path = Win32Window.GetProcessPath(processId);
         if (path is null) return false;
 
-        return s_excludedProcesses.Contains(Path.GetFileNameWithoutExtension(path));
+        return IsExcludedProcessName(Path.GetFileNameWithoutExtension(path));
     }
 
     /// <summary>
@@ -305,6 +306,44 @@ public static class WindowFilter
     public static WindowState InitialStateFor(nint handle, WindowState fallback)
     {
         if (Win32Window.IsMinimised(handle)) return WindowState.Minimised;
-        return fallback;
+
+        return InitialStateForClass(Win32Window.GetClassName(handle), fallback);
     }
+
+    /// <summary>The state a window of this class should start in.</summary>
+    /// <remarks>
+    /// Split from <see cref="InitialStateFor"/> so the policy can be stated and
+    /// tested without conjuring a real window of each class - which for a Win32
+    /// dialog means driving an application into showing one.
+    /// </remarks>
+    public static WindowState InitialStateForClass(string className, WindowState fallback) =>
+        s_floatingClasses.Contains(className) ? WindowState.Floating : fallback;
+
+    /// <summary>Whether windows owned by this executable are never managed.</summary>
+    /// <remarks>Named separately from the handle-based check so it can be tested.</remarks>
+    public static bool IsExcludedProcessName(string processName) =>
+        s_excludedProcesses.Contains(processName);
+
+    /// <summary>
+    /// Window classes that start floating rather than tiled.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Dialogs. Tiling one is always wrong: it is sized for its content, it is
+    /// usually modal, and it is gone in seconds - so tiling it resizes every other
+    /// window on the workspace twice for nothing. GlazeWM ships the same two as
+    /// built-in defaults rather than leaving them to config, and for the same reason:
+    /// nobody would think to write the rule until it had already annoyed them.
+    /// </para>
+    /// <para>
+    /// <c>#32770</c> is the standard Win32 dialog class - Save, Open, Properties, and
+    /// most third-party dialogs. <c>OperationStatusWindow</c> is the file copy,
+    /// move and delete progress window.
+    /// </para>
+    /// </remarks>
+    private static readonly HashSet<string> s_floatingClasses = new(StringComparer.Ordinal)
+    {
+        "#32770",
+        "OperationStatusWindow",
+    };
 }

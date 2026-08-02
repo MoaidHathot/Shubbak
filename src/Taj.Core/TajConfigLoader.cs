@@ -52,10 +52,34 @@ public static class TajConfigLoader
         if (parsed.HasErrors || bar is null) return (CreateDefault(), diagnostics);
 
         Dictionary<string, BarProfile> profiles = new(StringComparer.OrdinalIgnoreCase);
-        List<SourceSpec> sources = [.. DefaultSources()];
+
+        // Declared sources are collected first, then the built-ins fill in whatever
+        // was not named. The other order silently discards the user's version: the
+        // model registers by name and keeps the first, so declaring `clock` with a
+        // date in it changed nothing and gave no reason why.
+        List<SourceSpec> sources = [];
+        HashSet<string> declared = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (KdlNode node in bar.ChildrenNamed("source"))
-            if (ParseSource(node, diagnostics) is { } spec) sources.Add(spec);
+        {
+            if (ParseSource(node, diagnostics) is not { } spec) continue;
+
+            if (!declared.Add(spec.Name))
+            {
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0006",
+                    $"Source '{spec.Name}' is declared more than once.",
+                    node.Span,
+                    "The first declaration is used. Remove the duplicate, or rename it."));
+
+                continue;
+            }
+
+            sources.Add(spec);
+        }
+
+        foreach (SourceSpec builtin in DefaultSources())
+            if (!declared.Contains(builtin.Name)) sources.Add(builtin);
 
         foreach (KdlNode node in bar.ChildrenNamed("profile"))
         {
