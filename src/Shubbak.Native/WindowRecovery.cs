@@ -123,11 +123,24 @@ public static class WindowRecovery
             // minimised window would be a bug of its own.
             if (Win32Window.IsMinimised(handle)) continue;
 
+            // Windows cloaks a UWP app when it suspends one, using the same shell
+            // cloak Shubbak uses to conceal a workspace - so the two are
+            // indistinguishable after the fact. Reviving these puts the Settings app
+            // on screen every time recovery runs, which is worse than leaving a
+            // genuinely concealed one hidden: that has a keystroke to fix it.
+            if (IsSuspendedStoreApp(handle)) continue;
+
             if (!WindowFilter.Evaluate(handle, concealedAreEligible: true).Manageable) continue;
 
             yield return handle;
         }
     }
+
+    /// <summary>Whether this looks like a Store app the shell has put to sleep.</summary>
+    private static bool IsSuspendedStoreApp(nint handle) =>
+        Win32Window.GetCloakState(handle) == Win32Window.CloakState.Shell &&
+        string.Equals(
+            Win32Window.GetClassName(handle), "ApplicationFrameWindow", StringComparison.Ordinal);
 
     private static Candidate Describe(nint handle)
     {

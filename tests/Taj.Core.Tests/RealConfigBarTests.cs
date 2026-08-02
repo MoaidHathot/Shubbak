@@ -24,18 +24,22 @@ public sealed class RealConfigBarTests
 
             profile "default" {
                 height 34
-                background "#1e1e2e"
+                background "#181825"
                 foreground "#cdd6f4"
-                font "Segoe UI"
+                font "Segoe UI Variable Text"
                 font-size 15
+                padding 10
 
-                zone "left" justify="start" gap=4 {
+                zone "left" justify="start" gap=2 {
                     workspaces hide-empty=#true \
                         active-background="#00000000" \
-                        colour="#ffffffe6" \
-                        empty-colour="#ffffff80" \
+                        colour="#ffffffcc" \
+                        empty-colour="#ffffff59" \
                         active-colour="#8dbcff" \
-                        focused-colour="#1dfb8d"
+                        focused-colour="#1dfb8d" \
+                        hover-colour="#ffffff" \
+                        hover-background="#ffffff1f" \
+                        radius=6
                 }
 
                 zone "centre" justify="center" grow=1 {
@@ -52,7 +56,7 @@ public sealed class RealConfigBarTests
             }
 
             profile "presentation" extends="default" {
-                height 24
+                height 26
                 zone "centre" justify="center" grow=1 { }
                 zone "right" justify="end" gap=10 {
                     text id="clock" template="{{ clock }}" colour="#8dbcff"
@@ -139,5 +143,39 @@ public sealed class RealConfigBarTests
 
         Assert.Empty(centre.Widgets);
         Assert.True(centre.Grow > 0);
+    }
+
+    [Fact]
+    public void ThePresentationProfileInheritsTypography()
+    {
+        // It sets only a height. Falling back to the built-in defaults instead of the
+        // profile it extends made it render in a smaller font and a different colour
+        // for no reason the config mentioned - which read as the bar breaking on
+        // switch rather than as inheritance being incomplete.
+        BarProfile presentation = Load().Profiles["presentation"];
+
+        var clock = (TemplateWidget)presentation.Zones
+            .Single(z => z.Id == "right").Widgets.Single(w => w.Id == "clock");
+
+        Assert.Equal(15, clock.Style.Font.Size);
+        Assert.Equal("Segoe UI Variable Text", clock.Style.Font.Family);
+    }
+
+    [Fact]
+    public void ThePresentationProfileInheritsPadding()
+    {
+        Assert.Equal(
+            Load().Profiles["default"].Padding,
+            Load().Profiles["presentation"].Padding);
+    }
+
+    [Fact]
+    public void WorkspacesRespondToThePointer()
+    {
+        // They are clickable and nothing about them says so.
+        WorkspacesWidget workspaces = Workspaces(Load().Profiles["default"]);
+
+        Assert.NotNull(workspaces.HoverStyle);
+        Assert.Equal(new Colour(0xFF, 0xFF, 0xFF), workspaces.HoverStyle.Value.Foreground);
     }
 }

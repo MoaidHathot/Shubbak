@@ -9,6 +9,7 @@ using Taj.Rendering;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Dwm;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
 using Windows.Win32.UI.Shell;
 using Windows.Win32.UI.WindowsAndMessaging;
 using Windows.Win32.Graphics.Gdi;
@@ -47,6 +48,8 @@ public sealed class BarWindow : IDisposable
     private VisualNode? _tree;
     private Rect _bounds;
     private bool _appbarRegistered;
+    private VisualNode? _hovered;
+    private bool _mouseTracked;
     private bool _disposed;
 
     /// <summary>Raised when a widget is clicked, with the command to run.</summary>
@@ -138,7 +141,62 @@ public sealed class BarWindow : IDisposable
         if (_renderer is null || _tree is null) return;
 
         VisualPainter.Paint(
-            _renderer, _tree, _bounds with { X = 0, Y = 0 }, _model.Profile.Background);
+            _renderer, _tree, _bounds with { X = 0, Y = 0 }, _model.Profile.Background, _hovered);
+    }
+
+    /// <summary>Tracks which node the pointer is over, repainting when it changes.</summary>
+    /// <remarks>
+    /// The tree is not rebuilt for this. Hovering changes how a node is drawn, not
+    /// what it says, and rebuilding on pointer movement would mean rebuilding many
+    /// times a second for no change in content.
+    /// </remarks>
+    private void OnMouseMove(int x, int y)
+    {
+        if (!_mouseTracked) StartTrackingMouse();
+
+        VisualNode? hovered = Interactive(_tree?.HitTest(x, y));
+
+        if (ReferenceEquals(hovered, _hovered)) return;
+
+        _hovered = hovered;
+
+        PInvoke.InvalidateRect(_handle, (RECT?)null, false);
+    }
+
+    private void OnMouseLeave()
+    {
+        _mouseTracked = false;
+
+        if (_hovered is null) return;
+
+        _hovered = null;
+
+        PInvoke.InvalidateRect(_handle, (RECT?)null, false);
+    }
+
+    /// <summary>The nearest ancestor that reacts to the pointer, if any.</summary>
+    private VisualNode? Interactive(VisualNode? node)
+    {
+        if (_tree is null) return null;
+
+        for (VisualNode? current = node; current is not null; current = FindParent(_tree, current))
+            if (current.HoverStyle is not null) return current;
+
+        return null;
+    }
+
+    private void StartTrackingMouse()
+    {
+        // Without this there is no WM_MOUSELEAVE, and the highlight would stay behind
+        // after the pointer had gone.
+        var track = new TRACKMOUSEEVENT
+        {
+            cbSize = (uint)Marshal.SizeOf<TRACKMOUSEEVENT>(),
+            dwFlags = TRACKMOUSEEVENT_FLAGS.TME_LEAVE,
+            hwndTrack = _handle,
+        };
+
+        _mouseTracked = PInvoke.TrackMouseEvent(ref track);
     }
 
     private void OnClick(int x, int y)
@@ -288,6 +346,18 @@ public sealed class BarWindow : IDisposable
                         window.OnClick(x, y);
                         return new LRESULT(0);
                     }
+
+                    case PInvoke.WM_MOUSEMOVE:
+                    {
+                        int x = (short)(lParam.Value & 0xFFFF);
+                        int y = (short)((lParam.Value >> 16) & 0xFFFF);
+                        window.OnMouseMove(x, y);
+                        return new LRESULT(0);
+                    }
+
+                    case PInvoke.WM_MOUSELEAVE:
+                        window.OnMouseLeave();
+                        return new LRESULT(0);
 
                     case PInvoke.WM_DESTROY:
                         s_windows.Remove((nint)hwnd.Value);

@@ -56,7 +56,17 @@ public interface ITajRenderer : ITextMeasurer, IDisposable
 public static class VisualPainter
 {
     /// <summary>Draws a tree that has already been laid out.</summary>
-    public static void Paint(ITajRenderer renderer, VisualNode root, Rect bounds, Colour background)
+    /// <remarks>
+    /// The hovered node is passed in rather than stored on the tree, so hovering does
+    /// not require rebuilding it - the tree is rebuilt only when the data behind it
+    /// changes, and pointer movement is not data.
+    /// </remarks>
+    public static void Paint(
+        ITajRenderer renderer,
+        VisualNode root,
+        Rect bounds,
+        Colour background,
+        VisualNode? hovered = null)
     {
         ArgumentNullException.ThrowIfNull(renderer);
         ArgumentNullException.ThrowIfNull(root);
@@ -65,7 +75,7 @@ public static class VisualPainter
 
         try
         {
-            PaintNode(renderer, root);
+            PaintNode(renderer, root, hovered);
         }
         finally
         {
@@ -75,11 +85,13 @@ public static class VisualPainter
         }
     }
 
-    private static void PaintNode(ITajRenderer renderer, VisualNode node)
+    private static void PaintNode(ITajRenderer renderer, VisualNode node, VisualNode? hovered)
     {
         if (!node.Visible || node.Rect.IsEmpty) return;
 
-        VisualStyle style = node.Style;
+        VisualStyle style = ReferenceEquals(node, hovered) && node.HoverStyle is { } hover
+            ? hover
+            : node.Style;
 
         if (!style.Background.IsTransparent)
             renderer.FillRectangle(node.Rect, style.Background, style.CornerRadius);
@@ -94,7 +106,7 @@ public static class VisualPainter
         }
 
         // Children after the parent's own background, so nesting draws correctly.
-        foreach (VisualNode child in node.Children) PaintNode(renderer, child);
+        foreach (VisualNode child in node.Children) PaintNode(renderer, child, hovered);
     }
 
     private static Rect Deflate(Rect rect, Edges padding) => Rect.FromEdges(

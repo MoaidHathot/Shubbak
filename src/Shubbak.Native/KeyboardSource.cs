@@ -83,6 +83,20 @@ public sealed class KeyboardSource : IDisposable
     private UnhookWindowsHookExSafeHandle? _hook;
     private Thread? _thread;
     private uint _threadId;
+
+    /// <summary>Name of the thread servicing the hook, or null when not started.</summary>
+    /// <remarks>
+    /// Exposed so a test can assert the hook is not sharing a thread with anything
+    /// else. That is not an implementation detail: sharing it with the window
+    /// manager's message loop made typing slow across the entire machine.
+    /// </remarks>
+    public string? ThreadName => _thread?.Name;
+
+    /// <summary>Managed id of the thread servicing the hook, or zero.</summary>
+    public int ThreadId => _thread?.ManagedThreadId ?? 0;
+
+    /// <summary>Whether the hook is installed.</summary>
+    public bool IsRunning => _thread is not null && !_disposed;
     private BindingProbe? _probe;
     private volatile bool _suspended;
     private bool _disposed;

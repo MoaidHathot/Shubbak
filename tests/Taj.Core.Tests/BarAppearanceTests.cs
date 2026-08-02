@@ -175,7 +175,7 @@ public sealed class BarAppearanceTests
 
     [Theory]
     [InlineData("splith", "\u2502\u2502")]
-    [InlineData("splitv", "\u2550")]
+    [InlineData("splitv", "\u2261")]
     [InlineData("grid", "\u229E")]
     [InlineData("monocle", "\u25A0")]
     public void LayoutNamesBecomeGlyphs(string layout, string expected)
