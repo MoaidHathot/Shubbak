@@ -188,7 +188,10 @@ public sealed class WindowCommitterConcealmentTests
         var committer = new WindowCommitter();
 
         Conceal(committer, window.Handle);
-        TestWindow.Pump();
+
+        TestWindow.PumpUntil(() =>
+            !Win32Window.IsVisible(window.Handle) ||
+            Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None);
 
         Assert.True(
             !Win32Window.IsVisible(window.Handle) ||
@@ -198,7 +201,7 @@ public sealed class WindowCommitterConcealmentTests
         Assert.Equal(1, committer.ConcealedCount);
 
         committer.RestoreAll();
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
     }
 
     [Fact]
@@ -208,10 +211,10 @@ public sealed class WindowCommitterConcealmentTests
         var committer = new WindowCommitter();
 
         Conceal(committer, window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Reveal(committer, window.Handle, new Core.Geometry.Rect(100, 100, 320, 240));
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
         Assert.True(Win32Window.IsVisible(window.Handle));
@@ -285,7 +288,7 @@ public sealed class WindowCommitterConcealmentTests
         var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         Conceal(committer, window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
 
         // Hidden rather than cloaked - the escape hatch for environments where the
         // compositor is unavailable.
@@ -293,7 +296,7 @@ public sealed class WindowCommitterConcealmentTests
         Assert.False(Win32Window.IsVisible(window.Handle));
 
         committer.RestoreAll();
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
     }
 
     [Fact]
@@ -305,11 +308,17 @@ public sealed class WindowCommitterConcealmentTests
         var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         Conceal(committer, window.Handle);
-        TestWindow.Pump();
-        Assert.False(Win32Window.IsVisible(window.Handle));
+
+        // Recorded synchronously, unlike the window's visibility - SW_HIDE is posted
+        // to the owning thread. This is the part of the contract the test is about:
+        // that a hidden window is remembered as hidden, so RestoreAll reverses it the
+        // matching way rather than un-cloaking something that was never cloaked.
+        Assert.True(committer.IsConcealing(window.Handle));
+
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
 
         committer.RestoreAll();
-        TestWindow.Pump();
+        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
 
         Assert.True(Win32Window.IsVisible(window.Handle));
     }

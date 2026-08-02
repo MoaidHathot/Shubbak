@@ -107,6 +107,8 @@ public sealed class CrossProcessCloakingTests(ITestOutputHelper output)
 
         Assert.True(Win32ApplicationView.Cloak(foreign.Handle), "the shell refused to cloak");
 
+        WaitForCloakState(foreign.Handle, Win32Window.CloakState.Shell);
+
         Assert.Equal(Win32Window.CloakState.Shell, Win32Window.GetCloakState(foreign.Handle));
     }
 
@@ -119,6 +121,9 @@ public sealed class CrossProcessCloakingTests(ITestOutputHelper output)
         Assert.True(Win32ApplicationView.Cloak(foreign.Handle), "the shell refused to cloak");
 
         Assert.True(Win32ApplicationView.Uncloak(foreign.Handle));
+
+        WaitForCloakState(foreign.Handle, Win32Window.CloakState.None);
+
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(foreign.Handle));
     }
 
@@ -135,11 +140,31 @@ public sealed class CrossProcessCloakingTests(ITestOutputHelper output)
         var committer = new WindowCommitter();
 
         committer.Conceal(foreign.Handle);
+
+        // Polled, because the compositor publishes DWMWA_CLOAKED asynchronously: the
+        // shell has accepted the request by the time SetCloak returns, but the
+        // attribute a reader sees lags it slightly.
+        WaitForCloakState(foreign.Handle, Win32Window.CloakState.Shell);
+
         Assert.Equal(Win32Window.CloakState.Shell, Win32Window.GetCloakState(foreign.Handle));
 
         Assert.Equal(1, committer.RestoreAll());
 
+        WaitForCloakState(foreign.Handle, Win32Window.CloakState.None);
+
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(foreign.Handle));
+    }
+
+    private static void WaitForCloakState(nint handle, Win32Window.CloakState expected)
+    {
+        long deadline = Environment.TickCount64 + 3000;
+
+        while (Environment.TickCount64 < deadline)
+        {
+            if (Win32Window.GetCloakState(handle) == expected) return;
+
+            Thread.Sleep(25);
+        }
     }
 }
 
@@ -160,7 +185,21 @@ public sealed class CrossProcessCloakingTests(ITestOutputHelper output)
 internal sealed class ForeignWindow : IDisposable
 {
     /// <summary>How long to let the shell notice a newly created window.</summary>
-    private const int SettleForShellMs = 400;
+    private const int SettleForShellMs = 3000;
+
+    private static bool WaitForShellToNotice(nint handle)
+    {
+        long deadline = Environment.TickCount64 + SettleForShellMs;
+
+        while (Environment.TickCount64 < deadline)
+        {
+            if (Win32ApplicationView.HasView(handle)) return true;
+
+            Thread.Sleep(25);
+        }
+
+        return false;
+    }
 
     private readonly Process? _spawned;
 
@@ -229,10 +268,13 @@ internal sealed class ForeignWindow : IDisposable
                     // The shell catalogues windows into its application-view
                     // collection asynchronously, and a window a few milliseconds old
                     // is often not in it yet - GetViewForHwnd answers
-                    // TYPE_E_ELEMENTNOTFOUND. Waiting here is test setup, not a
-                    // workaround: Shubbak never conceals a window this soon after it
-                    // appears, because adoption itself waits for it to settle.
-                    Thread.Sleep(SettleForShellMs);
+                    // TYPE_E_ELEMENTNOTFOUND, and cloaking would fall back.
+                    //
+                    // Waited for rather than slept through, because a fixed delay is
+                    // a guess that is either too short on a loaded machine or wasted
+                    // on an idle one. This is test setup, not a workaround: Shubbak
+                    // never conceals a window within milliseconds of it appearing.
+                    if (!WaitForShellToNotice(handle)) break;
 
                     ForeignWindow result = new(handle, process);
                     process = null;

@@ -15,3 +15,11 @@ PeekMessage
 PEEK_MESSAGE_REMOVE_TYPE
 TranslateMessage
 DispatchMessage
+MsgWaitForMultipleObjects
+QUEUE_STATUS_FLAGS
+GetMessage
+PostThreadMessage
+GetCurrentThreadId
+WM_QUIT
+PostMessage
+WM_CLOSE

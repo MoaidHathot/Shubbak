@@ -7,14 +7,28 @@ using Windows.Win32.UI.WindowsAndMessaging;
 namespace Shubbak.Native.Tests;
 
 /// <summary>
-/// A real, throwaway top-level window.
+/// A real, throwaway top-level window with a thread of its own.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The platform layer cannot be tested against a stub: whether a window is cloaked,
-/// whether the compositor accepted the request, and whether the filter then still
+/// whether the shell accepted the request, and whether the filter then still
 /// recognises it are all questions only Windows can answer. This creates a genuine
-/// window, which is cheap - a borderless popup that is never painted - and disposes
-/// of it afterwards.
+/// window - a borderless popup that is never painted - and disposes of it afterwards.
+/// </para>
+/// <para>
+/// It runs on its own thread, and that is not incidental. The committer conceals with
+/// <c>ShowWindowAsync</c>, which hands the request to the thread owning the window and
+/// requires that thread to be waiting on its input queue. Sharing xunit's thread made
+/// that unreliable: other tests initialise COM on it, and a window whose owner is off
+/// doing something else does not process the request. The result was a suite that
+/// failed perhaps one run in ten, always on visibility, never reproducibly.
+/// </para>
+/// <para>
+/// With a dedicated pump the window is always ready to service its own messages, and
+/// waiting for an outcome becomes a matter of watching for it rather than hoping the
+/// test thread pumps at the right moment.
+/// </para>
 /// </remarks>
 internal sealed class TestWindow : IDisposable
 {
@@ -22,26 +36,28 @@ internal sealed class TestWindow : IDisposable
     private static bool s_registered;
     private static readonly Lock s_gate = new();
 
+    private readonly Thread _thread;
+    private readonly ManualResetEventSlim _ready = new(false);
+
     private HWND _handle;
+    private Exception? _failure;
     private bool _disposed;
 
-    public unsafe TestWindow(string title = "Shubbak test window", bool visible = true)
+    public TestWindow(string title = "Shubbak test window", bool visible = true)
     {
-        EnsureClassRegistered();
+        _thread = new Thread(() => Run(title, visible))
+        {
+            Name = "Shubbak test window",
+            IsBackground = true,
+        };
 
-        _handle = PInvoke.CreateWindowEx(
-            WINDOW_EX_STYLE.WS_EX_NOACTIVATE,
-            ClassName,
-            title,
-            WINDOW_STYLE.WS_POPUP | WINDOW_STYLE.WS_CAPTION | WINDOW_STYLE.WS_SYSMENU,
-            100, 100, 320, 240,
-            HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
+        _thread.Start();
+        _ready.Wait(TimeSpan.FromSeconds(10));
+
+        if (_failure is not null) throw _failure;
 
         if (_handle.IsNull)
-            throw new InvalidOperationException(
-                $"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
-
-        if (visible) PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+            throw new InvalidOperationException("the test window never appeared");
     }
 
     public unsafe nint Handle => (nint)_handle.Value;
@@ -49,25 +65,77 @@ internal sealed class TestWindow : IDisposable
     public bool IsVisible => PInvoke.IsWindowVisible(_handle);
 
     /// <summary>
-    /// Drains this thread's message queue.
+    /// Waits for <paramref name="until"/> to hold.
     /// </summary>
     /// <remarks>
-    /// The committer conceals and reveals with <c>ShowWindowAsync</c>, which posts to
-    /// the owning window's thread rather than acting immediately - deliberately, so a
-    /// hung application cannot stall a whole relayout. Test windows are created on the
-    /// test thread, so the effect only lands once that thread pumps.
+    /// No pumping here: the window's own thread does that continuously. This only
+    /// watches, which is what makes it a fair way to observe an asynchronous API.
     /// </remarks>
-    public static void Pump()
+    public static void PumpUntil(Func<bool> until, int timeoutMs = 5000)
     {
-        // A bounded loop: an unbounded one would hang the test run if something kept
-        // posting messages.
-        for (int i = 0; i < 128; i++)
-        {
-            if (!PInvoke.PeekMessage(out MSG msg, default, 0, 0, PEEK_MESSAGE_REMOVE_TYPE.PM_REMOVE))
-                return;
+        ArgumentNullException.ThrowIfNull(until);
 
-            PInvoke.TranslateMessage(in msg);
-            PInvoke.DispatchMessage(in msg);
+        long deadline = Environment.TickCount64 + timeoutMs;
+
+        while (Environment.TickCount64 < deadline)
+        {
+            if (until()) return;
+
+            Thread.Sleep(5);
+        }
+
+        // Left to the caller's assertion to report - it knows what it was waiting for.
+    }
+
+    /// <summary>Kept for tests that only need a moment to pass.</summary>
+    public static void PumpOnce() => Thread.Sleep(20);
+
+    private unsafe void Run(string title, bool visible)
+    {
+        try
+        {
+            EnsureClassRegistered();
+
+            _handle = PInvoke.CreateWindowEx(
+                WINDOW_EX_STYLE.WS_EX_NOACTIVATE,
+                ClassName,
+                title,
+                WINDOW_STYLE.WS_POPUP | WINDOW_STYLE.WS_CAPTION | WINDOW_STYLE.WS_SYSMENU,
+                100, 100, 320, 240,
+                HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
+
+            if (_handle.IsNull)
+                throw new InvalidOperationException(
+                    $"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
+
+            if (visible) PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+
+        }
+        catch (Exception ex)
+        {
+            _failure = ex;
+            return;
+        }
+        finally
+        {
+            _ready.Set();
+        }
+
+        // Blocking pump for the life of the window, so a request handed to this
+        // thread is serviced immediately rather than whenever someone else remembers
+        // to pump.
+        while (PInvoke.GetMessage(out MSG message, default, 0, 0))
+        {
+            if (message.message is PInvoke.WM_QUIT or PInvoke.WM_CLOSE) break;
+
+            PInvoke.TranslateMessage(in message);
+            PInvoke.DispatchMessage(in message);
+        }
+
+        if (!_handle.IsNull)
+        {
+            PInvoke.DestroyWindow(_handle);
+            _handle = HWND.Null;
         }
     }
 
@@ -107,10 +175,13 @@ internal sealed class TestWindow : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        if (!_handle.IsNull)
-        {
-            PInvoke.DestroyWindow(_handle);
-            _handle = HWND.Null;
-        }
+        // Posted to the window rather than the thread. Thread ids are recycled, and a
+        // WM_QUIT that arrives after its thread has gone can be delivered to whichever
+        // new thread inherited the id - which would stop the next test window pumping
+        // before it had started.
+        if (!_handle.IsNull) PInvoke.PostMessage(_handle, PInvoke.WM_CLOSE, default, default);
+
+        _thread.Join(TimeSpan.FromSeconds(5));
+        _ready.Dispose();
     }
 }

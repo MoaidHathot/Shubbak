@@ -34,12 +34,22 @@ public sealed class WindowRecoveryTests
         Assert.False(WindowCommitter.IsConcealed(window.Handle));
 
         committer.Conceal(window.Handle);
-        TestWindow.Pump();
 
-        Assert.True(WindowCommitter.IsConcealed(window.Handle));
+        // The committer's own record is set synchronously, so this is the part that
+        // can be asserted without waiting for anything.
+        Assert.True(committer.IsConcealing(window.Handle));
+
+        // Whether the window has actually gone off screen is a separate question:
+        // SW_HIDE is posted to the owning thread rather than applied, so it lands
+        // whenever that thread next pumps.
+        TestWindow.PumpUntil(() => WindowCommitter.IsConcealed(window.Handle));
+
+        Assert.True(
+            WindowCommitter.IsConcealed(window.Handle),
+            "the window was still on screen after the posted hide should have landed");
 
         committer.RestoreAll();
-        TestWindow.Pump();
+        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
     }
 
     [Fact]
@@ -51,11 +61,11 @@ public sealed class WindowRecoveryTests
         var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         committer.Conceal(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
         Assert.False(Win32Window.IsVisible(window.Handle));
 
         WindowCommitter.Revive(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
 
         Assert.True(Win32Window.IsVisible(window.Handle));
     }
@@ -68,7 +78,7 @@ public sealed class WindowRecoveryTests
         using var window = new TestWindow();
 
         WindowCommitter.Revive(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Assert.True(Win32Window.IsVisible(window.Handle));
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
@@ -83,12 +93,12 @@ public sealed class WindowRecoveryTests
         var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         committer.Conceal(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpUntil(() => WindowCommitter.IsConcealed(window.Handle));
 
         Assert.Empty(WindowRecovery.FindRemembered(SessionOf()));
 
         committer.RestoreAll();
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
     }
 
     [Fact]
@@ -98,7 +108,7 @@ public sealed class WindowRecoveryTests
         var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         committer.Conceal(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Session session = SessionOf(new RememberedWindow(
             "some-other-process", "SomeOtherClass", 12345, "2", [], false, "Tiling"));
@@ -106,7 +116,7 @@ public sealed class WindowRecoveryTests
         Assert.Empty(WindowRecovery.FindRemembered(session));
 
         committer.RestoreAll();
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
     }
 
     [Fact]
@@ -117,7 +127,7 @@ public sealed class WindowRecoveryTests
         using var window = new TestWindow();
 
         WindowActions.Minimise(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Assert.DoesNotContain(
             WindowRecovery.FindAll(),
@@ -138,12 +148,12 @@ public sealed class WindowRecoveryTests
         Assert.False(committer.IsConcealing(window.Handle));
 
         committer.Conceal(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Assert.True(committer.IsConcealing(window.Handle));
 
         committer.Reveal(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Assert.False(committer.IsConcealing(window.Handle));
     }
@@ -158,7 +168,7 @@ public sealed class WindowRecoveryTests
         var committer = new WindowCommitter();
 
         WindowActions.Minimise(window.Handle);
-        TestWindow.Pump();
+        TestWindow.PumpOnce();
 
         Assert.False(committer.IsConcealing(window.Handle));
     }
