@@ -1139,9 +1139,16 @@ public sealed class WmDaemon : IDisposable
 
             // Where the window is now: mid-flight position if it is already moving,
             // otherwise its real position on screen.
+            //
+            // Measured as the visible frame, because that is what a layout rectangle
+            // describes. GetWindowRect includes the window's shadow, so comparing it
+            // against the target reported a difference for every shadowed window even
+            // when it had not moved at all - and a focus change re-runs the layout, so
+            // every focus change animated the window out by the width of its own shadow
+            // and back again.
             Rect current = _animation.TryGetCurrent(placement.Window.Handle, out Rect inFlight)
                 ? inFlight
-                : Win32Window.GetBounds(handle);
+                : WindowCommitter.VisibleBounds(handle);
 
             AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : AnimationKind.WindowMove;
 

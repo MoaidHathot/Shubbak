@@ -395,19 +395,16 @@ public sealed class WindowCommitter
     /// allocate, and it should not be making system calls either.
     /// </para>
     /// </remarks>
-    private static Rect Expand(nint handle, Rect rect)
+    private static Rect Expand(nint handle, Rect rect) => Expand(rect, ShadowOf(handle));
+
+    /// <summary>Grows a visible rectangle to the window rectangle that produces it.</summary>
+    /// <remarks>
+    /// Separated from the handle so the geometry can be tested against margins that
+    /// actually exist. A plain test window has no shadow at all, so a test that placed
+    /// one and measured it would agree with any implementation, including a broken one.
+    /// </remarks>
+    public static Rect Expand(Rect rect, Win32Window.ShadowMargins margins)
     {
-        Win32Window.ShadowMargins margins;
-
-        lock (s_shadowGate)
-        {
-            if (!s_shadows.TryGetValue(handle, out margins))
-            {
-                margins = Win32Window.GetShadowMargins(handle);
-                s_shadows[handle] = margins;
-            }
-        }
-
         if (margins.IsEmpty) return rect;
 
         return new Rect(
@@ -417,13 +414,70 @@ public sealed class WindowCommitter
             rect.Height + margins.Top + margins.Bottom);
     }
 
+    /// <summary>Shrinks a window rectangle to the visible frame inside it.</summary>
+    /// <remarks>
+    /// The exact inverse of <see cref="Expand(Rect, Win32Window.ShadowMargins)"/>. The
+    /// two must round-trip, because one is used to place a window and the other to
+    /// measure it: any disagreement reads as the window having moved on its own, and
+    /// the layout then chases it.
+    /// </remarks>
+    public static Rect Shrink(Rect rect, Win32Window.ShadowMargins margins)
+    {
+        if (margins.IsEmpty) return rect;
+
+        return new Rect(
+            rect.X + margins.Left,
+            rect.Y + margins.Top,
+            rect.Width - margins.Left - margins.Right,
+            rect.Height - margins.Top - margins.Bottom);
+    }
+
+    private static Win32Window.ShadowMargins ShadowOf(nint handle)
+    {
+        lock (s_shadowGate)
+        {
+            if (!s_shadows.TryGetValue(handle, out Win32Window.ShadowMargins margins))
+            {
+                margins = Win32Window.GetShadowMargins(handle);
+                s_shadows[handle] = margins;
+            }
+
+            return margins;
+        }
+    }
+
     private static readonly Dictionary<nint, Win32Window.ShadowMargins> s_shadows = [];
     private static readonly Lock s_shadowGate = new();
 
-    /// <summary>Forgets a window''s measured shadow.</summary>
+    /// <summary>
+    /// Where a window's visible frame is now, in the same terms the layout uses.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Win32Window.GetBounds"/> is <c>GetWindowRect</c>, which includes the
+    /// invisible resize border a window draws its shadow into. Layout rectangles do
+    /// not. Comparing the two directly therefore reports a difference for every window
+    /// that has a shadow - typically fourteen pixels of width and seven of height -
+    /// even when the window is exactly where it was asked to be.
+    /// </para>
+    /// <para>
+    /// That false difference was read as "the window needs to move". Since a focus
+    /// change re-runs the layout, every focus change started an animation that grew the
+    /// window by the width of its own shadow and then settled back.
+    /// </para>
+    /// </remarks>
+    public static Rect VisibleBounds(nint handle)
+    {
+        Rect outer = Win32Window.GetBounds(handle);
+        if (outer.IsEmpty) return outer;
+
+        return Shrink(outer, ShadowOf(handle));
+    }
+
+    /// <summary>Forgets a window's measured shadow.</summary>
     /// <remarks>
     /// Called when a window is unmanaged, so the table does not grow for the life of
-    /// the process and a recycled handle cannot inherit someone else''s margins.
+    /// the process and a recycled handle cannot inherit someone else's margins.
     /// </remarks>
     private static void ForgetShadow(nint handle)
     {
@@ -484,9 +538,16 @@ public sealed class WindowCommitter
 
             foreach (AnimationFrame frame in frames)
             {
+                // Expanded exactly as the layout path expands, so a window is the same
+                // size whether it arrived by animation or by a direct placement.
+                // Writing raw here made every animated frame land the visible window
+                // about fourteen pixels narrower than the layout asked for, and the
+                // next placement snapped it back - a visible pop on every focus change.
+                Rect target = Expand((nint)frame.Handle, frame.Rect);
+
                 batch = PInvoke.DeferWindowPos(
                     batch, new HWND((nint)frame.Handle), HWND.Null,
-                    frame.Rect.X, frame.Rect.Y, frame.Rect.Width, frame.Rect.Height,
+                    target.X, target.Y, target.Width, target.Height,
                     (SET_WINDOW_POS_FLAGS)DefaultFlags);
 
                 if (batch.IsNull)
@@ -512,6 +573,12 @@ public sealed class WindowCommitter
                 {
                     _driving.Remove(handle);
                     _lastCommitted[handle] = frame.Rect;
+
+                    // Recorded for the same reason the layout path records it: the skip
+                    // check treats a missing entry as "never compensated" and places the
+                    // window again. After an animation that meant one redundant move,
+                    // which is what the user saw jump.
+                    _lastApplied[handle] = Expand(handle, frame.Rect);
                 }
                 else
                 {
