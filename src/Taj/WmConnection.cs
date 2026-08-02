@@ -243,7 +243,7 @@ public sealed class WmConnection : IAsyncDisposable
             List<WorkspacesWidget.WorkspaceEntry> entries =
             [
                 .. visible.Select(w => new WorkspacesWidget.WorkspaceEntry(
-                    w.Name, w.DisplayName, w.Active, w.HasWindows)),
+                    w.Name, w.DisplayName, w.Active, w.HasWindows, w.Focused)),
             ];
 
             _model.SetValue("workspaces", WorkspacesWidget.Encode(entries));

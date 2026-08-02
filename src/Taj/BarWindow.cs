@@ -119,6 +119,15 @@ public sealed class BarWindow : IDisposable
         _tree = _model.Build();
         _layout.Arrange(_tree, _bounds with { X = 0, Y = 0 });
 
+        if (Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.Debug(LogCategory.Wm,
+                $"bar {_monitorIndex} laid out at {_bounds.Width}x{_bounds.Height}: " +
+                string.Join(", ", _tree.SelfAndDescendants()
+                    .Where(n => n.Visible && !n.Rect.IsEmpty && n.Kind == VisualKind.Text)
+                    .Select(n => $"{n.Id}@{n.Rect.Left}..{n.Rect.Right}")));
+        }
+
         PInvoke.InvalidateRect(_handle, (RECT?)null, false);
         PInvoke.UpdateWindow(_handle);
     }
