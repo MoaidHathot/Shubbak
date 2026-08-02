@@ -308,6 +308,51 @@ public sealed class WmDaemon : IDisposable
         return completion.Task;
     }
 
+    /// <summary>
+    /// Decides whether a hidden window has actually gone away.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Applications that close to the system tray hide their window and keep running,
+    /// so it is still a valid handle. Keeping it managed means the next layout reveals
+    /// it, the window reappears, and the close button looks broken - which is exactly
+    /// what WhatsApp does.
+    /// </para>
+    /// <para>
+    /// The trap is that <c>EVENT_OBJECT_HIDE</c> also arrives when a window is
+    /// minimised or destroyed, and komorebi's handler carries a comment saying so.
+    /// Unmanaging on every hide would therefore drop a window the moment the user
+    /// minimised it. Minimising is checked first for that reason: it has its own event
+    /// and its own state, and this must not usurp either.
+    /// </para>
+    /// <para>
+    /// komorebi is more cautious still - it unmanages only for applications on a
+    /// curated tray list. That is more accurate and costs the user a config entry per
+    /// application. Treating any foreign hide as a departure is the opposite trade:
+    /// nothing to configure, and a window that hides itself transiently is re-managed
+    /// on the show event that follows.
+    /// </para>
+    /// </remarks>
+    private void HandleWindowHidden(nint handle)
+    {
+        // Ours. The workspace it lives on was switched away from.
+        if (_committer.IsConcealing(handle)) return;
+
+        // Gone for good.
+        if (!Win32Window.Exists(handle))
+        {
+            TryUnmanage(handle);
+            return;
+        }
+
+        // Minimised, not dismissed. Windows sends this alongside the minimise event,
+        // and a minimised window is still the user's - it keeps its place in the tree
+        // and its slot in the layout.
+        if (Win32Window.IsMinimised(handle)) return;
+
+        TryUnmanage(handle);
+    }
+
     private void HandleWindowEvent(WinEventNotification notification)
     {
         nint handle = notification.Handle;
@@ -346,10 +391,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.Hidden:
-                // A hidden window may simply be on a workspace we just switched
-                // away from - which we hid ourselves. Only unmanage windows that
-                // have genuinely gone.
-                if (!Win32Window.Exists(handle)) TryUnmanage(handle);
+                HandleWindowHidden(handle);
                 break;
 
             case WinEventKind.TitleChanged:
@@ -369,7 +411,12 @@ public sealed class WmDaemon : IDisposable
                 // until it was closed and reopened - by which time the window already
                 // existed and passed on the first try, which is what made it look
                 // like an intermittent fault rather than a race.
-                TryManage(handle);
+                //
+                // Minimised windows are excluded, which is komorebi's lesson rather
+                // than ours: they hit a case where Firefox renamed a minimised window
+                // as YouTube autoplayed, and treating that as an arrival pulled the
+                // window back onto the screen.
+                if (!Win32Window.IsMinimised(handle)) TryManage(handle);
                 break;
 
             case WinEventKind.Foreground:

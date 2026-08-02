@@ -80,6 +80,40 @@ public static unsafe partial class Win32ApplicationView
     /// <summary>Reverses <see cref="Cloak"/>.</summary>
     public static bool Uncloak(nint handle) => SetCloak(handle, CloakFlagOff);
 
+    /// <summary>Whether the shell has catalogued this window yet.</summary>
+    /// <remarks>
+    /// The collection is rebuilt asynchronously, so a window a few milliseconds old is
+    /// often absent from it and cannot be cloaked. Read-only: it takes a view and
+    /// releases it without changing anything, which is what makes it usable as a
+    /// readiness check rather than a side effect.
+    /// </remarks>
+    public static bool HasView(nint handle)
+    {
+        if (handle == 0) return false;
+
+        nint collection = GetViewCollection();
+        if (collection == 0) return false;
+
+        nint view = 0;
+
+        try
+        {
+            var getViewForHwnd =
+                (delegate* unmanaged[Stdcall]<nint, nint, nint*, int>)
+                (*(void***)collection)[GetViewForHwndSlot];
+
+            return getViewForHwnd(collection, handle, &view) >= 0 && view != 0;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+        finally
+        {
+            if (view != 0) Release(view);
+        }
+    }
+
     private static bool SetCloak(nint handle, int flag)
     {
         if (handle == 0) return false;
