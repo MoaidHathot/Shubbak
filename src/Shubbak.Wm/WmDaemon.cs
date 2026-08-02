@@ -1466,12 +1466,29 @@ public sealed class WmDaemon : IDisposable
         {
             WorkspaceConfig declared = _config.Workspaces[index];
 
-            if (_wm.Root.FindWorkspace(declared.Name) is not null) continue;
-
             ILayout? layout = declared.Layout is not null &&
                               LayoutRegistry.TryResolve(declared.Layout, out ILayout resolved)
                 ? resolved
                 : null;
+
+            // Already here, so its settings are brought up to date rather than the
+            // whole declaration being skipped. Reloading otherwise appeared to do
+            // nothing for the settings people most often change - a workspace's
+            // display name, which monitor it prefers, where it sits in the bar -
+            // because the workspace it applied to already existed by name.
+            if (_wm.Root.FindWorkspace(declared.Name) is { } existing)
+            {
+                existing.DisplayName = declared.DisplayName;
+                existing.PreferredMonitorIndex = declared.BindToMonitor;
+                existing.SortIndex = index;
+                existing.IsTransient = false;
+
+                // Only when the config names one: a workspace whose layout the user
+                // has since changed by keystroke should keep it.
+                if (layout is not null) existing.Layout = layout;
+
+                continue;
+            }
 
             var workspace = new WorkspaceNode(declared.Name, layout)
             {

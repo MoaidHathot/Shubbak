@@ -48,7 +48,7 @@ public sealed class WorkspaceNode : ContainerNode
     /// monitor a workspace currently sits on. Workspaces created on demand sort after
     /// declared ones, which is where a user expects something they never named.
     /// </remarks>
-    public int SortIndex { get; init; } = int.MaxValue;
+    public int SortIndex { get; set; } = int.MaxValue;
 
     /// <summary>What the bar should render.</summary>
     public string Label => DisplayName ?? Name;
@@ -57,7 +57,7 @@ public sealed class WorkspaceNode : ContainerNode
     /// The monitor index this workspace prefers, from config
     /// (GlazeWM's <c>bind_to_monitor</c>). Null means "any".
     /// </summary>
-    public int? PreferredMonitorIndex { get; init; }
+    public int? PreferredMonitorIndex { get; set; }
 
     /// <summary>
     /// True when this workspace exists only because a window was placed on it, and
@@ -67,7 +67,7 @@ public sealed class WorkspaceNode : ContainerNode
     /// Workspaces declared in config are not transient: an empty
     /// declared workspace must survive so that its keybinding keeps working.
     /// </remarks>
-    public bool IsTransient { get; init; }
+    public bool IsTransient { get; set; }
 
     /// <summary>The window that had focus when this workspace was last active.</summary>
     public WindowNode? LastFocused { get; set; }
