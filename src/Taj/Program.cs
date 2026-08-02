@@ -115,7 +115,22 @@ internal static class Program
             int monitorIndex = index;
 
             connection.ActiveWorkspaceChanged += workspace =>
-                model.Profile = selector.Select(workspace, monitorIndex);
+            {
+                BarProfile chosen = selector.Select(workspace, monitorIndex);
+
+                if (ReferenceEquals(chosen, model.Profile)) return;
+
+                model.Profile = chosen;
+
+                // Logged because a profile switch changes the whole bar at once, and
+                // when it looks wrong there is otherwise no way to tell whether the
+                // wrong profile was chosen, the right one was built badly, or the
+                // window failed to resize.
+                Log.Info(LogCategory.Config,
+                    $"monitor {monitorIndex} -> profile \"{chosen.Name}\" on workspace \"{workspace}\" " +
+                    $"(height {chosen.Height}, zones: " +
+                    $"{string.Join(", ", chosen.Zones.Select(z => $"{z.Id}/{z.Widgets.Count}w/grow{z.Grow}"))})");
+            };
 
             bar.CommandRequested += command => _ = connection.SendCommandAsync(command);
 
