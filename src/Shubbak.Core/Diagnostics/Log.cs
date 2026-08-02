@@ -324,7 +324,24 @@ public static class Log
             }
         }
 
+        /// <summary>
+        /// Serialises draining.
+        /// </summary>
+        /// <remarks>
+        /// Both the writer thread and whoever calls Flush or CloseFile drain the
+        /// queue. Without this they can drain at once: one takes the last entry, the
+        /// other sees an empty queue and reports itself done, and the file is closed
+        /// while the first is still writing - losing exactly the last lines, which are
+        /// the ones worth having.
+        /// </remarks>
+        private static readonly Lock s_drainGate = new();
+
         private static void DrainOnce()
+        {
+            lock (s_drainGate) DrainCore();
+        }
+
+        private static void DrainCore()
         {
             bool wrote = false;
 
