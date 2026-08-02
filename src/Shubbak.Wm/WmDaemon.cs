@@ -158,6 +158,10 @@ public sealed class WmDaemon : IDisposable
         if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath);
 
         RestoreConcealedWindows();
+
+        // Log writing is buffered onto its own thread, so the last lines - the ones
+        // that say why we are stopping - are still in the queue at this point.
+        Log.Flush();
     }
 
     /// <summary>

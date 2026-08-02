@@ -619,15 +619,25 @@ public sealed class WindowManager
 
         Emit(new WindowMoved(window, source, destination));
 
-        if (Options.FollowWindowOnMove)
+        // Whether focus follows turns on one question: did the window go into hiding?
+        //
+        // Moving it to a workspace that is not on screen does hide it, and dragging
+        // focus into hiding is what `follow-window-on-move #false` exists to prevent -
+        // "put this away" and "go there" are separate intentions.
+        //
+        // Moving it to another monitor does not. That monitor's active workspace is
+        // visible, so the window is still in front of the user, and leaving focus
+        // behind means a second push in the same direction moves a different window.
+        // GlazeWM keeps focus on the window for exactly this reason.
+        bool stillVisible = destination.IsActive;
+
+        if (Options.FollowWindowOnMove || stillVisible)
         {
-            ActivateWorkspaceCore(destination);
+            if (!destination.IsActive) ActivateWorkspaceCore(destination);
             SetFocus(window);
         }
         else if (ReferenceEquals(FocusedWindow, window))
         {
-            // The window left the visible workspace, so focus must not follow it
-            // into hiding.
             destination.LastFocused = window;
             SetFocus(successor);
         }
@@ -1006,6 +1016,13 @@ public sealed class WindowManager
         if (child is null) return Reject("resize", "Could not locate the resizable node.");
 
         container.SetChildRatio(child, child.SizeRatio + delta);
+
+        // Emitted because nothing else records that anything happened. The daemon
+        // marks the layout dirty from events, so a silent mutation left the new
+        // ratios sitting in the tree, unapplied, until some unrelated event forced a
+        // relayout.
+        Emit(new ContainerResized(container));
+
         return Complete();
     }
 
@@ -1016,6 +1033,8 @@ public sealed class WindowManager
             return Reject("equalise", "No focused window.");
 
         container.EqualiseChildren();
+        Emit(new ContainerResized(container));
+
         return Complete();
     }
 

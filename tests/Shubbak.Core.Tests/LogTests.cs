@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Shubbak.Core.Diagnostics;
 
 namespace Shubbak.Core.Tests;
@@ -287,6 +288,79 @@ public sealed class LogTests : IDisposable
 
         Assert.Equal(16 * 200, Log.TotalEntries);
         Assert.NotEmpty(Log.RecentEntries());
+    }
+
+    [Fact]
+    public void WritingDoesNotBlockTheCallingThread()
+    {
+        // The property this exists to protect. Log writing used to be a locked,
+        // flushed disk write on whichever thread produced the line - and the thread
+        // producing most of them was the window manager's message loop, which also
+        // answers the low-level keyboard hook. Blocking it delayed every keystroke
+        // the user typed, in every application, with nothing pointing at the cause.
+        //
+        // The threshold is deliberately loose. It is not a benchmark; it is there to
+        // fail if the sinks are ever moved back onto the caller.
+        Log.Level = LogLevel.Trace;
+
+        string path = Path.Combine(Path.GetTempPath(), $"shubbak-log-{Guid.NewGuid():N}.log");
+
+        try
+        {
+            Log.OpenFile(path);
+
+            long start = Stopwatch.GetTimestamp();
+
+            for (int i = 0; i < 2000; i++) Log.Info(LogCategory.Wm, $"entry {i}");
+
+            TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+
+            Assert.True(
+                elapsed < TimeSpan.FromSeconds(1),
+                $"2000 log calls took {elapsed.TotalMilliseconds:F0}ms, which suggests " +
+                "writing is happening on the caller's thread again.");
+        }
+        finally
+        {
+            Log.CloseFile();
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void FlushingMakesQueuedLinesReadable()
+    {
+        // The other half of the bargain: moving writes off the caller means nothing
+        // guarantees a line has reached the disk. Flush is what shutdown and the
+        // crash handler rely on, so it has to actually work.
+        Log.Level = LogLevel.Information;
+
+        string path = Path.Combine(Path.GetTempPath(), $"shubbak-log-{Guid.NewGuid():N}.log");
+
+        try
+        {
+            Log.OpenFile(path);
+            Log.Info(LogCategory.Wm, "a line worth keeping");
+
+            Log.Flush();
+
+            // Shared read: the point is that the line is on disk while the writer
+            // still holds the file open, which is the state a crash would leave.
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+
+            using var reader = new StreamReader(stream);
+
+            Assert.Contains(
+                "a line worth keeping",
+                reader.ReadToEnd(),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            Log.CloseFile();
+            File.Delete(path);
+        }
     }
 }
 

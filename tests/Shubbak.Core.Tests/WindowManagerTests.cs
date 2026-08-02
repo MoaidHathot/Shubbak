@@ -321,6 +321,46 @@ public sealed class WindowManagerTests
     }
 
     [Fact]
+    public void MovingAWindowToAnotherMonitorTakesFocusWithIt()
+    {
+        // The distinction the "leave focus behind" rule turns on is whether the
+        // window went into hiding. Another monitor's active workspace is on screen,
+        // so it did not - and leaving focus behind means a second push in the same
+        // direction moves a different window, which is not what anyone means by it.
+        // GlazeWM keeps focus on the window here for the same reason.
+        WindowManager wm = WmFixture.Create(monitors: 2, workspaceNames: ["1"]);
+        wm.AddWorkspace(new WorkspaceNode("2"), wm.Root.Monitors[1]);
+        wm.ActivateWorkspace(wm.Root.Monitors[1].Workspaces[0]);
+        wm.ActivateWorkspace(wm.Root.Monitors[0].Workspaces[0]);
+
+        WindowNode a = wm.Open("a");
+        wm.Arrange();
+
+        wm.MoveDirection(Direction.Right);
+
+        Assert.Same(a, wm.FocusedWindow);
+        Assert.Equal("2", a.Workspace!.Name);
+    }
+
+    [Fact]
+    public void MovingAWindowToAHiddenWorkspaceStillLeavesFocusBehind()
+    {
+        // The other half. Following a window somewhere invisible is exactly what
+        // follow-window-on-move #false is for, and the monitor rule must not weaken
+        // it - workspace 2 here shares a monitor with 1, so moving there hides it.
+        WindowManager wm = WmFixture.Create(monitors: 2, workspaceNames: ["1", "2"]);
+        WindowNode a = wm.Open("a");
+        WindowNode b = wm.Open("b");
+
+        wm.FocusWindow(b);
+        wm.MoveToWorkspace("2");
+
+        Assert.Same(a, wm.FocusedWindow);
+        Assert.Equal("1", wm.FocusedWorkspace!.Name);
+        Assert.Equal("2", b.Workspace!.Name);
+    }
+
+    [Fact]
     public void MoveDirectionSwapsWithASibling()
     {
         WindowManager wm = WmFixture.Create();
@@ -397,6 +437,44 @@ public sealed class WindowManagerTests
 
         Assert.Equal(0.6, a.SizeRatio, 1e-6);
         Assert.Equal(0.4, b.SizeRatio, 1e-6);
+    }
+
+    [Fact]
+    public void ResizingReportsThatSomethingChanged()
+    {
+        // Resizing used to mutate the tree and report nothing. The daemon marks the
+        // layout dirty from events, so the new ratios sat in the tree unapplied and
+        // the keystroke appeared to do nothing - until an unrelated event forced a
+        // relayout, which in practice meant switching workspace and back.
+        WindowManager wm = WmFixture.Create();
+        wm.Open("a");
+        WindowNode b = wm.Open("b");
+        wm.Arrange();
+
+        wm.FocusWindow(b);
+        WmResult result = wm.Resize(Axis.Horizontal, 0.1);
+
+        Assert.True(result.Succeeded);
+        Assert.Contains(result.Events, e => e is ContainerResized);
+    }
+
+    [Fact]
+    public void EqualisingReportsThatSomethingChanged()
+    {
+        // Same defect, same silence.
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.Open("b");
+        wm.Arrange();
+
+        wm.FocusWindow(a);
+        wm.Resize(Axis.Horizontal, 0.2);
+
+        WmResult result = wm.EqualiseSiblings();
+
+        Assert.True(result.Succeeded);
+        Assert.Contains(result.Events, e => e is ContainerResized);
+        Assert.Equal(0.5, a.SizeRatio, 1e-6);
     }
 
     [Fact]
