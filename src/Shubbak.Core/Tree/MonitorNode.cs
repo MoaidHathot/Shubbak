@@ -114,11 +114,29 @@ public sealed class MonitorNode : Node
 
         workspace.Parent = null;
 
-        if (ReferenceEquals(_active, workspace))
-            _active = _workspaces.Count > 0 ? _workspaces[0] : null;
+        bool wasActive = ReferenceEquals(_active, workspace);
+        bool wasPrevious = ReferenceEquals(PreviousWorkspace, workspace);
 
-        if (ReferenceEquals(PreviousWorkspace, workspace))
-            PreviousWorkspace = null;
+        if (wasPrevious) PreviousWorkspace = null;
+
+        if (!wasActive) return true;
+
+        // Falls back to where the user was last, not to whichever workspace happens
+        // to sit first in the list. Taking index zero exposed an arbitrary workspace
+        // when one was moved to another monitor - so a window the user had not asked
+        // for appeared, on a workspace they had not selected.
+        //
+        // Assigned to the field rather than through the property: the setter records
+        // the outgoing workspace as the previous one, and the outgoing workspace here
+        // has just been detached from this monitor entirely.
+        _active = PreviousWorkspace is { } recent && _workspaces.Contains(recent)
+            ? recent
+            : _workspaces.Count > 0 ? _workspaces[0] : null;
+
+        // Whatever we came from is either gone or is now current, so there is no
+        // meaningful workspace to toggle back to. Leaving a stale one made
+        // toggle-workspace-on-refocus jump somewhere the user had never been.
+        PreviousWorkspace = null;
 
         return true;
     }
