@@ -354,7 +354,22 @@ public sealed class WmDaemon : IDisposable
 
             case WinEventKind.TitleChanged:
                 if (_managed.TryGetValue(handle, out WindowNode? titled))
+                {
                     Publish(_wm.UpdateTitle(titled, Win32Window.GetTitle(handle)));
+                    break;
+                }
+
+                // Not managed yet - so this may be the moment it becomes eligible.
+                // Store apps and other late-loading windows are created before they
+                // have a title, and an untitled top-level window is rejected: they
+                // are overwhelmingly splash screens and invisible helpers.
+                //
+                // Without this, such a window is judged once, at its least ready, and
+                // never looked at again. Settings opened with Win+I stayed unmanaged
+                // until it was closed and reopened - by which time the window already
+                // existed and passed on the first try, which is what made it look
+                // like an intermittent fault rather than a race.
+                TryManage(handle);
                 break;
 
             case WinEventKind.Foreground:

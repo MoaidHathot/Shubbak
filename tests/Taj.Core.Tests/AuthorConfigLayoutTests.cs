@@ -117,4 +117,18 @@ public sealed class AuthorConfigLayoutTests
 
         Assert.Equal(wide.Rect.Right, slim.Rect.Right);
     }
+
+    [Fact]
+    public void SwitchingProfilesDoesNotResizeTheBar()
+    {
+        // A height change means the window is resized and the shell is told a new
+        // appbar reservation, on every switch to a presentation workspace. It reads
+        // as the bar glitching rather than as a setting, and it was: the height was
+        // the only thing the variant changed.
+        if (Load() is not { } config) return;
+
+        Assert.Equal(
+            config.Profiles["default"].Height,
+            config.Profiles["presentation"].Height);
+    }
 }

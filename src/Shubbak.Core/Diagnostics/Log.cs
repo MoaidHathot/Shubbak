@@ -191,6 +191,24 @@ public static class Log
     public static void Debug(LogCategory category, string message) =>
         Write(LogLevel.Debug, category, message);
 
+    /// <summary>Records a message, building it only if trace logging is on.</summary>
+    /// <remarks>
+    /// Preferred over the string overload anywhere that runs often. See
+    /// <see cref="TraceLogHandler"/> for why an interpolated string is not free when
+    /// the level is disabled.
+    /// </remarks>
+    public static void Trace(LogCategory category, ref TraceLogHandler message)
+    {
+        if (message.IsEnabled) Write(LogLevel.Trace, category, message.ToStringAndClear());
+    }
+
+    /// <summary>Records a message, building it only if debug logging is on.</summary>
+    /// <remarks>See <see cref="DebugLogHandler"/>.</remarks>
+    public static void Debug(LogCategory category, ref DebugLogHandler message)
+    {
+        if (message.IsEnabled) Write(LogLevel.Debug, category, message.ToStringAndClear());
+    }
+
     public static void Info(LogCategory category, string message) =>
         Write(LogLevel.Information, category, message);
 

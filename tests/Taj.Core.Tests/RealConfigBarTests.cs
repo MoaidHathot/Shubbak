@@ -56,7 +56,6 @@ public sealed class RealConfigBarTests
             }
 
             profile "presentation" extends="default" {
-                height 26
                 zone "centre" justify="center" grow=1 { }
                 zone "right" justify="end" gap=10 {
                     text id="clock" template="{{ clock }}" colour="#8dbcff"
