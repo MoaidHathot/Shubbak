@@ -1163,6 +1163,25 @@ public sealed class WmDaemon : IDisposable
                     $"placed {moved}/{placements.Count} windows, {_animation.ActiveCount} animating");
         }
 
+        // The whole picture, at trace level: what each window's workspace is and
+        // whether the layout decided it should be on screen. A window that is visible
+        // when it should not be is either mis-decided here or mis-applied afterwards,
+        // and there is no way to tell which from the outside.
+        if (Log.IsEnabled(LogLevel.Trace))
+        {
+            foreach (Placement placement in placements)
+            {
+                nint handle = (nint)placement.Window.Handle;
+
+                Log.Trace(LogCategory.Layout,
+                    $"  0x{handle:X} \"{Truncate(placement.Window.Identity.Title, 24)}\" " +
+                    $"ws={placement.Window.Workspace?.Name ?? "-"} " +
+                    $"want={(placement.Visible ? "shown" : "hidden")} " +
+                    $"is={(Win32Window.IsVisible(handle) ? "visible" : "invisible")}/" +
+                    $"{Win32Window.GetCloakState(handle)} {placement.Rect}");
+            }
+        }
+
         // Focus is applied after geometry: focusing a window that is about to move
         // makes it flash at its old position first.
         if (_wm.FocusedWindow is { } focused &&
