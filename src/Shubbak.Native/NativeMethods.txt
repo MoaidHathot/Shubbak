@@ -33,6 +33,14 @@ DwmGetWindowAttribute
 DWMWINDOWATTRIBUTE
 DwmSetWindowAttribute
 
+// --- shell cloaking (undocumented) ------------------------------------------
+// Deliberately absent. DWMWA_CLOAK is a per-process attribute - setting it on a
+// window owned by another process returns E_ACCESSDENIED, so it can never conceal a
+// window Shubbak manages. The shell's IApplicationView::SetCloak has no such
+// restriction, but CsWin32 emits ComImport interfaces for COM types, which are not
+// NativeAOT-safe. Those interfaces are therefore hand-rolled as raw vtable calls in
+// Win32ApplicationView and Win32Taskbar, which also keeps them allocation-free.
+
 // Process identity, for rules and for the inspector.
 OpenProcess
 PROCESS_ACCESS_RIGHTS

@@ -1,3 +1,5 @@
+using Shubbak.Core.Wm;
+
 namespace Shubbak.Native.Tests;
 
 /// <summary>
@@ -175,27 +177,44 @@ public sealed class WindowCommitterConcealmentTests
     };
 
     [Fact]
-    public void ConcealingAWindowCloaksIt()
+    public void ConcealingTakesAWindowOffScreen()
     {
+        // Asserts the outcome, not the mechanism. Which mechanism runs depends on
+        // whether the shell has an application view for the window, and it does not
+        // keep one for a borderless test popup - so pinning the mechanism here would
+        // only measure the harness. That cross-process claim belongs in
+        // CrossProcessCloakingTests, where it is made against a real application.
         using var window = new TestWindow();
         var committer = new WindowCommitter();
 
         Conceal(committer, window.Handle);
+        TestWindow.Pump();
 
-        Assert.Equal(Win32Window.CloakState.App, Win32Window.GetCloakState(window.Handle));
+        Assert.True(
+            !Win32Window.IsVisible(window.Handle) ||
+            Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None,
+            "the window was left on screen");
+
         Assert.Equal(1, committer.ConcealedCount);
+
+        committer.RestoreAll();
+        TestWindow.Pump();
     }
 
     [Fact]
-    public void RevealingUncloaksIt()
+    public void RevealingPutsItBack()
     {
         using var window = new TestWindow();
         var committer = new WindowCommitter();
 
         Conceal(committer, window.Handle);
+        TestWindow.Pump();
+
         Reveal(committer, window.Handle, new Core.Geometry.Rect(100, 100, 320, 240));
+        TestWindow.Pump();
 
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+        Assert.True(Win32Window.IsVisible(window.Handle));
         Assert.Equal(0, committer.ConcealedCount);
     }
 
@@ -260,10 +279,10 @@ public sealed class WindowCommitterConcealmentTests
     }
 
     [Fact]
-    public void HideMethodFallsBackWhenCloakingIsDisabled()
+    public void ConfiguringHideUsesShowWindowRatherThanCloaking()
     {
         using var window = new TestWindow();
-        var committer = new WindowCommitter { UseCloaking = false };
+        var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         Conceal(committer, window.Handle);
         TestWindow.Pump();
@@ -283,7 +302,7 @@ public sealed class WindowCommitterConcealmentTests
         // Restoring with the wrong call leaves the window off screen: un-cloaking
         // something that was hidden does nothing at all.
         using var window = new TestWindow();
-        var committer = new WindowCommitter { UseCloaking = false };
+        var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         Conceal(committer, window.Handle);
         TestWindow.Pump();

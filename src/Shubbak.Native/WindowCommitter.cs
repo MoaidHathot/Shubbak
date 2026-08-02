@@ -1,6 +1,8 @@
 using Shubbak.Core.Animation;
+using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Layouts;
+using Shubbak.Core.Wm;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.WindowsAndMessaging;
@@ -52,21 +54,54 @@ public sealed class WindowCommitter
     /// <summary>How a window was taken off screen.</summary>
     private enum ConcealMethod
     {
+        /// <summary>Cloaked through the shell. The only method that is fully reversible.</summary>
         Cloaked,
+
+        /// <summary><c>SW_HIDE</c>. Recoverable only by matching against the session.</summary>
         Hidden,
+
+        /// <summary><c>SW_MINIMIZE</c>. Visible to the user in the taskbar.</summary>
+        Minimised,
     }
 
+    /// <summary>How windows on inactive workspaces are taken off screen.</summary>
+    /// <remarks>
+    /// Configurable because the preferred method depends on an undocumented shell
+    /// interface. When that is unavailable a config option is far better than a
+    /// rebuild - see <see cref="WindowHideMethod"/>.
+    /// </remarks>
+    public WindowHideMethod HideMethod { get; set; } = WindowHideMethod.Cloak;
+
     /// <summary>
-    /// Whether to cloak rather than hide.
+    /// Whether concealed windows keep their taskbar button.
     /// </summary>
     /// <remarks>
-    /// Cloaking is the default and is strongly preferred - see
-    /// <see cref="Win32Window.Cloak"/> for why. The switch exists because the
-    /// compositor is not universally available (remote sessions, some virtual
-    /// display drivers) and because an individual application may misbehave, and in
-    /// that situation a config option is far better than a rebuild.
+    /// On by default. Cloaking leaves the button in place on its own, so this is
+    /// simply not interfering: the taskbar stays a complete list of what is open, and
+    /// a window on another workspace is one click away rather than hidden until you
+    /// remember which workspace you left it on. Turn it off to make an inactive
+    /// workspace disappear completely, at the cost of that discoverability.
     /// </remarks>
-    public bool UseCloaking { get; set; } = true;
+    public bool KeepInTaskbar { get; set; } = true;
+
+    private long _cloakedCount;
+    private long _hiddenCount;
+    private long _minimisedCount;
+    private int _cloakFailureReported;
+
+    /// <summary>
+    /// How many windows have been concealed each way since start.
+    /// </summary>
+    /// <remarks>
+    /// Reported by <c>shubbak diagnose</c>. Whether concealment is really cloaking or
+    /// has silently fallen back to hiding is the difference between recoverable and
+    /// unrecoverable, and it is not otherwise observable from outside. The original
+    /// bug - every concealed window stranded - was invisible for exactly this reason.
+    /// </remarks>
+    public (long Cloaked, long Hidden, long Minimised) ConcealmentCounts =>
+        (Interlocked.Read(ref _cloakedCount),
+         Interlocked.Read(ref _hiddenCount),
+         Interlocked.Read(ref _minimisedCount));
 
     /// <summary>
     /// Whether a location change for this window was caused by us.
@@ -394,7 +429,14 @@ public sealed class WindowCommitter
 
         if (method == ConcealMethod.Cloaked)
         {
-            Win32Window.Uncloak(handle);
+            Win32ApplicationView.Uncloak(handle);
+            Win32Taskbar.SetVisible(handle, visible: true);
+            return;
+        }
+
+        if (method == ConcealMethod.Minimised)
+        {
+            PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_RESTORE);
             return;
         }
 
@@ -405,12 +447,17 @@ public sealed class WindowCommitter
             return;
         }
 
-        // Not concealed by us. It may still be cloaked from a previous run that was
-        // killed before it could restore, in which case un-cloaking it here is
-        // exactly the recovery that makes cloaking worth using.
-        if (Win32Window.GetCloakState(handle) == Win32Window.CloakState.App)
+        // Not concealed by us. It may still be concealed by a previous run that was
+        // killed before it could restore, in which case undoing it here is exactly the
+        // recovery that makes concealment survivable. Both cloak routes are reversed:
+        // the shell's, and the per-process one used on windows Shubbak owns.
+        Win32Window.CloakState cloak = Win32Window.GetCloakState(handle);
+
+        if (cloak is Win32Window.CloakState.App or Win32Window.CloakState.Shell)
         {
             Win32Window.Uncloak(handle);
+            Win32ApplicationView.Uncloak(handle);
+            Win32Taskbar.SetVisible(handle, visible: true);
             return;
         }
 
@@ -418,14 +465,70 @@ public sealed class WindowCommitter
             PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
     }
 
+    /// <summary>Whether this instance is currently concealing the window.</summary>
+    /// <remarks>
+    /// The concealment counterpart of <see cref="IsSelfInflicted"/>. Concealing a
+    /// window makes Windows report it back as cloaked or hidden, and the event
+    /// pipeline has to be able to tell that echo from a window the user or its own
+    /// application really did put away.
+    /// </remarks>
+    public bool IsConcealing(nint handle)
+    {
+        lock (_lastCommitted) return _concealed.ContainsKey(handle);
+    }
+
+    /// <summary>
+    /// Brings a window back that some earlier run left concealed.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="Reveal"/>, which undoes concealment this instance
+    /// performed and therefore knows which method was used. Here nothing is known - the
+    /// run that concealed the window is gone - so every reversal is attempted. They are
+    /// all safe to apply to a window that did not receive them.
+    /// </remarks>
+    public static void Revive(nint handle)
+    {
+        if (handle == 0) return;
+
+        Win32ApplicationView.Uncloak(handle);
+        Win32Window.Uncloak(handle);
+        Win32Taskbar.SetVisible(handle, visible: true);
+
+        if (!Win32Window.IsVisible(handle))
+            PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+    }
+
+    /// <summary>Whether a window is off screen by some form of concealment.</summary>
+    /// <remarks>
+    /// Deliberately does not distinguish who concealed it, because that cannot be
+    /// known: a shell cloak looks identical whether Shubbak asked for it or the window
+    /// simply lives on another virtual desktop. Callers resolve the ambiguity with the
+    /// session, not with this.
+    /// </remarks>
+    public static bool IsConcealed(nint handle)
+    {
+        if (handle == 0) return false;
+
+        if (!Win32Window.IsVisible(handle)) return true;
+
+        return Win32Window.GetCloakState(handle)
+            is Win32Window.CloakState.App or Win32Window.CloakState.Shell;
+    }
+
     /// <summary>
     /// Takes a window off screen.
     /// </summary>
     /// <remarks>
-    /// Cloaks by preference, falling back to <c>SW_HIDE</c> if the compositor
-    /// refuses - which happens on some remote sessions and virtual display drivers.
-    /// The method used is recorded per window, because restoring with the wrong one
-    /// leaves the window off screen.
+    /// <para>
+    /// Cloaking through the shell is the only method that is cleanly reversible, so it
+    /// is preferred and everything else is a fallback. See
+    /// <see cref="Win32ApplicationView"/> for why the obvious
+    /// <c>DwmSetWindowAttribute</c> route cannot work across processes.
+    /// </para>
+    /// <para>
+    /// The method used is recorded per window: restoring with the wrong one leaves the
+    /// window off screen, which is the failure this whole path exists to prevent.
+    /// </para>
     /// </remarks>
     private void Hide(nint handle)
     {
@@ -434,9 +537,33 @@ public sealed class WindowCommitter
             if (_concealed.ContainsKey(handle)) return;
         }
 
-        if (UseCloaking && Win32Window.Cloak(handle))
+        if (HideMethod == WindowHideMethod.Cloak && Win32ApplicationView.Cloak(handle))
         {
-            lock (_lastCommitted) _concealed[handle] = ConcealMethod.Cloaked;
+            Record(handle, ConcealMethod.Cloaked);
+            Interlocked.Increment(ref _cloakedCount);
+
+            // Cloaked windows keep their taskbar button unless it is taken away, which
+            // is the behaviour most people want: the taskbar stays a complete list of
+            // what is open, and a window on another workspace is one click away.
+            if (!KeepInTaskbar) Win32Taskbar.SetVisible(handle, visible: false);
+
+            if (Log.IsEnabled(LogLevel.Debug))
+                Log.Debug(LogCategory.Window, $"concealed 0x{handle:X} via cloak");
+
+            return;
+        }
+
+        if (HideMethod == WindowHideMethod.Minimise)
+        {
+            if (Win32Window.IsMinimised(handle)) return;
+
+            PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_MINIMIZE);
+            Record(handle, ConcealMethod.Minimised);
+            Interlocked.Increment(ref _minimisedCount);
+
+            if (Log.IsEnabled(LogLevel.Debug))
+                Log.Debug(LogCategory.Window, $"concealed 0x{handle:X} via minimise");
+
             return;
         }
 
@@ -444,6 +571,31 @@ public sealed class WindowCommitter
 
         PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_HIDE);
 
-        lock (_lastCommitted) _concealed[handle] = ConcealMethod.Hidden;
+        Record(handle, ConcealMethod.Hidden);
+        Interlocked.Increment(ref _hiddenCount);
+
+        // Warned once rather than per window. Falling back to SW_HIDE matters a great
+        // deal - a hidden window is invisible to the filter on the next run, so it can
+        // only be recovered by matching against the session - and it must be visible in
+        // the log without drowning it.
+        if (HideMethod == WindowHideMethod.Cloak &&
+            Interlocked.Exchange(ref _cloakFailureReported, 1) == 0)
+        {
+            Log.Warn(LogCategory.Window,
+                "the shell would not cloak a window; falling back to SW_HIDE. " +
+                "Run 'shubbak restore' if any windows go missing.");
+        }
+
+        if (Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.Debug(LogCategory.Window,
+                $"concealed 0x{handle:X} via hide" +
+                (HideMethod == WindowHideMethod.Cloak ? " (cloak refused)" : " (configured)"));
+        }
+    }
+
+    private void Record(nint handle, ConcealMethod method)
+    {
+        lock (_lastCommitted) _concealed[handle] = method;
     }
 }

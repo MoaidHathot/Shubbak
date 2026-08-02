@@ -1,6 +1,7 @@
 using Shubbak.Core.Commands;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Tree;
+using Shubbak.Core.Wm;
 
 namespace Shubbak.Config;
 
@@ -80,17 +81,28 @@ public sealed record ShubbakConfig
     public WindowEffects Effects { get; init; } = new();
 
     /// <summary>
-    /// Whether to cloak rather than hide the windows of inactive workspaces.
+    /// How the windows of inactive workspaces are taken off screen.
     /// </summary>
     /// <remarks>
-    /// Cloaking is strongly preferred: a cloaked window is still visible to
-    /// <c>IsWindowVisible</c>, so if Shubbak exits or is killed the next run adopts
-    /// it and un-cloaks it. A hidden window is rejected by the filter as invisible
-    /// and cannot be recovered at all. The option exists only because the compositor
-    /// is unavailable in some remote sessions, and because an individual application
-    /// may misbehave - in which case a config switch beats a rebuild.
+    /// Cloaking is strongly preferred and is the default: a cloaked window is still
+    /// visible to <c>IsWindowVisible</c>, so if Shubbak exits or is killed the next run
+    /// adopts it and un-cloaks it through the ordinary path. The alternatives exist
+    /// because cloaking relies on an undocumented shell interface, and if that becomes
+    /// unavailable a config switch beats a rebuild.
     /// </remarks>
-    public bool UseCloaking { get; init; } = true;
+    public WindowHideMethod HideMethod { get; init; } = WindowHideMethod.Cloak;
+
+    /// <summary>
+    /// Whether windows on inactive workspaces keep their taskbar button.
+    /// </summary>
+    /// <remarks>
+    /// On by default, so the taskbar remains a complete list of what is open and a
+    /// window on another workspace is one click away. Turning it off makes an inactive
+    /// workspace vanish completely - tidier, but you have to remember where things
+    /// are. Only meaningful with <see cref="WindowHideMethod.Cloak"/>; hiding and
+    /// minimising already decide the matter themselves.
+    /// </remarks>
+    public bool KeepInTaskbar { get; init; } = true;
 
     /// <summary>Minimum level written to the log sinks.</summary>
     public Core.Diagnostics.LogLevel LogLevel { get; init; } = Core.Diagnostics.LogLevel.Information;

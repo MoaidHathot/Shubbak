@@ -150,7 +150,27 @@ public static class WindowFilter
     /// top-level windows are overwhelmingly splash screens, invisible message-only
     /// helpers and IME candidate hosts, none of which should occupy a tile.
     /// </param>
-    public static ManageDecision Evaluate(nint handle, bool requireTitle = true)
+    /// <param name="concealedAreEligible">
+    /// Whether a window that is merely concealed should still be evaluated on its
+    /// other merits.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// <paramref name="concealedAreEligible"/> exists for startup recovery, and only
+    /// for that. If Shubbak exits, crashes or is killed while windows are concealed,
+    /// those windows are indistinguishable from ones the shell concealed for its own
+    /// reasons - a window on another virtual desktop looks exactly like a window
+    /// Shubbak cloaked, because in both cases the shell performed the cloak. Ordinary
+    /// evaluation must therefore keep rejecting them.
+    /// </para>
+    /// <para>
+    /// The adoption pass sets this so a concealed window can be considered, then
+    /// reconciles the survivors against the recorded session and revives only the ones
+    /// Shubbak is known to have been managing. Everything else stays untouched.
+    /// </para>
+    /// </remarks>
+    public static ManageDecision Evaluate(
+        nint handle, bool requireTitle = true, bool concealedAreEligible = false)
     {
         var hwnd = new HWND(handle);
 
@@ -160,7 +180,10 @@ public static class WindowFilter
         if (hwnd == PInvoke.GetShellWindow() || hwnd == PInvoke.GetDesktopWindow())
             return ManageDecision.No(ExclusionReason.ShellWindow);
 
-        if (!PInvoke.IsWindowVisible(hwnd))
+        // Invisible windows are normally not ours to touch. During recovery they are
+        // considered, because SW_HIDE is what a fallback concealment leaves behind and
+        // a hidden window can be revived no other way.
+        if (!concealedAreEligible && !PInvoke.IsWindowVisible(hwnd))
             return ManageDecision.No(ExclusionReason.NotVisible);
 
         WINDOW_STYLE style = Win32Window.GetStyle(handle);
@@ -190,22 +213,22 @@ public static class WindowFilter
 
         // Cloaking has to be read three ways, not as a boolean.
         //
-        // The shell cloaks suspended UWP apps and everything on other Windows
-        // virtual desktops - reserving screen space for those produces phantom tiles
-        // and steals windows from other desktops, so both are rejected.
-        //
-        // An *application-level* cloak, by contrast, is what Shubbak itself uses to
-        // conceal inactive workspaces. Those windows must stay manageable, because
-        // adopting and un-cloaking them is precisely how a restart recovers from a
-        // crash that left windows concealed.
+        // The shell cloaks suspended UWP apps and everything on other Windows virtual
+        // desktops - reserving screen space for those produces phantom tiles and steals
+        // windows from other desktops, so both are normally rejected. It is also how
+        // Shubbak conceals inactive workspaces, because a per-process cloak cannot
+        // reach a window owned by another process. A shell cloak is therefore
+        // ambiguous, and only the recorded session can resolve it - see
+        // <paramref name="concealedAreEligible"/>.
         switch (Win32Window.GetCloakState(handle))
         {
-            case Win32Window.CloakState.Shell:
+            case Win32Window.CloakState.Shell when !concealedAreEligible:
                 return ManageDecision.No(ExclusionReason.CloakedByShell);
 
             case Win32Window.CloakState.Inherited:
                 return ManageDecision.No(ExclusionReason.CloakedByOwner);
 
+            case Win32Window.CloakState.Shell:
             case Win32Window.CloakState.App:
             case Win32Window.CloakState.None:
             default:

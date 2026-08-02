@@ -2,6 +2,7 @@ using Shubbak.Config.Kdl;
 using Shubbak.Core.Commands;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Tree;
+using Shubbak.Core.Wm;
 
 namespace Shubbak.Config;
 
@@ -119,7 +120,8 @@ public sealed class ConfigLoader
             CursorJumpOnMonitorFocus = CursorJump(node, "monitor"),
             CursorJumpOnWindowFocus = CursorJump(node, "window"),
             InitialWindowState = InitialState(node, config.InitialWindowState),
-            UseCloaking = HideMethod(node, config.UseCloaking),
+            HideMethod = HideMethod(node, config.HideMethod),
+            KeepInTaskbar = Bool(node, "keep-in-taskbar", config.KeepInTaskbar),
             DefaultLayout = Text(node, "default-layout", config.DefaultLayout),
             StartupCommands = startup,
         };
@@ -163,22 +165,24 @@ public sealed class ConfigLoader
     /// getting this wrong has a severe consequence - with <c>hide</c>, a crash leaves
     /// windows unreachable - and a typo should not quietly select it.
     /// </remarks>
-    private bool HideMethod(KdlNode node, bool fallback)
+    private WindowHideMethod HideMethod(KdlNode node, WindowHideMethod fallback)
     {
         string? text = Text(node, "hide-method", null);
         if (text is null) return fallback;
 
         switch (text.ToLowerInvariant())
         {
-            case "cloak": return true;
-            case "hide": return false;
+            case "cloak": return WindowHideMethod.Cloak;
+            case "minimise":
+            case "minimize": return WindowHideMethod.Minimise;
+            case "hide": return WindowHideMethod.Hide;
 
             default:
                 Report(Diagnostic.Error(
                     "SHB0423",
                     $"Unknown hide method '{text}'.",
                     SpanOf(node, "hide-method"),
-                    "Use \"cloak\" (recommended) or \"hide\"."));
+                    "Use \"cloak\" (recommended), \"minimize\", or \"hide\"."));
 
                 return fallback;
         }
