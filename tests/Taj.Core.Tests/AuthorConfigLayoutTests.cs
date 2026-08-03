@@ -63,14 +63,31 @@ public sealed class AuthorConfigLayoutTests
     private static VisualNode? Find(VisualNode root, string id) =>
         root.SelfAndDescendants().FirstOrDefault(n => n.Id == id);
 
+    /// <summary>Every profile the config actually declares.</summary>
+    /// <remarks>
+    /// Enumerated rather than named. These tests read a real configuration file that
+    /// its owner is free to edit, and hardcoding profile names meant commenting one
+    /// out failed the suite with a missing-key exception - reporting the test's
+    /// assumption as though it were a fault in the bar.
+    /// </remarks>
+    public static TheoryData<string> Profiles()
+    {
+        var data = new TheoryData<string>();
+
+        foreach (string name in Load()?.Profiles.Keys ?? (IEnumerable<string>)["default"])
+            data.Add(name);
+
+        return data;
+    }
+
     [Theory]
-    [InlineData("default")]
-    [InlineData("presentation")]
+    [MemberData(nameof(Profiles))]
     public void TheClockIsOnTheRight(string profileName)
     {
         if (Load() is not { } config) return;
+        if (!config.Profiles.TryGetValue(profileName, out BarProfile? profile)) return;
 
-        VisualNode? clock = Find(Arrange(config.Profiles[profileName]), "clock");
+        VisualNode? clock = Find(Arrange(profile), "clock");
 
         Assert.NotNull(clock);
 
@@ -81,13 +98,11 @@ public sealed class AuthorConfigLayoutTests
     }
 
     [Theory]
-    [InlineData("default")]
-    [InlineData("presentation")]
+    [MemberData(nameof(Profiles))]
     public void NothingIsDrawnOutsideTheBar(string profileName)
     {
         if (Load() is not { } config) return;
-
-        BarProfile profile = config.Profiles[profileName];
+        if (!config.Profiles.TryGetValue(profileName, out BarProfile? profile)) return;
 
         foreach (VisualNode node in Arrange(profile).SelfAndDescendants())
         {
@@ -109,13 +124,16 @@ public sealed class AuthorConfigLayoutTests
         // The reported bug: the clock jumped to the other side of the bar on switch.
         if (Load() is not { } config) return;
 
-        VisualNode? wide = Find(Arrange(config.Profiles["default"]), "clock");
-        VisualNode? slim = Find(Arrange(config.Profiles["presentation"]), "clock");
+        int? edge = null;
 
-        Assert.NotNull(wide);
-        Assert.NotNull(slim);
+        foreach (BarProfile profile in config.Profiles.Values)
+        {
+            if (Find(Arrange(profile), "clock") is not { } clock) continue;
 
-        Assert.Equal(wide.Rect.Right, slim.Rect.Right);
+            edge ??= clock.Rect.Right;
+
+            Assert.Equal(edge, clock.Rect.Right);
+        }
     }
 
     [Fact]
@@ -127,8 +145,11 @@ public sealed class AuthorConfigLayoutTests
         // the only thing the variant changed.
         if (Load() is not { } config) return;
 
-        Assert.Equal(
-            config.Profiles["default"].Height,
-            config.Profiles["presentation"].Height);
+        int[] heights = [.. config.Profiles.Values.Select(p => p.Height).Distinct()];
+
+        Assert.True(
+            heights.Length <= 1,
+            $"profiles disagree on height ({string.Join(", ", heights)}), so the bar is " +
+            "resized and the shell re-notified on every switch between them.");
     }
 }

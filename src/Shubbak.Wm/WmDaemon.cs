@@ -1298,7 +1298,13 @@ public sealed class WmDaemon : IDisposable
                 // Announced so the bar, which is a separate process reading the same
                 // file, reloads at the same moment rather than keeping whatever it was
                 // launched with.
-                EventsProduced?.Invoke([new ConfigReloaded(_configPath)]);
+                //
+                // Through Publish, because that is what reaches the IPC subscribers.
+                // Raising EventsProduced directly announced it to nothing at all: it
+                // has no subscribers, and the publish to clients lives inside Publish.
+                // The bar carried on with its old configuration and said nothing,
+                // which looked exactly like a reload that had worked.
+                Publish(new WmResult(true, [new ConfigReloaded(_configPath)]));
                 break;
 
             case HostAction.Redraw:
