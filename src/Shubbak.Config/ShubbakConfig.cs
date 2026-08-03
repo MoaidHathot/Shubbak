@@ -45,10 +45,20 @@ public sealed record WorkspaceConfig(
 /// <param name="Enabled">Whether to draw a border at all.</param>
 /// <param name="FocusedColour">Border colour for the focused window, as #RRGGBB.</param>
 /// <param name="UnfocusedColour">Border colour for other windows.</param>
+/// <param name="FloatingColour">
+/// Border colour for a focused window that is not in the tiling flow. Falls back to
+/// <paramref name="FocusedColour"/> when unset.
+/// </param>
+/// <param name="FloatingUnfocusedColour">
+/// Border colour for an unfocused window that is not in the tiling flow. Falls back
+/// to <paramref name="UnfocusedColour"/> when unset.
+/// </param>
 public sealed record WindowEffects(
     bool Enabled = false,
     string? FocusedColour = null,
-    string? UnfocusedColour = null);
+    string? UnfocusedColour = null,
+    string? FloatingColour = null,
+    string? FloatingUnfocusedColour = null);
 
 /// <summary>
 /// The whole of Shubbak's configuration.

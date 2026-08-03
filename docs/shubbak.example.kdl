@@ -75,6 +75,13 @@ window-effects {
     border #true
     focused-colour "#8dbcff"
     unfocused-colour "#a1a1a1"
+
+    // Windows outside the tiling flow can be marked differently. They look
+    // identical to tiled ones otherwise, while behaving completely differently:
+    // they ignore the layout, they can be dragged anywhere, and directional focus
+    // passes over them. Both fall back to the colours above when unset.
+    floating-colour "#f9e2af"
+    floating-unfocused-colour "#6c5f3f"
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +130,37 @@ rules {
         }
         do { ignore }
     }
+
+    // `manage` is the other direction: it takes on a window the built-in filter
+    // passed over. Those exclusions are heuristics - no title yet, declares itself
+    // a tool window, owned by an invisible parent so it never reaches Alt+Tab - and
+    // they are wrong for some applications. Run `shubbak inspect` on the window and
+    // the "manageable" line names the exact reason.
+    //
+    // What cannot be overridden: the desktop, the shell, child controls, and
+    // windows that are cloaked or have no area. Those are not opinions.
+    //
+    // rule "whatsapp" {
+    //     match { process = "WhatsApp" }
+    //     do { manage }
+    // }
+
+    // `float` and `tile` state a fact, unlike `toggle-floating`, which flips
+    // whatever is currently true - so a toggle in a rule does the opposite of what
+    // was meant as soon as something else has already floated the window.
+    //
+    // rule "keep the calculator loose" {
+    //     match { process = "CalculatorApp" }
+    //     do { float }
+    // }
+
+    // Matchers: title, class, process, path. Operators are `=` exact, `~=` regex,
+    // `^=` prefix, `$=` suffix, `*=` substring - or the named forms `equals`,
+    // `regex`, `prefix`, `suffix`, `contains`. Prefix a matcher with `!` to negate.
+    //
+    // Rules run on `manage` by default; `on="title-change"` and `on="focus"` are
+    // also available, which is how to catch a window that only identifies itself
+    // once it has loaded.
 }
 
 // ---------------------------------------------------------------------------
@@ -180,8 +218,17 @@ keybindings {
 
     // Structure.
     bind "alt+v"       { toggle-tiling-direction }
-    bind "alt+shift+n" { toggle-floating }
-    bind "alt+shift+m" { toggle-tiling }
+
+    // Untiles the window without releasing it: still tracked and focusable, but
+    // free to be moved and resized. `toggle-tiling` is an alias for the same
+    // command, so binding both is binding one thing twice.
+    bind "alt+shift+m" { toggle-floating }
+
+    // Takes on the window in front, or lets go of it. For the window Shubbak has
+    // passed over, or the one it has taken on that you would rather it had not,
+    // when you have not written a rule for it yet.
+    bind "alt+shift+n" { toggle-managed }
+
     bind "alt+x"       { toggle-fullscreen }
     bind "alt+m"       { toggle-minimized }
     bind "alt+shift+q" { close }

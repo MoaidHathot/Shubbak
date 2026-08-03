@@ -342,13 +342,49 @@ internal static class Program
     /// printing every matchable attribute, the manageability verdict with its
     /// reason, and which rules and app definitions matched.
     /// </remarks>
+    /// <summary>Reads a window handle written as decimal or as 0x hex.</summary>
+    /// <remarks>
+    /// Hex is accepted because it is the form this tool prints, and the form the log
+    /// prints. Only decimal parsed, so pasting back a handle the tool had just shown
+    /// silently fell through to "wait three seconds and take the foreground window" -
+    /// which answers a different question and looks like the handle was accepted.
+    /// </remarks>
+    private static bool TryParseHandle(string text, out nint handle)
+    {
+        handle = 0;
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        ReadOnlySpan<char> span = text.AsSpan().Trim();
+        bool hex = span.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
+
+        if (hex) span = span[2..];
+
+        if (!long.TryParse(
+                span,
+                hex ? System.Globalization.NumberStyles.HexNumber
+                    : System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out long value))
+        {
+            return false;
+        }
+
+        handle = (nint)value;
+        return handle != 0;
+    }
+
     private static async Task<int> InspectAsync(string[] args)
     {
-        nint handle;
+        nint handle = 0;
 
-        if (args.Length > 1 && long.TryParse(args[1], out long explicitHandle))
+        if (args.Length > 1)
         {
-            handle = (nint)explicitHandle;
+            if (!TryParseHandle(args[1], out handle))
+            {
+                Console.Error.WriteLine($"shubbak: '{args[1]}' is not a window handle.");
+                Console.Error.WriteLine("hint: decimal, or hex as shown by inspect and the log (0x20A44).");
+                return 1;
+            }
         }
         else
         {

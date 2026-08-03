@@ -256,6 +256,50 @@ public static class WindowFilter
         return ManageDecision.Yes;
     }
 
+    /// <summary>
+    /// Whether a rule, or the user, may overturn this exclusion.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Most of the exclusions are heuristics, and heuristics are wrong sometimes: a
+    /// chat client arrives without a title, a call window declares itself a palette,
+    /// an ordinary application is owned by an invisible parent and so never appears
+    /// in Alt+Tab. Those are exactly the judgements a rule should be able to
+    /// overturn, and leaving them unreachable meant editing the source in order to
+    /// use an application.
+    /// </para>
+    /// <para>
+    /// The rest are not opinions. A handle that is not a window, the desktop itself,
+    /// the shell, and a child control cannot be tiled in any meaningful sense; a
+    /// window manager that offered to try would be broken rather than configurable.
+    /// </para>
+    /// </remarks>
+    public static bool CanBeOverridden(ExclusionReason reason) => reason switch
+    {
+        ExclusionReason.NotAWindow => false,
+        ExclusionReason.ShellWindow => false,
+        ExclusionReason.ChildWindow => false,
+
+        // A cloaked window is on another virtual desktop or suspended. Managing it
+        // would drag it onto this one, which is not what a rule is asking for.
+        ExclusionReason.CloakedByShell => false,
+        ExclusionReason.CloakedByOwner => false,
+
+        ExclusionReason.NotVisible => false,
+        ExclusionReason.ZeroSized => false,
+
+        // The heuristics.
+        ExclusionReason.ToolWindow => true,
+        ExclusionReason.NotInAltTabList => true,
+        ExclusionReason.NoTitle => true,
+        ExclusionReason.ExcludedClass => true,
+        ExclusionReason.ExcludedProcess => true,
+        ExclusionReason.Elevated => true,
+
+        ExclusionReason.None => true,
+        _ => false,
+    };
+
     /// <summary>Whether the owning executable is one Shubbak never manages.</summary>
     private static bool IsExcludedProcess(nint handle)
     {

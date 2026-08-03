@@ -398,6 +398,12 @@ public sealed class WmDaemon : IDisposable
                 if (_managed.TryGetValue(handle, out WindowNode? titled))
                 {
                     Publish(_wm.UpdateTitle(titled, Win32Window.GetTitle(handle)));
+
+                    // on="title-change" rules parsed and were then dispatched from
+                    // nowhere, so a rule written against a title that only appears
+                    // once the application has loaded - a document name, a call in
+                    // progress - silently never ran.
+                    ApplyRules(titled, ToAttributes(handle), RuleTrigger.OnTitleChange);
                     break;
                 }
 
@@ -423,7 +429,12 @@ public sealed class WmDaemon : IDisposable
                 if (_managed.TryGetValue(handle, out WindowNode? focused))
                 {
                     if (!ReferenceEquals(_wm.FocusedWindow, focused))
+                    {
                         Publish(_wm.FocusWindow(focused));
+
+                        // on="focus" rules, likewise dispatched from nowhere until now.
+                        ApplyRules(focused, ToAttributes(handle), RuleTrigger.OnFocus);
+                    }
                 }
                 else
                 {
@@ -493,7 +504,16 @@ public sealed class WmDaemon : IDisposable
 
         if (window.State == WindowState.Floating)
         {
-            window.FloatingRect = after;
+            // Recorded as a visible frame, because that is what a layout rectangle is
+            // and FloatingRect is fed straight back to the layout. GetWindowRect
+            // includes the shadow, and the commit path adds the shadow on the way out,
+            // so storing the raw value grew the window by its own shadow - about
+            // fourteen pixels of width - every single time it was dragged.
+            window.FloatingRect = WindowCommitter.VisibleBounds(handle);
+
+            // Forgotten so the recorded position is what the next pass compares
+            // against; without it the skip check would still be holding the rectangle
+            // Shubbak last chose rather than the one the user just made.
             _committer.Forget(handle);
             return;
         }
@@ -544,32 +564,57 @@ public sealed class WmDaemon : IDisposable
 
     // ---- window lifecycle --------------------------------------------------
 
-    private void TryManage(nint handle)
+    private void TryManage(nint handle, bool forced = false)
     {
-        if (_managed.ContainsKey(handle) || _ignored.Contains(handle)) return;
+        if (_managed.ContainsKey(handle)) return;
+        if (!forced && _ignored.Contains(handle)) return;
 
         // Concealed windows are considered only during the initial adoption pass, and
         // even then only to be reconciled against the session below.
         ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: _restoring);
 
-        if (!decision.Manageable)
+        if (!decision.Manageable && !forced)
         {
-            // At trace level this is the answer to "why is that window floating?",
-            // recorded as it happens rather than reconstructed afterwards. The class
-            // is included because it is what a rule has to match on, and transient
-            // windows - shell flyouts especially - are gone long before anything can
-            // be pointed at them to ask.
-            if (Log.IsEnabled(LogLevel.Trace))
-                Log.Trace(LogCategory.Window,
-                    $"skip 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\" " +
-                    $"[{Win32Window.GetClassName(handle)}]: {decision.Explain()}");
+            // Attributes are built here rather than above because reading them costs a
+            // process handle, and the overwhelming majority of windows are rejected
+            // without ever needing them. Paying that only for the rejections a rule is
+            // allowed to overturn keeps the common path as cheap as it was.
+            if (WindowFilter.CanBeOverridden(decision.Reason) && ShouldForceManage(ToAttributes(handle)))
+            {
+                Log.Debug(LogCategory.Rule,
+                    $"managing 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\" " +
+                    $"despite {decision.Explain()}: a rule asked for it");
+            }
+            else
+            {
+                // At trace level this is the answer to "why is that window floating?",
+                // recorded as it happens rather than reconstructed afterwards. The class
+                // is included because it is what a rule has to match on, and transient
+                // windows - shell flyouts especially - are gone long before anything can
+                // be pointed at them to ask.
+                if (Log.IsEnabled(LogLevel.Trace))
+                    Log.Trace(LogCategory.Window,
+                        $"skip 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\" " +
+                        $"[{Win32Window.GetClassName(handle)}]: {decision.Explain()}");
 
-            return;
+                return;
+            }
+        }
+        else if (!decision.Manageable)
+        {
+            // Asked for by hand. Only the rules that keep the desktop itself out are
+            // absolute; everything else is a heuristic the user is entitled to overrule.
+            if (!WindowFilter.CanBeOverridden(decision.Reason))
+            {
+                Log.Warn(LogCategory.Window,
+                    $"refusing to manage 0x{handle:X}: {decision.Explain()}");
+                return;
+            }
         }
 
         var attributes = ToAttributes(handle);
 
-        if (ShouldIgnore(attributes))
+        if (!forced && ShouldIgnore(attributes))
         {
             // Remembered, so the same window is not re-evaluated on every one of the
             // many events it will generate over its lifetime.
@@ -580,6 +625,8 @@ public sealed class WmDaemon : IDisposable
 
             return;
         }
+
+        _ignored.Remove(handle);
 
         var window = new WindowNode(handle, Win32Window.BuildIdentity(handle))
         {
@@ -595,7 +642,9 @@ public sealed class WmDaemon : IDisposable
         // their content, which is precisely why they are not tiled.
         if (window.State == WindowState.Floating)
         {
-            Rect bounds = Win32Window.GetBounds(handle);
+            // Visible frame, matching what the layout means by a rectangle. See the
+            // same conversion in HandleUserMove.
+            Rect bounds = WindowCommitter.VisibleBounds(handle);
             if (!bounds.IsEmpty) window.FloatingRect = bounds;
         }
 
@@ -931,6 +980,21 @@ public sealed class WmDaemon : IDisposable
         return false;
     }
 
+    /// <summary>Whether a rule asks for a window the built-in filter passed over.</summary>
+    private bool ShouldForceManage(WindowAttributes attributes)
+    {
+        foreach (WindowRule rule in _config.Rules)
+        {
+            if (rule.Trigger != RuleTrigger.OnManage) continue;
+            if (!rule.Matches(attributes, _config.Apps)) continue;
+
+            foreach (WmCommand command in rule.Commands)
+                if (command is ManageCommand) return true;
+        }
+
+        return false;
+    }
+
     private void ApplyRules(WindowNode window, WindowAttributes attributes, RuleTrigger trigger)
     {
         foreach (WindowRule rule in _config.Rules)
@@ -944,7 +1008,7 @@ public sealed class WmDaemon : IDisposable
             WindowNode? previous = _wm.FocusedWindow;
 
             Publish(_wm.FocusWindow(window));
-            Execute(rule.Commands.Where(c => c is not IgnoreCommand));
+            Execute(rule.Commands.Where(c => c is not IgnoreCommand and not ManageCommand));
 
             if (previous is not null && !ReferenceEquals(previous, window) && previous.Workspace is not null)
                 Publish(_wm.FocusWindow(previous));
@@ -1064,12 +1128,67 @@ public sealed class WmDaemon : IDisposable
         return report.ToString();
     }
 
+    /// <summary>
+    /// Takes the focused window under management, or releases it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Works on the foreground window when nothing is managed, which is the whole
+    /// point: the window you want to take on is by definition not one Shubbak knows
+    /// about, so there is no node to name it by.
+    /// </para>
+    /// <para>
+    /// Releasing records the window as ignored. Without that it would be picked up
+    /// again by the next event it happened to raise - and a window raises a great many
+    /// - so letting go would last a fraction of a second.
+    /// </para>
+    /// </remarks>
+    private void ToggleManaged()
+    {
+        nint handle = _wm.FocusedWindow is { } focused
+            ? (nint)focused.Handle
+            : Win32Window.GetForeground();
+
+        if (handle == 0)
+        {
+            Log.Warn(LogCategory.Window, "toggle-managed: no window in front to act on.");
+            return;
+        }
+
+        if (_managed.ContainsKey(handle))
+        {
+            string title = Truncate(Win32Window.GetTitle(handle), 40);
+
+            // Ordered deliberately: TryUnmanage clears the ignore entry as its first
+            // act, so marking it has to come afterwards or the release is undone by
+            // the very next event.
+            TryUnmanage(handle);
+            _ignored.Add(handle);
+
+            Log.Info(LogCategory.Window, $"released 0x{handle:X} \"{title}\" - now unmanaged");
+            return;
+        }
+
+        _ignored.Remove(handle);
+        TryManage(handle, forced: true);
+
+        if (_managed.ContainsKey(handle))
+        {
+            Log.Info(LogCategory.Window,
+                $"took on 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\"");
+        }
+    }
+
     private void PerformHostAction(CommandOutcome outcome)
     {
         switch (outcome.Action)
         {
             case HostAction.CloseFocusedWindow:
                 if (_wm.FocusedWindow is { } window) WindowActions.Close((nint)window.Handle);
+                break;
+
+            case HostAction.ToggleManaged:
+                ToggleManaged();
                 break;
 
             case HostAction.ShellExecute:
@@ -1399,11 +1518,33 @@ public sealed class WmDaemon : IDisposable
     {
         if (!_managed.TryGetValue(handle, out WindowNode? window)) return;
 
-        ApplyBorder(
-            window,
-            ReferenceEquals(window, _borderedWindow)
-                ? _config.Effects.FocusedColour
-                : _config.Effects.UnfocusedColour);
+        ApplyBorder(window, ColourFor(window, ReferenceEquals(window, _borderedWindow)));
+    }
+
+    /// <summary>Which border colour a window should be wearing.</summary>
+    /// <remarks>
+    /// <para>
+    /// A window that is not in the tiling flow can be given its own colour, because
+    /// from the outside it looks identical to one that is - same border, same focus -
+    /// while behaving completely differently: it ignores the layout, it can be dragged
+    /// anywhere, and directional focus skips over it. Not being able to tell which
+    /// kind of window is in front turns every one of those differences into a surprise.
+    /// </para>
+    /// <para>
+    /// Falls back to the ordinary colours when unset, so the setting costs nothing to
+    /// anyone who does not want it.
+    /// </para>
+    /// </remarks>
+    private string? ColourFor(WindowNode window, bool focused)
+    {
+        WindowEffects effects = _config.Effects;
+
+        if (window.IsTiled)
+            return focused ? effects.FocusedColour : effects.UnfocusedColour;
+
+        return focused
+            ? effects.FloatingColour ?? effects.FocusedColour
+            : effects.FloatingUnfocusedColour ?? effects.UnfocusedColour;
     }
 
     /// <summary>
@@ -1445,15 +1586,15 @@ public sealed class WmDaemon : IDisposable
         {
             // Same window, but it may have just been resized out of its border.
             if (geometryChanged && focused is not null)
-                ApplyBorder(focused, _config.Effects.FocusedColour);
+                ApplyBorder(focused, ColourFor(focused, focused: true));
 
             return;
         }
 
         if (_borderedWindow is { } previous && Win32Window.Exists((nint)previous.Handle))
-            ApplyBorder(previous, _config.Effects.UnfocusedColour);
+            ApplyBorder(previous, ColourFor(previous, focused: false));
 
-        if (focused is not null) ApplyBorder(focused, _config.Effects.FocusedColour);
+        if (focused is not null) ApplyBorder(focused, ColourFor(focused, focused: true));
 
         _borderedWindow = focused;
     }
@@ -1492,7 +1633,7 @@ public sealed class WmDaemon : IDisposable
         if (_borderedWindow is not { } window) return;
         if (!Win32Window.Exists((nint)window.Handle)) return;
 
-        ApplyBorder(window, _config.Effects.FocusedColour);
+        ApplyBorder(window, ColourFor(window, focused: true));
     }
 
     private static void ApplyBorder(WindowNode window, string? colour)
@@ -1682,7 +1823,66 @@ public sealed class WmDaemon : IDisposable
         if (!initial)
         {
             CreateConfiguredWorkspaces();
-            Log.Info(LogCategory.Config, $"reloaded: {_config.Keybindings.Count} keybindings, {_config.Rules.Count} rules");
+
+            // Forgotten, so rules are re-applied to windows that are already open.
+            // The set is a cache of past verdicts, and the verdicts have just changed:
+            // keeping it meant deleting an ignore rule and reloading did nothing at all
+            // until the window was closed and reopened, which reads as the reload not
+            // working.
+            //
+            // Windows released by hand are re-examined too. That is the honest reading
+            // of a reload, and toggle-managed is one key away for anything that should
+            // go back.
+            int forgotten = _ignored.Count;
+            _ignored.Clear();
+
+            ReconsiderOpenWindows();
+
+            Log.Info(LogCategory.Config,
+                $"reloaded: {_config.Keybindings.Count} keybindings, {_config.Rules.Count} rules, " +
+                $"{forgotten} previously excluded window(s) re-examined");
+        }
+    }
+
+    /// <summary>
+    /// Re-runs the management decision over every window currently on the desktop.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Both directions. A rule that has just been added has to be able to release a
+    /// window that is already managed, and a rule that has just been deleted has to be
+    /// able to take one on - otherwise editing rules appears to do nothing until the
+    /// application in question is restarted, which is a miserable way to work out
+    /// whether a matcher is right.
+    /// </para>
+    /// <para>
+    /// Windows the built-in filter rejects are not remembered, so they would be
+    /// reconsidered on their next event anyway; a settled desktop may simply not
+    /// produce one for a long time, and after a reload the user is watching for the
+    /// change they just made.
+    /// </para>
+    /// </remarks>
+    private void ReconsiderOpenWindows()
+    {
+        // Copied: releasing a window mutates the dictionary being walked.
+        foreach (nint handle in _managed.Keys.ToArray())
+        {
+            if (!Win32Window.Exists(handle)) continue;
+            if (!ShouldIgnore(ToAttributes(handle))) continue;
+
+            Log.Info(LogCategory.Rule,
+                $"releasing 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\": " +
+                "a rule now excludes it");
+
+            TryUnmanage(handle);
+            _ignored.Add(handle);
+        }
+
+        foreach (nint handle in Win32Window.EnumerateTopLevel())
+        {
+            if (_managed.ContainsKey(handle)) continue;
+
+            TryManage(handle);
         }
     }
 
@@ -1744,6 +1944,12 @@ public sealed class WmDaemon : IDisposable
             if (wmEvent is BindingModeChanged mode) _bindings.SetMode(mode.Mode);
             if (wmEvent is CommandRejected rejected)
                 Log.Debug(LogCategory.Command, $"rejected {rejected.Command}: {rejected.Reason}");
+
+            // A window that has just left or rejoined the tiling flow may be owed a
+            // different border colour, and that is not a focus change, so nothing else
+            // would repaint it - least of all for a window that is not the focused one.
+            if (wmEvent is WindowStateChanged changed && _config.Effects.Enabled)
+                RefreshBorderFor((nint)changed.Window.Handle);
 
             _ipc?.Publish(wmEvent.Topic, StateProjection.Payload(wmEvent, _wm));
         }
