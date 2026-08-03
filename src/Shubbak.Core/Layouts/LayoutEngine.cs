@@ -13,7 +13,19 @@ namespace Shubbak.Core.Layouts;
 /// that switching to the workspace shows a correct layout immediately rather than
 /// a frame of garbage.
 /// </param>
-public readonly record struct Placement(WindowNode Window, Rect Rect, bool Visible);
+/// <param name="Raise">
+/// True for a window that has to sit above the windows it overlaps.
+/// <para>
+/// Tiles do not overlap, so for most windows this is meaningless and stacking can be
+/// left exactly as the user arranged it. Three arrangements do overlap by design -
+/// fullscreen, maximised, and monocle, where every window is given the whole area -
+/// and for those, stacking is the only thing that decides what is seen. Nothing
+/// raised them, so a fullscreen window could sit behind the tile it was covering and
+/// a monocle container showed whichever window happened to be on top.
+/// </para>
+/// </param>
+public readonly record struct Placement(
+    WindowNode Window, Rect Rect, bool Visible, bool Raise = false);
 
 /// <summary>
 /// Settings that apply to a whole arrange pass rather than to one container.
@@ -25,10 +37,15 @@ public readonly record struct Placement(WindowNode Window, Rect Rect, bool Visib
 /// </param>
 /// <param name="InnerGap">Spacing between adjacent siblings.</param>
 /// <param name="MinimumTileExtent">Smallest extent a tile may be given.</param>
+/// <param name="Focused">
+/// The focused window, when there is one. Used only to decide which window to raise
+/// inside a layout whose rectangles overlap; tiling layouts never consult it.
+/// </param>
 public readonly record struct ArrangeOptions(
     Gaps OuterGap = default,
     int InnerGap = 0,
-    int MinimumTileExtent = 24)
+    int MinimumTileExtent = 24,
+    WindowNode? Focused = null)
 {
     public static ArrangeOptions Default => new();
 
@@ -55,12 +72,23 @@ public sealed class LayoutEngine
 {
     private readonly List<Placement> _placements = [];
 
+    /// <summary>
+    /// The focused window for the pass in progress.
+    /// </summary>
+    /// <remarks>
+    /// Held for the duration of one arrange rather than threaded through every
+    /// recursion, because only one thing consults it: a container whose layout
+    /// overlaps its children, which has to know which of them to raise.
+    /// </remarks>
+    private WindowNode? _focused;
+
     /// <summary>Arranges every workspace on every monitor.</summary>
     public IReadOnlyList<Placement> Arrange(RootNode root, ArrangeOptions options)
     {
         ArgumentNullException.ThrowIfNull(root);
 
         _placements.Clear();
+        _focused = options.Focused;
 
         foreach (MonitorNode monitor in root.Monitors)
             ArrangeMonitorInto(monitor, options);
@@ -74,6 +102,7 @@ public sealed class LayoutEngine
         ArgumentNullException.ThrowIfNull(monitor);
 
         _placements.Clear();
+        _focused = options.Focused;
         ArrangeMonitorInto(monitor, options);
         return _placements;
     }
@@ -84,6 +113,7 @@ public sealed class LayoutEngine
         ArgumentNullException.ThrowIfNull(workspace);
 
         _placements.Clear();
+        _focused = options.Focused;
 
         MonitorNode? monitor = workspace.Monitor;
         Rect area = monitor?.WorkArea ?? workspace.Rect;
@@ -142,13 +172,23 @@ public sealed class LayoutEngine
             view.Container.Layout.Arrange(view.Container, area, in options, rects);
         }
 
+        // In a layout whose rectangles overlap, stacking is the only thing that
+        // decides what the user sees, so the focused window has to be raised. Where
+        // rectangles are disjoint - every tiling layout - stacking is left alone,
+        // which keeps windows in whatever order the user put them.
+        bool overlapping = container.Layout.Overlaps;
+
         for (int i = 0; i < tiled.Length; i++)
         {
             switch (tiled[i])
             {
                 case WindowNode window:
                     window.Rect = rects[i];
-                    _placements.Add(new Placement(window, rects[i], visible));
+                    _placements.Add(new Placement(
+                        window,
+                        rects[i],
+                        visible,
+                        Raise: overlapping && ReferenceEquals(window, _focused)));
                     break;
 
                 case ContainerNode child:
@@ -177,7 +217,7 @@ public sealed class LayoutEngine
                 case WindowState.Fullscreen:
                 case WindowState.Maximised:
                     window.Rect = workArea;
-                    _placements.Add(new Placement(window, workArea, visible));
+                    _placements.Add(new Placement(window, workArea, visible, Raise: true));
                     break;
 
                 case WindowState.Floating:

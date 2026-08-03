@@ -23,6 +23,17 @@ public sealed record WmOptions
     public WindowState InitialWindowState { get; init; } = WindowState.Tiling;
 
     /// <summary>
+    /// The layout a newly created workspace starts in.
+    /// </summary>
+    /// <remarks>
+    /// Null means the registry default, horizontal split. The configuration key that
+    /// sets this was read and then never consulted, so every workspace was horizontal
+    /// whatever the file said - a setting that appeared to be accepted, validated
+    /// without complaint, and did nothing.
+    /// </remarks>
+    public ILayout? DefaultLayout { get; init; }
+
+    /// <summary>
     /// Whether focusing the already-active workspace switches back to the previous
     /// one. GlazeWM calls this <c>toggle_workspace_on_refocus</c>.
     /// </summary>
@@ -205,6 +216,16 @@ public sealed class WindowManager
             ?? throw new InvalidOperationException("No monitor available to host a workspace.");
 
         target.AddWorkspace(workspace);
+
+        // Applied only to a workspace still holding the registry default, so a
+        // workspace that has been given a layout deliberately - by config, by command,
+        // or by a restored session - keeps it.
+        if (Options.DefaultLayout is { } layout &&
+            ReferenceEquals(workspace.Layout, LayoutRegistry.Default))
+        {
+            workspace.Layout = layout;
+        }
+
         Emit(new WorkspaceCreated(workspace, target));
         return workspace;
     }
@@ -398,7 +419,23 @@ public sealed class WindowManager
     /// <summary>
     /// Brings a window under management, inserting it beside the focused window.
     /// </summary>
-    public WmResult ManageWindow(WindowNode window, WorkspaceNode? workspace = null)
+    /// <param name="window">The window to adopt.</param>
+    /// <param name="workspace">Where to put it; the focused workspace when null.</param>
+    /// <param name="state">
+    /// The state the caller has already determined, when it has. Null means "decide
+    /// from configuration", which is what a newly opened window wants.
+    /// </param>
+    /// <remarks>
+    /// The state is a parameter rather than something read off the node because it was
+    /// previously overwritten here. A window that had been detected as minimised, or
+    /// as a floating dialog, or whose state had just been read back from the saved
+    /// session, was reset to the configured default the moment it was adopted.
+    /// A minimised window then held a tile it could not fill - reveal refuses to
+    /// restore a minimised window, correctly - and the result was a hole in the layout
+    /// with whatever lay behind showing through it.
+    /// </remarks>
+    public WmResult ManageWindow(
+        WindowNode window, WorkspaceNode? workspace = null, WindowState? state = null)
     {
         ArgumentNullException.ThrowIfNull(window);
 
@@ -406,7 +443,7 @@ public sealed class WindowManager
         if (target is null)
             return Reject("manage", "No workspace available to host the window.");
 
-        window.State = Options.InitialWindowState;
+        window.State = state ?? Options.InitialWindowState;
 
         // Insert beside the focused window when it is on this workspace, so a new
         // window appears where the user is looking rather than at the far edge.
@@ -1210,7 +1247,7 @@ public sealed class WindowManager
 
     /// <summary>Recomputes every window's target rectangle.</summary>
     public IReadOnlyList<Placement> ComputePlacements() =>
-        _engine.Arrange(Root, Options.ToArrangeOptions());
+        _engine.Arrange(Root, Options.ToArrangeOptions() with { Focused = FocusedWindow });
 
     // ---- internals ---------------------------------------------------------
 
