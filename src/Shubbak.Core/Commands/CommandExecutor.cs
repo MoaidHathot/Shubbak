@@ -20,6 +20,15 @@ public enum HostAction
     /// <summary>Ask the focused window to close.</summary>
     CloseFocusedWindow,
 
+    /// <summary>
+    /// Take the focused window under management, or release it.
+    /// </summary>
+    /// <remarks>
+    /// A host action because the state machine deals in nodes and this deals in
+    /// window handles: a window that is not managed has no node to name it by.
+    /// </remarks>
+    ToggleManaged,
+
     /// <summary>Run <see cref="ShellExecCommand.CommandLine"/>.</summary>
     ShellExecute,
 
@@ -115,6 +124,8 @@ public sealed class CommandExecutor
             CycleLayoutCommand c => new(_wm.CycleLayout(c.Forward)),
 
             ToggleFloatingCommand => new(_wm.ToggleFloating()),
+            FloatCommand => new(_wm.SetFocusedWindowState(Tree.WindowState.Floating)),
+            TileCommand => new(_wm.SetFocusedWindowState(Tree.WindowState.Tiling)),
             ToggleFullscreenCommand => new(_wm.ToggleFullscreen()),
             ToggleMinimisedCommand => new(_wm.ToggleMinimised()),
 
@@ -133,6 +144,11 @@ public sealed class CommandExecutor
             // Only meaningful inside a window rule, where the rule engine consumes it
             // before execution. Reaching here means it was bound to a key by mistake.
             IgnoreCommand => Rejected(command, "'ignore' is only valid in a window rule."),
+            ManageCommand => Rejected(
+                command,
+                "'manage' is only valid in a window rule; use toggle-managed for a key."),
+
+            ToggleManagedCommand => Host(HostAction.ToggleManaged),
 
             _ => Rejected(command, $"Command '{command.Name}' is not implemented."),
         };

@@ -150,6 +150,26 @@ public sealed record ToggleFloatingCommand : WmCommand
     public override string Name => "toggle-floating";
 }
 
+/// <summary>
+/// <c>float</c> - takes the window out of the tiling flow.
+/// </summary>
+/// <remarks>
+/// Distinct from <c>toggle-floating</c> because a rule needs to state a fact, not
+/// flip a switch. A rule saying "this always floats" written as a toggle does the
+/// opposite as soon as something else has already floated the window - and the
+/// built-in dialog rule floats some of them before any rule runs.
+/// </remarks>
+public sealed record FloatCommand : WmCommand
+{
+    public override string Name => "float";
+}
+
+/// <summary><c>tile</c> - returns the window to the tiling flow.</summary>
+public sealed record TileCommand : WmCommand
+{
+    public override string Name => "tile";
+}
+
 /// <summary><c>toggle-fullscreen</c></summary>
 public sealed record ToggleFullscreenCommand : WmCommand
 {
@@ -234,4 +254,38 @@ public sealed record ShellExecCommand(string CommandLine) : WmCommand
 public sealed record IgnoreCommand : WmCommand
 {
     public override string Name => "ignore";
+}
+
+/// <summary>
+/// <c>manage</c> - takes on a window the built-in filter would have passed over.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The counterpart to <c>ignore</c>, and the reason the filter's judgements are
+/// defaults rather than policy. The built-in exclusions are the ones that would
+/// otherwise ruin the first five minutes - the taskbar, Start, the Win+Space
+/// switcher - but they are heuristics, and some perfectly ordinary application is
+/// always going to look like a palette or arrive without a title.
+/// </para>
+/// <para>
+/// Only meaningful inside a window rule. The rules that keep the desktop itself out
+/// cannot be overridden: a window manager that tiles the wallpaper is not expressing
+/// a preference.
+/// </para>
+/// </remarks>
+public sealed record ManageCommand : WmCommand
+{
+    public override string Name => "manage";
+}
+
+/// <summary>
+/// <c>toggle-managed</c> - takes the focused window under management, or releases it.
+/// </summary>
+/// <remarks>
+/// The runtime counterpart to the <c>manage</c> and <c>ignore</c> rules, for the
+/// window in front of you that you did not think to write a rule for.
+/// </remarks>
+public sealed record ToggleManagedCommand : WmCommand
+{
+    public override string Name => "toggle-managed";
 }

@@ -142,6 +142,14 @@ public static class CommandParser
                 command = new ToggleFloatingCommand();
                 return true;
 
+            case "float":
+                command = new FloatCommand();
+                return true;
+
+            case "tile":
+                command = new TileCommand();
+                return true;
+
             case "toggle-fullscreen":
                 command = new ToggleFullscreenCommand();
                 return true;
@@ -189,6 +197,14 @@ public static class CommandParser
 
             case "ignore":
                 command = new IgnoreCommand();
+                return true;
+
+            case "manage":
+                command = new ManageCommand();
+                return true;
+
+            case "toggle-managed":
+                command = new ToggleManagedCommand();
                 return true;
 
             case "wm-enable-binding-mode":
@@ -478,7 +494,8 @@ public static class CommandParser
             "focus", "move", "move-workspace", "resize", "split", "layout", "close",
             "tag", "sticky", "scratchpad",
             "toggle-tiling-direction", "toggle-floating", "toggle-fullscreen",
-            "toggle-minimized", "equalise", "ignore", "shell-exec",
+            "toggle-minimized", "toggle-managed", "float", "tile",
+            "equalise", "ignore", "manage", "shell-exec",
             "wm-enable-binding-mode", "wm-disable-binding-mode", "wm-toggle-pause",
             "wm-reload-config", "wm-redraw", "wm-exit",
         ];

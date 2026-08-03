@@ -251,7 +251,10 @@ public sealed class ConfigLoader
             Effects = new WindowEffects(
                 Bool(node, "border", false),
                 Text(node, "focused-colour", null) ?? Text(node, "focused-color", null),
-                Text(node, "unfocused-colour", null) ?? Text(node, "unfocused-color", null)),
+                Text(node, "unfocused-colour", null) ?? Text(node, "unfocused-color", null),
+                Text(node, "floating-colour", null) ?? Text(node, "floating-color", null),
+                Text(node, "floating-unfocused-colour", null)
+                    ?? Text(node, "floating-unfocused-color", null)),
         };
     }
 
@@ -665,7 +668,22 @@ public sealed class ConfigLoader
                 _ => null,
             };
 
-            if (target is null) continue;
+            if (target is null)
+            {
+                // `app` is a reference to a named definition, handled by the caller.
+                if (string.Equals(name, "app", StringComparison.OrdinalIgnoreCase)) continue;
+
+                // Everything else here is a mistake worth naming. Dropped in silence
+                // before, so a misspelt target left the rule matching on whatever else
+                // was in the block - or, if it was the only one, on nothing at all.
+                Report(Diagnostic.Error(
+                    "SHB0419",
+                    $"Unknown matcher '{child.Name}'.",
+                    child.Span,
+                    "Match on title, class, process, or path."));
+
+                continue;
+            }
 
             (MatchOperator op, KdlValue? value) = ReadMatcherOperand(child);
 
@@ -692,15 +710,21 @@ public sealed class ConfigLoader
     {
         // `title = "x"` parses as a bare argument; `title regex="x"` as a property.
         // Supporting both keeps simple cases terse and complex ones explicit.
+        //
+        // The symbolic spellings arrive here as properties too, and that is not
+        // obvious: KDL excludes `=` from identifiers, so `title ~= "x"` is read as the
+        // property `~` with the value `"x"`, never as an operator token followed by a
+        // pattern. All four were documented and none of them worked - they reported
+        // "matcher has no pattern", which reads as the pattern being at fault.
         foreach ((string key, KdlValue value) in node.Properties)
         {
             MatchOperator? op = key.ToLowerInvariant() switch
             {
                 "equals" or "is" => MatchOperator.Equals,
-                "regex" or "matches" => MatchOperator.Regex,
-                "starts-with" or "prefix" => MatchOperator.StartsWith,
-                "ends-with" or "suffix" => MatchOperator.EndsWith,
-                "contains" => MatchOperator.Contains,
+                "regex" or "matches" or "~" => MatchOperator.Regex,
+                "starts-with" or "prefix" or "^" => MatchOperator.StartsWith,
+                "ends-with" or "suffix" or "$" => MatchOperator.EndsWith,
+                "contains" or "*" => MatchOperator.Contains,
                 _ => null,
             };
 

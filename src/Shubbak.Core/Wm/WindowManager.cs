@@ -1202,6 +1202,20 @@ public sealed class WindowManager
             window.State == WindowState.Floating ? WindowState.Tiling : WindowState.Floating);
     }
 
+    /// <summary>Puts the focused window into a stated state.</summary>
+    /// <remarks>
+    /// Separate from the toggles so a rule can assert a fact rather than flip a
+    /// switch. "This application always floats" written as a toggle stops being true
+    /// the moment anything else has already floated the window.
+    /// </remarks>
+    public WmResult SetFocusedWindowState(WindowState state)
+    {
+        if (FocusedWindow is not { } window)
+            return Reject(state == WindowState.Floating ? "float" : "tile", "No focused window.");
+
+        return SetWindowState(window, state);
+    }
+
     /// <summary>Toggles the focused window between fullscreen and tiling.</summary>
     public WmResult ToggleFullscreen()
     {
