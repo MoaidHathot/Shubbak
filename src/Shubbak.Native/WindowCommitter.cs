@@ -267,6 +267,11 @@ public sealed class WindowCommitter
         // make the move pointless.
         List<(nint Handle, Rect Rect)> toMove = new(placements.Count);
 
+        // Raises are separate from moves, and are applied even when nothing moved.
+        // Entering monocle changes no rectangle at all - every window already fills
+        // the area - so the stacking change is the entire visible effect.
+        List<nint>? toRaise = null;
+
         foreach (Placement placement in placements)
         {
             nint handle = handleOf(placement);
@@ -274,11 +279,25 @@ public sealed class WindowCommitter
 
             if (!placement.Visible)
             {
+                // Concealed, then still moved. A window on an inactive workspace has a
+                // rectangle like any other - the layout computes one precisely so that
+                // showing the workspace shows a finished arrangement rather than a
+                // frame of garbage.
+                //
+                // Returning here instead left every such window at whatever position
+                // and stacking it had before Shubbak started. It was concealed there,
+                // and the first time its workspace was shown it appeared at that stale
+                // position - windows piled on top of one another - and only then slid
+                // into place. Since z-order is never touched, nothing corrected the
+                // stacking either.
                 Hide(handle);
-                continue;
             }
+            else
+            {
+                Show(handle);
 
-            Show(handle);
+                if (placement.Raise) (toRaise ??= []).Add(handle);
+            }
 
             // Skip windows already where we want them. This is the difference
             // between a relayout costing one SetWindowPos and costing dozens, and
@@ -307,7 +326,11 @@ public sealed class WindowCommitter
             toMove.Add((handle, placement.Rect));
         }
 
-        if (toMove.Count == 0) return 0;
+        if (toMove.Count == 0)
+        {
+            RaiseAll(toRaise);
+            return 0;
+        }
 
         lock (_lastCommitted)
         {
@@ -331,7 +354,44 @@ public sealed class WindowCommitter
             }
         }
 
+        RaiseAll(toRaise);
+
         return toMove.Count;
+    }
+
+    /// <summary>Brings windows to the front of the ordinary stacking order.</summary>
+    /// <remarks>
+    /// <para>
+    /// <c>HWND_TOP</c>, not <c>HWND_TOPMOST</c>. Topmost would place the window above
+    /// every other application permanently, which is a different feature and an
+    /// unwelcome one; this only orders a window against its own siblings.
+    /// </para>
+    /// <para>
+    /// Applied after the move so the raise is not undone by it, and outside the
+    /// batch: a <c>DeferWindowPos</c> transaction that changes stacking has to give up
+    /// <c>SWP_NOZORDER</c> for every window in it, and almost none of them want that.
+    /// The list is short - only fullscreen, maximised and monocle windows ask.
+    /// </para>
+    /// </remarks>
+    private static void RaiseAll(List<nint>? handles)
+    {
+        if (handles is null) return;
+
+        // HWND_TOP = 0. A sentinel rather than a real handle.
+        var top = new HWND(0);
+
+        foreach (nint handle in handles)
+        {
+            if (!Win32Window.Exists(handle)) continue;
+
+            PInvoke.SetWindowPos(
+                new HWND(handle), top, 0, 0, 0, 0,
+                SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
+                SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+                SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
+                SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
+                SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING);
+        }
     }
 
     private static void ApplyBatch(List<(nint Handle, Rect Rect)> moves)

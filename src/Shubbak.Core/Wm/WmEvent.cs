@@ -170,6 +170,20 @@ public sealed record BindingModeChanged(string? Mode) : WmEvent
 }
 
 /// <summary>
+/// The configuration was re-read from disk.
+/// </summary>
+/// <remarks>
+/// Announced so that everything reading the same file can reload together. The bar is
+/// a separate process reading the same config, and without this it kept whatever it
+/// started with: reloading the window manager left the bar showing settings from
+/// however long ago it was launched, with nothing to say so.
+/// </remarks>
+public sealed record ConfigReloaded(string? Path) : WmEvent
+{
+    public override string Topic => "config.reloaded";
+}
+
+/// <summary>
 /// A request the window manager declined, with a human-readable reason.
 /// </summary>
 /// <remarks>

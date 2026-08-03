@@ -18,6 +18,13 @@ namespace Shubbak.Native.Tests;
 /// </remarks>
 public sealed class ShadowMarginTests
 {
+    private static Core.Tree.WindowIdentity Identity => new()
+    {
+        ProcessName = "test",
+        ClassName = "ShubbakNativeTestWindow",
+        Title = "Shubbak test window",
+    };
+
     [Fact]
     public void NonsenseMeasurementsAreDiscarded()
     {
@@ -121,6 +128,63 @@ public sealed class ShadowMarginTests
 
         Assert.Equal(rect, WindowCommitter.Expand(rect, margins));
         Assert.Equal(rect, WindowCommitter.Shrink(rect, margins));
+    }
+
+    [Fact]
+    public void AConcealedWindowIsStillMovedToItsRectangle()
+    {
+        // The gap that let the startup stacking through. The engine promises that a
+        // window on an inactive workspace is arranged anyway, "so that switching to
+        // the workspace shows a correct layout immediately rather than a frame of
+        // garbage" - and there was a test for the engine keeping that promise and none
+        // for the platform layer honouring it. It did not: it hid the window and
+        // discarded the rectangle, so every window on an inactive workspace stayed
+        // wherever it had been before Shubbak started, and the first visit to that
+        // workspace showed them piled on top of one another.
+        using var window = new TestWindow();
+        var committer = new WindowCommitter();
+
+        var wanted = new Core.Geometry.Rect(220, 160, 700, 520);
+
+        committer.Commit(
+            [new Core.Layouts.Placement(
+                new Core.Tree.WindowNode(window.Handle, Identity), wanted, Visible: false)],
+            static p => (nint)p.Window.Handle);
+
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
+
+        // Off screen, and nonetheless exactly where the layout asked for it.
+        Assert.False(Win32Window.IsVisible(window.Handle));
+        Assert.Equal(wanted, WindowCommitter.VisibleBounds(window.Handle));
+    }
+
+    [Fact]
+    public void RevealingAConcealedWindowShowsItAlreadyInPlace()
+    {
+        // Stated the way the user meets it: switch to the workspace, and the window is
+        // where it belongs rather than sliding there from wherever it used to be.
+        using var window = new TestWindow();
+        var committer = new WindowCommitter();
+
+        var away = new Core.Geometry.Rect(300, 240, 640, 480);
+        var node = new Core.Tree.WindowNode(window.Handle, Identity);
+
+        committer.Commit(
+            [new Core.Layouts.Placement(node, away, Visible: false)],
+            static p => (nint)p.Window.Handle);
+
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
+
+        Core.Geometry.Rect whileHidden = WindowCommitter.VisibleBounds(window.Handle);
+
+        committer.Commit(
+            [new Core.Layouts.Placement(node, away, Visible: true)],
+            static p => (nint)p.Window.Handle);
+
+        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
+
+        Assert.Equal(away, whileHidden);
+        Assert.Equal(away, WindowCommitter.VisibleBounds(window.Handle));
     }
 
     [Fact]

@@ -48,6 +48,18 @@ public interface ILayout
     Axis? PrimaryAxis { get; }
 
     /// <summary>
+    /// Whether the rectangles this layout produces overlap one another.
+    /// </summary>
+    /// <remarks>
+    /// False for every tiling layout, which is what makes stacking order irrelevant
+    /// to them. A layout that answers true is saying that stacking is the only thing
+    /// deciding what the user sees, so the engine must raise the focused window -
+    /// monocle gives every child the whole area, and without a raise it showed
+    /// whichever window happened to already be on top.
+    /// </remarks>
+    bool Overlaps => false;
+
+    /// <summary>
     /// Writes the rectangle for each direct child of <paramref name="container"/>
     /// into <paramref name="destination"/>.
     /// </summary>

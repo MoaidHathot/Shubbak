@@ -644,18 +644,48 @@ public sealed class WmDaemon : IDisposable
                 return;
             }
 
-            WindowCommitter.Revive(handle);
+            // Claimed, but not revealed here. Whether this window belongs on screen is
+            // the layout's decision, and the layout has not run yet - the first pass is
+            // on the first tick, after the hooks are installed and the startup commands
+            // have been shell-executed.
+            //
+            // Un-cloaking it now put every remembered window on the desktop at once,
+            // stacked at whatever positions they had last run, until that first pass
+            // hid the ones belonging to other workspaces again. Leaving it concealed
+            // costs nothing: Show already reverses a concealment it did not perform,
+            // which is the path this window takes the moment its workspace is shown.
             _revived++;
 
             Log.Info(LogCategory.Window,
-                $"recovered concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                $"claimed concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
                 $"-> workspace {remembered.Name}");
         }
 
         WorkspaceNode? workspace = remembered ?? WorkspaceFor(handle);
 
+        // The state detected above, and the one the session remembered, are passed
+        // through rather than left on the node: adoption used to overwrite whatever
+        // was there with the configured default.
+        WindowState detected = window.State;
+
+        WmResult adoption = _wm.ManageWindow(window, workspace, detected);
+
+        if (!adoption.Succeeded)
+        {
+            // Not in the tree, so no placement is ever computed for it, and the guard
+            // at the top of this method means we never look at it again. Recording it
+            // as managed would leave it on screen at its original position for the
+            // life of the process, on top of everything the layout does control.
+            Log.Warn(LogCategory.Window,
+                $"not managing 0x{handle:X} \"{Truncate(attributes.Title, 40)}\": " +
+                $"{adoption.RejectionReason ?? "no workspace available"}");
+
+            _ignored.Add(handle);
+            return;
+        }
+
         _managed[handle] = window;
-        Publish(_wm.ManageWindow(window, workspace));
+        Publish(adoption);
 
         Log.Info(LogCategory.Window,
             $"managed 0x{handle:X} \"{Truncate(attributes.Title, 40)}\" " +
@@ -1049,6 +1079,11 @@ public sealed class WmDaemon : IDisposable
             case HostAction.ReloadConfig:
                 LoadConfig(_configPath, initial: false);
                 _layoutDirty = true;
+
+                // Announced so the bar, which is a separate process reading the same
+                // file, reloads at the same moment rather than keeping whatever it was
+                // launched with.
+                EventsProduced?.Invoke([new ConfigReloaded(_configPath)]);
                 break;
 
             case HostAction.Redraw:
@@ -1116,16 +1151,29 @@ public sealed class WmDaemon : IDisposable
 
         _commitScratch.Clear();
 
+        // Everything that should be off screen goes first, before anything is
+        // revealed. Revealing as we went meant the incoming workspace was on screen
+        // while the outgoing one still was, so a switch showed both at once for a
+        // frame - two sets of windows overlapping, which is the moment the user
+        // notices and the hardest one to photograph.
+        foreach (Placement placement in placements)
+        {
+            if (placement.Visible) continue;
+
+            _animation.Remove(placement.Window.Handle);
+            _committer.Conceal((nint)placement.Window.Handle);
+        }
+
         foreach (Placement placement in placements)
         {
             nint handle = (nint)placement.Window.Handle;
 
             // Hidden windows are never animated: moving something the user cannot
             // see is wasted work, and it would keep the animation engine busy for
-            // every window on every inactive workspace.
+            // every window on every inactive workspace. They are still committed,
+            // so they hold a correct rectangle for when the workspace is shown.
             if (!placement.Visible)
             {
-                _animation.Remove(placement.Window.Handle);
                 _commitScratch.Add(placement);
                 continue;
             }
@@ -1191,14 +1239,28 @@ public sealed class WmDaemon : IDisposable
 
         // Focus is applied after geometry: focusing a window that is about to move
         // makes it flash at its old position first.
+        //
+        // Only ever to a window the layout just decided to show. Adoption focuses each
+        // window it takes on, so at startup the focused window is whichever one the
+        // enumeration happened to reach last - frequently on a workspace that is not
+        // displayed. Forcing it to the foreground raised it over the workspace the user
+        // was actually looking at, and the resulting foreground event then switched the
+        // desktop to that workspace, where nothing had been placed yet.
         if (_wm.FocusedWindow is { } focused &&
-            Win32Window.GetForeground() != (nint)focused.Handle)
+            Win32Window.GetForeground() != (nint)focused.Handle &&
+            IsOnADisplayedWorkspace(focused))
         {
             WindowActions.Focus((nint)focused.Handle);
         }
 
-        ApplyFocusBorder();
+        ApplyFocusBorder(geometryChanged: true);
     }
+
+    /// <summary>Whether a window sits on the workspace its monitor is showing.</summary>
+    private static bool IsOnADisplayedWorkspace(WindowNode window) =>
+        window.Workspace is { } workspace &&
+        workspace.Monitor is { } monitor &&
+        ReferenceEquals(monitor.ActiveWorkspace, workspace);
 
     /// <summary>
     /// Periodically re-reads the monitor layout.
@@ -1311,6 +1373,37 @@ public sealed class WmDaemon : IDisposable
         // One atomic transaction per frame, exactly as in the S2 spike: the
         // unbatched alternative dropped 33-42% of frames at 144 Hz.
         _committer.CommitFrame(_frameScratch.AsSpan(0, count));
+
+        // A window that has just stopped moving has almost certainly repainted its own
+        // frame on the way, and applications that draw their own frame rewrite the
+        // border colour when they do. Re-asserted at the end of the movement rather
+        // than at the start of it: the layout pass that began the animation ran a
+        // hundred and forty milliseconds ago, and anything it set has since been
+        // painted over.
+        if (!_config.Effects.Enabled) return;
+
+        for (int i = 0; i < count; i++)
+        {
+            if (_frameScratch[i].IsFinal) RefreshBorderFor((nint)_frameScratch[i].Handle);
+        }
+    }
+
+    /// <summary>Re-applies whichever border a window should be wearing.</summary>
+    /// <remarks>
+    /// Both colours, not just the focused one. A move swaps two windows and resizes
+    /// both, so the one that is merely alongside loses its unfocused border just as
+    /// readily - and the once-a-second refresh only ever heals the focused window, so
+    /// nothing put that one back until focus next moved.
+    /// </remarks>
+    private void RefreshBorderFor(nint handle)
+    {
+        if (!_managed.TryGetValue(handle, out WindowNode? window)) return;
+
+        ApplyBorder(
+            window,
+            ReferenceEquals(window, _borderedWindow)
+                ? _config.Effects.FocusedColour
+                : _config.Effects.UnfocusedColour);
     }
 
     /// <summary>
@@ -1328,13 +1421,34 @@ public sealed class WmDaemon : IDisposable
     /// cleared rather than being given one - a border on everything is visual noise
     /// and defeats the purpose of marking the focused window at all.
     /// </para>
+    /// <para>
+    /// Geometry changes re-assert it even when focus did not move. The border belongs
+    /// to the window, not to Shubbak, and an application that draws its own frame
+    /// rewrites it while repainting - which a resize reliably provokes. Skipping the
+    /// re-assert because the same window was still focused meant that after every
+    /// move the border simply went out, and stayed out until the once-a-second
+    /// refresh happened to come round. That refresh is phase-locked to startup, so
+    /// the gap was anywhere up to a full second.
+    /// </para>
     /// </remarks>
-    private void ApplyFocusBorder()
+    /// <param name="geometryChanged">
+    /// True when windows have just been placed, so borders may have been repainted
+    /// away even though focus is unchanged.
+    /// </param>
+    private void ApplyFocusBorder(bool geometryChanged = false)
     {
         if (!_config.Effects.Enabled) return;
 
         WindowNode? focused = _wm.FocusedWindow;
-        if (ReferenceEquals(focused, _borderedWindow)) return;
+
+        if (ReferenceEquals(focused, _borderedWindow))
+        {
+            // Same window, but it may have just been resized out of its border.
+            if (geometryChanged && focused is not null)
+                ApplyBorder(focused, _config.Effects.FocusedColour);
+
+            return;
+        }
 
         if (_borderedWindow is { } previous && Win32Window.Exists((nint)previous.Handle))
             ApplyBorder(previous, _config.Effects.UnfocusedColour);

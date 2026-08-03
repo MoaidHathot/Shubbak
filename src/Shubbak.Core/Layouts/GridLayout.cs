@@ -128,6 +128,9 @@ public sealed class MonocleLayout : ILayout
 
     public Axis? PrimaryAxis => null;
 
+    /// <summary>Every child gets the whole area, so only stacking decides what is seen.</summary>
+    public bool Overlaps => true;
+
     public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
         ArgumentNullException.ThrowIfNull(container);
