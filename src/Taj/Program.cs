@@ -128,7 +128,7 @@ internal static class Program
             var model = new BarModel(config.Default);
             var selector = new BarProfileSelector(config.Profiles, config.Rules, config.Default);
 
-            foreach (Core.Sources.ISource source in TajConfigLoader.CreateSources(config.Sources))
+            foreach (Core.Sources.ISource source in TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current))
                 model.AddSource(source);
 
             var bar = new BarWindow(model, index);
@@ -225,7 +225,7 @@ internal static class Program
 
             // Sources hold timers, so the old set has to be disposed rather than
             // dropped, or a reloaded bar accumulates a clock per reload.
-            model.ReplaceSources(TajConfigLoader.CreateSources(config.Sources));
+            model.ReplaceSources(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
 
             // Forced through, rather than going via SelectProfile: the profile object
             // is new after a reload even when it is the same profile by name, and the

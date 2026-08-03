@@ -299,6 +299,46 @@ public static class TajConfigLoader
         return new BarZone(id, justify, grow, gap, widgets);
     }
 
+    /// <summary>
+    /// Reads the <c>when value="…"</c> children of a text widget.
+    /// </summary>
+    /// <remarks>
+    /// Each one restates only what differs, inheriting everything else from the
+    /// widget, so marking a value usually costs a colour and nothing more.
+    /// </remarks>
+    private static List<WidgetCondition> ParseConditions(
+        KdlNode node, VisualStyle baseStyle, FontStyle baseFont)
+    {
+        List<WidgetCondition> conditions = [];
+
+        foreach (KdlNode child in node.ChildrenNamed("when"))
+        {
+            string? value = SettingText(child, "value") ?? child.Argument(0)?.AsString();
+            if (value is null) continue;
+
+            var font = baseFont with
+            {
+                Size = SettingInt(child, "font-size") ?? baseFont.Size,
+                Bold = SettingBool(child, "bold") ?? baseFont.Bold,
+                Italic = SettingBool(child, "italic") ?? baseFont.Italic,
+            };
+
+            var style = baseStyle with
+            {
+                Foreground =
+                    ParseColour(SettingText(child, "colour") ?? SettingText(child, "color"))
+                    ?? baseStyle.Foreground,
+                Background =
+                    ParseColour(SettingText(child, "background")) ?? baseStyle.Background,
+                Font = font,
+            };
+
+            conditions.Add(new WidgetCondition(value, style));
+        }
+
+        return conditions;
+    }
+
     private static IWidget? ParseWidget(
         KdlNode node, Colour foreground, FontStyle font, List<Diagnostic> diagnostics)
     {
@@ -400,6 +440,7 @@ public static class TajConfigLoader
                 return new TemplateWidget(id, template, style, box)
                 {
                     OnClick = SettingText(node, "on-click"),
+                    Conditions = ParseConditions(node, style, widgetFont),
                 };
             }
 
@@ -487,7 +528,18 @@ public static class TajConfigLoader
     }
 
     /// <summary>Creates the sources described by config.</summary>
-    public static IEnumerable<ISource> CreateSources(IReadOnlyList<SourceSpec> specs)
+    /// <param name="specs">The declared sources.</param>
+    /// <param name="keyboardLanguage">
+    /// Reads the current input language, supplied by the host.
+    /// </param>
+    /// <remarks>
+    /// The keyboard language cannot be read without Win32, and this assembly is
+    /// deliberately free of it - it is the part that can be tested without a desktop.
+    /// The host passes the reader in, so this stays the single place that knows what
+    /// kinds of source exist.
+    /// </remarks>
+    public static IEnumerable<ISource> CreateSources(
+        IReadOnlyList<SourceSpec> specs, Func<string>? keyboardLanguage = null)
     {
         ArgumentNullException.ThrowIfNull(specs);
 
@@ -503,6 +555,17 @@ public static class TajConfigLoader
                 case "command":
                     if (spec.Argument.Length > 0)
                         yield return new ProcessSource(spec.Name, spec.Argument);
+                    break;
+
+                case "keyboard":
+                    if (keyboardLanguage is null)
+                    {
+                        Log.Warn(LogCategory.Config,
+                            $"source '{spec.Name}': the keyboard language is not available on this host");
+                        break;
+                    }
+
+                    yield return new IntervalSource(spec.Name, spec.Interval, keyboardLanguage);
                     break;
 
                 default:

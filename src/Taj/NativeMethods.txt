@@ -99,3 +99,6 @@ DwmSetWindowAttribute
 DWMWINDOWATTRIBUTE
 LoadCursor
 IDC_ARROW
+GetKeyboardLayout
+GetWindowThreadProcessId
+GetForegroundWindow

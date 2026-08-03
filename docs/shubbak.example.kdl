@@ -17,6 +17,17 @@ general {
     // New windows start tiled.
     initial-window-state "tiling"
 
+    // What a command that targets a window does when the focused window is one
+    // Shubbak does not manage - a dialog, a tray popup, an app it passed over.
+    //
+    //   refuse  (default) - do nothing, and say which window and why. A command
+    //                       that does nothing is recoverable; one that acts on the
+    //                       wrong window may not be.
+    //   adopt             - take the window on first, then run the command.
+    //
+    // Either way `toggle-managed` still works, which is the way in.
+    unmanaged-window-commands "refuse"
+
     // The layout a new workspace starts in. An unrecognised name is an error at
     // load rather than a silent fall back to horizontal.
     //
@@ -304,6 +315,14 @@ bar {
     source "clock"   kind="time" format="ddd d MMM HH:mm" interval=500
     source "seattle" kind="time" format="ddd d MMM HH:mm" interval=500 timezone="America/Los_Angeles"
 
+    // The input language of whichever window is in front, as a two-letter code.
+    //
+    // Per window, not per system: Windows keeps the layout per input thread, which
+    // is the thing that decides what typing actually produces. Polled, because no
+    // notification of a layout change crosses process boundaries - it is two cheap
+    // calls, so a few times a second costs nothing.
+    source "keyboard" kind="keyboard" interval=250
+
     // Any program that writes lines to stdout can drive a widget - in any
     // language, with no Taj source code. This is the extension point that means
     // Taj never has to grow a widget for everything.
@@ -335,6 +354,13 @@ bar {
         // Two clocks, as in the Zebar config: Seattle dimmed on the left, local
         // accented on the right.
         zone "right" justify="end" gap=12 {
+            // `when` restates only what differs, so marking a value costs a colour.
+            // Useful for anything worth noticing at a glance rather than reading: a
+            // keyboard in the wrong language, a battery about to go, a live mic.
+            text id="lang"    template="{{ keyboard }}"     colour="#7f849c" {
+                when value="HE" colour="#f38ba8" bold=#true
+            }
+
             text id="seattle" template="{{ seattle }}" colour="#ffffff80"
             text id="mode"    template="{{ binding_mode }}" colour="#f9e2af"
             text id="layout"  template="{{ layout }}"       colour="#7f849c"

@@ -24,6 +24,22 @@ public interface IWidget
 }
 
 /// <summary>
+/// A style to use when the widget's text takes a particular value.
+/// </summary>
+/// <param name="Value">
+/// The text to match, compared case-insensitively against the rendered result.
+/// </param>
+/// <param name="Style">The style to use instead when it matches.</param>
+/// <remarks>
+/// The bar's job is to be read at a glance, and a value that matters is one that
+/// should look different rather than one the user has to actually read. A keyboard
+/// showing a language you did not mean to be in, a battery below ten percent, a
+/// microphone that is live: all the same shape of problem, and none of them worth a
+/// widget type of their own.
+/// </remarks>
+public readonly record struct WidgetCondition(string Value, VisualStyle Style);
+
+/// <summary>
 /// A widget that renders a template into a single text node.
 /// </summary>
 /// <remarks>
@@ -65,6 +81,13 @@ public sealed class TemplateWidget : IWidget
     /// </remarks>
     public bool HideWhenEmpty { get; set; } = true;
 
+    /// <summary>Styles that replace the default one when the text matches.</summary>
+    /// <remarks>
+    /// Checked in order, first match wins, so the config reads top to bottom the way
+    /// it is written.
+    /// </remarks>
+    public IReadOnlyList<WidgetCondition> Conditions { get; set; } = [];
+
     public VisualNode Build(IReadOnlyDictionary<string, string?> values)
     {
         string text = Template.Render(_template, values);
@@ -74,11 +97,22 @@ public sealed class TemplateWidget : IWidget
             Id = Id,
             Kind = VisualKind.Text,
             Text = text,
-            Style = Style,
+            Style = StyleFor(text),
             Box = Box,
             Visible = !HideWhenEmpty || text.Length > 0,
             OnClick = OnClick,
         };
+    }
+
+    private VisualStyle StyleFor(string text)
+    {
+        foreach (WidgetCondition condition in Conditions)
+        {
+            if (string.Equals(condition.Value, text, StringComparison.OrdinalIgnoreCase))
+                return condition.Style;
+        }
+
+        return Style;
     }
 }
 
