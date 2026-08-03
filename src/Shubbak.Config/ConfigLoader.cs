@@ -122,9 +122,34 @@ public sealed class ConfigLoader
             InitialWindowState = InitialState(node, config.InitialWindowState),
             HideMethod = HideMethod(node, config.HideMethod),
             KeepInTaskbar = Bool(node, "keep-in-taskbar", config.KeepInTaskbar),
-            DefaultLayout = Text(node, "default-layout", config.DefaultLayout),
+            DefaultLayout = DefaultLayout(node, config.DefaultLayout),
             StartupCommands = startup,
         };
+    }
+
+    /// <summary>Reads and validates <c>default-layout</c>.</summary>
+    /// <remarks>
+    /// Checked here so an unrecognised name is reported once, at load, rather than
+    /// falling back silently on every workspace that is created. The key spent a while
+    /// being read and never applied, which looked exactly like a typo would.
+    /// </remarks>
+    private string? DefaultLayout(KdlNode general, string? fallback)
+    {
+        KdlNode? child = general.Child("default-layout");
+        if (child is null) return fallback;
+
+        string? name = Text(general, "default-layout", fallback);
+        if (string.IsNullOrWhiteSpace(name)) return fallback;
+
+        if (Core.Layouts.LayoutRegistry.TryResolve(name, out _)) return name;
+
+        Report(Diagnostic.Error(
+            "SHB0113",
+            $"Unknown layout '{name}'.",
+            child.Span,
+            $"Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}."));
+
+        return fallback;
     }
 
     private bool CursorJump(KdlNode general, string trigger)

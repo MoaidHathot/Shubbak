@@ -17,6 +17,13 @@ general {
     // New windows start tiled.
     initial-window-state "tiling"
 
+    // The layout a new workspace starts in. An unrecognised name is an error at
+    // load rather than a silent fall back to horizontal.
+    //
+    //   splith  splitv  fibonacci  fibonacci-v  fibonacci-mirrored
+    //   master-left  master-right  master-top  master-bottom  grid  monocle
+    default-layout "splith"
+
     // How windows on inactive workspaces are concealed.
     //
     // "cloak" (default) is strongly preferred: a cloaked window still reports as
@@ -197,7 +204,8 @@ keybindings {
     bind "alt+n" { scratchpad --name notes }
     bind "alt+ctrl+n" { scratchpad --name terminal }
 
-    // Lifecycle.
+    // Lifecycle. wm-reload-config re-reads this file for the window manager and
+    // tells the bar to re-read it too, so one key updates both.
     bind "alt+shift+r" { wm-reload-config }
     bind "alt+shift+w" { wm-redraw }
     bind "alt+shift+e" { wm-exit }
