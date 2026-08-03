@@ -112,6 +112,37 @@ public sealed class BarModel : IDisposable
         OnSourceChanged(source);
     }
 
+    /// <summary>
+    /// Swaps the whole set of sources for a new one.
+    /// </summary>
+    /// <remarks>
+    /// The old sources are disposed rather than dropped: each one owns a timer, so
+    /// leaving them running would add a clock on every reload and the bar would slowly
+    /// fill with ticking it no longer reads. Values are kept until the replacements
+    /// publish, so the bar does not blank while the new sources take their first
+    /// reading.
+    /// </remarks>
+    public void ReplaceSources(IEnumerable<ISource> sources)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+
+        ISource[] previous;
+
+        lock (_gate)
+        {
+            previous = [.. _sources.Values];
+            _sources.Clear();
+        }
+
+        foreach (ISource source in previous)
+        {
+            source.Changed -= OnSourceChanged;
+            source.Dispose();
+        }
+
+        foreach (ISource source in sources) AddSource(source);
+    }
+
     /// <summary>Sets a value directly, for push sources driven by the host.</summary>
     public void SetValue(string name, string? value)
     {

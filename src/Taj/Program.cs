@@ -18,6 +18,27 @@ internal static class Program
     private static readonly List<BarModel> s_models = [];
     private static readonly List<WmConnection> s_connections = [];
 
+    /// <summary>Per-bar state a reload has to rebuild.</summary>
+    private static readonly List<BarProfileSelector> s_selectors = [];
+
+    /// <summary>
+    /// The workspace each bar last reported, so a reload can re-pick its profile.
+    /// </summary>
+    private static readonly List<string> s_workspaces = [];
+
+    /// <summary>Arguments, kept so the config can be found again on a reload.</summary>
+    private static string[] s_args = [];
+
+    /// <summary>
+    /// Set from the connection thread when the window manager reports a reload.
+    /// </summary>
+    /// <remarks>
+    /// A flag rather than the work itself. The event arrives on the IPC task, and
+    /// rebuilding touches windows and GDI objects owned by the thread running the
+    /// message loop, so the loop picks it up on its next pass.
+    /// </remarks>
+    private static volatile bool s_reloadRequested;
+
     private static volatile bool s_running = true;
 
     private static int Main(string[] args)
@@ -29,6 +50,7 @@ internal static class Program
         }
 
         ConfigureLogging(args);
+        s_args = args;
 
         // Before any window is created: without it Windows reports virtualised
         // coordinates on scaled displays and the bar lands in the wrong place.
@@ -116,21 +138,11 @@ internal static class Program
 
             connection.ActiveWorkspaceChanged += workspace =>
             {
-                BarProfile chosen = selector.Select(workspace, monitorIndex);
-
-                if (ReferenceEquals(chosen, model.Profile)) return;
-
-                model.Profile = chosen;
-
-                // Logged because a profile switch changes the whole bar at once, and
-                // when it looks wrong there is otherwise no way to tell whether the
-                // wrong profile was chosen, the right one was built badly, or the
-                // window failed to resize.
-                Log.Info(LogCategory.Config,
-                    $"monitor {monitorIndex} -> profile \"{chosen.Name}\" on workspace \"{workspace}\" " +
-                    $"(height {chosen.Height}, zones: " +
-                    $"{string.Join(", ", chosen.Zones.Select(z => $"{z.Id}/{z.Widgets.Count}w/grow{z.Grow}"))})");
+                s_workspaces[monitorIndex] = workspace;
+                SelectProfile(monitorIndex, workspace);
             };
+
+            connection.ConfigReloaded += () => s_reloadRequested = true;
 
             bar.CommandRequested += command => _ = connection.SendCommandAsync(command);
 
@@ -145,10 +157,83 @@ internal static class Program
 
             s_models.Add(model);
             s_bars.Add(bar);
+            s_selectors.Add(selector);
+            s_workspaces.Add(string.Empty);
             s_connections.Add(connection);
         }
 
         return s_bars.Count > 0;
+    }
+
+    /// <summary>Picks and applies the profile for one bar.</summary>
+    private static void SelectProfile(int index, string workspace)
+    {
+        if (index >= s_models.Count || index >= s_selectors.Count) return;
+
+        BarModel model = s_models[index];
+        BarProfile chosen = s_selectors[index].Select(workspace, index);
+
+        if (ReferenceEquals(chosen, model.Profile)) return;
+
+        model.Profile = chosen;
+
+        // Logged because a profile switch changes the whole bar at once, and
+        // when it looks wrong there is otherwise no way to tell whether the
+        // wrong profile was chosen, the right one was built badly, or the
+        // window failed to resize.
+        Log.Info(LogCategory.Config,
+            $"monitor {index} -> profile \"{chosen.Name}\" on workspace \"{workspace}\" " +
+            $"(height {chosen.Height}, zones: " +
+            $"{string.Join(", ", chosen.Zones.Select(z => $"{z.Id}/{z.Widgets.Count}w/grow{z.Grow}"))})");
+    }
+
+    /// <summary>
+    /// Re-reads the configuration and rebuilds every bar from it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Runs on the message-loop thread. Sources own timers and the bars own windows
+    /// and GDI objects, and neither may be replaced from the connection's thread.
+    /// </para>
+    /// <para>
+    /// A configuration that does not parse leaves everything exactly as it is, which
+    /// is what the window manager does with the same file. Half-applying a broken
+    /// config would be worse than ignoring it: the bar is how the user finds out what
+    /// state they are in.
+    /// </para>
+    /// </remarks>
+    private static void ReloadConfig()
+    {
+        TajConfig config;
+
+        try
+        {
+            config = LoadConfig(s_args);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn(LogCategory.Config, $"could not re-read the config: {ex.Message}");
+            return;
+        }
+
+        for (int index = 0; index < s_models.Count; index++)
+        {
+            BarModel model = s_models[index];
+
+            s_selectors[index] =
+                new BarProfileSelector(config.Profiles, config.Rules, config.Default);
+
+            // Sources hold timers, so the old set has to be disposed rather than
+            // dropped, or a reloaded bar accumulates a clock per reload.
+            model.ReplaceSources(TajConfigLoader.CreateSources(config.Sources));
+
+            // Forced through, rather than going via SelectProfile: the profile object
+            // is new after a reload even when it is the same profile by name, and the
+            // reference check would otherwise skip it.
+            model.Profile = s_selectors[index].Select(s_workspaces[index], index);
+        }
+
+        Log.Info(LogCategory.Config, $"reloaded; {s_bars.Count} bar(s) rebuilt");
     }
 
     /// <summary>
@@ -178,6 +263,12 @@ internal static class Program
 
                 PInvoke.TranslateMessage(in msg);
                 PInvoke.DispatchMessage(in msg);
+            }
+
+            if (s_reloadRequested)
+            {
+                s_reloadRequested = false;
+                ReloadConfig();
             }
 
             foreach (BarWindow bar in s_bars) bar.Update();

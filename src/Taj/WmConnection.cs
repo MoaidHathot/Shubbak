@@ -36,6 +36,16 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>Raised when the active workspace changes, so profiles can switch.</summary>
     public event Action<string>? ActiveWorkspaceChanged;
 
+    /// <summary>
+    /// Raised when the window manager reports that it has re-read the configuration.
+    /// </summary>
+    /// <remarks>
+    /// The bar reads the same file, so a reload that only reached the window manager
+    /// left the two disagreeing - with the bar showing whatever it was launched with
+    /// and nothing to indicate it.
+    /// </remarks>
+    public event Action? ConfigReloaded;
+
     /// <param name="model">The bar model to feed.</param>
     /// <param name="monitorIndex">
     /// Which monitor this bar is on. Used to show only that monitor's workspaces,
@@ -181,6 +191,13 @@ public sealed class WmConnection : IAsyncDisposable
 
             case "layout.changed":
                 await RefreshAsync(client).ConfigureAwait(false);
+                break;
+
+            case "config.reloaded":
+                // Raised, not acted on. Rebuilding the bar touches windows and GDI
+                // objects belonging to the thread running the message loop, and this
+                // is not that thread.
+                ConfigReloaded?.Invoke();
                 break;
 
             default:
