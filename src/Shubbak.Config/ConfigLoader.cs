@@ -121,6 +121,7 @@ public sealed class ConfigLoader
             CursorJumpOnWindowFocus = CursorJump(node, "window"),
             InitialWindowState = InitialState(node, config.InitialWindowState),
             HideMethod = HideMethod(node, config.HideMethod),
+            UnmanagedWindowCommands = UnmanagedCommands(node, config.UnmanagedWindowCommands),
             KeepInTaskbar = Bool(node, "keep-in-taskbar", config.KeepInTaskbar),
             DefaultLayout = DefaultLayout(node, config.DefaultLayout),
             StartupCommands = startup,
@@ -208,6 +209,30 @@ public sealed class ConfigLoader
                     $"Unknown hide method '{text}'.",
                     SpanOf(node, "hide-method"),
                     "Use \"cloak\" (recommended), \"minimize\", or \"hide\"."));
+
+                return fallback;
+        }
+    }
+
+    private UnmanagedWindowCommands UnmanagedCommands(
+        KdlNode node, UnmanagedWindowCommands fallback)
+    {
+        string? text = Text(node, "unmanaged-window-commands", null);
+        if (text is null) return fallback;
+
+        switch (text.ToLowerInvariant())
+        {
+            case "refuse":
+            case "reject": return UnmanagedWindowCommands.Refuse;
+            case "adopt":
+            case "manage": return UnmanagedWindowCommands.Adopt;
+
+            default:
+                Report(Diagnostic.Error(
+                    "SHB0424",
+                    $"Unknown setting '{text}' for unmanaged-window-commands.",
+                    SpanOf(node, "unmanaged-window-commands"),
+                    "Use \"refuse\" (the default) or \"adopt\"."));
 
                 return fallback;
         }

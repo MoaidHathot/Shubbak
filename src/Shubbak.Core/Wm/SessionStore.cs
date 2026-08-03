@@ -99,7 +99,14 @@ public sealed class SessionStore
     }
 
     /// <summary>Writes a session to disk.</summary>
-    public static bool Save(RootNode root, string? path = null)
+    /// <param name="root">The tree to capture.</param>
+    /// <param name="path">Where to write; the default location when null.</param>
+    /// <param name="routine">
+    /// True for the periodic save, which is silent unless something changed. The
+    /// deliberate saves - shutdown especially - stay audible, because those are the
+    /// ones worth confirming happened.
+    /// </param>
+    public static bool Save(RootNode root, string? path = null, bool routine = false)
     {
         ArgumentNullException.ThrowIfNull(root);
 
@@ -109,6 +116,20 @@ public sealed class SessionStore
         {
             Session session = Capture(root);
 
+            string json = JsonSerializer.Serialize(session, SessionJsonContext.Default.Session);
+
+            // Written only when something changed. The periodic save fired every thirty
+            // seconds regardless, so an untouched desktop still rewrote the file nearly
+            // three thousand times a day and announced each one - which was half of
+            // everything the log had to say.
+            //
+            // Compared without the timestamp, which changes on every capture and would
+            // make every session look different from the last.
+            string fingerprint = Fingerprint(session);
+
+            if (routine && string.Equals(fingerprint, s_lastFingerprint, StringComparison.Ordinal))
+                return true;
+
             string? directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
 
@@ -116,12 +137,12 @@ public sealed class SessionStore
             // cannot leave a truncated session that fails to parse on next start.
             string temporary = path + ".tmp";
 
-            File.WriteAllText(
-                temporary, JsonSerializer.Serialize(session, SessionJsonContext.Default.Session));
-
+            File.WriteAllText(temporary, json);
             File.Move(temporary, path, overwrite: true);
 
-            Log.Info(LogCategory.Wm, $"session saved: {session.Windows.Count} windows -> {path}");
+            s_lastFingerprint = fingerprint;
+
+            Log.Debug(LogCategory.Wm, $"session saved: {session.Windows.Count} windows -> {path}");
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
@@ -129,6 +150,30 @@ public sealed class SessionStore
             Log.Error(LogCategory.Wm, "could not save session", ex);
             return false;
         }
+    }
+
+    /// <summary>What the last write contained, so an unchanged one can be skipped.</summary>
+    private static string? s_lastFingerprint;
+
+    /// <summary>
+    /// A comparable summary of a session, ignoring when it was captured.
+    /// </summary>
+    private static string Fingerprint(Session session)
+    {
+        var builder = new System.Text.StringBuilder(session.Windows.Count * 48);
+
+        foreach (RememberedWindow window in session.Windows)
+        {
+            builder.Append(window.Workspace).Append('\u001f')
+                   .Append(window.ProcessName).Append('\u001f')
+                   .Append(window.ClassName).Append('\u001f')
+                   .Append(window.TitleHash).Append('\u001f')
+                   .Append(window.Sticky).Append('\u001f')
+                   .Append(string.Join(',', window.Tags)).Append('\u001f')
+                   .Append(window.State).Append('\u001e');
+        }
+
+        return builder.ToString();
     }
 
     /// <summary>Reads a session from disk, or null if there is none to read.</summary>

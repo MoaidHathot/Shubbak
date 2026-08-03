@@ -22,6 +22,28 @@ public abstract record WmCommand
 {
     /// <summary>The canonical name, as it appears in config and IPC.</summary>
     public abstract string Name { get; }
+
+    /// <summary>
+    /// Whether this command acts on whichever window currently has focus.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Stated per command rather than inferred, because the consequence of getting it
+    /// wrong is acting on a window the user cannot see. Focus can be on a window
+    /// Shubbak does not manage - a dialog, a tray popup, an application it passed over
+    /// - and its own idea of the focused window is then whatever was focused before.
+    /// Commands that ran anyway hit that earlier window: pressing the float key over
+    /// an unmanaged window untiled something else entirely, and the close key would
+    /// have closed it.
+    /// </para>
+    /// <para>
+    /// False for commands that act on a workspace, a monitor, or focus itself. Those
+    /// remain useful from an unmanaged window - moving focus out of one is exactly
+    /// how you leave it - and refusing them would break clicking a workspace on the
+    /// bar, whose own window is not managed either.
+    /// </para>
+    /// </remarks>
+    public virtual bool TargetsFocusedWindow => false;
 }
 
 // ---- focus -----------------------------------------------------------------
@@ -56,12 +78,16 @@ public sealed record CycleFocusCommand(bool Forward) : WmCommand
 public sealed record MoveDirectionCommand(Direction Direction) : WmCommand
 {
     public override string Name => "move";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>move --workspace 3</c></summary>
 public sealed record MoveToWorkspaceCommand(string Workspace) : WmCommand
 {
     public override string Name => "move-to-workspace";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>move-workspace --direction left</c></summary>
@@ -76,24 +102,32 @@ public sealed record MoveWorkspaceToMonitorCommand(Direction Direction) : WmComm
 public sealed record TagCommand(string Workspace, Wm.TagMode Mode) : WmCommand
 {
     public override string Name => "tag";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>sticky</c> - follow every workspace on this monitor.</summary>
 public sealed record ToggleStickyCommand : WmCommand
 {
     public override string Name => "sticky";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>scratchpad --name notes</c> - stash or summon.</summary>
 public sealed record ScratchpadCommand(string Slot) : WmCommand
 {
     public override string Name => "scratchpad";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>tag --clear</c></summary>
 public sealed record ClearTagsCommand : WmCommand
 {
     public override string Name => "tag-clear";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 // ---- sizing ----------------------------------------------------------------
@@ -108,6 +142,8 @@ public sealed record ClearTagsCommand : WmCommand
 public sealed record ResizeCommand(Axis Axis, double Delta) : WmCommand
 {
     public override string Name => "resize";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary>Gives every sibling of the focused window an equal share.</summary>
@@ -148,6 +184,8 @@ public sealed record CycleLayoutCommand(bool Forward) : WmCommand
 public sealed record ToggleFloatingCommand : WmCommand
 {
     public override string Name => "toggle-floating";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary>
@@ -162,24 +200,32 @@ public sealed record ToggleFloatingCommand : WmCommand
 public sealed record FloatCommand : WmCommand
 {
     public override string Name => "float";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>tile</c> - returns the window to the tiling flow.</summary>
 public sealed record TileCommand : WmCommand
 {
     public override string Name => "tile";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>toggle-fullscreen</c></summary>
 public sealed record ToggleFullscreenCommand : WmCommand
 {
     public override string Name => "toggle-fullscreen";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary><c>toggle-minimised</c></summary>
 public sealed record ToggleMinimisedCommand : WmCommand
 {
     public override string Name => "toggle-minimized";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 /// <summary>
@@ -194,6 +240,8 @@ public sealed record ToggleMinimisedCommand : WmCommand
 public sealed record CloseWindowCommand : WmCommand
 {
     public override string Name => "close";
+
+    public override bool TargetsFocusedWindow => true;
 }
 
 // ---- modes and lifecycle ---------------------------------------------------
