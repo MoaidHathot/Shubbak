@@ -96,13 +96,30 @@ public sealed class BindingTable
             if (mode.Bindings.ContainsKey(key)) return true;
 
             // A non-pass-through mode swallows everything. That is the entire point
-            // of the author's `pause` mode: it exists to make the keyboard inert
-            // apart from the binding that leaves it.
-            return !mode.PassThrough;
+            // of a `pause` mode: it exists to make the keyboard inert apart from the
+            // binding that leaves it.
+            //
+            // Everything except the modifier keys themselves, which are never a
+            // binding on their own and must not be claimed. Swallowing a modifier
+            // stops it reaching the input state that ReadModifiers consults, so the
+            // very next keystroke reports no modifiers held - and a mode whose only
+            // way out is alt+shift+p can then never match it. The keyboard was inert
+            // with no way back, which is the worst failure this program can have.
+            return !mode.PassThrough && !IsModifierKey(virtualKey);
         }
 
         return _default.ContainsKey(key);
     }
+
+    /// <summary>Whether a key is a modifier, and so never a binding by itself.</summary>
+    private static bool IsModifierKey(ushort virtualKey) => virtualKey switch
+    {
+        0x10 or 0xA0 or 0xA1 => true,   // shift, left shift, right shift
+        0x11 or 0xA2 or 0xA3 => true,   // control, left control, right control
+        0x12 or 0xA4 or 0xA5 => true,   // alt, left alt, right alt
+        0x5B or 0x5C => true,           // left windows, right windows
+        _ => false,
+    };
 
     /// <summary>Resolves a keystroke to its binding, on the worker thread.</summary>
     public Keybinding? Resolve(ushort virtualKey, KeyModifiers modifiers)

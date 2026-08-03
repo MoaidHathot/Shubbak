@@ -632,14 +632,33 @@ public sealed class ConfigLoader
             List<Keybinding> bindings = [];
             CollectBindings(child, workspaces, bindings);
 
-            modes.Add(new BindingMode(
-                nameValue.AsString(),
-                bindings,
-                Bool(child, "pass-through", false)));
+            string name = nameValue.AsString();
+            bool passThrough = Bool(child, "pass-through", false);
+
+            // A mode that swallows every keystroke and has no binding that leaves it
+            // is a trap: once entered, the keyboard is inert and no key can undo it.
+            // Caught here, where it is a typo being pointed at, rather than at two in
+            // the morning with no way to type.
+            if (!passThrough && !LeavesTheMode(bindings))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0425",
+                    $"Binding mode '{name}' swallows every key and has no binding that leaves it.",
+                    child.Span,
+                    "Add a way out, e.g. bind \"escape\" { wm-disable-binding-mode }, " +
+                    "or set pass-through #true so unbound keys still reach applications."));
+            }
+
+            modes.Add(new BindingMode(name, bindings, passThrough));
         }
 
         return modes;
     }
+
+    /// <summary>Whether any binding in a mode returns to the default set.</summary>
+    private static bool LeavesTheMode(List<Keybinding> bindings) =>
+        bindings.Any(b => b.Commands.Any(
+            c => c is DisableBindingModeCommand or EnableBindingModeCommand));
 
     // ---- apps and rules ----------------------------------------------------
 
@@ -890,12 +909,28 @@ public sealed class ConfigLoader
 
     private void Report(Diagnostic diagnostic) => _diagnostics.Add(diagnostic);
 
+    /// <summary>Reads a setting written either as a child node or as a property.</summary>
+    /// <remarks>
+    /// <para>
+    /// Both spellings appear throughout a real config - <c>border #true</c> as a child,
+    /// <c>monitor=0</c> as a property - and which one a given setting wanted was not
+    /// discoverable. Reading only children meant the property form was ignored in
+    /// silence rather than rejected.
+    /// </para>
+    /// <para>
+    /// That was worst for <c>pass-through</c>. Written as a property it did nothing,
+    /// so a mode meant to leave the keyboard usable swallowed every key instead, and
+    /// the config said plainly that it should not.
+    /// </para>
+    /// </remarks>
+    private static KdlValue? SettingValue(KdlNode parent, string name) =>
+        parent.Child(name)?.Argument(0) ?? parent.Property(name);
+
     private static KdlNode? Setting(KdlNode parent, string name) => parent.Child(name);
 
     private bool Bool(KdlNode parent, string name, bool fallback)
     {
-        KdlNode? node = Setting(parent, name);
-        if (node?.Argument(0) is not { } value) return fallback;
+        if (SettingValue(parent, name) is not { } value) return fallback;
 
         if (value.TryAsBool(out bool result)) return result;
 
@@ -909,8 +944,7 @@ public sealed class ConfigLoader
 
     private int Int(KdlNode parent, string name, int fallback)
     {
-        KdlNode? node = Setting(parent, name);
-        if (node?.Argument(0) is not { } value) return fallback;
+        if (SettingValue(parent, name) is not { } value) return fallback;
 
         if (value.TryAsInt(out int result)) return result;
 
@@ -922,11 +956,8 @@ public sealed class ConfigLoader
         return fallback;
     }
 
-    private static string? Text(KdlNode parent, string name, string? fallback)
-    {
-        KdlNode? node = Setting(parent, name);
-        return node?.Argument(0) is { } value ? value.AsString() : fallback;
-    }
+    private static string? Text(KdlNode parent, string name, string? fallback) =>
+        SettingValue(parent, name) is { } value ? value.AsString() : fallback;
 
     private static TextSpan SpanOf(KdlNode parent, string name) =>
         Setting(parent, name)?.Span ?? parent.Span;
