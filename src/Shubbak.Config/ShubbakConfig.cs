@@ -139,5 +139,12 @@ public sealed record ShubbakConfig
         InitialWindowState = InitialWindowState,
         ToggleWorkspaceOnRefocus = ToggleWorkspaceOnRefocus,
         FollowWindowOnMove = FollowWindowOnMove,
+
+        // Resolved here rather than stored as a name, so an unknown layout is a
+        // startup problem rather than a silent fallback every time a workspace is made.
+        DefaultLayout = DefaultLayout is { Length: > 0 } name &&
+                        Core.Layouts.LayoutRegistry.TryResolve(name, out Core.Layouts.ILayout layout)
+            ? layout
+            : null,
     };
 }
