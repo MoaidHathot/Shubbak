@@ -122,6 +122,7 @@ public sealed class ConfigLoader
             InitialWindowState = InitialState(node, config.InitialWindowState),
             HideMethod = HideMethod(node, config.HideMethod),
             UnmanagedWindowCommands = UnmanagedCommands(node, config.UnmanagedWindowCommands),
+            AllowShellExecOverIpc = Bool(node, "allow-shell-exec-over-ipc", config.AllowShellExecOverIpc),
             KeepInTaskbar = Bool(node, "keep-in-taskbar", config.KeepInTaskbar),
             DefaultLayout = DefaultLayout(node, config.DefaultLayout),
             StartupCommands = startup,
@@ -718,7 +719,7 @@ public sealed class ConfigLoader
                 // before, so a misspelt target left the rule matching on whatever else
                 // was in the block - or, if it was the only one, on nothing at all.
                 Report(Diagnostic.Error(
-                    "SHB0419",
+                    "SHB0426",
                     $"Unknown matcher '{child.Name}'.",
                     child.Span,
                     "Match on title, class, process, or path."));

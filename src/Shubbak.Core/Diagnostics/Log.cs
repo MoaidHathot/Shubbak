@@ -68,6 +68,17 @@ public static class Log
     public static long TotalEntries => Interlocked.Read(ref s_totalEntries);
 
     /// <summary>
+    /// Entries the writer could not keep up with and discarded.
+    /// </summary>
+    /// <remarks>
+    /// Surfaced because it is the counter that says the log is lying by omission. It
+    /// was already being kept, on a private nested class, so nothing outside could
+    /// read it - a diagnostic report could show a gap and no way to tell whether
+    /// nothing happened or the writer fell behind.
+    /// </remarks>
+    public static int Dropped => Sink.Dropped;
+
+    /// <summary>
     /// Whether anything would be recorded at this level.
     /// </summary>
     /// <remarks>

@@ -28,6 +28,17 @@ general {
     // Either way `toggle-managed` still works, which is the way in.
     unmanaged-window-commands "refuse"
 
+    // Whether `shell-exec` may be sent over the IPC pipe.
+    //
+    // Off, because a window manager is not an execution service. The command exists
+    // so a keybinding or a startup command below can launch a terminal - decisions
+    // made deliberately in this file - and it stays available to those either way.
+    //
+    // The pipe is scoped to the account, not to the integrity level, so leaving this
+    // open means any process running as you can ask an elevated Shubbak to start
+    // something elevated.
+    allow-shell-exec-over-ipc #false
+
     // The layout a new workspace starts in. An unrecognised name is an error at
     // load rather than a silent fall back to horizontal.
     //

@@ -155,12 +155,14 @@ public sealed class SessionStore
             // three thousand times a day and announced each one - which was half of
             // everything the log had to say.
             //
-            // Compared without the timestamp, which changes on every capture and would
-            // make every session look different from the last.
+            // Keyed by path, and only trusted while the file it describes is still
+            // there. A single shared fingerprint claimed that any path was up to date
+            // once any other path had been written with the same contents - so deleting
+            // the session file meant it was never written again, and two saves to
+            // different paths in one process silently produced one file.
             string fingerprint = Fingerprint(session);
 
-            if (routine && string.Equals(fingerprint, s_lastFingerprint, StringComparison.Ordinal))
-                return true;
+            if (routine && IsAlreadyOnDisk(path, fingerprint)) return true;
 
             string? directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
@@ -172,7 +174,7 @@ public sealed class SessionStore
             File.WriteAllText(temporary, json);
             File.Move(temporary, path, overwrite: true);
 
-            s_lastFingerprint = fingerprint;
+            RecordWritten(path, fingerprint);
 
             Log.Debug(LogCategory.Wm, $"session saved: {session.Windows.Count} windows -> {path}");
             return true;
@@ -184,8 +186,34 @@ public sealed class SessionStore
         }
     }
 
-    /// <summary>What the last write contained, so an unchanged one can be skipped.</summary>
-    private static string? s_lastFingerprint;
+    /// <summary>What the last write to each path contained, so an unchanged one can be skipped.</summary>
+    private static readonly Dictionary<string, string> s_lastWritten =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private static readonly Lock s_lastWrittenGate = new();
+
+    /// <summary>Whether this exact session is already the contents of that file.</summary>
+    /// <remarks>
+    /// Checks the file is still there as well as what it held. A remembered
+    /// fingerprint describes a file, and a file that has been deleted no longer
+    /// matches anything - without the existence check, removing the session file left
+    /// Shubbak convinced it was already written and it never came back.
+    /// </remarks>
+    private static bool IsAlreadyOnDisk(string path, string fingerprint)
+    {
+        lock (s_lastWrittenGate)
+        {
+            if (!s_lastWritten.TryGetValue(path, out string? previous)) return false;
+            if (!string.Equals(previous, fingerprint, StringComparison.Ordinal)) return false;
+        }
+
+        return File.Exists(path);
+    }
+
+    private static void RecordWritten(string path, string fingerprint)
+    {
+        lock (s_lastWrittenGate) s_lastWritten[path] = fingerprint;
+    }
 
     /// <summary>
     /// A comparable summary of a session, ignoring what cannot change a placement.

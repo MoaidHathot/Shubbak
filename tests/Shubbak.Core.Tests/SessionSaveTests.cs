@@ -183,6 +183,45 @@ public sealed class SessionSaveTests : IDisposable
     }
 
     [Fact]
+    public void ADeletedSessionIsWrittenAgain()
+    {
+        // The skip remembered what had been written and not whether it was still
+        // there, so deleting the file convinced Shubbak it was already saved and it
+        // never came back - the state survived exactly until someone tidied up.
+        WindowManager wm = Create();
+
+        SessionStore.Save(wm.Root, _path, routine: true);
+        Assert.True(File.Exists(_path));
+
+        File.Delete(_path);
+
+        SessionStore.Save(wm.Root, _path, routine: true);
+
+        Assert.True(File.Exists(_path), "an unchanged session must still be written when the file is gone");
+    }
+
+    [Fact]
+    public void TwoPathsEachGetTheirOwnFile()
+    {
+        // One shared fingerprint meant the second path was considered already written
+        // because the first had been, so it silently never appeared.
+        WindowManager wm = Create();
+        string other = _path + ".other";
+
+        try
+        {
+            SessionStore.Save(wm.Root, _path, routine: true);
+            SessionStore.Save(wm.Root, other, routine: true);
+
+            Assert.True(File.Exists(other));
+        }
+        finally
+        {
+            if (File.Exists(other)) File.Delete(other);
+        }
+    }
+
+    [Fact]
     public void AFileWrittenBeforeMonitorsWereRememberedStillLoads()
     {
         // The field is optional so an older session is not thrown away, which would
