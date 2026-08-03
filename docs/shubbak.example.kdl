@@ -292,9 +292,17 @@ binding-modes {
         bind "enter"  { wm-disable-binding-mode }
     }
 
-    // Swallow everything except the key that resumes.
+    // Swallow everything except the keys that resume.
+    //
+    // A mode with `pass-through` false makes the keyboard inert, so more than one way
+    // out is worth having - the keyboard is the very thing it disables. Shubbak
+    // refuses to load a swallowing mode that binds no way out at all.
+    //
+    // The bar's mode indicator can be given on-click="wm-disable-binding-mode", and
+    // from any shell:  shubbak wm-disable-binding-mode
     mode "pause" {
         bind "alt+shift+p" { wm-disable-binding-mode }
+        bind "escape"      { wm-disable-binding-mode }
     }
 }
 
@@ -368,7 +376,11 @@ bar {
             }
 
             text id="seattle" template="{{ seattle }}" colour="#ffffff80"
-            text id="mode"    template="{{ binding_mode }}" colour="#f9e2af"
+            // Empty most of the time, so it takes no room. When it is showing, the
+            // keyboard is behaving unusually - click it to return to the default
+            // bindings, which is the one way out that does not need the keyboard.
+            text id="mode"    template="{{ binding_mode }}" colour="#1e1e2e" \
+                 background="#f38ba8" on-click="wm-disable-binding-mode"
 
             // `of` matters here: the icon filter has already turned the layout's name
             // into a glyph, so matching the drawn text would mean writing box-drawing

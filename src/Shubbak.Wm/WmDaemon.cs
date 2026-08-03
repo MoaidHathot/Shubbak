@@ -1114,7 +1114,41 @@ public sealed class WmDaemon : IDisposable
             "unmanaged-window-commands \"adopt\".";
     }
 
-    /// <summary>Runs one command, for IPC. Must be called on the daemon thread.</summary>
+    /// <summary>
+    /// Records which binding mode is active, and how to leave one that swallows keys.
+    /// </summary>
+    /// <remarks>
+    /// At info rather than debug. A mode that makes the keyboard inert is the one
+    /// state where the log is the only thing that can still be read, and "which keys
+    /// still work" is the only question worth answering at that point.
+    /// </remarks>
+    private void ReportBindingMode(string? mode)
+    {
+        if (mode is null)
+        {
+            Log.Info(LogCategory.Hook, "binding mode cleared; the default bindings are back");
+            return;
+        }
+
+        BindingMode? declared = _config.BindingModes
+            .FirstOrDefault(m => string.Equals(m.Name, mode, StringComparison.OrdinalIgnoreCase));
+
+        if (declared is null || declared.PassThrough)
+        {
+            Log.Info(LogCategory.Hook, $"binding mode '{mode}' active");
+            return;
+        }
+
+        string[] exits = [.. declared.Keybindings
+            .Where(b => b.Commands.Any(c => c is DisableBindingModeCommand or EnableBindingModeCommand))
+            .Select(b => b.Key.Display)];
+
+        Log.Info(LogCategory.Hook,
+            $"binding mode '{mode}' active and swallowing every key. " +
+            $"Way out: {(exits.Length > 0 ? string.Join(" or ", exits) : "none bound")}, " +
+            "or run: shubbak wm-disable-binding-mode");
+    }
+
     internal CommandOutcome RunCommand(WmCommand command)
     {
         if (!ResolveTarget(command))
@@ -2041,9 +2075,15 @@ public sealed class WmDaemon : IDisposable
 
         foreach (WmEvent wmEvent in result.Events)
         {
-            // Binding mode lives in two places: the state machine, which reports it,
+                        // Binding mode lives in two places: the state machine, which reports it,
             // and the lookup table, which enforces it.
-            if (wmEvent is BindingModeChanged mode) _bindings.SetMode(mode.Mode);
+            if (wmEvent is BindingModeChanged mode)
+            {
+                _bindings.SetMode(mode.Mode);
+                ReportBindingMode(mode.Mode);
+            }
+
+
             if (wmEvent is CommandRejected rejected)
                 Log.Debug(LogCategory.Command, $"rejected {rejected.Command}: {rejected.Reason}");
 

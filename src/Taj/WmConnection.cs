@@ -306,8 +306,26 @@ public sealed class WmConnection : IAsyncDisposable
         return string.Empty;
     }
 
-    private static string Unquote(string json) =>
-        json.Length >= 2 && json[0] == '"' && json[^1] == '"' ? json[1..^1] : json;
+    /// <summary>Reads a JSON string payload as plain text.</summary>
+    /// <remarks>
+    /// A JSON <c>null</c> becomes an empty string, not the four letters spelling it.
+    /// Clearing the binding mode sends exactly that, so leaving the default set put
+    /// the word "null" on the bar where the mode had been - and it stayed there,
+    /// because an empty value is what hides the widget.
+    /// </remarks>
+    private static string Unquote(string json)
+    {
+        if (json is null) return string.Empty;
+
+        string trimmed = json.Trim();
+
+        if (trimmed.Length == 0 || string.Equals(trimmed, "null", StringComparison.Ordinal))
+            return string.Empty;
+
+        return trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"'
+            ? trimmed[1..^1]
+            : trimmed;
+    }
 
     public async ValueTask DisposeAsync()
     {
