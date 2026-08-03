@@ -559,13 +559,91 @@ public sealed class WindowManager
     // ---- moving ------------------------------------------------------------
 
     /// <summary>Moves the focused window in a direction.</summary>
+    /// <summary>Nudges a window that is not in the tiling flow.</summary>
+    /// <remarks>
+    /// The step is a proportion of the work area rather than a fixed pixel count, so
+    /// the same binding travels the same visible distance on a laptop panel and on a
+    /// 4K monitor.
+    /// </remarks>
+    private WmResult MoveFloating(WindowNode window, Direction direction)
+    {
+        Rect area = WorkAreaFor(window);
+        if (area.IsEmpty) return Reject("move", "The window is not on a monitor.");
+
+        Rect rect = window.FloatingRect ?? window.Rect;
+        if (rect.IsEmpty) return Reject("move", "The window has no rectangle to move.");
+
+        int dx = Math.Max(1, area.Width / 20);
+        int dy = Math.Max(1, area.Height / 20);
+
+        (int offsetX, int offsetY) = direction switch
+        {
+            Direction.Left => (-dx, 0),
+            Direction.Right => (dx, 0),
+            Direction.Up => (0, -dy),
+            Direction.Down => (0, dy),
+            _ => (0, 0),
+        };
+
+        if (offsetX == 0 && offsetY == 0) return Reject("move", "Unknown direction.");
+
+        window.FloatingRect = new Rect(rect.X + offsetX, rect.Y + offsetY, rect.Width, rect.Height);
+        window.Rect = window.FloatingRect.Value;
+
+        if (window.Workspace is { } workspace)
+            Emit(new WindowMoved(window, workspace, workspace));
+
+        return Complete();
+    }
+
+    /// <summary>Resizes a window that is not in the tiling flow.</summary>
+    /// <remarks>
+    /// The delta is a proportion of the work area, matching what it means for a tiled
+    /// window - where it is a proportion of the container - so one binding reads the
+    /// same way whichever kind of window is in front.
+    /// </remarks>
+    private WmResult ResizeFloating(WindowNode window, Axis axis, double delta)
+    {
+        Rect area = WorkAreaFor(window);
+        if (area.IsEmpty) return Reject("resize", "The window is not on a monitor.");
+
+        Rect rect = window.FloatingRect ?? window.Rect;
+        if (rect.IsEmpty) return Reject("resize", "The window has no rectangle to resize.");
+
+        int minimum = Math.Max(Options.MinimumTileExtent, 1);
+
+        int width = rect.Width;
+        int height = rect.Height;
+
+        if (axis == Axis.Horizontal)
+            width = Math.Max(minimum, width + (int)Math.Round(area.Width * delta));
+        else
+            height = Math.Max(minimum, height + (int)Math.Round(area.Height * delta));
+
+        if (width == rect.Width && height == rect.Height)
+            return Reject("resize", "The window is already at its smallest on that axis.");
+
+        window.FloatingRect = new Rect(rect.X, rect.Y, width, height);
+        window.Rect = window.FloatingRect.Value;
+
+        if (window.Workspace is { } workspace)
+            Emit(new WindowMoved(window, workspace, workspace));
+
+        return Complete();
+    }
+
+    private static Rect WorkAreaFor(WindowNode window) =>
+        window.Workspace?.Monitor?.WorkArea ?? Rect.Empty;
+
     public WmResult MoveDirection(Direction direction)
     {
         if (FocusedWindow is not { } window)
             return Reject("move", "No focused window.");
 
-        if (!window.IsTiled)
-            return Reject("move", "Only tiling windows can be moved directionally.");
+        // Nothing to swap with outside the tiling flow, so the window is nudged
+        // instead. The alternative - refusing - left an untiled window stuck wherever
+        // it happened to be unless the mouse was used.
+        if (!window.IsTiled) return MoveFloating(window, direction);
 
         ContainerNode? parent = window.ParentContainer;
         if (parent is null) return Reject("move", "Focused window is not attached.");
@@ -1067,8 +1145,11 @@ public sealed class WindowManager
         if (FocusedWindow is not { } window)
             return Reject("resize", "No focused window.");
 
-        if (!window.IsTiled)
-            return Reject("resize", "Only tiling windows can be resized.");
+        // A window outside the tiling flow has no siblings to take space from, so it
+        // is resized directly. Refusing meant an untiled window could be moved nowhere
+        // and resized not at all: the keyboard stopped working on it entirely, and the
+        // only way to change it was the mouse.
+        if (!window.IsTiled) return ResizeFloating(window, axis, delta);
 
         // The window itself may not be the node that can grow: widening a window
         // inside a vertical split has to be applied at the first ancestor that

@@ -373,8 +373,59 @@ internal static class Program
         return handle != 0;
     }
 
+    /// <summary>
+    /// Lists every top-level window with the verdict the filter reaches for it.
+    /// </summary>
+    /// <remarks>
+    /// The answer to "why is that application not being tiled?", which otherwise
+    /// requires knowing the window's handle before you can ask about it - and the
+    /// windows worth asking about are exactly the ones that are hard to point at.
+    /// Runs entirely locally, so it works with nothing running.
+    /// </remarks>
+    private static int InspectAll()
+    {
+        Console.WriteLine($"{"handle",-10}  {"process",-24}  {"class",-34}  verdict");
+        Console.WriteLine(new string('-', 110));
+
+        int manageable = 0;
+        int total = 0;
+
+        foreach (nint handle in Win32Window.EnumerateTopLevel())
+        {
+            ManageDecision decision = WindowFilter.Evaluate(handle);
+            string title = Win32Window.GetTitle(handle);
+
+            // Untitled and unmanageable together means a helper window nobody has any
+            // interest in, and there are hundreds. Anything with a title is worth
+            // listing even when it is rejected: that is the case being investigated.
+            if (title.Length == 0 && !decision.Manageable) continue;
+
+            total++;
+            if (decision.Manageable) manageable++;
+
+            Console.WriteLine(
+                $"0x{handle:X8}  {Trim(Win32Window.BuildIdentity(handle).ProcessName, 24),-24}  " +
+                $"{Trim(Win32Window.GetClassName(handle), 34),-34}  " +
+                $"{(decision.Manageable ? "MANAGEABLE" : decision.Explain())}");
+
+            if (title.Length > 0) Console.WriteLine($"{"",-10}  {Trim(title, 90)}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"{total} window(s) listed, {manageable} manageable.");
+        Console.WriteLine("Override a verdict with a rule:  rules { rule \"x\" { match { process = \"...\" } do { manage } } }");
+
+        return 0;
+
+        static string Trim(string text, int width) =>
+            text.Length <= width ? text : text[..(width - 1)] + "\u2026";
+    }
+
     private static async Task<int> InspectAsync(string[] args)
     {
+        if (args.Length > 1 && args[1] is "--all" or "-a")
+            return InspectAll();
+
         nint handle = 0;
 
         if (args.Length > 1)
@@ -382,7 +433,7 @@ internal static class Program
             if (!TryParseHandle(args[1], out handle))
             {
                 Console.Error.WriteLine($"shubbak: '{args[1]}' is not a window handle.");
-                Console.Error.WriteLine("hint: decimal, or hex as shown by inspect and the log (0x20A44).");
+                Console.Error.WriteLine("hint: decimal, hex (0x20A44), or --all to list every window.");
                 return 1;
             }
         }
@@ -552,7 +603,9 @@ internal static class Program
                                every matchable attribute, whether it is manageable
                                and why not, and which rules matched.
                                With no handle, waits 3 seconds then inspects the
-                               foreground window.
+                               foreground window. Handles may be decimal or hex.
+                    --all      List every top-level window with its verdict. Use
+                               this to find out why an app is not being tiled.
 
           check-config [path]  Validate a config file, with carets under any
                                problems. Exits non-zero only for errors.

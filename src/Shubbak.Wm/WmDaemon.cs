@@ -754,6 +754,13 @@ public sealed class WmDaemon : IDisposable
 
         if (ReferenceEquals(_borderedWindow, window)) _borderedWindow = null;
 
+        // The border is drawn on the window's own frame, so letting go of the window
+        // without clearing it leaves Shubbak's mark on something it no longer controls.
+        // It stayed lit for the life of the window, which is precisely the opposite of
+        // the signal it exists to give.
+        if (_config.Effects.Enabled && Win32Window.Exists(handle))
+            WindowActions.ClearBorderColour(handle);
+
         _committer.Forget(handle);
         _animation.Remove(window.Handle);
         _dragOrigin.Remove(handle);
