@@ -114,6 +114,77 @@ public sealed class WidgetConditionTests
         Assert.Equal(ParseColour("#a1a1a1"), Build(widget, "HE").Style.Foreground);
     }
 
+    // ---- not, and testing a source rather than the rendered text ----------------
+
+    private const string NotSplith = """
+        text id="layout" template="{{ layout | icon }}" colour="#ffffff73" {
+            when of="layout" not="splith" colour="#1dfb8d" bold=#true
+        }
+        """;
+
+    private static VisualNode BuildLayout(TemplateWidget widget, string layout) =>
+        widget.Build(new Dictionary<string, string?> { ["layout"] = layout });
+
+    [Fact]
+    public void NotAppliesToEverythingExceptTheNamedValue()
+    {
+        TemplateWidget widget = Load(NotSplith);
+
+        Assert.Equal(ParseColour("#1dfb8d"), BuildLayout(widget, "fibonacci").Style.Foreground);
+        Assert.Equal(ParseColour("#1dfb8d"), BuildLayout(widget, "monocle").Style.Foreground);
+        Assert.Equal(ParseColour("#1dfb8d"), BuildLayout(widget, "grid").Style.Foreground);
+    }
+
+    [Fact]
+    public void NotLeavesTheNamedValueAlone()
+    {
+        TemplateWidget widget = Load(NotSplith);
+
+        Assert.Equal(ParseColour("#ffffff73"), BuildLayout(widget, "splith").Style.Foreground);
+    }
+
+    [Fact]
+    public void AConditionCanTestASourceRatherThanTheRenderedText()
+    {
+        // The layout widget renders its name as a glyph, so matching the text would
+        // mean writing box-drawing characters into the config and keeping them in step
+        // with whichever glyph the filter chooses. Matching the source means writing
+        // the layout's name.
+        TemplateWidget widget = Load(NotSplith);
+
+        // What is actually drawn is the glyph, not the name being matched on.
+        Assert.Equal("\u2502\u2502", BuildLayout(widget, "splith").Text);
+        Assert.Equal("\u253C", BuildLayout(widget, "grid").Text);
+    }
+
+    [Fact]
+    public void ATestedSourceBecomesADependency()
+    {
+        // The bar only rebuilds a widget when one of its dependencies changes. A
+        // condition watching a source the template never mentions would otherwise be
+        // evaluated once and never again.
+        TemplateWidget widget = Load("""
+            text id="x" template="{{ clock }}" colour="#ffffff73" {
+                when of="layout" not="splith" colour="#1dfb8d"
+            }
+            """);
+
+        Assert.Contains("clock", widget.Dependencies);
+        Assert.Contains("layout", widget.Dependencies);
+    }
+
+    [Fact]
+    public void AMissingSourceCountsAsEmptyRatherThanThrowing()
+    {
+        // A source that has not reported yet must not take the bar down, and "not
+        // splith" is true of nothing at all.
+        TemplateWidget widget = Load(NotSplith);
+
+        VisualNode node = widget.Build(new Dictionary<string, string?>());
+
+        Assert.Equal(ParseColour("#1dfb8d"), node.Style.Foreground);
+    }
+
     private static Colour ParseColour(string text)
     {
         (TajConfig config, _) = TajConfigLoader.Load($$"""
