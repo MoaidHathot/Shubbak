@@ -72,4 +72,24 @@ public sealed class OverridableExclusionTests
         Assert.False(WindowFilter.IsExcludedProcessName("firefox"));
         Assert.False(WindowFilter.IsExcludedClassName("MozillaWindowClass"));
     }
+
+    [Fact]
+    public void TheScreenshotOverlayIsExcludedButTheEditorIsNot()
+    {
+        // Win+Shift+S puts a full-screen overlay up for a second or two. Tiling it
+        // animated the real windows aside to make room for something about to vanish.
+        //
+        // By class, not by process: the Snipping Tool also has an ordinary editor
+        // window, and excluding the whole process would take that with it.
+        Assert.True(WindowFilter.IsExcludedClassName("SnipOverlayRootWindow"));
+
+        Assert.False(WindowFilter.IsExcludedProcessName("SnippingTool"));
+    }
+
+    [Fact]
+    public void TheOverlayExclusionCanStillBeOverruled()
+    {
+        // It is a default, not a policy. Someone who wants it tiled may say so.
+        Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.ExcludedClass));
+    }
 }

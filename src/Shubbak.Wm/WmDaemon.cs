@@ -1026,8 +1026,12 @@ public sealed class WmDaemon : IDisposable
 
     private void Execute(IEnumerable<WmCommand> commands)
     {
-        foreach (CommandOutcome outcome in _executor.ExecuteAll(commands))
+        foreach (WmCommand command in commands)
         {
+            if (!ResolveTarget(command)) continue;
+
+            CommandOutcome outcome = _executor.Execute(command);
+
             Publish(outcome.Result);
             PerformHostAction(outcome);
 
@@ -1035,9 +1039,90 @@ public sealed class WmDaemon : IDisposable
         }
     }
 
+    /// <summary>
+    /// Points the window manager at whichever window is actually in front, before a
+    /// command that acts on one is run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Focus is not Shubbak's to define. The window in front may be a dialog, a tray
+    /// popup, or an application the filter passed over - and for those, nothing
+    /// updates the focused window, so it still names whatever was focused before.
+    /// Every command that acts on "the focused window" then acted on that earlier one:
+    /// the float key untiled a window elsewhere on screen, and the close key would
+    /// have closed it, with nothing said either way.
+    /// </para>
+    /// <para>
+    /// Commands that act on a workspace, a monitor, or focus itself are left alone.
+    /// They stay useful from an unmanaged window - moving focus out of one is exactly
+    /// how it is left - and refusing them would break clicking a workspace on the bar,
+    /// whose own window is not managed either.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether the command should run.</returns>
+    private bool ResolveTarget(WmCommand command)
+    {
+        if (!command.TargetsFocusedWindow) return true;
+
+        nint foreground = Win32Window.GetForeground();
+        if (foreground == 0) return true;
+
+        if (_managed.TryGetValue(foreground, out WindowNode? window))
+        {
+            // In front and ours, but not what the tree thinks is focused: a click that
+            // arrived without a foreground event, or focus restored by an application
+            // itself. Syncing here means the command lands where the user is looking.
+            if (!ReferenceEquals(_wm.FocusedWindow, window)) Publish(_wm.FocusWindow(window));
+
+            return true;
+        }
+
+        // Toggle-managed is exempt: acting on a window Shubbak does not manage is the
+        // entire purpose of it, and it reads the foreground window itself.
+        if (command is ToggleManagedCommand) return true;
+
+        if (_config.UnmanagedWindowCommands == UnmanagedWindowCommands.Adopt)
+        {
+            TryManage(foreground, forced: true);
+
+            if (_managed.TryGetValue(foreground, out WindowNode? adopted))
+            {
+                Publish(_wm.FocusWindow(adopted));
+                return true;
+            }
+        }
+
+        Publish(new WmResult(false, [new CommandRejected(command.Name, DescribeForeground(foreground))]));
+        return false;
+    }
+
+    /// <summary>Explains which window is in front and why it was not acted on.</summary>
+    /// <remarks>
+    /// Names the window rather than saying "no focused window". The whole difficulty
+    /// is that the user is looking straight at it, so a message that does not identify
+    /// it reads as the keybinding being broken.
+    /// </remarks>
+    private static string DescribeForeground(nint foreground)
+    {
+        string title = Truncate(Win32Window.GetTitle(foreground), 40);
+        string className = Win32Window.GetClassName(foreground);
+        ManageDecision decision = WindowFilter.Evaluate(foreground);
+
+        return
+            $"\"{title}\" [{className}] is not managed ({decision.Explain()}). " +
+            "Take it on with toggle-managed, add a rule, or set " +
+            "unmanaged-window-commands \"adopt\".";
+    }
+
     /// <summary>Runs one command, for IPC. Must be called on the daemon thread.</summary>
     internal CommandOutcome RunCommand(WmCommand command)
     {
+        if (!ResolveTarget(command))
+        {
+            return new CommandOutcome(
+                new WmResult(false, [new CommandRejected(command.Name, "the focused window is not managed")]));
+        }
+
         CommandOutcome outcome = _executor.Execute(command);
 
         Publish(outcome.Result);
@@ -1152,9 +1237,13 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void ToggleManaged()
     {
-        nint handle = _wm.FocusedWindow is { } focused
-            ? (nint)focused.Handle
-            : Win32Window.GetForeground();
+        // The window in front, not the one the tree thinks is focused. Written the
+        // other way round it was useless for the one job it has: focus sitting on an
+        // unmanaged window leaves the tree naming whatever was focused before, so
+        // asking to take on the window in front released a different one instead.
+        nint handle = Win32Window.GetForeground();
+
+        if (handle == 0 && _wm.FocusedWindow is { } focused) handle = (nint)focused.Handle;
 
         if (handle == 0)
         {
@@ -1484,7 +1573,7 @@ public sealed class WmDaemon : IDisposable
 
         _lastSessionSaveTicks = now;
 
-        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath);
+        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true);
     }
 
     /// <summary>Drives one frame of in-flight window motion.</summary>

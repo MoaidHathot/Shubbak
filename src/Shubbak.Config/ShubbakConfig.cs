@@ -103,6 +103,20 @@ public sealed record ShubbakConfig
     public WindowHideMethod HideMethod { get; init; } = WindowHideMethod.Cloak;
 
     /// <summary>
+    /// What a command that targets a window does when the focused window is one
+    /// Shubbak does not manage.
+    /// </summary>
+    /// <remarks>
+    /// Focus can be on a dialog, a tray popup, or an application the filter passed
+    /// over. Shubbak's own idea of the focused window is then whatever was focused
+    /// before, and running the command against that acts on a window the user is not
+    /// looking at - which is a surprise for the float key and a disaster for the close
+    /// key.
+    /// </remarks>
+    public UnmanagedWindowCommands UnmanagedWindowCommands { get; init; } =
+        UnmanagedWindowCommands.Refuse;
+
+    /// <summary>
     /// Whether windows on inactive workspaces keep their taskbar button.
     /// </summary>
     /// <remarks>

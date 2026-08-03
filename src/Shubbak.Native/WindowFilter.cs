@@ -146,6 +146,14 @@ public static class WindowFilter
         "EdgeUiInputTopWndClass",
         "NarratorHelperWindow",
         "Xaml_WindowedPopupClass",
+
+        // The Windows 11 screenshot overlay, which is what ScreenClippingHost above
+        // became. Excluded by class rather than by process, because the Snipping Tool
+        // also has an ordinary editor window that is perfectly reasonable to tile.
+        //
+        // It lives for a second or two, and tiling it animated the real windows aside
+        // to make room for something that was about to disappear.
+        "SnipOverlayRootWindow",
     };
 
     /// <summary>
