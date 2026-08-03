@@ -85,6 +85,6 @@ public sealed class MatcherOperatorTests
             }
             """);
 
-        Assert.Contains(result.Diagnostics, d => d.Code == "SHB0419");
+        Assert.Contains(result.Diagnostics, d => d.Code == "SHB0426");
     }
 }

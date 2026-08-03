@@ -117,6 +117,18 @@ public sealed record ShubbakConfig
         UnmanagedWindowCommands.Refuse;
 
     /// <summary>
+    /// Whether <c>shell-exec</c> may be sent over the IPC pipe.
+    /// </summary>
+    /// <remarks>
+    /// Off by default. A window manager is not an execution service: the command
+    /// exists so a keybinding or a startup command can launch a terminal, which is a
+    /// decision made deliberately in this file. The pipe is scoped to the account and
+    /// not to the integrity level, so leaving it open means any process running as the
+    /// user can ask an elevated daemon to start something elevated.
+    /// </remarks>
+    public bool AllowShellExecOverIpc { get; init; }
+
+    /// <summary>
     /// Whether windows on inactive workspaces keep their taskbar button.
     /// </summary>
     /// <remarks>

@@ -203,17 +203,35 @@ public sealed class WindowManager
     /// <summary>
     /// Registers a workspace declared in config, on its preferred monitor.
     /// </summary>
-    public WorkspaceNode AddWorkspace(WorkspaceNode workspace, MonitorNode? monitor = null)
+    /// <remarks>
+    /// <para>
+    /// Returns a result rather than the workspace, and rejects rather than throwing,
+    /// like every other operation here. It used to do neither, in violation of the
+    /// contract stated at the top of this class - and it is called from config
+    /// loading, so a throw left the configuration half-applied: the new settings and
+    /// bindings were already in place and the windows had not been reconsidered, with
+    /// the whole thing surfacing as a generic "tick failed".
+    /// </para>
+    /// <para>
+    /// The workspace is not returned because the caller supplied it; keeping a
+    /// reference is theirs to do. Returning it was what let the emitted
+    /// WorkspaceCreated event go undrained, so it surfaced later attached to whatever
+    /// unrelated operation next completed.
+    /// </para>
+    /// </remarks>
+    public WmResult AddWorkspace(WorkspaceNode workspace, MonitorNode? monitor = null)
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        MonitorNode target =
+        MonitorNode? target =
             monitor
             ?? (workspace.PreferredMonitorIndex is { } index && index < Root.Monitors.Count
                 ? Root.Monitors[index]
                 : null)
-            ?? Root.PrimaryMonitor
-            ?? throw new InvalidOperationException("No monitor available to host a workspace.");
+            ?? Root.PrimaryMonitor;
+
+        if (target is null)
+            return Reject("add-workspace", "No monitor available to host a workspace.");
 
         target.AddWorkspace(workspace);
 
@@ -227,7 +245,7 @@ public sealed class WindowManager
         }
 
         Emit(new WorkspaceCreated(workspace, target));
-        return workspace;
+        return Complete();
     }
 
     /// <summary>Activates a workspace by name, creating it on demand.</summary>

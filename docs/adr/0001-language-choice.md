@@ -341,3 +341,39 @@ re-benchmarked against real windows during P3.
 The fallback is *not* a rewrite. It is a small native shim behind the
 `Shubbak.Native` boundary, with `Shubbak.Core` untouched — which is exactly what
 constraint 5 exists to preserve.
+
+---
+
+## Addendum: the IPC pipe is a boundary
+
+Decided 2026-08-04, after a review pointed out that `shell-exec` was reachable
+from the pipe and asked for a decision rather than a patch.
+
+**The pipe is a trust boundary, not a trusted channel.**
+
+`shell-exec` exists so a keybinding, a rule or a startup command can launch a
+terminal. Those are decisions the user writes into their config deliberately.
+Nothing about that requires the same capability to be reachable at runtime by
+any process that happens to be able to open the pipe.
+
+The pipe is `PipeOptions.CurrentUserOnly`, which scopes it to the *account* and
+not to the *integrity level*. Shubbak tells users to run elevated in order to
+manage windows belonging to elevated processes, so an ordinary medium-integrity
+process running as the same user - a browser child, a postinstall script - could
+open the pipe of an elevated daemon and have it start a high-integrity process.
+That is an escalation available to anything already running as the user.
+
+The escalation was reasoned from the documented semantics of `CurrentUserOnly`
+rather than demonstrated with a test client. The decision does not depend on it:
+even without elevation, a window manager accepting arbitrary process launches
+over a local pipe is a capability nobody asked it to have.
+
+**What was done.** `ShellExecCommand` is refused on the IPC path unless
+`general { allow-shell-exec-over-ipc #true }`. Keybindings, rules and startup
+commands are untouched. The refusal names the key, so anyone driving Shubbak as
+a launcher on purpose is told how rather than left guessing.
+
+**What was rejected.** An explicit `PipeSecurity` carrying a High mandatory
+integrity label when elevated is more correct and more work, and still leaves
+the same-integrity case open. It remains the right answer if the pipe ever
+carries anything else worth protecting.

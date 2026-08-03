@@ -1,9 +1,4 @@
-using Shubbak.Config;
-using Shubbak.Core.Commands;
-using Shubbak.Native;
-using Shubbak.Wm;
-
-namespace Shubbak.Wm.Tests;
+namespace Shubbak.Config.Tests;
 
 /// <summary>
 /// Reading a setting written either way round.

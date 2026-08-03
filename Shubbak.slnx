@@ -16,6 +16,7 @@
     <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />
     <Project Path="tests/Shubbak.Native.Tests/Shubbak.Native.Tests.csproj" />
+    <Project Path="tests/Shubbak.Wm.Tests/Shubbak.Wm.Tests.csproj" />
     <Project Path="tests/Taj.Core.Tests/Taj.Core.Tests.csproj" />
   </Folder>
 </Solution>

@@ -23,6 +23,20 @@ internal static class Program
             return args.Length == 0 ? 1 : 0;
         }
 
+        // Asking for help must never do anything else.
+        //
+        // Checked here rather than in each handler, because the handlers read their
+        // flags by scanning for the ones they know: an argument none of them
+        // recognises is silently the default. `restore --help` therefore matched
+        // neither --dry-run nor --cloaked nor --all, fell through to the ordinary
+        // path, and un-concealed every window the session could identify. Asking a
+        // destructive command how to use it performed it.
+        if (Array.Exists(args, a => a is "--help" or "-h"))
+        {
+            PrintUsage();
+            return 0;
+        }
+
         try
         {
             return args[0] switch
@@ -270,8 +284,22 @@ internal static class Program
     {
         string? output = null;
 
-        for (int i = 1; i < args.Length - 1; i++)
-            if (args[i] is "--output" or "-o") output = args[i + 1];
+        // Stops one short of the end so the value can be read, which meant a trailing
+        // -o with nothing after it was skipped entirely and the report went to stdout
+        // instead - the one place the user was certain it would not.
+        for (int i = 1; i < args.Length; i++)
+        {
+            if (args[i] is not ("--output" or "-o")) continue;
+
+            if (i + 1 >= args.Length)
+            {
+                Console.Error.WriteLine($"shubbak: {args[i]} needs a file to write to.");
+                Console.Error.WriteLine("hint: shubbak diagnose -o report.md");
+                return 1;
+            }
+
+            output = args[i + 1];
+        }
 
         string reason = args.Length > 1 && !args[1].StartsWith('-') ? args[1] : "manual";
 

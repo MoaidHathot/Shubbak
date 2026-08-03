@@ -71,7 +71,9 @@ public sealed class AdoptionStateTests
         var wm = new WindowManager(new WmOptions { DefaultLayout = LayoutRegistry.Resolve("grid") });
 
         wm.AddMonitor(TreeBuilder.Monitor(@"\\.\DISPLAY1", x: 0, width: 1920, height: 1080));
-        WorkspaceNode workspace = wm.AddWorkspace(new WorkspaceNode("1"));
+
+        var workspace = new WorkspaceNode("1");
+        Assert.True(wm.AddWorkspace(workspace).Succeeded);
 
         Assert.Equal("grid", workspace.Layout.Name);
     }

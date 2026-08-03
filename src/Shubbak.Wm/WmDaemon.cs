@@ -62,6 +62,33 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private readonly HashSet<nint> _arriving = [];
 
+    /// <summary>
+    /// Whether any rule is waiting on a title change or a focus change.
+    /// </summary>
+    /// <remarks>
+    /// Building the attributes a rule matches on costs four Win32 calls and opens a
+    /// process handle, and it was paid on every title change and every focus change
+    /// whether or not a single rule was listening - which browsers, terminals and
+    /// media players make continuous. Almost every configuration has no rule on
+    /// either trigger, so almost every configuration was paying for nothing.
+    /// </remarks>
+    private bool _hasTitleChangeRules;
+
+    private bool _hasFocusRules;
+
+    /// <summary>How long each tick took, and how far apart they landed.</summary>
+    /// <remarks>
+    /// The interval is the one that answers whether the loop runs at the rate it asks
+    /// for. It asks for 8 ms and sleeps for it, and a plain sleep is rounded up to the
+    /// system timer resolution - so the honest answer has to be measured rather than
+    /// assumed from the number in the call.
+    /// </remarks>
+    private readonly LatencyStats _tickDuration = new(4096, "tick duration");
+
+    private readonly LatencyStats _tickInterval = new(4096, "tick interval");
+
+    private readonly long _startedTicks = Stopwatch.GetTimestamp();
+
     /// <summary>Window geometry captured when a mouse drag started.</summary>
     private readonly Dictionary<nint, Rect> _dragOrigin = [];
 
@@ -218,14 +245,22 @@ public sealed class WmDaemon : IDisposable
                 : (now - _lastTickTicks) * 1000.0 / Stopwatch.Frequency;
             _lastTickTicks = now;
 
+            if (deltaMs > 0) _tickInterval.Record(deltaMs);
+
             DrainKeyboard();
             DrainWindowEvents();
             DrainInbox();
 
             if (_layoutDirty)
             {
-                _layoutDirty = false;
+                // Cleared only once the pass has finished. Clearing first meant a
+                // throw left the desktop in whatever half-applied state the exception
+                // produced, with nothing to retry it until some unrelated event
+                // happened to set the flag again - and the windows already taken out
+                // of the arriving set animated on that eventual retry, which is the
+                // stutter that set is there to avoid.
                 ApplyLayout();
+                _layoutDirty = false;
             }
 
             if (_animation.IsAnimating) AdvanceAnimation(deltaMs);
@@ -239,6 +274,11 @@ public sealed class WmDaemon : IDisposable
             // A daemon that dies leaves every managed window stranded, so the tick
             // never propagates. Anything unexpected is logged and the loop carries on.
             Log.Error(LogCategory.Wm, "tick failed", ex);
+        }
+        finally
+        {
+            _tickDuration.Record(
+                (Stopwatch.GetTimestamp() - _lastTickTicks) * 1000.0 / Stopwatch.Frequency);
         }
     }
 
@@ -428,7 +468,8 @@ public sealed class WmDaemon : IDisposable
                     // nowhere, so a rule written against a title that only appears
                     // once the application has loaded - a document name, a call in
                     // progress - silently never ran.
-                    ApplyRules(titled, ToAttributes(handle), RuleTrigger.OnTitleChange);
+                    if (_hasTitleChangeRules)
+                        ApplyRules(titled, ToAttributes(handle), RuleTrigger.OnTitleChange);
                     break;
                 }
 
@@ -458,7 +499,8 @@ public sealed class WmDaemon : IDisposable
                         Publish(_wm.FocusWindow(focused));
 
                         // on="focus" rules, likewise dispatched from nowhere until now.
-                        ApplyRules(focused, ToAttributes(handle), RuleTrigger.OnFocus);
+                        if (_hasFocusRules)
+                            ApplyRules(focused, ToAttributes(handle), RuleTrigger.OnFocus);
                     }
                 }
                 else
@@ -833,6 +875,28 @@ public sealed class WmDaemon : IDisposable
             $"- **IPC clients**: {_ipc?.ClientCount ?? 0}",
         }));
 
+        report.AddSection("Performance", string.Join('\n', new[]
+        {
+            $"- **Uptime**: {TimeSpan.FromSeconds((Stopwatch.GetTimestamp() - _startedTicks) / (double)Stopwatch.Frequency):hh\\:mm\\:ss}",
+            $"- **Ticks**: {_tickInterval.Offered}",
+
+            // The number that says whether the loop runs at the rate it asks for. It
+            // asks for 8 ms; a plain sleep is rounded up to the system timer
+            // resolution, so this is the only honest answer.
+            $"- **Tick interval**: p50 {_tickInterval.Percentile(0.5):F2} ms, " +
+            $"p99 {_tickInterval.Percentile(0.99):F2} ms, max {_tickInterval.Max:F2} ms " +
+            $"(~{(_tickInterval.Percentile(0.5) > 0 ? 1000.0 / _tickInterval.Percentile(0.5) : 0):F0} Hz)",
+
+            $"- **Tick duration**: p50 {_tickDuration.Percentile(0.5):F2} ms, " +
+            $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms",
+
+            $"- **Ticks over 6.94 ms budget**: {_tickDuration.CountOver(6.94)} of {_tickDuration.Count} sampled",
+            $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
+            $"- **Dropped log entries**: {Log.Dropped}",
+            $"- **GC**: gen0 {GC.CollectionCount(0)}, gen1 {GC.CollectionCount(1)}, gen2 {GC.CollectionCount(2)}",
+            $"- **Allocated**: {GC.GetTotalAllocatedBytes(precise: false) / (1024 * 1024)} MB",
+        }));
+
         report.AddCodeSection("Window tree", DescribeTree());
 
         if (_configPath is not null && File.Exists(_configPath))
@@ -1163,11 +1227,16 @@ public sealed class WmDaemon : IDisposable
         // entire purpose of it, and it reads the foreground window itself.
         if (command is ToggleManagedCommand) return true;
 
+        // Evaluated once. It is about ten Win32 calls including an OpenProcess, and it
+        // was being run twice on the same handle for every refused command - once to
+        // decide, and again to explain.
+        ManageDecision decision = WindowFilter.Evaluate(foreground);
+
         // The focused window is one of ours and merely sits behind something that is
         // not - a dialog that has just opened, a flyout. The command was meant for it.
         if (_wm.FocusedWindow is { } focused &&
             Win32Window.Exists((nint)focused.Handle) &&
-            WindowFilter.Evaluate(foreground).Reason is ExclusionReason.ToolWindow)
+            decision.Reason is ExclusionReason.ToolWindow)
         {
             return true;
         }
@@ -1183,7 +1252,7 @@ public sealed class WmDaemon : IDisposable
             }
         }
 
-        Publish(new WmResult(false, [new CommandRejected(command.Name, DescribeForeground(foreground))]));
+        Publish(new WmResult(false, [new CommandRejected(command.Name, DescribeForeground(foreground, decision))]));
         return false;
     }
 
@@ -1193,11 +1262,10 @@ public sealed class WmDaemon : IDisposable
     /// is that the user is looking straight at it, so a message that does not identify
     /// it reads as the keybinding being broken.
     /// </remarks>
-    private static string DescribeForeground(nint foreground)
+    private static string DescribeForeground(nint foreground, ManageDecision decision)
     {
         string title = Truncate(Win32Window.GetTitle(foreground), 40);
         string className = Win32Window.GetClassName(foreground);
-        ManageDecision decision = WindowFilter.Evaluate(foreground);
 
         return
             $"\"{title}\" [{className}] is not managed ({decision.Explain()}). " +
@@ -1239,6 +1307,9 @@ public sealed class WmDaemon : IDisposable
             $"Way out: {(exits.Length > 0 ? string.Join(" or ", exits) : "none bound")}, " +
             "or run: shubbak wm-disable-binding-mode");
     }
+
+    /// <summary>Whether the pipe may be used to launch processes.</summary>
+    internal bool AllowShellExecOverIpc => _config.AllowShellExecOverIpc;
 
     internal CommandOutcome RunCommand(WmCommand command)
     {
@@ -1665,13 +1736,19 @@ public sealed class WmDaemon : IDisposable
     /// Whether the monitor layout differs from what the tree records.
     /// </summary>
     /// <remarks>
-    /// Checked before syncing because <see cref="SyncMonitors"/> publishes events and
+    /// Checked before syncing because <see cref="SyncMonitors()"/> publishes events and
     /// marks the layout dirty, and doing that twice a second regardless would keep
     /// the window manager permanently busy on an idle desktop.
     /// </remarks>
-    private bool MonitorLayoutChanged()
+    private bool MonitorLayoutChanged() => MonitorLayoutChanged(MonitorSource.Enumerate());
+
+    /// <summary>Whether an already-read monitor list differs from the tree.</summary>
+    /// <remarks>
+    /// Takes the list so a caller that is about to act on it does not enumerate the
+    /// display configuration twice - once to ask, once to apply.
+    /// </remarks>
+    private bool MonitorLayoutChanged(IReadOnlyList<MonitorInfo> current)
     {
-        IReadOnlyList<MonitorInfo> current = MonitorSource.Enumerate();
 
         if (current.Count != _wm.Root.Monitors.Count) return true;
 
@@ -1946,9 +2023,10 @@ public sealed class WmDaemon : IDisposable
 
     // ---- monitors ----------------------------------------------------------
 
-    private void SyncMonitors()
+    private void SyncMonitors() => SyncMonitors(MonitorSource.Enumerate());
+
+    private void SyncMonitors(IReadOnlyList<MonitorInfo> current)
     {
-        IReadOnlyList<MonitorInfo> current = MonitorSource.Enumerate();
 
         foreach (MonitorInfo info in current)
         {
@@ -2025,7 +2103,9 @@ public sealed class WmDaemon : IDisposable
                 SortIndex = index,
             };
 
-            _wm.AddWorkspace(workspace);
+            // Published, so the WorkspaceCreated event reaches subscribers now rather
+            // than surfacing later attached to an unrelated operation.
+            Publish(_wm.AddWorkspace(workspace));
         }
     }
 
@@ -2037,6 +2117,7 @@ public sealed class WmDaemon : IDisposable
         {
             Log.Warn(LogCategory.Config, "no config file found; using defaults");
             _bindings.Load(_config);
+            IndexRuleTriggers();
             return;
         }
 
@@ -2060,6 +2141,7 @@ public sealed class WmDaemon : IDisposable
         _committer.HideMethod = _config.HideMethod;
         _committer.KeepInTaskbar = _config.KeepInTaskbar;
         _bindings.Load(_config);
+        IndexRuleTriggers();
 
         ApplyLoggingConfig(initial);
 
@@ -2138,6 +2220,19 @@ public sealed class WmDaemon : IDisposable
     /// mid-investigation, and having a config reload silently drop them back to
     /// <c>info</c> would throw away exactly the detail they were collecting.
     /// </remarks>
+    /// <summary>Records which rule triggers any rule actually uses.</summary>
+    private void IndexRuleTriggers()
+    {
+        _hasTitleChangeRules = false;
+        _hasFocusRules = false;
+
+        foreach (WindowRule rule in _config.Rules)
+        {
+            if (rule.Trigger == RuleTrigger.OnTitleChange) _hasTitleChangeRules = true;
+            if (rule.Trigger == RuleTrigger.OnFocus) _hasFocusRules = true;
+        }
+    }
+
     private void ApplyLoggingConfig(bool initial)
     {
         if (_logLevelFromCommandLine) return;
@@ -2213,9 +2308,14 @@ public sealed class WmDaemon : IDisposable
         {
             Thread.Sleep(PollMs);
 
-            if (MonitorLayoutChanged())
+            // Enumerated once per pass and handed to both, rather than each asking the
+            // display configuration for itself - twenty iterations of that is forty
+            // full enumerations at every start.
+            IReadOnlyList<MonitorInfo> monitors = MonitorSource.Enumerate();
+
+            if (MonitorLayoutChanged(monitors))
             {
-                SyncMonitors();
+                SyncMonitors(monitors);
 
                 changed = true;
                 stable = 0;

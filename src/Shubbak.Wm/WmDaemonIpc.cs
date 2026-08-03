@@ -93,6 +93,28 @@ internal sealed partial class WmDaemonIpc
             return Task.FromResult(new IpcResponse(request.Id, false, null, message));
         }
 
+        // A window manager is not an execution service.
+        //
+        // shell-exec exists so a keybinding or a startup command can launch a
+        // terminal, which is a decision the user made in their config. Nothing about
+        // that requires it to be reachable at runtime by any process that can open the
+        // pipe - and the pipe is scoped to the account, not to the integrity level, so
+        // an ordinary process can reach the pipe of an elevated daemon and have it
+        // start something elevated. Shubbak tells users to run elevated to manage
+        // elevated windows, which makes that a realistic path rather than a
+        // theoretical one.
+        //
+        // Off by default, and a config key rather than a rebuild for anyone who wants
+        // to drive Shubbak as a launcher deliberately.
+        if (command is ShellExecCommand && !_daemon.AllowShellExecOverIpc)
+        {
+            return Task.FromResult(new IpcResponse(
+                request.Id, false, null,
+                "shell-exec is not accepted over the pipe. It stays available to " +
+                "keybindings, rules and startup commands. Set " +
+                "general { allow-shell-exec-over-ipc #true } to permit it here."));
+        }
+
         return _daemon.InvokeAsync(() =>
         {
             CommandOutcome outcome = _daemon.RunCommand(command!);
