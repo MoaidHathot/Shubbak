@@ -151,6 +151,13 @@ public sealed class WinEventSource : IDisposable
         return null;
     }
 
+    /// <summary>Signalled after anything is queued, so a waiting pump wakes at once.</summary>
+    /// <remarks>
+    /// The consumer waits rather than polls, so without this an event sits in the
+    /// queue until some unrelated timeout expires.
+    /// </remarks>
+    public Action? WorkQueued { get; set; }
+
     private void Enqueue(WinEventNotification notification)
     {
         lock (_gate)
@@ -163,6 +170,8 @@ public sealed class WinEventSource : IDisposable
 
             _queue.Enqueue(notification);
         }
+
+        WorkQueued?.Invoke();
     }
 
     public void Dispose()

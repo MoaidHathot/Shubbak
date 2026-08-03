@@ -346,6 +346,14 @@ public sealed class KeyboardSource : IDisposable
 
     private void ClearSwallowed(ushort virtualKey) => _swallowed[virtualKey] = false;
 
+    /// <summary>Signalled after a keystroke is queued, so a waiting pump wakes at once.</summary>
+    /// <remarks>
+    /// Runs inside the hook callback, so it must be as cheap as everything else there:
+    /// one SetEvent, no allocation, about a microsecond. That is what stops a keystroke
+    /// waiting on a timer before anything looks at it.
+    /// </remarks>
+    public Action? WorkQueued { get; set; }
+
     /// <summary>Single-producer enqueue. Wait-free and allocation-free.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Enqueue(in KeyEvent key)
@@ -363,6 +371,8 @@ public sealed class KeyboardSource : IDisposable
 
         _ring[(int)(write & _mask)] = key;
         Volatile.Write(ref _write, write + 1);
+
+        WorkQueued?.Invoke();
     }
 
     public void Dispose()

@@ -1,0 +1,44 @@
+name: build
+
+# Runs on every push and pull request.
+#
+# This exists because a test project was once left out of the solution file and
+# nothing noticed for a week - the tests in it were the ones guarding the path where
+# a mistake leaves the keyboard unusable. Building and testing the solution is the
+# cheapest thing that would have caught it, on the commit that introduced it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    # Windows, and not by preference: the platform layer is Win32 and the tests
+    # create real windows to check what Shubbak does to them.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore
+
+      # TreatWarningsAsErrors is already on, so this is the lint step as well.
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      # The whole solution, deliberately, rather than a list of projects that can
+      # drift out of date - which is the failure this workflow is here to prevent.
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity quiet
+
+      # Cheap check that the shipped example stays loadable, since it is what
+      # everyone starts from.
+      - name: Validate the example config
+        run: dotnet run --project src/Shubbak.Cli --configuration Release --no-build -- check-config docs/shubbak.example.kdl

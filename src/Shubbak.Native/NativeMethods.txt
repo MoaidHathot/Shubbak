@@ -129,3 +129,10 @@ WM_KEYUP
 WM_SYSKEYDOWN
 WM_SYSKEYUP
 WM_APP
+
+// --- event-driven message wait ---------------------------------------------------
+MsgWaitForMultipleObjectsEx
+QUEUE_STATUS_FLAGS
+MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS
+timeBeginPeriod
+timeEndPeriod

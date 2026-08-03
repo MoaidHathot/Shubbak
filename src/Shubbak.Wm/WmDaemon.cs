@@ -181,10 +181,10 @@ public sealed class WmDaemon : IDisposable
         SyncMonitors();
         AdoptExistingWindows();
 
-        _winEvents = new WinEventSource();
+        _winEvents = new WinEventSource { WorkQueued = _loop.Wake };
         _winEvents.Start();
 
-        _keyboard = new KeyboardSource();
+        _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
         _keyboard.Start(_bindings.IsBound);
 
         _ipc = new IpcServer();
@@ -196,6 +196,7 @@ public sealed class WmDaemon : IDisposable
 
         _layoutDirty = true;
         _loop.Tick += OnTick;
+        _loop.NextTimeout = NextTimeout;
 
         Log.Info(LogCategory.Wm, $"started: {_managed.Count} windows adopted, " +
             $"{_wm.Root.Monitors.Count} monitors, {_config.Keybindings.Count} keybindings, " +
@@ -234,6 +235,52 @@ public sealed class WmDaemon : IDisposable
     public void Stop() => _loop.Stop();
 
     // ---- the tick ----------------------------------------------------------
+
+    /// <summary>
+    /// How long the pump may wait before the next pass.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// While something is moving, a frame interval - and the finer system timer, which
+    /// is what makes a frame interval mean anything. Every wait with a timeout is
+    /// quantised by that timer, so without raising it a request to wake in seven
+    /// milliseconds returns in fifteen exactly as a sleep did, and the animation runs
+    /// at half the rate it was designed for however the waiting is done.
+    /// </para>
+    /// <para>
+    /// Otherwise a long wait, released the moment anything queues work. Periodic
+    /// housekeeping - monitors, the focus border, the session - is on the order of
+    /// seconds, so waking eight times a second to find nothing to do was the loop's
+    /// own invention rather than anything the work required.
+    /// </para>
+    /// </remarks>
+    private TimeSpan NextTimeout()
+    {
+        if (_animation.IsAnimating || _layoutDirty)
+        {
+            _timerResolution.Acquire();
+            return FrameInterval;
+        }
+
+        _timerResolution.Release();
+
+        return IdleInterval;
+    }
+
+    /// <summary>Roughly 144 Hz, the rate ADR 0001 gates the animation path on.</summary>
+    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(7);
+
+    /// <summary>
+    /// The longest the loop sits idle before looking around on its own.
+    /// </summary>
+    /// <remarks>
+    /// Not infinite. Everything that changes the tree signals the pump, but a monitor
+    /// being unplugged does not, and neither does a window that resized itself - so
+    /// there has to be a floor under how stale the world can get.
+    /// </remarks>
+    private static readonly TimeSpan IdleInterval = TimeSpan.FromMilliseconds(250);
+
+    private readonly TimerResolution _timerResolution = new(1);
 
     private void OnTick()
     {
@@ -366,6 +413,10 @@ public sealed class WmDaemon : IDisposable
                 catch (Exception ex) { completion.SetException(ex); }
             });
         }
+
+        // The pump waits rather than polls, so a request arriving from a pipe thread
+        // has to say so or it sits in the inbox until some unrelated timeout expires.
+        _loop.Wake();
 
         return completion.Task;
     }
@@ -2400,6 +2451,11 @@ public sealed class WmDaemon : IDisposable
 
         _keyboard?.Dispose();
         _winEvents?.Dispose();
+
+        // Process-wide, so leaving it raised would outlive the reason for it.
+        _timerResolution.Dispose();
+        _loop.Dispose();
+
         if (_ipc is not null) _ipc.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 }
