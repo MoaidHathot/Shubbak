@@ -110,4 +110,104 @@ public sealed class SessionSaveTests : IDisposable
         Assert.NotNull(loaded);
         Assert.Equal("2", Assert.Single(loaded!.Windows).Workspace);
     }
+
+    [Fact]
+    public void ATitleChangeAloneIsNotWritten()
+    {
+        // The one that defeated the check entirely. A browser tab, an unread count or
+        // a terminal's directory rewrites the title constantly, and none of it moves a
+        // window anywhere - yet the file was still written every thirty seconds.
+        WindowManager wm = Create();
+        WindowNode window = wm.Root.DescendantWindows().First();
+
+        SessionStore.Save(wm.Root, _path, routine: true);
+        DateTime first = File.GetLastWriteTimeUtc(_path);
+
+        Thread.Sleep(30);
+
+        wm.UpdateTitle(window, "a completely different title");
+        SessionStore.Save(wm.Root, _path, routine: true);
+
+        Assert.Equal(first, File.GetLastWriteTimeUtc(_path));
+    }
+
+    [Fact]
+    public void TheTitleIsStillRecordedWhenSomethingElseChanges()
+    {
+        // It is not being dropped, only stopped from forcing a write on its own. It
+        // is what tells two windows of the same application apart when restoring.
+        WindowManager wm = Create();
+        WindowNode window = wm.Root.DescendantWindows().First();
+
+        wm.UpdateTitle(window, "the title that matters");
+        SessionStore.Save(wm.Root, _path);
+
+        Session? loaded = SessionStore.Load(_path);
+
+        Assert.NotNull(loaded);
+        Assert.NotEqual(0, Assert.Single(loaded!.Windows).TitleHash);
+    }
+
+    [Fact]
+    public void SwitchingWorkspaceIsWritten()
+    {
+        // Which workspace a monitor shows is part of what gets restored, so changing
+        // it has to reach the file.
+        WindowManager wm = Create();
+
+        SessionStore.Save(wm.Root, _path, routine: true);
+        DateTime first = File.GetLastWriteTimeUtc(_path);
+
+        Thread.Sleep(30);
+
+        wm.FocusWorkspace("2");
+        SessionStore.Save(wm.Root, _path, routine: true);
+
+        Assert.NotEqual(first, File.GetLastWriteTimeUtc(_path));
+    }
+
+    [Fact]
+    public void TheWorkspaceEachMonitorWasShowingIsRemembered()
+    {
+        WindowManager wm = Create();
+        wm.FocusWorkspace("2");
+
+        SessionStore.Save(wm.Root, _path, focusedMonitor: wm.FocusedMonitor);
+
+        Session? loaded = SessionStore.Load(_path);
+
+        RememberedMonitor monitor = Assert.Single(loaded!.Monitors!);
+
+        Assert.Equal("2", monitor.ActiveWorkspace);
+        Assert.True(monitor.Focused);
+    }
+
+    [Fact]
+    public void AFileWrittenBeforeMonitorsWereRememberedStillLoads()
+    {
+        // The field is optional so an older session is not thrown away, which would
+        // lose every window placement to gain nothing.
+        File.WriteAllText(_path, """
+            {
+              "version": 1,
+              "saved_at": "2026-08-03T00:00:00+00:00",
+              "windows": [
+                {
+                  "process_name": "firefox",
+                  "class_name": "MozillaWindowClass",
+                  "title_hash": 123,
+                  "workspace": "3",
+                  "tags": [],
+                  "sticky": false,
+                  "state": "Tiling"
+                }
+              ]
+            }
+            """);
+
+        Session? loaded = SessionStore.Load(_path);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("3", Assert.Single(loaded!.Windows).Workspace);
+    }
 }

@@ -26,14 +26,33 @@ public sealed record RememberedWindow(
     bool Sticky,
     string State);
 
+/// <summary>Which workspace a monitor was showing.</summary>
+/// <param name="DeviceId">The monitor's device id.</param>
+/// <param name="ActiveWorkspace">The workspace it was displaying.</param>
+/// <param name="Focused">Whether this was the monitor being worked on.</param>
+/// <remarks>
+/// Remembered because restarting otherwise dropped the user on whichever workspace
+/// happened to sort first, with the one they were using still on screen somewhere
+/// else. Restoring the windows but not the view is only half the job.
+/// </remarks>
+public sealed record RememberedMonitor(
+    string DeviceId,
+    string ActiveWorkspace,
+    bool Focused);
+
 /// <summary>A saved session.</summary>
 /// <param name="Version">Format version, so an old file can be rejected cleanly.</param>
 /// <param name="SavedAt">When it was written.</param>
 /// <param name="Windows">Remembered placements.</param>
+/// <param name="Monitors">
+/// Which workspace each monitor was showing, and which monitor was in use. Optional,
+/// so a file written before this existed still loads.
+/// </param>
 public sealed record Session(
     int Version,
     DateTimeOffset SavedAt,
-    IReadOnlyList<RememberedWindow> Windows);
+    IReadOnlyList<RememberedWindow> Windows,
+    IReadOnlyList<RememberedMonitor>? Monitors = null);
 
 /// <summary>Source-generated serialisation for the session file.</summary>
 [JsonSourceGenerationOptions(
@@ -70,7 +89,7 @@ public sealed class SessionStore
         "Shubbak", "session.json");
 
     /// <summary>Captures the current placement of every managed window.</summary>
-    public static Session Capture(RootNode root)
+    public static Session Capture(RootNode root, MonitorNode? focusedMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(root);
 
@@ -95,7 +114,19 @@ public sealed class SessionStore
                 window.State.ToString()));
         }
 
-        return new Session(CurrentVersion, DateTimeOffset.Now, windows);
+        List<RememberedMonitor> monitors = [];
+
+        foreach (MonitorNode monitor in root.Monitors)
+        {
+            if (monitor.ActiveWorkspace is not { } active) continue;
+
+            monitors.Add(new RememberedMonitor(
+                monitor.DeviceId,
+                active.Name,
+                ReferenceEquals(monitor, focusedMonitor)));
+        }
+
+        return new Session(CurrentVersion, DateTimeOffset.Now, windows, monitors);
     }
 
     /// <summary>Writes a session to disk.</summary>
@@ -106,7 +137,8 @@ public sealed class SessionStore
     /// deliberate saves - shutdown especially - stay audible, because those are the
     /// ones worth confirming happened.
     /// </param>
-    public static bool Save(RootNode root, string? path = null, bool routine = false)
+    /// <param name="focusedMonitor">The monitor being worked on, when known.</param>
+    public static bool Save(RootNode root, string? path = null, bool routine = false, MonitorNode? focusedMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(root);
 
@@ -114,7 +146,7 @@ public sealed class SessionStore
 
         try
         {
-            Session session = Capture(root);
+            Session session = Capture(root, focusedMonitor);
 
             string json = JsonSerializer.Serialize(session, SessionJsonContext.Default.Session);
 
@@ -156,8 +188,22 @@ public sealed class SessionStore
     private static string? s_lastFingerprint;
 
     /// <summary>
-    /// A comparable summary of a session, ignoring when it was captured.
+    /// A comparable summary of a session, ignoring what cannot change a placement.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The capture time is excluded, or every session would differ from the last.
+    /// </para>
+    /// <para>
+    /// So is the title, which is the one that mattered. A browser tab, an unread count
+    /// or a terminal's current directory rewrites it constantly, and none of that moves
+    /// the window anywhere - yet it defeated the check entirely and the file was still
+    /// being written every thirty seconds. The title is only a tiebreaker when
+    /// restoring, between several windows of the same application; process and class
+    /// are what actually place a window. A clean exit writes unconditionally, so the
+    /// titles on disk are current exactly when they are read.
+    /// </para>
+    /// </remarks>
     private static string Fingerprint(Session session)
     {
         var builder = new System.Text.StringBuilder(session.Windows.Count * 48);
@@ -167,10 +213,18 @@ public sealed class SessionStore
             builder.Append(window.Workspace).Append('\u001f')
                    .Append(window.ProcessName).Append('\u001f')
                    .Append(window.ClassName).Append('\u001f')
-                   .Append(window.TitleHash).Append('\u001f')
                    .Append(window.Sticky).Append('\u001f')
                    .Append(string.Join(',', window.Tags)).Append('\u001f')
                    .Append(window.State).Append('\u001e');
+        }
+
+        // Which workspace each monitor is showing is part of what has to be restored,
+        // so switching workspace is a real change and does get written.
+        foreach (RememberedMonitor monitor in session.Monitors ?? [])
+        {
+            builder.Append(monitor.DeviceId).Append('\u001f')
+                   .Append(monitor.ActiveWorkspace).Append('\u001f')
+                   .Append(monitor.Focused).Append('\u001e');
         }
 
         return builder.ToString();
