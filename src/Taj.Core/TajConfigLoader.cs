@@ -313,7 +313,11 @@ public static class TajConfigLoader
 
         foreach (KdlNode child in node.ChildrenNamed("when"))
         {
-            string? value = SettingText(child, "value") ?? child.Argument(0)?.AsString();
+            // `value` matches, `not` matches everything else. One or the other, and
+            // the bare argument form spells `value`.
+            string? negated = SettingText(child, "not");
+            string? value = negated ?? SettingText(child, "value") ?? child.Argument(0)?.AsString();
+
             if (value is null) continue;
 
             var font = baseFont with
@@ -333,7 +337,11 @@ public static class TajConfigLoader
                 Font = font,
             };
 
-            conditions.Add(new WidgetCondition(value, style));
+            conditions.Add(new WidgetCondition(
+                value,
+                style,
+                Negate: negated is not null,
+                Source: SettingText(child, "of")));
         }
 
         return conditions;

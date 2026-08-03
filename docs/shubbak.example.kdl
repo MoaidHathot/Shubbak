@@ -357,13 +357,27 @@ bar {
             // `when` restates only what differs, so marking a value costs a colour.
             // Useful for anything worth noticing at a glance rather than reading: a
             // keyboard in the wrong language, a battery about to go, a live mic.
+            //
+            //   when value="X"      - matches X
+            //   when not="X"        - matches everything except X
+            //   when of="source"    - tests a source instead of the drawn text
+            //
+            // First match wins, so the block reads top to bottom as written.
             text id="lang"    template="{{ keyboard }}"     colour="#7f849c" {
                 when value="HE" colour="#f38ba8" bold=#true
             }
 
             text id="seattle" template="{{ seattle }}" colour="#ffffff80"
             text id="mode"    template="{{ binding_mode }}" colour="#f9e2af"
-            text id="layout"  template="{{ layout }}"       colour="#7f849c"
+
+            // `of` matters here: the icon filter has already turned the layout's name
+            // into a glyph, so matching the drawn text would mean writing box-drawing
+            // characters and keeping them in step with whichever glyph the filter
+            // picks. Matching the source means writing the layout's name.
+            text id="layout"  template="{{ layout | icon }}" colour="#7f849c" {
+                when of="layout" not="splith" colour="#a6e3a1"
+            }
+
             text id="clock"   template="{{ clock }}"        colour="#8dbcff"
         }
     }

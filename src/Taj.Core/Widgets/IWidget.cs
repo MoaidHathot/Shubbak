@@ -24,20 +24,37 @@ public interface IWidget
 }
 
 /// <summary>
-/// A style to use when the widget's text takes a particular value.
+/// A style to use when a widget's value matches, or fails to match.
 /// </summary>
-/// <param name="Value">
-/// The text to match, compared case-insensitively against the rendered result.
+/// <param name="Value">The text to compare against, case-insensitively.</param>
+/// <param name="Style">The style to use instead when the condition holds.</param>
+/// <param name="Negate">
+/// True to apply the style when the value is <i>anything but</i> <paramref name="Value"/>.
 /// </param>
-/// <param name="Style">The style to use instead when it matches.</param>
+/// <param name="Source">
+/// The source to test instead of the rendered text, when they differ.
+/// </param>
 /// <remarks>
+/// <para>
 /// The bar's job is to be read at a glance, and a value that matters is one that
 /// should look different rather than one the user has to actually read. A keyboard
 /// showing a language you did not mean to be in, a battery below ten percent, a
 /// microphone that is live: all the same shape of problem, and none of them worth a
 /// widget type of their own.
+/// </para>
+/// <para>
+/// Testing a source rather than the rendered text matters wherever a filter has
+/// already transformed the value. The layout widget renders its name as a glyph, so
+/// matching the text means writing box-drawing characters into the config and keeping
+/// them in step with the glyph the filter happens to choose; matching the source means
+/// writing the layout's name.
+/// </para>
 /// </remarks>
-public readonly record struct WidgetCondition(string Value, VisualStyle Style);
+public readonly record struct WidgetCondition(
+    string Value,
+    VisualStyle Style,
+    bool Negate = false,
+    string? Source = null);
 
 /// <summary>
 /// A widget that renders a template into a single text node.
@@ -50,6 +67,8 @@ public readonly record struct WidgetCondition(string Value, VisualStyle Style);
 public sealed class TemplateWidget : IWidget
 {
     private readonly string _template;
+    private readonly IReadOnlyList<string> _templateDependencies;
+    private IReadOnlyList<WidgetCondition> _conditions = [];
 
     public TemplateWidget(string id, string template, VisualStyle style, BoxStyle box = default)
     {
@@ -57,12 +76,22 @@ public sealed class TemplateWidget : IWidget
         _template = template ?? throw new ArgumentNullException(nameof(template));
         Style = style;
         Box = box;
-        Dependencies = Template.Dependencies(template);
+        _templateDependencies = Template.Dependencies(template);
+        Dependencies = _templateDependencies;
     }
 
     public string Id { get; }
 
-    public IReadOnlyList<string> Dependencies { get; }
+    /// <summary>
+    /// The sources this widget reads.
+    /// </summary>
+    /// <remarks>
+    /// Includes anything a condition tests, not only what the template renders. The
+    /// bar rebuilds a widget when one of its dependencies changes, so a condition
+    /// watching a source the template never mentions would otherwise be evaluated
+    /// once and then never again.
+    /// </remarks>
+    public IReadOnlyList<string> Dependencies { get; private set; }
 
     public VisualStyle Style { get; set; }
 
@@ -81,12 +110,28 @@ public sealed class TemplateWidget : IWidget
     /// </remarks>
     public bool HideWhenEmpty { get; set; } = true;
 
-    /// <summary>Styles that replace the default one when the text matches.</summary>
+    /// <summary>Styles that replace the default one when a value matches.</summary>
     /// <remarks>
     /// Checked in order, first match wins, so the config reads top to bottom the way
     /// it is written.
     /// </remarks>
-    public IReadOnlyList<WidgetCondition> Conditions { get; set; } = [];
+    public IReadOnlyList<WidgetCondition> Conditions
+    {
+        get => _conditions;
+
+        set
+        {
+            _conditions = value ?? [];
+
+            string[] extra = [.. _conditions
+                .Select(c => c.Source)
+                .OfType<string>()
+                .Where(s => !_templateDependencies.Contains(s, StringComparer.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)];
+
+            Dependencies = extra.Length == 0 ? _templateDependencies : [.. _templateDependencies, .. extra];
+        }
+    }
 
     public VisualNode Build(IReadOnlyDictionary<string, string?> values)
     {
@@ -97,19 +142,28 @@ public sealed class TemplateWidget : IWidget
             Id = Id,
             Kind = VisualKind.Text,
             Text = text,
-            Style = StyleFor(text),
+            Style = StyleFor(text, values),
             Box = Box,
             Visible = !HideWhenEmpty || text.Length > 0,
             OnClick = OnClick,
         };
     }
 
-    private VisualStyle StyleFor(string text)
+    private VisualStyle StyleFor(string text, IReadOnlyDictionary<string, string?> values)
     {
         foreach (WidgetCondition condition in Conditions)
         {
-            if (string.Equals(condition.Value, text, StringComparison.OrdinalIgnoreCase))
-                return condition.Style;
+            // The rendered text unless the condition names a source. A filter may have
+            // transformed the value out of recognition - the layout widget renders a
+            // name as a glyph - and a condition should be able to test what the value
+            // is rather than what it ended up looking like.
+            string subject = condition.Source is null
+                ? text
+                : values.GetValueOrDefault(condition.Source) ?? string.Empty;
+
+            bool matches = string.Equals(condition.Value, subject, StringComparison.OrdinalIgnoreCase);
+
+            if (matches != condition.Negate) return condition.Style;
         }
 
         return Style;
