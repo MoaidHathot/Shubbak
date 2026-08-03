@@ -136,18 +136,15 @@ public sealed class ConfigLoader
     /// </remarks>
     private string? DefaultLayout(KdlNode general, string? fallback)
     {
-        KdlNode? child = general.Child("default-layout");
-        if (child is null) return fallback;
-
         string? name = Text(general, "default-layout", fallback);
-        if (string.IsNullOrWhiteSpace(name)) return fallback;
 
+        if (string.IsNullOrWhiteSpace(name)) return fallback;
         if (Core.Layouts.LayoutRegistry.TryResolve(name, out _)) return name;
 
         Report(Diagnostic.Error(
             "SHB0113",
             $"Unknown layout '{name}'.",
-            child.Span,
+            SpanOf(general, "default-layout"),
             $"Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}."));
 
         return fallback;

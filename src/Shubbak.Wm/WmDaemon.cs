@@ -42,6 +42,17 @@ public sealed class WmDaemon : IDisposable
     private readonly Dictionary<nint, WindowNode> _managed = [];
     private readonly HashSet<nint> _ignored = [];
 
+    /// <summary>
+    /// Windows that were concealed when Shubbak started and that no session claimed.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="_ignored"/>, which is a decision about the window - a
+    /// rule excluded it, or the user let go of it. This is a decision about a moment:
+    /// the window was in the tray at startup and there was no evidence it was ours to
+    /// reveal. The moment it shows itself, that evidence arrives and it is reconsidered.
+    /// </remarks>
+    private readonly HashSet<nint> _dormant = [];
+
     /// <summary>Window geometry captured when a mouse drag started.</summary>
     private readonly Dictionary<nint, Rect> _dragOrigin = [];
 
@@ -156,7 +167,7 @@ public sealed class WmDaemon : IDisposable
 
         // A clean shutdown is the one chance to record the arrangement exactly as
         // the user left it, rather than as it was up to thirty seconds earlier.
-        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath);
+        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, focusedMonitor: _wm.FocusedMonitor);
 
         RestoreConcealedWindows();
 
@@ -371,6 +382,9 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Created:
             case WinEventKind.Shown:
             case WinEventKind.Uncloaked:
+                // Coming out of the tray is the evidence that was missing at startup,
+                // so a window set aside then gets another look now.
+                _dormant.Remove(handle);
                 TryManage(handle);
                 break;
 
@@ -567,7 +581,7 @@ public sealed class WmDaemon : IDisposable
     private void TryManage(nint handle, bool forced = false)
     {
         if (_managed.ContainsKey(handle)) return;
-        if (!forced && _ignored.Contains(handle)) return;
+        if (!forced && (_ignored.Contains(handle) || _dormant.Contains(handle))) return;
 
         // Concealed windows are considered only during the initial adoption pass, and
         // even then only to be reconciled against the session below.
@@ -666,14 +680,22 @@ public sealed class WmDaemon : IDisposable
         {
             if (remembered is null)
             {
-                // Remembered as ignored so the events these windows emit do not bring
-                // us back here for a second look.
-                _ignored.Add(handle);
+                // Set aside rather than excluded. It is concealed right now and no
+                // session entry claims it, so it is not ours to reveal - but that is a
+                // statement about this moment, not about the window.
+                //
+                // Recorded as permanently ignored before, which was wrong in a way
+                // that took a while to see: an application sitting in the tray when
+                // Shubbak starts was never managed again, however many times it was
+                // opened. Closing and reopening it worked, because that made a new
+                // window with a handle the set had never heard of - which is exactly
+                // how the fault was reported.
+                _dormant.Add(handle);
 
                 if (Log.IsEnabled(LogLevel.Debug))
                     Log.Debug(LogCategory.Window,
                         $"leaving concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
-                        "alone: no session entry claims it");
+                        "alone for now: no session entry claims it");
 
                 return;
             }
@@ -749,6 +771,7 @@ public sealed class WmDaemon : IDisposable
     private void TryUnmanage(nint handle)
     {
         _ignored.Remove(handle);
+        _dormant.Remove(handle);
 
         if (!_managed.Remove(handle, out WindowNode? window)) return;
 
@@ -951,11 +974,53 @@ public sealed class WmDaemon : IDisposable
                     $"startup recovery: revived {_revived} of {_revivalBudget} remembered window(s)");
             }
 
+            RestoreTheView();
+
             // Restoration applies only to the initial adoption pass. A window opened
             // later must land where the user is, not where an old session says.
             _restoring = false;
             _session = null;
             _claimedSessionEntries.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Puts each monitor back on the workspace it was showing, and focus back on the
+    /// monitor that had it.
+    /// </summary>
+    /// <remarks>
+    /// Restoring the windows and not the view is only half the job: a restart landed
+    /// the user on whichever workspace happened to sort first, with the one they had
+    /// been working on still there but somewhere else, and every window in the right
+    /// place except the one in front of them.
+    /// </remarks>
+    private void RestoreTheView()
+    {
+        if (_session?.Monitors is not { Count: > 0 } monitors) return;
+
+        MonitorNode? focused = null;
+
+        foreach (RememberedMonitor remembered in monitors)
+        {
+            MonitorNode? monitor = _wm.Root.FindMonitor(remembered.DeviceId);
+
+            // A monitor that is no longer attached takes its view with it. The
+            // workspaces themselves have already been re-homed by the config.
+            if (monitor is null) continue;
+
+            if (monitor.FindWorkspace(remembered.ActiveWorkspace) is { } workspace)
+                Publish(_wm.ActivateWorkspace(workspace));
+
+            if (remembered.Focused) focused = monitor;
+        }
+
+        // Focus last, so activating the other monitors cannot steal it back.
+        if (focused?.ActiveWorkspace is { } target)
+        {
+            Publish(_wm.ActivateWorkspace(target));
+
+            Log.Info(LogCategory.Wm,
+                $"restored the view: {target.Name} on {focused.DeviceId}");
         }
     }
 
@@ -1613,7 +1678,7 @@ public sealed class WmDaemon : IDisposable
 
         _lastSessionSaveTicks = now;
 
-        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true);
+        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true, focusedMonitor: _wm.FocusedMonitor);
     }
 
     /// <summary>Drives one frame of in-flight window motion.</summary>
@@ -1969,8 +2034,9 @@ public sealed class WmDaemon : IDisposable
             // Windows released by hand are re-examined too. That is the honest reading
             // of a reload, and toggle-managed is one key away for anything that should
             // go back.
-            int forgotten = _ignored.Count;
+            int forgotten = _ignored.Count + _dormant.Count;
             _ignored.Clear();
+            _dormant.Clear();
 
             ReconsiderOpenWindows();
 
