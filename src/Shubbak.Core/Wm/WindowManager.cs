@@ -752,7 +752,22 @@ public sealed class WindowManager
         }
         else
         {
+            // Beside whatever was last focused there, so a window arrives where the
+            // user was working rather than at the far edge.
+            //
+            // Only if it is still there. LastFocused is a plain reference and a window
+            // that has since been moved away keeps its place in it, so the container it
+            // now lives in belongs to a different workspace entirely - and the arriving
+            // window was inserted there instead. It appeared not to move at all, or to
+            // trade places with something on the other monitor.
             WindowNode? reference = destination.LastFocused;
+
+            if (reference is not null && !ReferenceEquals(reference.Workspace, destination))
+            {
+                destination.LastFocused = null;
+                reference = null;
+            }
+
             ContainerNode container = reference?.ParentContainer ?? destination;
             TreeOps.InsertByLayout(container, window, reference);
         }

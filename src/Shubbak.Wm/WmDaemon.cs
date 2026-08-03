@@ -53,6 +53,15 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private readonly HashSet<nint> _dormant = [];
 
+    /// <summary>
+    /// Windows taken on since the last layout, which are placed rather than animated.
+    /// </summary>
+    /// <remarks>
+    /// Cleared as each one is placed, so a window is only ever exempt for the single
+    /// pass that first gives it a rectangle.
+    /// </remarks>
+    private readonly HashSet<nint> _arriving = [];
+
     /// <summary>Window geometry captured when a mouse drag started.</summary>
     private readonly Dictionary<nint, Rect> _dragOrigin = [];
 
@@ -155,6 +164,8 @@ public sealed class WmDaemon : IDisposable
         _ipc.Start(new WmDaemonIpc(this).HandleAsync);
 
         RunStartupCommands();
+
+        SettleWorkArea();
 
         _layoutDirty = true;
         _loop.Tick += OnTick;
@@ -756,6 +767,7 @@ public sealed class WmDaemon : IDisposable
         }
 
         _managed[handle] = window;
+        _arriving.Add(handle);
         Publish(adoption);
 
         Log.Info(LogCategory.Window,
@@ -772,6 +784,7 @@ public sealed class WmDaemon : IDisposable
     {
         _ignored.Remove(handle);
         _dormant.Remove(handle);
+        _arriving.Remove(handle);
 
         if (!_managed.Remove(handle, out WindowNode? window)) return;
 
@@ -1132,19 +1145,32 @@ public sealed class WmDaemon : IDisposable
         nint foreground = Win32Window.GetForeground();
         if (foreground == 0) return true;
 
-        if (_managed.TryGetValue(foreground, out WindowNode? window))
-        {
-            // In front and ours, but not what the tree thinks is focused: a click that
-            // arrived without a foreground event, or focus restored by an application
-            // itself. Syncing here means the command lands where the user is looking.
-            if (!ReferenceEquals(_wm.FocusedWindow, window)) Publish(_wm.FocusWindow(window));
-
-            return true;
-        }
+        // Managed, so Shubbak's own idea of focus is the authority - even when the two
+        // disagree. They disagree constantly for a moment at a time: SetForegroundWindow
+        // is asynchronous, so immediately after a focus command the desktop still names
+        // the previous window.
+        //
+        // Re-syncing to the desktop here looked harmless and was not. Pressing a focus
+        // key and then a move key quickly enough moved the window focus had just left,
+        // because the desktop had not caught up yet - and pressing the same key again
+        // worked, which is what made it look like a swap rather than a race.
+        //
+        // A genuine click raises a foreground event, which updates focus properly. This
+        // check exists only to notice a window Shubbak does not manage at all.
+        if (_managed.ContainsKey(foreground)) return true;
 
         // Toggle-managed is exempt: acting on a window Shubbak does not manage is the
         // entire purpose of it, and it reads the foreground window itself.
         if (command is ToggleManagedCommand) return true;
+
+        // The focused window is one of ours and merely sits behind something that is
+        // not - a dialog that has just opened, a flyout. The command was meant for it.
+        if (_wm.FocusedWindow is { } focused &&
+            Win32Window.Exists((nint)focused.Handle) &&
+            WindowFilter.Evaluate(foreground).Reason is ExclusionReason.ToolWindow)
+        {
+            return true;
+        }
 
         if (_config.UnmanagedWindowCommands == UnmanagedWindowCommands.Adopt)
         {
@@ -1519,6 +1545,22 @@ public sealed class WmDaemon : IDisposable
                 : WindowCommitter.VisibleBounds(handle);
 
             AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : AnimationKind.WindowMove;
+
+            // A window joining the layout for the first time is placed, not animated.
+            // The rectangle it would travel from is the size the application happened
+            // to open at - it was never part of the arrangement, so the motion carries
+            // nothing and simply drags a full-sized window across the screen.
+            //
+            // It also costs the most where it is worst: a window that is expensive to
+            // resize relays out its contents on every frame, and File Explorer doing
+            // that eighteen times in a hundred and forty milliseconds is exactly the
+            // stutter this removes.
+            if (_arriving.Remove(handle))
+            {
+                _animation.Remove(placement.Window.Handle);
+                _commitScratch.Add(placement);
+                continue;
+            }
 
             if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
             {
@@ -2133,6 +2175,68 @@ public sealed class WmDaemon : IDisposable
         }
     }
 
+    /// <summary>
+    /// Waits for the usable area of each monitor to stop changing before the first
+    /// layout.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A bar reserves its strip of the screen by registering an appbar, and the shell
+    /// only shrinks the work area once it has. Shubbak launches the bar itself, from
+    /// the startup commands, so at that instant the work area is still the whole
+    /// screen.
+    /// </para>
+    /// <para>
+    /// Laying out immediately therefore placed every window over the full display -
+    /// including the strip the bar was about to take - and the periodic monitor check
+    /// only noticed up to two seconds later. Every start began with the windows
+    /// briefly too big, sliding down and shrinking as the bar appeared underneath
+    /// them.
+    /// </para>
+    /// <para>
+    /// Bounded, and skipped entirely when nothing was launched: waiting is only worth
+    /// it when something was asked to start. A bar that never appears costs the
+    /// deadline once, at startup, rather than a visible jump on every start.
+    /// </para>
+    /// </remarks>
+    private void SettleWorkArea()
+    {
+        if (_config.StartupCommands.Count == 0) return;
+
+        const int DeadlineMs = 1_000;
+        const int PollMs = 50;
+
+        bool changed = false;
+        int stable = 0;
+
+        for (int waited = 0; waited < DeadlineMs; waited += PollMs)
+        {
+            Thread.Sleep(PollMs);
+
+            if (MonitorLayoutChanged())
+            {
+                SyncMonitors();
+
+                changed = true;
+                stable = 0;
+                continue;
+            }
+
+            // Waits for the change, then for it to stop: returning on stillness alone
+            // would return immediately, before the bar had registered anything, which
+            // is the state this exists to avoid.
+            if (changed && ++stable >= 2)
+            {
+                Log.Debug(LogCategory.Monitor, $"work area settled after {waited} ms");
+                return;
+            }
+        }
+
+        // Nothing reserved anything. Whatever was launched was not a bar, so there was
+        // never a strip to wait for; the windows have not been placed yet either way.
+        if (!changed) Log.Debug(LogCategory.Monitor, "work area unchanged after startup commands");
+    }
+
     // ---- plumbing ----------------------------------------------------------
 
     private void Publish(WmResult result)
@@ -2151,7 +2255,18 @@ public sealed class WmDaemon : IDisposable
 
 
             if (wmEvent is CommandRejected rejected)
-                Log.Debug(LogCategory.Command, $"rejected {rejected.Command}: {rejected.Reason}");
+            {
+                // At info when the reason is that the window in front is not managed.
+                // That refusal is the one a user meets by pressing a key and watching
+                // nothing happen, with no way to tell whether the binding is broken,
+                // the window is unusual, or the window manager has stopped. The others
+                // are ordinary - focusing left from the leftmost window - and stay at
+                // debug where they belong.
+                if (rejected.Reason.Contains("is not managed", StringComparison.Ordinal))
+                    Log.Info(LogCategory.Command, $"{rejected.Command}: {rejected.Reason}");
+                else
+                    Log.Debug(LogCategory.Command, $"rejected {rejected.Command}: {rejected.Reason}");
+            }
 
             // A window that has just left or rejoined the tiling flow may be owed a
             // different border colour, and that is not a focus change, so nothing else
