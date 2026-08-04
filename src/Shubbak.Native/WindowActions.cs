@@ -101,10 +101,6 @@ public static class WindowActions
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
     }
 
-    /// <summary>True while the given virtual-key code is held down.</summary>
-    public static bool IsKeyDown(int virtualKey) =>
-        (PInvoke.GetKeyState(virtualKey) & 0x8000) != 0;
-
     /// <summary><c>DWMWA_BORDER_COLOR</c>, Windows 11 build 22000 and later.</summary>
     private const uint DwmwaBorderColour = 34;
 

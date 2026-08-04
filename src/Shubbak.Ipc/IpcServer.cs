@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text;
 using System.Text.Json;
@@ -169,14 +170,19 @@ public sealed class IpcServer : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
 
+        ClientConnection[] clients;
+        lock (_gate) clients = [.. _clients];
+
+        // Before cancelling, not after. Publishing only queues a message onto each
+        // client's outbox for its writer to send, so tearing the pipes down first
+        // discarded whatever had not gone yet - and the last thing published is the
+        // one that matters most, because it is the notice that the window manager is
+        // leaving. A bar that misses it sits there attached to nothing.
+        await FlushClientsAsync(clients).ConfigureAwait(false);
+
         await _shutdown.CancelAsync().ConfigureAwait(false);
 
-        ClientConnection[] clients;
-        lock (_gate)
-        {
-            clients = [.. _clients];
-            _clients.Clear();
-        }
+        lock (_gate) _clients.Clear();
 
         foreach (ClientConnection client in clients) client.Dispose();
 
@@ -187,6 +193,36 @@ public sealed class IpcServer : IAsyncDisposable
         }
 
         _shutdown.Dispose();
+    }
+
+    /// <summary>
+    /// Gives every client's writer a bounded moment to send what it already has.
+    /// </summary>
+    /// <remarks>
+    /// Bounded, and that is the whole design. A client that has stopped reading must
+    /// never be able to hold the window manager open - which is the same property the
+    /// outbox has, where a backlog is dropped rather than waited on. A quarter of a
+    /// second is far more than the few milliseconds a healthy client needs and far
+    /// less than anyone would notice on the way out.
+    /// </remarks>
+    private static async Task FlushClientsAsync(ClientConnection[] clients)
+    {
+        if (clients.Length == 0) return;
+
+        foreach (ClientConnection client in clients) client.Wake();
+
+        long deadline = Stopwatch.GetTimestamp() + (Stopwatch.Frequency / 4);
+
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            await Task.Delay(10).ConfigureAwait(false);
+
+            // The outbox empties when the writer takes the batch, which is a moment
+            // before it writes it - so emptiness is nearly, not quite, delivery. The
+            // delay above is taken first so there is always one tick after the last
+            // batch is claimed for it to reach the pipe.
+            if (!Array.Exists(clients, client => client.HasPending)) return;
+        }
     }
 
     /// <summary>One connected client.</summary>
@@ -258,6 +294,30 @@ public sealed class IpcServer : IAsyncDisposable
         /// signal costs nothing until there is something to send.
         /// </remarks>
         private readonly SemaphoreSlim _pending = new(0);
+
+        /// <summary>Whether anything is still queued to send.</summary>
+        public bool HasPending
+        {
+            get { lock (_gate) return _outbox.Count > 0 || _needsResync; }
+        }
+
+        /// <summary>Asks the writer to send what it has, without queueing anything new.</summary>
+        /// <remarks>
+        /// For shutdown. The writer waits on this signal rather than polling, so the
+        /// only way to make it look at a queue it is not expecting is to signal it.
+        /// </remarks>
+        public void Wake()
+        {
+            try
+            {
+                _pending.Release();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The client went away underneath us. There is nothing left to flush,
+                // which is the outcome the caller wanted anyway.
+            }
+        }
 
         public async Task RunAsync(CancellationToken token)
         {

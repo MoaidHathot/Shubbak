@@ -189,4 +189,130 @@ public sealed class UnknownBarSettingTests
                 """),
             d => d.Code is "TAJ0013" or "TAJ0014" or "TAJ0015");
     }
+
+    // ---- widgets, sources, rules and conditions ----------------------------
+
+    [Theory]
+    [InlineData("workspaces active-backgruond=\"#fff\"", "active-background")]
+    [InlineData("workspaces hide-emty=#true", "hide-empty")]
+    [InlineData("workspaces hover-colur=\"#fff\"", "hover-colour")]
+    [InlineData("spacer widht=8", "width")]
+    [InlineData("text template=\"x\" on-clik=\"y\"", "on-click")]
+    [InlineData("text template=\"x\" radus=4", "radius")]
+    public void AMistypedWidgetSettingIsReported(string widget, string expected)
+    {
+        Diagnostic diagnostic = Single($$"""
+            bar {
+                profile "default" {
+                    height 30
+                    zone "left" { {{widget}} }
+                }
+            }
+            """, "TAJ0016");
+
+        Assert.Contains(expected, diagnostic.Hint!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMistypedConditionSettingIsReported()
+    {
+        Diagnostic diagnostic = Single("""
+            bar {
+                profile "default" {
+                    height 30
+                    zone "left" {
+                        text template="{{ clock }}" {
+                            when value="a" colur="#fff"
+                        }
+                    }
+                }
+            }
+            """, "TAJ0017");
+
+        Assert.Contains("colour", diagnostic.Hint!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMistypedSourceSettingIsReported()
+    {
+        Diagnostic diagnostic = Single("""
+            bar {
+                source "clock" kind="time" fromat="HH:mm"
+                profile "default" { height 30 }
+            }
+            """, "TAJ0018");
+
+        Assert.Contains("format", diagnostic.Hint!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AMistypedBarRuleSettingIsReported()
+    {
+        Diagnostic diagnostic = Single("""
+            bar {
+                profile "default" { height 30 }
+                rule use="default" workspac="1"
+            }
+            """, "TAJ0019");
+
+        Assert.Contains("workspace", diagnostic.Hint!, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("colour")]
+    [InlineData("color")]
+    public void BothSpellingsOfColourAreAccepted(string spelling)
+    {
+        // The config is read by people who write one or the other, and being told off
+        // for either would be absurd.
+        Assert.DoesNotContain(
+            Diagnose($$"""
+                bar {
+                    profile "default" {
+                        height 30
+                        zone "left" { text template="x" {{spelling}}="#fff" }
+                    }
+                }
+                """),
+            d => d.Code == "TAJ0016");
+    }
+
+    [Fact]
+    public void AnUnknownWidgetKindIsReportedOnceRatherThanPerProperty()
+    {
+        // The zone already says the kind is wrong. Adding a complaint about every
+        // property on a node the user has been told is wrong would bury the one that
+        // matters.
+        IReadOnlyList<Diagnostic> diagnostics = Diagnose("""
+            bar {
+                profile "default" {
+                    height 30
+                    zone "left" { txt template="x" colour="#fff" bold=#true }
+                }
+            }
+            """);
+
+        Assert.Single(diagnostics, d => d.Code == "TAJ0015");
+        Assert.DoesNotContain(diagnostics, d => d.Code == "TAJ0016");
+    }
+
+    // ---- the guard against crying wolf -------------------------------------
+
+    [Theory]
+    [InlineData(@"W:\Github\Shubbak\docs\shubbak.example.kdl")]
+    [InlineData(@"P:\Github\Neovim-Moaid\config\shubbak\shubbak.kdl")]
+    public void ARealConfigProducesNoWarningsAtAll(string path)
+    {
+        // The check is only worth having if it is silent on configs that are correct.
+        // A false positive here trains people to ignore the whole class, which is
+        // worse than not warning at all.
+        //
+        // Skipped where the file does not exist, so this does not fail on anyone
+        // else's machine.
+        if (!File.Exists(path)) return;
+
+        Assert.DoesNotContain(
+            Diagnose(File.ReadAllText(path)),
+            d => d.Code.StartsWith("TAJ", StringComparison.Ordinal));
+    }
 }

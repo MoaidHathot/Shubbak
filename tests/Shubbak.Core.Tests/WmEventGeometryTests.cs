@@ -187,10 +187,9 @@ public sealed class WmEventGeometryTests
         // by one of the tests above.
         //
         // Reflection is the only way to ask "what subtypes exist"; C# has no closed
-        // hierarchy and so no compile-time exhaustiveness over one. The trim analyzer
-        // objects on principle, and is wrong here specifically: this assembly is a
-        // test host that is never trimmed, never published, and never AOT compiled.
-#pragma warning disable IL2026
+        // hierarchy and so no compile-time exhaustiveness over one. The trim analyser
+        // would object, and is switched off for test projects - which are never
+        // trimmed, never published and never AOT compiled.
         string[] declared =
         [
             .. typeof(WmEvent).Assembly
@@ -199,7 +198,6 @@ public sealed class WmEventGeometryTests
                 .Select(t => t.Name)
                 .OrderBy(name => name, StringComparer.Ordinal),
         ];
-#pragma warning restore IL2026
 
         string[] considered =
         [

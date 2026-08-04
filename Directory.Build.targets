@@ -1,0 +1,35 @@
+<Project>
+
+  <!--
+    Imported after each project file, unlike Directory.Build.props which is
+    imported before it. That ordering is the whole reason this file exists.
+
+    These four properties were in the props file, each guarded by
+    Condition="'$(IsTestProject)' != 'true'". The condition never held: a test
+    project sets IsTestProject in its own PropertyGroup, which has not been read
+    yet when the props file is evaluated, so $(IsTestProject) was always empty and
+    the analyzers were switched on everywhere - including the test projects the
+    condition existed to exclude.
+
+    It was not harmless. A test that enumerates a type hierarchy through reflection
+    is exactly the sort of thing a test may do and a trimmed application may not,
+    and IL2026 is an error here because warnings are errors - so the guard that was
+    meant to prevent that had to be worked around with a pragma instead.
+  -->
+  <PropertyGroup>
+    <!--
+      Shubbak ships as NativeAOT (see docs/adr/0001-language-choice.md).
+      Enabling the analyzers everywhere - including in the pure library - keeps
+      the "zero IL#### warnings" property from ADR 0001 from silently regressing.
+
+      Test projects are exempt: they are never trimmed, never published and never
+      AOT compiled, so the analyzers can only produce findings that are false for
+      the way that code is actually built.
+    -->
+    <IsAotCompatible Condition="'$(IsTestProject)' != 'true'">true</IsAotCompatible>
+    <EnableAotAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+</Project>
