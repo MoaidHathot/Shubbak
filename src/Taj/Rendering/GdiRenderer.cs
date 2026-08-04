@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Shubbak.Core.Geometry;
+using Shubbak.Core.Rendering;
 using Taj.Core.Layout;
 using Taj.Core.Rendering;
 using Windows.Win32;
