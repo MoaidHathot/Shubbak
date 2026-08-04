@@ -278,6 +278,40 @@ public sealed class WmDaemon : IDisposable
 
     private readonly TimerResolution _timerResolution = new(1);
 
+    /// <summary>
+    /// How far an animation may be advanced by a single tick.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The tick measures the real gap since the previous pass and hands it to the
+    /// animation engine, which adds it to the elapsed time of every track. That is
+    /// right for a track already in flight and wrong for one created on the same tick,
+    /// because the gap says nothing about how long <i>that</i> animation has been
+    /// running - it has been running for none of it.
+    /// </para>
+    /// <para>
+    /// The idle wait is a quarter of a second, and rightly so. But a layout pass runs
+    /// before the animation is advanced, so the order within one tick was: wait up to
+    /// 250 ms, create a track with zero elapsed, then add up to 250 ms to it. A
+    /// window-move animation is 140 ms by default, so it completed on its first frame
+    /// and the window teleported.
+    /// </para>
+    /// <para>
+    /// That is why the animations looked unreliable rather than absent: it needed the
+    /// tick that starts the animation to follow a long wait, which means the first
+    /// action after the desktop has been idle, and almost never during a burst of
+    /// activity. "It animates while I'm working and not when I come back to it" is an
+    /// accurate description and points nowhere near a delta.
+    /// </para>
+    /// <para>
+    /// Two frames, so a single missed one is still caught up and anything longer
+    /// stretches the animation in wall-clock time rather than collapsing it. Slower is
+    /// invisible; instant is the bug.
+    /// </para>
+    /// </remarks>
+    internal static double ClampAnimationStep(double deltaMs) =>
+        Math.Min(deltaMs, FrameInterval.TotalMilliseconds * 2);
+
     private void OnTick()
     {
         try
@@ -306,7 +340,7 @@ public sealed class WmDaemon : IDisposable
                 _layoutDirty = false;
             }
 
-            if (_animation.IsAnimating) AdvanceAnimation(deltaMs);
+            if (_animation.IsAnimating) AdvanceAnimation(ClampAnimationStep(deltaMs));
 
             MaybeSyncMonitors(now);
             MaybeRefreshFocusBorder(now);
@@ -466,10 +500,11 @@ public sealed class WmDaemon : IDisposable
     {
         nint handle = notification.Handle;
 
-        // LOCATIONCHANGE is excluded from tracing on purpose. S4 measured 122 of
-        // them per second from a single dragged window; logging them would drown
-        // everything else and slow the very thing being diagnosed.
-        if (notification.Kind != WinEventKind.LocationChanged && Log.IsEnabled(LogLevel.Trace))
+        // LOCATIONCHANGE used to be excluded here by name: S4 measured 122 of them per
+        // second from a single dragged window, and logging them would drown everything
+        // else while slowing the very thing being diagnosed. It is no longer subscribed
+        // to at all, so there is nothing left to exclude.
+        if (Log.IsEnabled(LogLevel.Trace))
         {
             Log.Trace(LogCategory.Window,
                 $"{notification.Kind} 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 48)}\"");
@@ -574,12 +609,6 @@ public sealed class WmDaemon : IDisposable
 
             case WinEventKind.MoveSizeEnd:
                 HandleUserMove(handle);
-                break;
-
-            case WinEventKind.LocationChanged:
-                // The firehose: S4 measured 122/s from a single dragged window, and
-                // every move we make ourselves echoes back here. Ignored entirely -
-                // MoveSizeEnd is the event that actually carries intent.
                 break;
 
             default:

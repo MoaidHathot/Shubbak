@@ -53,7 +53,6 @@ public sealed class WindowCommitter
     /// visible: a small jump every time focus moved.
     /// </remarks>
     private readonly Dictionary<nint, Rect> _lastApplied = [];
-    private readonly HashSet<nint> _driving = [];
 
     /// <summary>
     /// Windows currently concealed, and how.
@@ -117,33 +116,6 @@ public sealed class WindowCommitter
          Interlocked.Read(ref _hiddenCount),
          Interlocked.Read(ref _minimisedCount));
 
-    /// <summary>
-    /// Whether a location change for this window was caused by us.
-    /// </summary>
-    /// <remarks>
-    /// Consulted by the event pipeline before reacting to
-    /// <c>EVENT_OBJECT_LOCATIONCHANGE</c>. Returns true while a commit is in flight
-    /// for the window, and also when the reported rectangle matches what we last
-    /// asked for - the second check catches the echo that arrives after the commit
-    /// has finished.
-    /// </remarks>
-    public bool IsSelfInflicted(nint handle, Rect reported)
-    {
-        lock (_lastCommitted)
-        {
-            if (_driving.Contains(handle)) return true;
-
-            // Compared against the rectangle actually applied, because that is what
-            // GetWindowRect reports back. The visible rectangle the layout asked for
-            // is smaller by the shadow, so comparing with that would make every echo
-            // look like the user had moved the window.
-            if (_lastApplied.TryGetValue(handle, out Rect applied) && applied == reported)
-                return true;
-
-            return _lastCommitted.TryGetValue(handle, out Rect expected) && expected == reported;
-        }
-    }
-
     /// <summary>Forgets a window, e.g. once it has closed.</summary>
     public void Forget(nint handle)
     {
@@ -151,7 +123,6 @@ public sealed class WindowCommitter
         {
             _lastCommitted.Remove(handle);
             _lastApplied.Remove(handle);
-            _driving.Remove(handle);
             _concealed.Remove(handle);
         }
 
@@ -332,11 +303,6 @@ public sealed class WindowCommitter
             return 0;
         }
 
-        lock (_lastCommitted)
-        {
-            foreach ((nint handle, _) in toMove) _driving.Add(handle);
-        }
-
         try
         {
             ApplyBatch(toMove);
@@ -347,7 +313,6 @@ public sealed class WindowCommitter
             {
                 foreach ((nint handle, Rect rect) in toMove)
                 {
-                    _driving.Remove(handle);
                     _lastCommitted[handle] = rect;
                     _lastApplied[handle] = Expand(handle, rect);
                 }
@@ -549,8 +514,6 @@ public sealed class WindowCommitter
     {
         if (handle == 0 || !Win32Window.Exists(handle)) return;
 
-        lock (_lastCommitted) _driving.Add(handle);
-
         try
         {
             MoveSingle(handle, rect);
@@ -559,7 +522,6 @@ public sealed class WindowCommitter
         {
             lock (_lastCommitted)
             {
-                _driving.Remove(handle);
                 _lastCommitted[handle] = rect;
                 _lastApplied[handle] = Expand(handle, rect);
             }
@@ -625,25 +587,21 @@ public sealed class WindowCommitter
         {
             foreach (AnimationFrame frame in frames)
             {
+                // Only the final frame is recorded. Every position before it is a
+                // waypoint the window is passing through, and recording those would
+                // make the skip check believe the window was already where the layout
+                // wants it while it was still halfway there.
+                if (!frame.IsFinal) continue;
+
                 nint handle = (nint)frame.Handle;
 
-                // While a window is mid-flight every position is ours, so it stays
-                // in the driving set until the final frame lands.
-                if (frame.IsFinal)
-                {
-                    _driving.Remove(handle);
-                    _lastCommitted[handle] = frame.Rect;
+                _lastCommitted[handle] = frame.Rect;
 
-                    // Recorded for the same reason the layout path records it: the skip
-                    // check treats a missing entry as "never compensated" and places the
-                    // window again. After an animation that meant one redundant move,
-                    // which is what the user saw jump.
-                    _lastApplied[handle] = Expand(handle, frame.Rect);
-                }
-                else
-                {
-                    _driving.Add(handle);
-                }
+                // Recorded for the same reason the layout path records it: the skip
+                // check treats a missing entry as "never compensated" and places the
+                // window again. After an animation that meant one redundant move,
+                // which is what the user saw jump.
+                _lastApplied[handle] = Expand(handle, frame.Rect);
             }
         }
     }
@@ -708,10 +666,9 @@ public sealed class WindowCommitter
 
     /// <summary>Whether this instance is currently concealing the window.</summary>
     /// <remarks>
-    /// The concealment counterpart of <see cref="IsSelfInflicted"/>. Concealing a
-    /// window makes Windows report it back as cloaked or hidden, and the event
-    /// pipeline has to be able to tell that echo from a window the user or its own
-    /// application really did put away.
+    /// Concealing a window makes Windows report it back as cloaked or hidden, and the
+    /// event pipeline has to be able to tell that echo from a window the user or its
+    /// own application really did put away.
     /// </remarks>
     public bool IsConcealing(nint handle)
     {
