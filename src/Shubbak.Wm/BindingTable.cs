@@ -30,11 +30,40 @@ public sealed class BindingTable
         new(StringComparer.OrdinalIgnoreCase);
 
     private ModeTable? _activeMode;
+    private string? _activeModeName;
 
     private sealed record ModeTable(Dictionary<int, Keybinding> Bindings, bool PassThrough);
 
-    /// <summary>Rebuilds the table from config.</summary>
-    public void Load(ShubbakConfig config)
+    /// <summary>
+    /// Rebuilds the table from config, keeping the active mode if it still exists.
+    /// </summary>
+    /// <returns>
+    /// The name of the active mode that the new config no longer declares, or null if
+    /// nothing was lost - either because no mode was active or because it survived.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// This used to drop the active mode on the floor and tell nobody. The lookup
+    /// table went back to the default bindings, which is the safe half, while
+    /// <c>WindowManager.BindingMode</c> kept whatever it had - so after reloading
+    /// inside a mode called <c>pause</c>, the keyboard was on the default bindings
+    /// while <c>diagnose</c>, the bar and the state machine all still said
+    /// <c>pause</c>. Three surfaces describing a state the keyboard was not in.
+    /// </para>
+    /// <para>
+    /// It then got worse if the user tried the obvious remedy.
+    /// <c>SetBindingMode</c> short-circuits when the name is unchanged, so pressing
+    /// the key that enables <c>pause</c> found it already active, emitted no event,
+    /// and never reached this table. <b>The mode could not be entered again</b> until
+    /// <c>wm-disable-binding-mode</c> was run - which looked like it did nothing, and
+    /// was the thing that fixed it.
+    /// </para>
+    /// <para>
+    /// Keeping the mode is also the better behaviour on its own terms: a reload is not
+    /// a request to leave the mode you are in.
+    /// </para>
+    /// </remarks>
+    public string? Load(ShubbakConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -52,23 +81,37 @@ public sealed class BindingTable
             modes[mode.Name] = new ModeTable(bindings, mode.PassThrough);
         }
 
+        string? wasActive = _activeModeName;
+
         _default = defaults;
         _modes = modes;
         _activeMode = null;
+        _activeModeName = null;
+
+        if (wasActive is null) return null;
+
+        // Re-selected against the new tables. SetMode reports whether the name still
+        // means anything, which is the one thing the caller has to know: a mode that
+        // has been deleted from the config leaves the keyboard on the defaults, and
+        // everything that reports the mode has to be told so.
+        return SetMode(wasActive) ? null : wasActive;
     }
 
     /// <summary>Switches binding mode; null returns to the default set.</summary>
+    /// <returns>False when no such mode is declared, in which case nothing changed.</returns>
     public bool SetMode(string? mode)
     {
         if (mode is null)
         {
             _activeMode = null;
+            _activeModeName = null;
             return true;
         }
 
         if (!_modes.TryGetValue(mode, out ModeTable? table)) return false;
 
         _activeMode = table;
+        _activeModeName = mode;
         return true;
     }
 

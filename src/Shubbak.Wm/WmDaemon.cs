@@ -2172,7 +2172,7 @@ public sealed class WmDaemon : IDisposable
         if (path is null)
         {
             Log.Warn(LogCategory.Config, "no config file found; using defaults");
-            _bindings.Load(_config);
+            _ = _bindings.Load(_config);
             IndexRuleTriggers();
             return;
         }
@@ -2196,13 +2196,30 @@ public sealed class WmDaemon : IDisposable
         _animation.Options = _config.Animation;
         _committer.HideMethod = _config.HideMethod;
         _committer.KeepInTaskbar = _config.KeepInTaskbar;
-        _bindings.Load(_config);
+
+        // The active mode is carried across when it still exists, and named when it
+        // does not. Silently dropping it left the keyboard on the default bindings
+        // while the state machine, the report and the bar all still announced the mode.
+        string? lostMode = _bindings.Load(_config);
+
         IndexRuleTriggers();
 
         // The other moment a key stops being bound. A binding deleted here leaves any
         // swallow flag it set with nothing to clear it, and the next press of that key
         // passes through while its release is still swallowed.
         _keyboard?.ForgetSwallowed();
+
+        if (lostMode is not null)
+        {
+            Log.Warn(LogCategory.Hook,
+                $"binding mode '{lostMode}' is no longer declared; back to the default bindings");
+
+            // Announced, so the state machine and everything reading from it agree with
+            // the table. Without this the mode could not even be re-entered: SetBindingMode
+            // short-circuits on an unchanged name, so the key that enables it would find
+            // it already active and emit nothing at all.
+            Publish(_wm.SetBindingMode(null));
+        }
 
         ApplyLoggingConfig(initial);
 
@@ -2404,19 +2421,38 @@ public sealed class WmDaemon : IDisposable
     {
         if (result.Events.Count == 0) return;
 
+        // Corrected after the batch rather than inside it, so the state machine is not
+        // mutated while its own events are being walked.
+        bool undeclaredMode = false;
+
         foreach (WmEvent wmEvent in result.Events)
         {
             // Binding mode lives in two places: the state machine, which reports it,
             // and the lookup table, which enforces it.
             if (wmEvent is BindingModeChanged mode)
             {
-                _bindings.SetMode(mode.Mode);
-                ReportBindingMode(mode.Mode);
+                if (_bindings.SetMode(mode.Mode))
+                {
+                    ReportBindingMode(mode.Mode);
 
-                // A mode change is one of the moments a key stops being bound, which
-                // is precisely when a stranded swallow flag turns into a key the
-                // application believes is still held down.
-                _keyboard?.ForgetSwallowed();
+                    // A mode change is one of the moments a key stops being bound, which
+                    // is precisely when a stranded swallow flag turns into a key the
+                    // application believes is still held down.
+                    _keyboard?.ForgetSwallowed();
+                }
+                else
+                {
+                    // No such mode. The table stays on the defaults, so the state
+                    // machine must not be left claiming otherwise - it reported success,
+                    // logged the mode as active, and the bar showed it, while every
+                    // keystroke went on resolving against the default bindings.
+                    Log.Warn(LogCategory.Hook,
+                        $"binding mode '{mode.Mode}' is not declared in the config; " +
+                        $"staying on the default bindings. Declared: " +
+                        $"{(_bindings.ModeNames.Any() ? string.Join(", ", _bindings.ModeNames) : "none")}");
+
+                    undeclaredMode = true;
+                }
             }
 
             if (wmEvent is CommandRejected rejected)
@@ -2452,6 +2488,10 @@ public sealed class WmDaemon : IDisposable
         // playing video, a terminal showing its directory - held the whole computer at
         // a fine timer for passes that could not move anything.
         if (result.Events.AffectGeometry()) _layoutDirty = true;
+
+        // One level of recursion, and it terminates: clearing the mode is always
+        // accepted by the table, so this cannot come back here a second time.
+        if (undeclaredMode) Publish(_wm.SetBindingMode(null));
     }
 
     public void Dispose()
