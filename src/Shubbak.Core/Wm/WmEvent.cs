@@ -79,7 +79,7 @@ public sealed record WindowStateChanged(
     public override string Topic => "window.state_changed";
 }
 
-/// <summary>A window''s workspace membership changed.</summary>
+/// <summary>A window's workspace membership changed.</summary>
 /// <param name="Window">The window.</param>
 /// <param name="Tags">Workspaces it now also belongs to.</param>
 /// <param name="IsSticky">Whether it follows every workspace on its monitor.</param>
