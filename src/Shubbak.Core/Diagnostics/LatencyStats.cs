@@ -12,6 +12,11 @@ namespace Shubbak.Core.Diagnostics;
 /// absence forces, and reasoning is not measurement.
 /// </para>
 /// <para>
+/// The name says latency because that is what it was first used for, but nothing here
+/// is time-specific: samples are plain doubles and the unit is the caller's business.
+/// The daemon also uses it for bytes allocated per tick and windows moved per frame.
+/// </para>
+/// <para>
 /// Recording is allocation-free and is a bounds check, a store and an increment, so
 /// it is safe on the tick. The set holds the most recent <c>capacity</c> samples,
 /// overwriting the oldest, because a window of <i>recent</i> behaviour is what a
@@ -60,14 +65,19 @@ public sealed class LatencyStats
     public double Max { get; private set; }
 
     /// <summary>Records one sample, overwriting the oldest once full. Allocation-free.</summary>
-    public void Record(double milliseconds)
+    /// <param name="value">
+    /// In whatever unit the caller is measuring. The name carries no unit because the
+    /// set is also used for byte counts and window counts, where "milliseconds" made
+    /// the call sites read as though they were recording a duration.
+    /// </param>
+    public void Record(double value)
     {
         Interlocked.Increment(ref _total);
 
-        if (milliseconds > Max) Max = milliseconds;
+        if (value > Max) Max = value;
 
         int i = _next;
-        _samples[i] = milliseconds;
+        _samples[i] = value;
 
         // Wrapped with a comparison rather than a modulo so capacity need not be a
         // power of two, and so the tick pays a predictable branch instead of a divide.
@@ -107,12 +117,12 @@ public sealed class LatencyStats
     }
 
     /// <summary>How many samples exceeded a budget.</summary>
-    public int CountOver(double milliseconds)
+    public int CountOver(double budget)
     {
         int over = 0;
 
         for (int i = 0; i < _count; i++)
-            if (_samples[i] > milliseconds) over++;
+            if (_samples[i] > budget) over++;
 
         return over;
     }
@@ -120,6 +130,6 @@ public sealed class LatencyStats
     public override string ToString() =>
         _count == 0
             ? $"{Name}: no samples"
-            : $"{Name}: p50 {Percentile(0.5):F2} ms, p99 {Percentile(0.99):F2} ms, " +
-              $"max {Max:F2} ms, {_count} sample(s)";
+            : $"{Name}: p50 {Percentile(0.5):F2}, p99 {Percentile(0.99):F2}, " +
+              $"max {Max:F2}, {_count} sample(s)";
 }
