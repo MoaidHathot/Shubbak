@@ -1731,6 +1731,19 @@ public sealed class WmDaemon : IDisposable
 
             if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
             {
+                // Raised here, because an animated window never reaches Commit and
+                // Commit is where Raise is otherwise honoured. The layout engine sets
+                // it for exactly two things - a fullscreen or maximised window, and
+                // the focused window in a layout whose rectangles overlap, which is
+                // monocle - so entering any of those did not bring the window forward
+                // whenever the rectangle also moved. Which is almost always: a window
+                // that is already in the right place is not animated at all, so the
+                // feature worked only in the cases where it was not needed.
+                //
+                // Before the motion rather than after it. A window travelling to the
+                // front should be in front while it travels.
+                if (placement.Raise) WindowCommitter.Raise(handle);
+
                 // Animated: the tick loop drives the geometry from here.
                 continue;
             }
@@ -2186,6 +2199,11 @@ public sealed class WmDaemon : IDisposable
         _bindings.Load(_config);
         IndexRuleTriggers();
 
+        // The other moment a key stops being bound. A binding deleted here leaves any
+        // swallow flag it set with nothing to clear it, and the next press of that key
+        // passes through while its release is still swallowed.
+        _keyboard?.ForgetSwallowed();
+
         ApplyLoggingConfig(initial);
 
         if (!initial)
@@ -2394,6 +2412,11 @@ public sealed class WmDaemon : IDisposable
             {
                 _bindings.SetMode(mode.Mode);
                 ReportBindingMode(mode.Mode);
+
+                // A mode change is one of the moments a key stops being bound, which
+                // is precisely when a stranded swallow flag turns into a key the
+                // application believes is still held down.
+                _keyboard?.ForgetSwallowed();
             }
 
             if (wmEvent is CommandRejected rejected)

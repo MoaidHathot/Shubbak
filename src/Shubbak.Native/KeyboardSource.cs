@@ -265,12 +265,14 @@ public sealed class KeyboardSource : IDisposable
         bool isKeyDown = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
         var virtualKey = (ushort)info->vkCode;
 
-        KeyModifiers modifiers = ReadModifiers();
-
         // A key-up must be swallowed if its key-down was, or the application is left
         // believing the key is still held. Tracked rather than re-evaluated, because
         // the modifiers may have been released between the two edges - which would
         // make the combination look unbound on the way up.
+        //
+        // Decided before the modifiers are read, because a release does not need them
+        // and roughly half of all events are releases. Reading them first meant every
+        // one paid for a result that was thrown away.
         if (!isKeyDown)
         {
             if (source.WasSwallowed(virtualKey))
@@ -281,6 +283,8 @@ public sealed class KeyboardSource : IDisposable
 
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
         }
+
+        KeyModifiers modifiers = ReadModifiers();
 
         var key = new KeyEvent(
             virtualKey,
@@ -419,6 +423,39 @@ public sealed class KeyboardSource : IDisposable
     private bool WasSwallowed(ushort virtualKey) => _swallowed[virtualKey];
 
     private void ClearSwallowed(ushort virtualKey) => _swallowed[virtualKey] = false;
+
+    /// <summary>
+    /// Forgets every swallowed press, so no release is swallowed on its behalf.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A press is remembered so its release can be swallowed too. That pairing assumes
+    /// the release arrives, and there are several ways it does not: a low-level hook
+    /// receives no input on the secure desktop, so Ctrl+Alt+Del or a UAC prompt landing
+    /// between the two edges strands the flag, as does a foreground process at a higher
+    /// integrity level, as does Windows unhooking us for exceeding LowLevelHooksTimeout.
+    /// </para>
+    /// <para>
+    /// A stranded flag does nothing until that key is next pressed while <i>unbound</i> -
+    /// after a mode change, or a reload that removed the binding. Then the press passes
+    /// through to the application and the release is swallowed on the strength of a flag
+    /// set minutes earlier. The application sees a key that went down and never came up:
+    /// stuck, and auto-repeating. The flag clears on the way, so it happens once and
+    /// cannot be reproduced.
+    /// </para>
+    /// <para>
+    /// Clearing it whenever the set of bindings changes removes the whole class, because
+    /// those are exactly the moments a key stops being bound. Two hundred and fifty six
+    /// bytes is not a cost worth reasoning about.
+    /// </para>
+    /// <para>
+    /// Called from the daemon thread while the hook thread may be writing. Benign: each
+    /// entry is a byte and is independently either set or cleared, so no torn value is
+    /// possible, and the worst outcome is one keystroke's flag going the wrong way in a
+    /// window of microseconds - which is the same thing this repairs.
+    /// </para>
+    /// </remarks>
+    public void ForgetSwallowed() => Array.Clear(_swallowed);
 
     /// <summary>Signalled after a keystroke is queued, so a waiting pump wakes at once.</summary>
     /// <remarks>
