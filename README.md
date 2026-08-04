@@ -20,7 +20,7 @@ Feature complete and working. Not yet battle-tested — see
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**853 test methods**, ~700 ms. Everything except the platform layer and the renderer runs
+**856 test methods**, ~700 ms. Everything except the platform layer and the renderer runs
 headless.
 
 ## Why .NET
@@ -195,7 +195,7 @@ src/
   Shubbak.Cli/      shubbak
   Taj.Core/         widget tree, flex layout, sources          — no drawing code
   Taj/              bar host + GDI renderer
-tests/              853 test methods
+tests/              856 test methods
 ```
 
 `Shubbak.Core` contains no Win32 at all. That is the highest-leverage decision in the
