@@ -353,13 +353,51 @@ public sealed class WmDaemon : IDisposable
         // config it was still raised on every dirty tick - for a feature the user had
         // switched off. It is now never raised in that case, which is what the comment
         // on TimerResolution has always claimed.
-        if (_animation.IsAnimating) _timerResolution.Acquire();
-        else _timerResolution.Release();
+        if (_animation.IsAnimating)
+        {
+            _timerResolution.Acquire();
+
+            // Only what is left of the current frame, not a fresh one. The pump is
+            // woken by keyboard and window events as well as by its own timeout - and
+            // during a workspace switch, by a storm of cloak and uncloak events - so
+            // asking for a full interval after each of those pushed the frame out by
+            // up to a whole interval every time one arrived. Measured: 14.49 ms
+            // between frames against the 11.11 asked for, with 30-40% of each motion's
+            // frames never delivered.
+            double sinceFrameMs = _lastFrameTicks == 0
+                ? 0
+                : (Stopwatch.GetTimestamp() - _lastFrameTicks) * 1000.0 / Stopwatch.Frequency;
+
+            return RemainingUntilFrame(sinceFrameMs, FrameInterval.TotalMilliseconds);
+        }
+
+        _timerResolution.Release();
 
         // The wait is the other question, and has a different answer: a pending pass
         // does want to run promptly.
-        return _animation.IsAnimating || _layoutDirty ? FrameInterval : IdleInterval;
+        return _layoutDirty ? FrameInterval : IdleInterval;
     }
+
+    /// <summary>
+    /// How long to wait before the next animation frame is due.
+    /// </summary>
+    /// <param name="sinceLastFrameMs">Time since the last committed frame.</param>
+    /// <param name="frameMs">One frame, in milliseconds.</param>
+    /// <remarks>
+    /// <para>
+    /// Never negative. A frame already overdue asks for no wait at all, which the pump
+    /// treats as "do not wait" - the tick that follows finds the frame due, commits it
+    /// and restarts the clock, so this can return zero at most once per frame rather
+    /// than spinning.
+    /// </para>
+    /// <para>
+    /// That safety depends on agreeing with <see cref="IsFrameDue"/>: if this returned
+    /// zero while that still refused the frame, the loop would zero-wait in a circle
+    /// and burn a core. They are held together by a test rather than by hoping.
+    /// </para>
+    /// </remarks>
+    internal static TimeSpan RemainingUntilFrame(double sinceLastFrameMs, double frameMs) =>
+        TimeSpan.FromMilliseconds(Math.Max(0, frameMs - sinceLastFrameMs));
 
     /// <summary>
     /// How long one animation frame lasts, from configuration.
@@ -1440,6 +1478,21 @@ public sealed class WmDaemon : IDisposable
             $"(~{(p50 > 0 ? 1000.0 / p50 : 0):F0} Hz)",
 
             $"- **Motions**: {_animationsStarted}",
+
+            // Whether the pump's own clock is doing what the frame rate assumes. The
+            // default Windows timer granularity is 15.625 ms, which on its own would
+            // hold any rate above about 64 Hz to a fraction of what it asked for -
+            // entirely independently of the daemon's arithmetic. Reported so the two
+            // explanations can be told apart rather than argued about.
+            $"- **Fine timer held**: {_timerResolution.IsHeld}",
+
+            $"- **Wake overshoot** (last {_loop.WakeOvershoot.Count}, timed-out waits only): " +
+            $"p50 {_loop.WakeOvershoot.Percentile(0.5):F2} ms, " +
+            $"p99 {_loop.WakeOvershoot.Percentile(0.99):F2} ms, " +
+            $"max {_loop.WakeOvershoot.Max:F2} ms all-time",
+
+            $"- **Waits**: {_loop.WaitsTimedOut} ran out, {_loop.WaitsInterrupted} cut short " +
+            $"by a message or signal",
 
             $"- **Commit frame** (last {_commitFrameDuration.Count}): " +
             $"p50 {_commitFrameDuration.Percentile(0.5):F2} ms, " +
