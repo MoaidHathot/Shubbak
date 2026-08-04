@@ -109,4 +109,57 @@ public sealed class FrameClockTests
         Assert.True(WmDaemon.IsFrameDue(FrameMs, FrameMs));
         Assert.False(WmDaemon.IsFrameDue(FrameMs / 2, FrameMs));
     }
+
+    [Fact]
+    public void AFreshFrameWaitsTheWholeInterval()
+    {
+        Assert.Equal(FrameMs, WmDaemon.RemainingUntilFrame(0, FrameMs).TotalMilliseconds, 6);
+    }
+
+    [Fact]
+    public void AnInterruptedFrameWaitsOnlyWhatIsLeftOfIt()
+    {
+        // The bug this exists to fix. The pump is woken by keyboard and window events
+        // as well as by its own timeout, and asking for a fresh interval after each of
+        // those pushed the frame out by up to a whole one every time an event arrived.
+        // During a workspace switch they arrive constantly.
+        Assert.Equal(2, WmDaemon.RemainingUntilFrame(5, FrameMs).TotalMilliseconds, 6);
+    }
+
+    [Fact]
+    public void AnOverdueFrameAsksForNoWaitRatherThanANegativeOne()
+    {
+        // A negative TimeSpan reaches the pump as an enormous unsigned timeout, which
+        // would park the loop for weeks rather than running the frame it is late for.
+        Assert.Equal(TimeSpan.Zero, WmDaemon.RemainingUntilFrame(FrameMs * 3, FrameMs));
+        Assert.Equal(TimeSpan.Zero, WmDaemon.RemainingUntilFrame(FrameMs, FrameMs));
+    }
+
+    [Fact]
+    public void AZeroWaitAlwaysMeansTheFrameIsDue()
+    {
+        // The two halves of the clock have to agree, and this is the direction that
+        // matters: if the wait could reach zero while the floor still refused the
+        // frame, the loop would ask for no wait, decline to emit, ask for no wait
+        // again, and spin a core for the length of the animation.
+        //
+        // Swept rather than spot-checked, and across rates, because the floor carries
+        // a millisecond of slack and the wait does not - so they agree by inequality
+        // rather than by sharing a number, which is exactly the kind of agreement that
+        // breaks silently when one of them is edited.
+        foreach (double frameMs in new[] { 1000.0 / 240, 1000.0 / 144, 1000.0 / 90, 1000.0 / 60, 1000.0 / 15 })
+        {
+            for (double since = 0; since <= frameMs * 2; since += frameMs / 64)
+            {
+                bool noWait = WmDaemon.RemainingUntilFrame(since, frameMs) == TimeSpan.Zero;
+
+                if (noWait)
+                {
+                    Assert.True(
+                        WmDaemon.IsFrameDue(since, frameMs),
+                        $"at {frameMs:F3} ms a frame, {since:F3} ms in: no wait but not due - the loop would spin");
+                }
+            }
+        }
+    }
 }

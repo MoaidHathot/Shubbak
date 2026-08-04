@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using Shubbak.Core.Diagnostics;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.WindowsAndMessaging;
@@ -57,6 +59,40 @@ public sealed class MessageLoop : IDisposable
     public Func<TimeSpan>? NextTimeout { get; set; }
 
     public bool IsRunning => _running;
+
+    /// <summary>
+    /// How much longer than asked a wait that ran to its timeout actually took.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The measurement that says whether the fine timer resolution is really in
+    /// effect. Windows' default timer granularity is 15.625 ms, so without it a
+    /// request for 12 ms comes back at about 15.6 and one for 17 ms at about 31 -
+    /// which would produce exactly the frame rates the daemon has been measuring, from
+    /// a cause that has nothing to do with its own arithmetic.
+    /// </para>
+    /// <para>
+    /// Only waits that timed out are recorded. A wait cut short by a message or a
+    /// signal says nothing about the clock, and mixing the two would bury the answer
+    /// in a distribution of unrelated numbers - which is the mistake the combined tick
+    /// interval made before the frame interval was separated from it.
+    /// </para>
+    /// </remarks>
+    public LatencyStats WakeOvershoot { get; } = new(4096, "wake overshoot");
+
+    /// <summary>Waits that ran to their timeout.</summary>
+    public long WaitsTimedOut => Interlocked.Read(ref _waitsTimedOut);
+
+    /// <summary>Waits cut short by a message or a signal arriving.</summary>
+    /// <remarks>
+    /// How often anything paced by the timeout is interrupted mid-interval. High
+    /// against <see cref="WaitsTimedOut"/> means the loop is being driven by traffic
+    /// rather than by its own clock.
+    /// </remarks>
+    public long WaitsInterrupted => Interlocked.Read(ref _waitsInterrupted);
+
+    private long _waitsTimedOut;
+    private long _waitsInterrupted;
 
     /// <summary>
     /// Wakes the pump. Safe to call from any thread, including a hook callback.
@@ -156,12 +192,30 @@ public sealed class MessageLoop : IDisposable
 
         HANDLE handle = (HANDLE)_wake.SafeWaitHandle.DangerousGetHandle();
 
-        PInvoke.MsgWaitForMultipleObjectsEx(
+        long before = Stopwatch.GetTimestamp();
+
+        WAIT_EVENT result = PInvoke.MsgWaitForMultipleObjectsEx(
             1,
             &handle,
             timeout,
             QUEUE_STATUS_FLAGS.QS_ALLINPUT,
             MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
+
+        // The return value says why the wait ended, and was previously discarded.
+        // Without it there is no way to tell a loop running late from a loop being
+        // woken early, and those want opposite fixes.
+        if (result == WAIT_EVENT.WAIT_TIMEOUT)
+        {
+            Interlocked.Increment(ref _waitsTimedOut);
+
+            double elapsedMs = (Stopwatch.GetTimestamp() - before) * 1000.0 / Stopwatch.Frequency;
+
+            WakeOvershoot.Record(elapsedMs - timeout);
+        }
+        else
+        {
+            Interlocked.Increment(ref _waitsInterrupted);
+        }
     }
 
     /// <summary>

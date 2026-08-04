@@ -123,6 +123,94 @@ public sealed class MessageLoopTests
     }
 
     [Fact]
+    public void AWaitThatRunsOutIsToldApartFromOneThatIsCutShort()
+    {
+        // The wait's return value says why it ended and used to be discarded. Without
+        // it a loop running late and a loop being woken early look identical from
+        // outside, and they want opposite fixes - one is the clock, the other is the
+        // traffic.
+        using var timer = new TimerResolution(1);
+        using var loop = new MessageLoop();
+
+        timer.Acquire();
+
+        loop.NextTimeout = () => TimeSpan.FromMilliseconds(10);
+
+        Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(10));
+
+        try
+        {
+            Thread.Sleep(200);
+
+            long timedOut = loop.WaitsTimedOut;
+
+            Assert.True(timedOut > 0, "no wait ran to its timeout in 200 ms at a 10 ms interval");
+
+            // Now interrupt it repeatedly and watch the other counter, not this one.
+            for (int i = 0; i < 20; i++)
+            {
+                loop.Wake();
+                Thread.Sleep(2);
+            }
+
+            Assert.True(
+                loop.WaitsInterrupted > 0,
+                "waking the loop twenty times recorded no interrupted wait");
+        }
+        finally
+        {
+            loop.Stop();
+            thread.Join(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
+    public void TheFineTimerKeepsWaitsCloseToWhatWasAskedFor()
+    {
+        // Windows' default timer granularity is 15.625 ms, so without the fine
+        // resolution a 10 ms wait comes back at about 15.6 - an overshoot of 5.6 ms
+        // that would cap any frame rate above about 64 Hz regardless of what the
+        // daemon asked for, and would look exactly like a bug in its arithmetic.
+        //
+        // A timing assertion, so the threshold is set to tell 1 ms granularity from
+        // 15.625 ms rather than to measure the scheduler: the two produce medians
+        // about five milliseconds apart and this sits between them.
+        using var timer = new TimerResolution(1);
+        using var loop = new MessageLoop();
+
+        timer.Acquire();
+
+        Assert.True(timer.IsHeld, "timeBeginPeriod(1) was refused, so this measures nothing");
+
+        loop.NextTimeout = () => TimeSpan.FromMilliseconds(10);
+
+        Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(10));
+
+        try
+        {
+            Thread.Sleep(400);
+
+            Assert.True(loop.WakeOvershoot.Count > 5, $"only {loop.WakeOvershoot.Count} samples");
+
+            // A low percentile rather than the median. Transient load on the machine
+            // pushes the upper tail out and can move a median by several milliseconds,
+            // which made this flake about one run in ten. It cannot pull the best
+            // waits in: 15.625 ms granularity overshoots a 10 ms request by 5.6 ms on
+            // every single wait, including the luckiest. So the question this asks -
+            // "did any wait come back near when it was asked to?" - separates the two
+            // granularities without depending on the machine being quiet.
+            double best = loop.WakeOvershoot.Percentile(0.1);
+
+            Assert.True(best < 4, $"even the promptest waits overshot 10 ms by {best:F2} ms");
+        }
+        finally
+        {
+            loop.Stop();
+            thread.Join(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Fact]
     public void StoppingEndsTheLoop()
     {
         using var loop = new MessageLoop();
