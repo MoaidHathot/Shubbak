@@ -38,6 +38,47 @@ public sealed class WindowCommitter
                SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
                SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS);
 
+    /// <summary>
+    /// <see cref="DefaultFlags"/> plus <c>SWP_ASYNCWINDOWPOS</c>, for animation only.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without the flag, <c>EndDeferWindowPos</c> <i>sends</i> to each target window's
+    /// thread and blocks until that thread has processed it. Every window being moved
+    /// therefore gets to decide how long the window manager's animation loop takes,
+    /// and a browser or an Electron app busy on its UI thread stops the loop dead.
+    /// </para>
+    /// <para>
+    /// This is not a theory. The first run to measure the commit call found a median
+    /// of <b>3.71 ms to move a median of one window</b> - 53% of a 7 ms frame budget -
+    /// with a p99 of 73.63 ms and a worst case of 138.75 ms. The worst tick of that
+    /// entire run was 138.76 ms, so ten microseconds of the worst stall the daemon
+    /// suffered was something other than this call.
+    /// </para>
+    /// <para>
+    /// ADR 0001 measured the same path at 94.6% of frame time and drew the conclusion
+    /// that managed code was not the bottleneck, which was correct. What it could not
+    /// see is that its harness moved synthetic windows whose message pumps were idle
+    /// and always ready to answer. Real targets are not.
+    /// </para>
+    /// <para>
+    /// Animation only, deliberately. The flag makes the move asynchronous, so
+    /// <c>GetWindowRect</c> can briefly report the old rectangle - harmless for a
+    /// waypoint that a later frame supersedes, and harmless for the final frame
+    /// because "is the window already where we put it?" is answered from
+    /// <see cref="_lastApplied"/> rather than by asking Windows. Placement outside an
+    /// animation keeps the synchronous flags until there is a measurement saying it
+    /// should not.
+    /// </para>
+    /// <para>
+    /// Windows ignores the flag when the calling thread and the target window's thread
+    /// share an input queue, so it changes nothing for windows in this process and
+    /// everything for the cross-process ones that were doing the blocking.
+    /// </para>
+    /// </remarks>
+    private const uint FrameFlags =
+        DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
+
     private readonly Dictionary<nint, Rect> _lastCommitted = [];
 
     /// <summary>
@@ -400,14 +441,23 @@ public sealed class WindowCommitter
         PInvoke.EndDeferWindowPos(batch);
     }
 
-    private static void MoveSingle(nint handle, Rect rect)
+    /// <summary>Places one window immediately, without a batch.</summary>
+    /// <param name="handle">The window to move.</param>
+    /// <param name="rect">Where its visible frame should end up.</param>
+    /// <param name="flags">
+    /// Defaults to the synchronous <see cref="DefaultFlags"/>. The animation path
+    /// passes <see cref="FrameFlags"/>, because a fallback frame is still a frame and
+    /// blocking on a busy target is exactly as bad when the batch failed as when it
+    /// did not.
+    /// </param>
+    private static void MoveSingle(nint handle, Rect rect, uint flags = DefaultFlags)
     {
         Rect target = Expand(handle, rect);
 
         PInvoke.SetWindowPos(
             new HWND(handle), HWND.Null,
             target.X, target.Y, target.Width, target.Height,
-            (SET_WINDOW_POS_FLAGS)DefaultFlags);
+            (SET_WINDOW_POS_FLAGS)flags);
     }
 
     /// <summary>
@@ -560,7 +610,7 @@ public sealed class WindowCommitter
         if (batch.IsNull)
         {
             foreach (AnimationFrame frame in frames)
-                MoveSingle((nint)frame.Handle, frame.Rect);
+                MoveSingle((nint)frame.Handle, frame.Rect, FrameFlags);
         }
         else
         {
@@ -578,7 +628,7 @@ public sealed class WindowCommitter
                 batch = PInvoke.DeferWindowPos(
                     batch, new HWND((nint)frame.Handle), HWND.Null,
                     target.X, target.Y, target.Width, target.Height,
-                    (SET_WINDOW_POS_FLAGS)DefaultFlags);
+                    (SET_WINDOW_POS_FLAGS)FrameFlags);
 
                 if (batch.IsNull)
                 {
@@ -588,7 +638,7 @@ public sealed class WindowCommitter
             }
 
             if (ok) PInvoke.EndDeferWindowPos(batch);
-            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect);
+            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect, FrameFlags);
         }
 
         lock (_lastCommitted)
