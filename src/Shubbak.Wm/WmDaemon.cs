@@ -158,12 +158,7 @@ public sealed class WmDaemon : IDisposable
         _executor = new CommandExecutor(_wm);
     }
 
-    /// <summary>Raised for every state change, for the IPC server to forward.</summary>
-    public event Action<IReadOnlyList<WmEvent>>? EventsProduced;
-
     public WindowManager Manager => _wm;
-
-    public ShubbakConfig Config => _config;
 
     /// <summary>Starts the daemon and pumps messages until <see cref="Stop"/>.</summary>
     public void Run(string? configPath)
@@ -1227,8 +1222,6 @@ public sealed class WmDaemon : IDisposable
 
             Publish(outcome.Result);
             PerformHostAction(outcome);
-
-            if (outcome.Events.Count > 0) _layoutDirty = true;
         }
     }
 
@@ -1374,8 +1367,6 @@ public sealed class WmDaemon : IDisposable
 
         Publish(outcome.Result);
         PerformHostAction(outcome);
-
-        if (outcome.Events.Count > 0) _layoutDirty = true;
 
         return outcome;
     }
@@ -1546,11 +1537,11 @@ public sealed class WmDaemon : IDisposable
                 // file, reloads at the same moment rather than keeping whatever it was
                 // launched with.
                 //
-                // Through Publish, because that is what reaches the IPC subscribers.
-                // Raising EventsProduced directly announced it to nothing at all: it
-                // has no subscribers, and the publish to clients lives inside Publish.
-                // The bar carried on with its old configuration and said nothing,
-                // which looked exactly like a reload that had worked.
+                // Through Publish, because that is the only path that reaches the IPC
+                // subscribers. An earlier version raised a daemon-level event instead,
+                // which announced it to nothing at all - that event never had a single
+                // subscriber. The bar carried on with its old configuration and said
+                // nothing, which looked exactly like a reload that had worked.
                 Publish(new WmResult(true, [new ConfigReloaded(_configPath)]));
                 break;
 
@@ -1601,8 +1592,19 @@ public sealed class WmDaemon : IDisposable
         if (commandLine.StartsWith('"'))
         {
             int close = commandLine.IndexOf('"', 1);
+
             if (close > 0)
                 return (commandLine[1..close], commandLine[(close + 1)..].Trim());
+
+            // A quote opened and never closed. Falling through to the space split was
+            // worse than useless: it returned the opening quote as part of the path,
+            // so `"C:\Program Files\app.exe` launched `"C:\Program` and failed with a
+            // message naming a file nobody had typed.
+            //
+            // Quoting is the user saying the path contains spaces, so the remainder is
+            // all path and there are no arguments. That is the only reading that can
+            // still start the program they meant.
+            return (commandLine[1..], string.Empty);
         }
 
         int space = commandLine.IndexOf(' ', StringComparison.Ordinal);
@@ -1787,27 +1789,24 @@ public sealed class WmDaemon : IDisposable
 
         _lastMonitorSyncTicks = now;
 
-        if (MonitorLayoutChanged()) SyncMonitors();
+        // Enumerated once and handed to both, rather than each asking the display
+        // configuration for itself. Asking twice a second, forever, for the whole life
+        // of the process is the same waste SettleWorkArea already avoids.
+        IReadOnlyList<MonitorInfo> monitors = MonitorSource.Enumerate();
+
+        if (MonitorLayoutChanged(monitors)) SyncMonitors(monitors);
     }
 
     /// <summary>
-    /// Whether the monitor layout differs from what the tree records.
+    /// Whether an already-read monitor list differs from the tree.
     /// </summary>
     /// <remarks>
-    /// Checked before syncing because <see cref="SyncMonitors()"/> publishes events and
-    /// marks the layout dirty, and doing that twice a second regardless would keep
-    /// the window manager permanently busy on an idle desktop.
-    /// </remarks>
-    private bool MonitorLayoutChanged() => MonitorLayoutChanged(MonitorSource.Enumerate());
-
-    /// <summary>Whether an already-read monitor list differs from the tree.</summary>
-    /// <remarks>
-    /// Takes the list so a caller that is about to act on it does not enumerate the
-    /// display configuration twice - once to ask, once to apply.
+    /// Checked before syncing because <see cref="SyncMonitors(IReadOnlyList{MonitorInfo})"/>
+    /// publishes events and marks the layout dirty, and doing that twice a second
+    /// regardless would keep the window manager permanently busy on an idle desktop.
     /// </remarks>
     private bool MonitorLayoutChanged(IReadOnlyList<MonitorInfo> current)
     {
-
         if (current.Count != _wm.Root.Monitors.Count) return true;
 
         foreach (MonitorInfo info in current)
@@ -2085,7 +2084,6 @@ public sealed class WmDaemon : IDisposable
 
     private void SyncMonitors(IReadOnlyList<MonitorInfo> current)
     {
-
         foreach (MonitorInfo info in current)
         {
             MonitorNode? existing = _wm.Root.FindMonitor(info.DeviceId);
@@ -2270,14 +2268,6 @@ public sealed class WmDaemon : IDisposable
         }
     }
 
-    /// <summary>
-    /// Applies the config's logging settings.
-    /// </summary>
-    /// <remarks>
-    /// Command line flags win. Someone who launched with <c>--log-level trace</c> is
-    /// mid-investigation, and having a config reload silently drop them back to
-    /// <c>info</c> would throw away exactly the detail they were collecting.
-    /// </remarks>
     /// <summary>Records which rule triggers any rule actually uses.</summary>
     private void IndexRuleTriggers()
     {
@@ -2291,6 +2281,14 @@ public sealed class WmDaemon : IDisposable
         }
     }
 
+    /// <summary>
+    /// Applies the config's logging settings.
+    /// </summary>
+    /// <remarks>
+    /// Command line flags win. Someone who launched with <c>--log-level trace</c> is
+    /// mid-investigation, and having a config reload silently drop them back to
+    /// <c>info</c> would throw away exactly the detail they were collecting.
+    /// </remarks>
     private void ApplyLoggingConfig(bool initial)
     {
         if (_logLevelFromCommandLine) return;
@@ -2403,14 +2401,13 @@ public sealed class WmDaemon : IDisposable
 
         foreach (WmEvent wmEvent in result.Events)
         {
-                        // Binding mode lives in two places: the state machine, which reports it,
+            // Binding mode lives in two places: the state machine, which reports it,
             // and the lookup table, which enforces it.
             if (wmEvent is BindingModeChanged mode)
             {
                 _bindings.SetMode(mode.Mode);
                 ReportBindingMode(mode.Mode);
             }
-
 
             if (wmEvent is CommandRejected rejected)
             {
@@ -2435,8 +2432,16 @@ public sealed class WmDaemon : IDisposable
             _ipc?.Publish(wmEvent.Topic, StateProjection.Payload(wmEvent, _wm));
         }
 
-        _layoutDirty = true;
-        EventsProduced?.Invoke(result.Events);
+        // Only when something can actually have moved.
+        //
+        // Every event used to mark the layout dirty, which is correct and costs more
+        // than it looks: a pending pass re-arranges the whole tree, reads the position
+        // of every visible window, shortens the pump's wait from 250 ms to 7 ms, and
+        // raises the system timer resolution to 1 ms. The last of those is machine-wide
+        // rather than ours, so a window retitling itself several times a second - a
+        // playing video, a terminal showing its directory - held the whole computer at
+        // a fine timer for passes that could not move anything.
+        if (result.Events.AffectGeometry()) _layoutDirty = true;
     }
 
     public void Dispose()
