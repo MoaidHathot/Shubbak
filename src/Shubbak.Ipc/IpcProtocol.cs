@@ -113,12 +113,126 @@ public static class IpcProtocol
     /// The named pipe both ends use.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Per-user rather than global, so two people logged into the same machine each
     /// drive their own window manager rather than fighting over one.
+    /// </para>
+    /// <para>
+    /// Identified by the account's SID and not its name. Two accounts called
+    /// <c>alice</c> in different domains share a name and nothing else, and would have
+    /// collided; lower-casing a name also carries the Turkish-I problem, where a
+    /// user called <c>ALICE</c> resolves differently depending on the machine's
+    /// culture. The name is kept as a suffix so the pipe is still recognisable in
+    /// Process Explorer.
+    /// </para>
+    /// <para>
+    /// The version is part of the name deliberately. Adding or removing a method
+    /// degrades gracefully, but changing a payload does not - System.Text.Json ignores
+    /// members it does not know and leaves missing ones at their default, so an old
+    /// bar against a new window manager misreads the state rather than failing. A
+    /// version in the name turns that into "no window manager is running", which is
+    /// wrong in a way anyone can act on.
+    /// </para>
     /// </remarks>
-    public static string PipeName =>
-        $"shubbak-{Environment.UserName.ToLowerInvariant()}";
+    public static string PipeName { get; } = BuildPipeName();
+
+    /// <summary>
+    /// The wire format both ends must agree on.
+    /// </summary>
+    /// <remarks>
+    /// Raise this whenever a payload changes shape - a renamed field, a removed one,
+    /// or a meaning that no longer matches the name. Adding an optional field with a
+    /// sensible default does not need it.
+    /// </remarks>
+    public const int ProtocolVersion = 1;
+
+    private static string BuildPipeName()
+    {
+        string account = Environment.UserName;
+
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+
+                if (identity.User is { } sid) account = sid.Value;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException)
+            {
+                // Falling back to the name is worse but still works on one machine
+                // with one account, which is every ordinary case.
+            }
+        }
+
+        return $"shubbak-v{ProtocolVersion}-{account}";
+    }
 
     /// <summary>Messages are newline-delimited JSON.</summary>
     public const char MessageTerminator = '\n';
+
+    /// <summary>
+    /// Told to a client whose backlog was dropped, so it re-reads the world.
+    /// </summary>
+    /// <remarks>
+    /// A client mirroring state cannot notice events that never arrived. Without this
+    /// it carries on showing whatever it last heard about - wrong, and confident -
+    /// until something unrelated corrects it.
+    /// </remarks>
+    public const string ResyncTopic = "wm.resync";
+
+    /// <summary>
+    /// Every topic the window manager publishes.
+    /// </summary>
+    /// <remarks>
+    /// Held here so both ends agree, and so a subscription can be checked. Subscribing
+    /// to anything at all was accepted, which meant a bar author who wrote
+    /// <c>window.focus</c> for <c>window.focused</c> was told it had worked and then
+    /// heard nothing for the life of the process.
+    /// </remarks>
+    public static readonly IReadOnlySet<string> Topics = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "window.managed",
+        "window.unmanaged",
+        "window.focused",
+        "window.title_changed",
+        "window.state_changed",
+        "window.tags_changed",
+        "window.moved",
+        "workspace.activated",
+        "workspace.created",
+        "workspace.destroyed",
+        "workspace.moved",
+        "layout.changed",
+        "container.resized",
+        "monitor.added",
+        "monitor.removed",
+        "monitor.changed",
+        "binding_mode.changed",
+        "command.rejected",
+        "config.reloaded",
+        ResyncTopic,
+    };
+
+    /// <summary>
+    /// The longest message either end will read.
+    /// </summary>
+    /// <remarks>
+    /// A reader that waits for a newline will wait for one that never comes, growing
+    /// its buffer until the process dies. A window tree serialises to a few tens of
+    /// kilobytes, so a megabyte is far more than any honest message and far less than
+    /// enough to hurt.
+    /// </remarks>
+    public const int MaxMessageBytes = 1024 * 1024;
+
+    /// <summary>How many clients may be connected at once.</summary>
+    /// <remarks>
+    /// A bar per monitor, a CLI call or two, and a tail. Anything past that is a
+    /// runaway rather than a workflow, and each connection costs a lock taken on the
+    /// daemon thread for every published event.
+    /// </remarks>
+    public const int MaxClients = 32;
+
+    /// <summary>How many distinct topics one client may subscribe to.</summary>
+    public const int MaxSubscriptionsPerClient = 64;
 }

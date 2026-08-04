@@ -59,39 +59,68 @@ public sealed class IpcClient : IAsyncDisposable
     }
 
     /// <summary>Sends a request and waits for its response.</summary>
+    /// <summary>Sends one request and waits for its reply.</summary>
+    /// <remarks>
+    /// Bounded. The server can decline to reply at all - a payload that deserialises
+    /// to JSON null takes that path - and every caller passed no token, so a single
+    /// wedged request left the caller waiting for the life of the process rather than
+    /// failing with something it could report.
+    /// </remarks>
     public async Task<IpcResponse> SendAsync(
         string method, string? payload = null, CancellationToken token = default)
     {
         if (_writer is null || _reader is null)
             throw new InvalidOperationException("Not connected.");
 
+        using var timeout = new CancellationTokenSource(ResponseTimeout);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+
         var request = new IpcRequest(method, payload, _nextId++);
 
-        await _writer.WriteLineAsync(
-            JsonSerializer.Serialize(request, IpcJsonContext.Default.IpcRequest).AsMemory(), token)
-            .ConfigureAwait(false);
-
-        while (true)
+        try
         {
-            string? line = await _reader.ReadLineAsync(token).ConfigureAwait(false);
-            if (line is null) throw new IOException("The window manager closed the connection.");
-            if (line.Length == 0) continue;
+            await _writer.WriteLineAsync(
+                JsonSerializer.Serialize(request, IpcJsonContext.Default.IpcRequest).AsMemory(), linked.Token)
+                .ConfigureAwait(false);
 
-            // Events can interleave with responses on a subscribed connection, so
-            // anything that is not our response is skipped.
-            IpcResponse? response;
-            try
+            while (true)
             {
-                response = JsonSerializer.Deserialize(line, IpcJsonContext.Default.IpcResponse);
-            }
-            catch (JsonException)
-            {
-                continue;
-            }
+                string? line = await _reader.ReadLineAsync(linked.Token).ConfigureAwait(false);
+                if (line is null) throw new IOException("The window manager closed the connection.");
+                if (line.Length == 0) continue;
 
-            if (response is not null && response.Id == request.Id) return response;
+                // Events can interleave with responses on a subscribed connection, so
+                // anything that is not our response is skipped.
+                IpcResponse? response;
+                try
+                {
+                    response = JsonSerializer.Deserialize(line, IpcJsonContext.Default.IpcResponse);
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+
+                if (response is not null && response.Id == request.Id) return response;
+            }
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"The window manager did not answer '{method}' within {ResponseTimeout.TotalSeconds:F0} s.");
         }
     }
+
+    /// <summary>
+    /// How long to wait for a reply.
+    /// </summary>
+    /// <remarks>
+    /// Generous, because a request is answered on the daemon thread and that thread
+    /// may legitimately be busy adopting windows at startup. Long enough never to fire
+    /// in normal use, short enough that a wedged daemon is reported rather than waited
+    /// on forever.
+    /// </remarks>
+    private static readonly TimeSpan ResponseTimeout = TimeSpan.FromSeconds(10);
 
     /// <summary>Subscribes and yields events until cancelled.</summary>
     /// <param name="topics">Comma-separated topics, or null for everything.</param>
@@ -102,7 +131,13 @@ public sealed class IpcClient : IAsyncDisposable
     {
         if (_reader is null) throw new InvalidOperationException("Not connected.");
 
-        await SendAsync("subscribe", topics ?? "*", token).ConfigureAwait(false);
+        // Checked, because the server can refuse - an unknown topic can never fire, so
+        // accepting the refusal quietly leaves the caller waiting for something that
+        // was never going to arrive.
+        IpcResponse response = await SendAsync("subscribe", topics ?? "*", token).ConfigureAwait(false);
+
+        if (!response.Ok)
+            throw new InvalidOperationException(response.Error ?? "the subscription was refused.");
 
         while (!token.IsCancellationRequested)
         {

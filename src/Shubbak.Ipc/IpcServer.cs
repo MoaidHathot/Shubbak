@@ -30,6 +30,16 @@ public sealed class IpcServer : IAsyncDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Reports something worth knowing, without this assembly knowing how to log.
+    /// </summary>
+    /// <remarks>
+    /// This layer deliberately has no dependencies, so it cannot reach the logger -
+    /// but refusing a connection or a subscription in silence is exactly the failure
+    /// mode being fixed elsewhere. The host wires this to its own logging.
+    /// </remarks>
+    public Action<string>? Warn { get; set; }
+
+    /// <summary>
     /// Handles one request, returning the response.
     /// </summary>
     /// <remarks>
@@ -111,6 +121,22 @@ public sealed class IpcServer : IAsyncDisposable
 
                 await pipe.WaitForConnectionAsync(_shutdown.Token).ConfigureAwait(false);
 
+                // Bounded. Every connected client costs a lock taken on the daemon
+                // thread for every event published, so an unbounded set is a way for
+                // one runaway process to slow the window manager down for everybody.
+                bool room;
+                lock (_gate) room = _clients.Count < IpcProtocol.MaxClients;
+
+                if (!room)
+                {
+                    Warn?.Invoke(
+                        $"refusing a connection: already serving {IpcProtocol.MaxClients} clients");
+
+                    pipe.Dispose();
+                    pipe = null;
+                    continue;
+                }
+
                 var client = new ClientConnection(pipe, this);
 
                 lock (_gate) _clients.Add(client);
@@ -181,6 +207,14 @@ public sealed class IpcServer : IAsyncDisposable
             _server = server;
         }
 
+        /// <summary>
+        /// Whether this client has fallen behind and needs to re-read the world.
+        /// </summary>
+        /// <remarks>
+        /// Set when the outbox overflows, cleared once the notice has been sent.
+        /// </remarks>
+        private bool _needsResync;
+
         public bool IsSubscribed(string topic)
         {
             lock (_gate) return _subscribedToAll || _subscriptions.Contains(topic);
@@ -190,18 +224,40 @@ public sealed class IpcServer : IAsyncDisposable
         {
             lock (_gate)
             {
-                // Bounded: a client that has stopped reading is dropped rather than
-                // allowed to grow the queue without limit. The window manager must
-                // never be held hostage by a stalled bar.
-                if (_outbox.Count >= 512)
+                // Bounded, because the window manager must never be held hostage by a
+                // stalled bar.
+                //
+                // Dropping the backlog was already right; doing it silently was not. A
+                // client mirroring state has no way to notice that events went missing,
+                // so it carries on displaying whatever it last heard about, wrong and
+                // confident, until something unrelated happens to correct it. The
+                // resync notice below turns that into something self-healing: the
+                // client is told its picture is stale and re-reads it.
+                if (_outbox.Count >= MaxQueuedEvents)
                 {
                     _outbox.Clear();
+                    _needsResync = true;
+                    _pending.Release();
                     return;
                 }
 
                 _outbox.Enqueue(message);
             }
+
+            _pending.Release();
         }
+
+        /// <summary>How many pushed events may wait before the backlog is dropped.</summary>
+        private const int MaxQueuedEvents = 512;
+
+        /// <summary>Released whenever there is something to flush.</summary>
+        /// <remarks>
+        /// The loop used to race the reader against a sixteen-millisecond timer, so
+        /// every connected client woke sixty times a second forever on an idle desktop
+        /// and the losing timer was abandoned rather than cancelled. Waiting on a
+        /// signal costs nothing until there is something to send.
+        /// </remarks>
+        private readonly SemaphoreSlim _pending = new(0);
 
         public async Task RunAsync(CancellationToken token)
         {
@@ -213,14 +269,14 @@ public sealed class IpcServer : IAsyncDisposable
                     AutoFlush = false,
                 };
 
-                Task<string?> readTask = reader.ReadLineAsync(token).AsTask();
+                Task<string?> readTask = ReadBoundedLineAsync(reader, token);
+                Task pendingTask = _pending.WaitAsync(token);
 
                 while (!token.IsCancellationRequested && _pipe.IsConnected)
                 {
-                    // Interleave reading requests with flushing queued events, so a
-                    // subscriber receives pushes without having to send anything.
-                    Task completed = await Task.WhenAny(readTask, Task.Delay(16, token))
-                        .ConfigureAwait(false);
+                    // Whichever comes first: a request to answer, or something to push.
+                    // Neither costs anything while waiting.
+                    Task completed = await Task.WhenAny(readTask, pendingTask).ConfigureAwait(false);
 
                     if (completed == readTask)
                     {
@@ -228,7 +284,13 @@ public sealed class IpcServer : IAsyncDisposable
                         if (line is null) break;
 
                         await HandleLineAsync(line, writer).ConfigureAwait(false);
-                        readTask = reader.ReadLineAsync(token).AsTask();
+                        readTask = ReadBoundedLineAsync(reader, token);
+                    }
+                    else
+                    {
+                        // Recreated only when it actually fired, so a signal arriving
+                        // while a request was being handled is not swallowed.
+                        pendingTask = _pending.WaitAsync(token);
                     }
 
                     await FlushOutboxAsync(writer).ConfigureAwait(false);
@@ -245,6 +307,38 @@ public sealed class IpcServer : IAsyncDisposable
             {
                 _server.Remove(this);
                 Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Reads one message, refusing one that never ends.
+        /// </summary>
+        /// <remarks>
+        /// A plain ReadLine waits for a newline that a hostile or broken client need
+        /// never send, growing its buffer until the window manager runs out of memory.
+        /// Returning null past the limit closes the connection, which is the only
+        /// answer available: the stream is no longer at a message boundary, so there
+        /// is nothing to resynchronise to.
+        /// </remarks>
+        private static async Task<string?> ReadBoundedLineAsync(StreamReader reader, CancellationToken token)
+        {
+            var builder = new StringBuilder();
+            var buffer = new char[1];
+
+            while (true)
+            {
+                int read = await reader.ReadAsync(buffer.AsMemory(0, 1), token).ConfigureAwait(false);
+
+                if (read == 0) return builder.Length > 0 ? builder.ToString() : null;
+
+                char c = buffer[0];
+
+                if (c == IpcProtocol.MessageTerminator) return builder.ToString();
+                if (c == '\r') continue;
+
+                if (builder.Length >= IpcProtocol.MaxMessageBytes) return null;
+
+                builder.Append(c);
             }
         }
 
@@ -269,8 +363,12 @@ public sealed class IpcServer : IAsyncDisposable
 
             if (string.Equals(request.Method, "subscribe", StringComparison.Ordinal))
             {
-                Subscribe(request.Payload);
-                await WriteAsync(writer, new IpcResponse(request.Id, true)).ConfigureAwait(false);
+                string? rejected = Subscribe(request.Payload);
+
+                await WriteAsync(writer, rejected is null
+                    ? new IpcResponse(request.Id, true)
+                    : new IpcResponse(request.Id, false, null, rejected)).ConfigureAwait(false);
+
                 return;
             }
 
@@ -281,37 +379,68 @@ public sealed class IpcServer : IAsyncDisposable
             await WriteAsync(writer, response).ConfigureAwait(false);
         }
 
-        private void Subscribe(string? topics)
+        /// <summary>Records a subscription, or explains why it was refused.</summary>
+        /// <returns>Null when accepted, otherwise the reason.</returns>
+        private string? Subscribe(string? topics)
         {
+            if (string.IsNullOrWhiteSpace(topics) || topics == "*")
+            {
+                lock (_gate) _subscribedToAll = true;
+                return null;
+            }
+
+            string[] requested = topics.Split(
+                ',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            // Checked rather than accepted. A topic that does not exist can never fire,
+            // so telling the client it worked leaves them waiting for something that
+            // was never going to arrive - and a misspelling is the likeliest cause.
+            string[] unknown = [.. requested.Where(t => !IpcProtocol.Topics.Contains(t))];
+
+            if (unknown.Length > 0)
+            {
+                return $"unknown topic(s): {string.Join(", ", unknown)}. " +
+                       $"Known topics: {string.Join(", ", IpcProtocol.Topics.Order())}.";
+            }
+
             lock (_gate)
             {
-                if (string.IsNullOrWhiteSpace(topics) || topics == "*")
-                {
-                    _subscribedToAll = true;
-                    return;
-                }
+                if (_subscriptions.Count + requested.Length > IpcProtocol.MaxSubscriptionsPerClient)
+                    return $"too many subscriptions; the limit is {IpcProtocol.MaxSubscriptionsPerClient}.";
 
-                foreach (string topic in topics.Split(',', StringSplitOptions.RemoveEmptyEntries |
-                                                          StringSplitOptions.TrimEntries))
-                {
-                    _subscriptions.Add(topic);
-                }
+                foreach (string topic in requested) _subscriptions.Add(topic);
             }
+
+            return null;
         }
 
         private async Task FlushOutboxAsync(StreamWriter writer)
         {
             string[] pending;
+            bool resync;
 
             lock (_gate)
             {
-                if (_outbox.Count == 0) return;
+                resync = _needsResync;
+                _needsResync = false;
+
+                if (!resync && _outbox.Count == 0) return;
+
                 pending = [.. _outbox];
                 _outbox.Clear();
             }
 
             foreach (string message in pending)
                 await writer.WriteLineAsync(message).ConfigureAwait(false);
+
+            // Sent after whatever survived, so a client that acts on it re-reads a
+            // world at least as new as the events it just processed.
+            if (resync)
+            {
+                await writer.WriteLineAsync(JsonSerializer.Serialize(
+                    new IpcEvent(IpcProtocol.ResyncTopic, "{}"),
+                    IpcJsonContext.Default.IpcEvent)).ConfigureAwait(false);
+            }
 
             await writer.FlushAsync().ConfigureAwait(false);
         }

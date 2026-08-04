@@ -83,6 +83,8 @@ public sealed class ConfigLoader
     {
         var config = ShubbakConfig.Default;
 
+        WarnAboutUnknown(document.Nodes, KnownSections, "section", "SHB0427");
+
         config = ApplyGeneral(config, document.Node("general"));
         config = ApplyGaps(config, document.Node("gaps"));
         config = ApplyEffects(config, document.Node("window-effects"));
@@ -102,11 +104,76 @@ public sealed class ConfigLoader
         };
     }
 
+    private static readonly string[] KnownSections =
+    [
+        "general", "gaps", "window-effects", "animation", "logging",
+        "workspaces", "keybindings", "binding-modes", "rules", "app", "bar",
+    ];
+
+    private static readonly string[] KnownGeneralKeys =
+    [
+        "focus-follows-cursor", "toggle-workspace-on-refocus", "follow-window-on-move",
+        "cursor-jump", "initial-window-state", "hide-method", "keep-in-taskbar",
+        "default-layout", "unmanaged-window-commands", "allow-shell-exec-over-ipc",
+        "startup-command",
+    ];
+
+    private static readonly string[] KnownAnimationKeys =
+    [
+        "enabled", "animate-new-windows", "minimum-distance",
+        "window-open", "window-move", "layout-change", "workspace-switch",
+    ];
+
+    private static readonly string[] KnownEffectsKeys =
+    [
+        "border", "focused-colour", "focused-color", "unfocused-colour", "unfocused-color",
+        "floating-colour", "floating-color", "floating-unfocused-colour", "floating-unfocused-color",
+    ];
+
+    private static readonly string[] KnownGapsKeys = ["inner", "outer"];
+
+    private static readonly string[] KnownLoggingKeys = ["level", "file", "console"];
+
+    /// <summary>
+    /// Reports anything in a block that is not a name this loader knows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A warning rather than an error, so loading stays total: a config with one
+    /// misspelling still produces a usable window manager rather than none.
+    /// </para>
+    /// <para>
+    /// Nothing checked this, so a misspelled section or setting was discarded in
+    /// perfect silence and check-config said "ok". Writing <c>focus-follows-mouse</c>
+    /// for <c>focus-follows-cursor</c> left the user reading the documentation again
+    /// for a setting they had already written correctly by their own reckoning - the
+    /// loader knew it was wrong and said nothing.
+    /// </para>
+    /// </remarks>
+    private void WarnAboutUnknown(
+        IEnumerable<KdlNode> nodes, string[] known, string what, string code)
+    {
+        foreach (KdlNode node in nodes)
+        {
+            if (known.Contains(node.Name, StringComparer.OrdinalIgnoreCase)) continue;
+
+            string? guess = Suggestion.Closest(node.Name, known);
+
+            Report(Diagnostic.Warning(
+                code,
+                $"Unknown {what} '{node.Name}'; it will be ignored.",
+                node.Span,
+                guess is null ? null : $"Did you mean '{guess}'?"));
+        }
+    }
+
     // ---- general -----------------------------------------------------------
 
     private ShubbakConfig ApplyGeneral(ShubbakConfig config, KdlNode? node)
     {
         if (node is null) return config;
+
+        WarnAboutUnknown(node.Children, KnownGeneralKeys, "setting in 'general'", "SHB0428");
 
         List<string> startup = [];
         foreach (KdlNode child in node.ChildrenNamed("startup-command"))
@@ -241,6 +308,8 @@ public sealed class ConfigLoader
     private ShubbakConfig ApplyGaps(ShubbakConfig config, KdlNode? node)
     {
         if (node is null) return config;
+        WarnAboutUnknown(node.Children, KnownGapsKeys, "setting in 'gaps'", "SHB0428");
+
 
         int inner = Int(node, "inner", config.InnerGap);
 
@@ -268,6 +337,8 @@ public sealed class ConfigLoader
     private ShubbakConfig ApplyEffects(ShubbakConfig config, KdlNode? node)
     {
         if (node is null) return config;
+        WarnAboutUnknown(node.Children, KnownEffectsKeys, "setting in 'window-effects'", "SHB0428");
+
 
         return config with
         {
@@ -284,6 +355,8 @@ public sealed class ConfigLoader
     private ShubbakConfig ApplyAnimation(ShubbakConfig config, KdlNode? node)
     {
         if (node is null) return config;
+
+        WarnAboutUnknown(node.Children, KnownAnimationKeys, "setting in 'animation'", "SHB0428");
 
         Core.Animation.AnimationOptions animation = config.Animation;
 
@@ -345,6 +418,8 @@ public sealed class ConfigLoader
     private ShubbakConfig ApplyLogging(ShubbakConfig config, KdlNode? node)
     {
         if (node is null) return config;
+        WarnAboutUnknown(node.Children, KnownLoggingKeys, "setting in 'logging'", "SHB0428");
+
 
         Core.Diagnostics.LogLevel level = config.LogLevel;
 
@@ -404,11 +479,48 @@ public sealed class ConfigLoader
                 continue;
             }
 
+            string? layout = child.Property("layout")?.AsString();
+
+            // Validated here for the same reason default-layout is: an unrecognised
+            // name would otherwise fall back to the default in silence, and a
+            // workspace quietly not being the layout it says it is looks like the
+            // setting being ignored - which it was.
+            if (layout is { Length: > 0 } && !Core.Layouts.LayoutRegistry.TryResolve(layout, out _))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0429",
+                    $"Workspace '{name}' asks for unknown layout '{layout}'.",
+                    child.Property("layout")?.Span ?? child.Span,
+                    $"Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}."));
+
+                layout = null;
+            }
+
+            int? monitor = null;
+
+            if (child.Property("monitor") is { } m && m.TryAsInt(out int index))
+            {
+                // A negative index is never a monitor, and it would silently fall
+                // through to the primary rather than being reported.
+                if (index < 0)
+                {
+                    Report(Diagnostic.Error(
+                        "SHB0430",
+                        $"Workspace '{name}' asks for monitor {index}.",
+                        m.Span,
+                        "Monitors are numbered from 0."));
+                }
+                else
+                {
+                    monitor = index;
+                }
+            }
+
             workspaces.Add(new WorkspaceConfig(
                 name,
                 child.Property("display-name")?.AsString(),
-                child.Property("monitor") is { } m && m.TryAsInt(out int index) ? index : null,
-                child.Property("layout")?.AsString()));
+                monitor,
+                layout));
         }
 
         return workspaces;
@@ -844,13 +956,27 @@ public sealed class ConfigLoader
             ordinal++;
             string name = child.Argument(0)?.AsString() ?? $"rule #{ordinal}";
 
-            RuleTrigger trigger = (Text(child, "on", "manage") ?? "manage").ToLowerInvariant() switch
+            string triggerName = (Text(child, "on", "manage") ?? "manage").ToLowerInvariant();
+
+            RuleTrigger trigger = triggerName switch
             {
                 "manage" => RuleTrigger.OnManage,
                 "title-change" => RuleTrigger.OnTitleChange,
                 "focus" => RuleTrigger.OnFocus,
                 _ => RuleTrigger.OnManage,
             };
+
+            // Reported rather than assumed. Falling back to "manage" meant a rule
+            // written on="titel-change" ran at a completely different moment from the
+            // one intended, and looked from the outside like the rule not matching.
+            if (triggerName is not ("manage" or "title-change" or "focus"))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0431",
+                    $"Rule '{name}' has unknown trigger '{triggerName}'.",
+                    SpanOf(child, "on"),
+                    "Use on=\"manage\" (the default), on=\"title-change\", or on=\"focus\"."));
+            }
 
             List<WindowMatcher> matchers = [];
             List<string> appReferences = [];

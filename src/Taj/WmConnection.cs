@@ -200,6 +200,14 @@ public sealed class WmConnection : IAsyncDisposable
                 ConfigReloaded?.Invoke();
                 break;
 
+            case "wm.resync":
+                // The window manager dropped a backlog it could not deliver, so what
+                // the bar is showing is older than the world. Re-reading is the whole
+                // point of being told.
+                Log.Warn(LogCategory.Ipc, "missed events; re-reading the window manager's state");
+                await RefreshAsync(client).ConfigureAwait(false);
+                break;
+
             default:
                 break;
         }

@@ -500,49 +500,9 @@ public static class CommandParser
             "wm-reload-config", "wm-redraw", "wm-exit",
         ];
 
-        string? best = null;
-        int bestDistance = int.MaxValue;
-
-        foreach (string candidate in known)
-        {
-            int distance = Levenshtein(verb, candidate);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = candidate;
-            }
-        }
-
-        // Only suggest when the guess is close enough to be plausible; a wild guess
+        // Only suggests when the guess is close enough to be plausible; a wild guess
         // is worse than no guess, because it sends the user down the wrong path.
-        return best is not null && bestDistance <= 3 ? $"Did you mean '{best}'?" : null;
+        return Suggestion.Closest(verb, known) is { } best ? $"Did you mean '{best}'?" : null;
     }
 
-    private static int Levenshtein(string a, string b)
-    {
-        if (a.Length == 0) return b.Length;
-        if (b.Length == 0) return a.Length;
-
-        Span<int> previous = new int[b.Length + 1];
-        Span<int> current = new int[b.Length + 1];
-
-        for (int j = 0; j <= b.Length; j++) previous[j] = j;
-
-        for (int i = 1; i <= a.Length; i++)
-        {
-            current[0] = i;
-
-            for (int j = 1; j <= b.Length; j++)
-            {
-                int cost = a[i - 1] == b[j - 1] ? 0 : 1;
-                current[j] = Math.Min(
-                    Math.Min(current[j - 1] + 1, previous[j] + 1),
-                    previous[j - 1] + cost);
-            }
-
-            current.CopyTo(previous);
-        }
-
-        return previous[b.Length];
-    }
 }

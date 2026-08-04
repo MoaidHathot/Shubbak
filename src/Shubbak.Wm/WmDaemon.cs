@@ -187,7 +187,7 @@ public sealed class WmDaemon : IDisposable
         _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
         _keyboard.Start(_bindings.IsBound);
 
-        _ipc = new IpcServer();
+        _ipc = new IpcServer { Warn = message => Log.Warn(LogCategory.Ipc, message) };
         _ipc.Start(new WmDaemonIpc(this).HandleAsync);
 
         RunStartupCommands();
