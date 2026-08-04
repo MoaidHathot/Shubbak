@@ -98,7 +98,6 @@ public sealed class KeyboardSource : IDisposable
     /// <summary>Whether the hook is installed.</summary>
     public bool IsRunning => _thread is not null && !_disposed;
     private BindingProbe? _probe;
-    private volatile bool _suspended;
     private bool _disposed;
 
     public KeyboardSource(int capacityPowerOfTwo = 1024)
@@ -112,20 +111,6 @@ public sealed class KeyboardSource : IDisposable
 
     /// <summary>Keystrokes dropped because the consumer fell behind.</summary>
     public long Dropped => Interlocked.Read(ref _dropped);
-
-    /// <summary>
-    /// When true the hook passes everything through untouched.
-    /// </summary>
-    /// <remarks>
-    /// Backs <c>wm-toggle-pause</c>. Suspending rather than unhooking matters: the
-    /// binding that resumes has to keep working, and re-installing a hook later can
-    /// fail if the desktop has changed.
-    /// </remarks>
-    public bool Suspended
-    {
-        get => _suspended;
-        set => _suspended = value;
-    }
 
     /// <summary>
     /// Installs the hook on a dedicated thread and begins delivering keystrokes.
@@ -256,7 +241,7 @@ public sealed class KeyboardSource : IDisposable
         if (nCode < 0) return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
 
         KeyboardSource? source = s_instance;
-        if (source is null || source._suspended)
+        if (source is null)
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
 
         var info = (KBDLLHOOKSTRUCT*)lParam.Value;

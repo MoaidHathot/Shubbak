@@ -252,15 +252,24 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private TimeSpan NextTimeout()
     {
-        if (_animation.IsAnimating || _layoutDirty)
-        {
-            _timerResolution.Acquire();
-            return FrameInterval;
-        }
+        // The timer follows motion, and nothing else. It is a process-wide setting
+        // that defeats timer coalescing and the deeper idle states, so it is held for
+        // the thing it was raised for - animation frames landing when they are due -
+        // and not for a pending layout pass, which is one pass rather than a sequence
+        // of them and does not care whether it starts seven or fifteen milliseconds
+        // from now.
+        //
+        // _layoutDirty is set by almost everything, so the timer was in practice raised
+        // whenever anything happened at all. With `animation { enabled #false }` in the
+        // config it was still raised on every dirty tick - for a feature the user had
+        // switched off. It is now never raised in that case, which is what the comment
+        // on TimerResolution has always claimed.
+        if (_animation.IsAnimating) _timerResolution.Acquire();
+        else _timerResolution.Release();
 
-        _timerResolution.Release();
-
-        return IdleInterval;
+        // The wait is the other question, and has a different answer: a pending pass
+        // does want to run promptly.
+        return _animation.IsAnimating || _layoutDirty ? FrameInterval : IdleInterval;
     }
 
     /// <summary>Roughly 144 Hz, the rate ADR 0001 gates the animation path on.</summary>
@@ -328,7 +337,10 @@ public sealed class WmDaemon : IDisposable
             DrainWindowEvents();
             DrainInbox();
 
-            if (_layoutDirty)
+            // Paused means the daemon keeps its hands off the desktop. The flag is left
+            // set, so everything that accumulated while paused is applied in a single
+            // pass on resuming rather than being lost.
+            if (_layoutDirty && !_wm.IsPaused)
             {
                 // Cleared only once the pass has finished. Clearing first meant a
                 // throw left the desktop in whatever half-applied state the exception
@@ -499,6 +511,18 @@ public sealed class WmDaemon : IDisposable
     private void HandleWindowEvent(WinEventNotification notification)
     {
         nint handle = notification.Handle;
+
+        // Paused suspends window management: nothing is adopted, released, focused or
+        // re-arranged while the user has asked Shubbak to leave the desktop alone.
+        //
+        // Destruction is the exception, because it is bookkeeping rather than
+        // management. A window that has closed is gone whether we are paused or not,
+        // and the event saying so arrives exactly once - dropping it would leave a dead
+        // node in the tree with nothing left to reap it.
+        //
+        // Keybindings deliberately keep working. The command that resumes is one of
+        // them, and a pause that cannot be undone from the keyboard is a trap.
+        if (_wm.IsPaused && notification.Kind != WinEventKind.Destroyed) return;
 
         // LOCATIONCHANGE used to be excluded here by name: S4 measured 122 of them per
         // second from a single dragged window, and logging them would drown everything
