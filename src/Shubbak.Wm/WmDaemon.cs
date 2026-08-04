@@ -1024,7 +1024,7 @@ public sealed class WmDaemon : IDisposable
             $"- **Allocated**: {GC.GetTotalAllocatedBytes(precise: false) / (1024 * 1024)} MB",
         }));
 
-        report.AddCodeSection("Window tree", DescribeTree());
+        report.AddCodeSection("Window tree", TreeRenderer.Render(_wm.Root, _wm.FocusedWindow));
 
         if (_configPath is not null && File.Exists(_configPath))
         {
@@ -1039,64 +1039,6 @@ public sealed class WmDaemon : IDisposable
         }
 
         return report.AddRecentLog().AddFooter().ToString();
-    }
-
-    /// <summary>
-    /// Renders the tree as indented text.
-    /// </summary>
-    /// <remarks>
-    /// A drawing of the tree is worth far more than the same facts as JSON when the
-    /// question is "why is this window the wrong size?" - the nesting is the answer,
-    /// and nesting is what an indented rendering shows at a glance.
-    /// </remarks>
-    private string DescribeTree()
-    {
-        var output = new System.Text.StringBuilder();
-
-        foreach (MonitorNode monitor in _wm.Root.Monitors)
-        {
-            output.AppendLine(
-                $"monitor {monitor.DeviceId}{(monitor.IsPrimary ? " (primary)" : "")} " +
-                $"{monitor.Bounds} work={monitor.WorkArea} dpi={monitor.Dpi}");
-
-            foreach (WorkspaceNode workspace in monitor.Workspaces)
-            {
-                output.AppendLine(
-                    $"  workspace \"{workspace.Name}\"{(workspace.IsActive ? " [active]" : "")} " +
-                    $"layout={workspace.Layout.Name} {workspace.Rect}");
-
-                foreach (Node child in workspace.Children) DescribeNode(child, output, depth: 2);
-            }
-        }
-
-        return output.Length == 0 ? "(empty)" : output.ToString();
-    }
-
-    private void DescribeNode(Node node, System.Text.StringBuilder output, int depth)
-    {
-        string indent = new(' ', depth * 2);
-
-        switch (node)
-        {
-            case WindowNode window:
-                output.AppendLine(
-                    $"{indent}window 0x{window.Handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
-                    $"({window.Identity.ProcessName}) {window.State} " +
-                    $"ratio={window.SizeRatio:F3} {window.Rect}" +
-                    $"{(ReferenceEquals(window, _wm.FocusedWindow) ? " [focused]" : "")}");
-                break;
-
-            case ContainerNode container:
-                output.AppendLine(
-                    $"{indent}container layout={container.Layout.Name} " +
-                    $"ratio={container.SizeRatio:F3} {container.Rect}");
-
-                foreach (Node child in container.Children) DescribeNode(child, output, depth + 1);
-                break;
-
-            default:
-                break;
-        }
     }
 
     /// <summary>
