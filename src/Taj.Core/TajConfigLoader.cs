@@ -17,7 +17,28 @@ public sealed record TajConfig(
     IReadOnlyDictionary<string, BarProfile> Profiles,
     IReadOnlyList<BarRule> Rules,
     BarProfile Default,
-    IReadOnlyList<SourceSpec> Sources);
+    IReadOnlyList<SourceSpec> Sources)
+{
+    /// <summary>How long the bar waits for a window manager it has lost, by default.</summary>
+    public static readonly TimeSpan DefaultWindowManagerTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// How long to keep waiting for the window manager after losing it, or null to
+    /// wait for ever.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only ever counted once the bar has connected at least one time. A bar that has
+    /// never reached a window manager waits indefinitely, because it is usually
+    /// launched by the window manager's own startup command and can win the race.
+    /// </para>
+    /// <para>
+    /// If the window manager comes back inside the window the bar reconnects and the
+    /// clock resets, so restarting the daemon does not cost you the bar.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? WindowManagerTimeout { get; init; } = DefaultWindowManagerTimeout;
+}
 
 /// <summary>A source declared in config.</summary>
 /// <param name="Name">Name templates refer to.</param>
@@ -133,7 +154,46 @@ public static class TajConfigLoader
         BarProfile fallbackProfile =
             profiles.TryGetValue("default", out BarProfile? named) ? named : profiles.Values.First();
 
-        return (new TajConfig(profiles, rules, fallbackProfile, sources), diagnostics);
+        var config = new TajConfig(profiles, rules, fallbackProfile, sources)
+        {
+            WindowManagerTimeout = ParseWindowManagerTimeout(bar, diagnostics),
+        };
+
+        return (config, diagnostics);
+    }
+
+    /// <summary>
+    /// Reads <c>window-manager-timeout</c>, in seconds, where zero waits for ever.
+    /// </summary>
+    private static TimeSpan? ParseWindowManagerTimeout(KdlNode bar, List<Diagnostic> diagnostics)
+    {
+        if (bar.Child("window-manager-timeout") is not { } node) return TajConfig.DefaultWindowManagerTimeout;
+
+        if (node.Argument(0) is not { } value || !value.TryAsInt(out int seconds))
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0011",
+                "'window-manager-timeout' must be a whole number of seconds.",
+                node.Span,
+                "Write window-manager-timeout 30, or 0 to keep the bar running for ever."));
+
+            return TajConfig.DefaultWindowManagerTimeout;
+        }
+
+        if (seconds < 0)
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0012",
+                $"'window-manager-timeout' cannot be negative ({seconds}).",
+                node.Span,
+                "Write 0 to keep the bar running for ever."));
+
+            return TajConfig.DefaultWindowManagerTimeout;
+        }
+
+        // Zero is "no timeout" rather than "give up at once". A bar that vanished the
+        // instant the window manager hiccupped would be worse than one that lingers.
+        return seconds == 0 ? null : TimeSpan.FromSeconds(seconds);
     }
 
     private static SourceSpec? ParseSource(KdlNode node, List<Diagnostic> diagnostics)

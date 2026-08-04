@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
@@ -66,6 +67,25 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>True while connected to a window manager.</summary>
     public bool IsConnected { get; private set; }
 
+    private bool _everConnected;
+
+    /// <summary>
+    /// How long to keep waiting for a window manager that has gone, or null to wait
+    /// for ever.
+    /// </summary>
+    public TimeSpan? WindowManagerTimeout { get; set; } = TajConfig.DefaultWindowManagerTimeout;
+
+    /// <summary>
+    /// Raised when the bar should close: the window manager said it was going, or it
+    /// has been gone longer than <see cref="WindowManagerTimeout"/>.
+    /// </summary>
+    /// <remarks>
+    /// Raised, not acted on. Closing the bar touches windows belonging to the thread
+    /// running the message loop, and this is not that thread - the same reason
+    /// <see cref="ConfigReloaded"/> is a signal rather than a call.
+    /// </remarks>
+    public event Action? WindowManagerStopped;
+
     /// <summary>
     /// Connects and begins consuming events, retrying until the window manager
     /// appears.
@@ -96,12 +116,26 @@ public sealed class WmConnection : IAsyncDisposable
 
     private async Task PumpAsync()
     {
+        // Zero until the first successful connection, and reset by every one after,
+        // so the clock only ever runs against a window manager that was really there.
+        long lostAtTicks = 0;
+
         while (!_shutdown.IsCancellationRequested)
         {
             try
             {
                 if (!IpcClient.IsServerRunning())
                 {
+                    if (ReconnectPolicy.ShouldGiveUp(
+                            _everConnected, lostAtTicks, Stopwatch.GetTimestamp(), WindowManagerTimeout))
+                    {
+                        Log.Info(LogCategory.Ipc,
+                            $"no window manager for {WindowManagerTimeout!.Value.TotalSeconds:F0}s; closing the bar");
+
+                        WindowManagerStopped?.Invoke();
+                        return;
+                    }
+
                     await Task.Delay(1000, _shutdown.Token).ConfigureAwait(false);
                     continue;
                 }
@@ -111,6 +145,11 @@ public sealed class WmConnection : IAsyncDisposable
 
                 _client = client;
                 IsConnected = true;
+
+                // Reset on every connection, not only the first: a window manager that
+                // comes back inside the window is not a window manager that has gone.
+                _everConnected = true;
+                lostAtTicks = 0;
 
                 Log.Info(LogCategory.Ipc, "connected to the window manager");
 
@@ -139,6 +178,10 @@ public sealed class WmConnection : IAsyncDisposable
             {
                 _client = null;
                 IsConnected = false;
+
+                // Stamped where the connection ended rather than where it was noticed,
+                // so the wait is measured from the loss itself.
+                if (lostAtTicks == 0) lostAtTicks = Stopwatch.GetTimestamp();
             }
 
             try
@@ -198,6 +241,17 @@ public sealed class WmConnection : IAsyncDisposable
                 // objects belonging to the thread running the message loop, and this
                 // is not that thread.
                 ConfigReloaded?.Invoke();
+                break;
+
+            case IpcProtocol.ShutdownTopic:
+                // The window manager is going. A bar launched by it should go too,
+                // rather than sitting there attached to nothing.
+                //
+                // Best-effort on the sending side - the server does not flush its
+                // outboxes on the way out - so missing this is not a failure. The
+                // timeout on the reconnect loop catches it a few seconds later.
+                Log.Info(LogCategory.Ipc, "the window manager is shutting down; closing the bar");
+                WindowManagerStopped?.Invoke();
                 break;
 
             case "wm.resync":
