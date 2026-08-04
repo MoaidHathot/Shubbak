@@ -461,11 +461,11 @@ public sealed class WindowCommitter
     }
 
     /// <summary>
-    /// Grows a target rectangle to account for the window''s invisible shadow.
+    /// Grows a target rectangle to account for the window's invisible shadow.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// A window''s rectangle includes its drop shadow, which is transparent. Asking
+    /// A window's rectangle includes its drop shadow, which is transparent. Asking
     /// for the rectangle the user should see and passing it straight to SetWindowPos
     /// therefore insets the visible frame by the shadow on every side - so two
     /// neighbouring windows show a gap of twice the shadow no matter what the gap is
