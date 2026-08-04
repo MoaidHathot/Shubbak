@@ -24,22 +24,41 @@ namespace Shubbak.Wm.Tests;
 /// </remarks>
 public sealed class FrameClockTests
 {
-    /// <summary>The pump's frame interval, which the floor is defined in terms of.</summary>
+    /// <summary>
+    /// A frame interval to state the rules in terms of - roughly 144 Hz.
+    /// </summary>
+    /// <remarks>
+    /// Not the default any more. The rate is configuration now, so the floor takes it
+    /// as an argument and these assertions name the rate they are about.
+    /// </remarks>
     private const double FrameMs = 7;
+
+    [Fact]
+    public void TheFloorFollowsWhateverRateItIsGiven()
+    {
+        // The point of making the rate configurable: at 60 fps a gap of 10 ms is not
+        // yet a frame, where at 144 it is two. A floor that had kept the old fixed
+        // number would have gone on emitting frames at 143 Hz however the file was
+        // configured, which is the flood this exists to prevent.
+        const double SixtyFps = 1000.0 / 60;
+
+        Assert.False(WmDaemon.IsFrameDue(10, SixtyFps));
+        Assert.True(WmDaemon.IsFrameDue(10, FrameMs));
+    }
 
     [Fact]
     public void AFrameIsNotDueBeforeTheIntervalHasPassed()
     {
         // The regression, stated as a number: the loop woke roughly every 0.8 ms and
         // committed a frame every time it woke.
-        Assert.False(WmDaemon.IsFrameDue(0.81));
+        Assert.False(WmDaemon.IsFrameDue(0.81, FrameMs));
     }
 
     [Fact]
     public void AFrameIsDueOnceTheIntervalHasPassed()
     {
-        Assert.True(WmDaemon.IsFrameDue(FrameMs));
-        Assert.True(WmDaemon.IsFrameDue(FrameMs + 0.01));
+        Assert.True(WmDaemon.IsFrameDue(FrameMs, FrameMs));
+        Assert.True(WmDaemon.IsFrameDue(FrameMs + 0.01, FrameMs));
     }
 
     [Fact]
@@ -48,8 +67,8 @@ public sealed class FrameClockTests
         // Exclusive would push every frame to the next wake. The pump asks for exactly
         // this interval, so the tick that arrives on time is the common case, not an
         // edge case - rejecting it would halve the frame rate.
-        Assert.True(WmDaemon.IsFrameDue(FrameMs));
-        Assert.False(WmDaemon.IsFrameDue(FrameMs - 0.01));
+        Assert.True(WmDaemon.IsFrameDue(FrameMs, FrameMs));
+        Assert.False(WmDaemon.IsFrameDue(FrameMs - 0.01, FrameMs));
     }
 
     [Fact]
@@ -58,7 +77,7 @@ public sealed class FrameClockTests
         // The floor must not become a schedule. A frame that missed its slot is
         // committed at the next opportunity rather than waiting for a multiple of the
         // interval to come round.
-        Assert.True(WmDaemon.IsFrameDue(FrameMs * 3.5));
+        Assert.True(WmDaemon.IsFrameDue(FrameMs * 3.5, FrameMs));
     }
 
     [Fact]
@@ -67,8 +86,8 @@ public sealed class FrameClockTests
         // Both are defined in terms of the pump's frame interval and neither can see
         // it directly. If one is changed without the other, animations either stutter
         // or run at the wrong speed, and the two failures look nothing alike.
-        Assert.Equal(FrameMs * 2, WmDaemon.ClampAnimationStep(1000));
-        Assert.True(WmDaemon.IsFrameDue(FrameMs));
-        Assert.False(WmDaemon.IsFrameDue(FrameMs / 2));
+        Assert.Equal(FrameMs * 2, WmDaemon.ClampAnimationStep(1000, FrameMs));
+        Assert.True(WmDaemon.IsFrameDue(FrameMs, FrameMs));
+        Assert.False(WmDaemon.IsFrameDue(FrameMs / 2, FrameMs));
     }
 }

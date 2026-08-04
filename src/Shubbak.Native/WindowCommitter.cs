@@ -75,6 +75,25 @@ public sealed class WindowCommitter
     /// share an input queue, so it changes nothing for windows in this process and
     /// everything for the cross-process ones that were doing the blocking.
     /// </para>
+    /// <para>
+    /// <b>Every animation frame, including the last one.</b> Sending the settling
+    /// frame synchronously was tried, on the reasoning that a window coming to rest
+    /// should be told properly so it paints promptly rather than showing bare
+    /// background. It was measured and reverted: the settling frame cost <b>87 ms</b>,
+    /// not the ~3.7 ms the median frame had cost, because the end of a resize is
+    /// exactly when an application does its layout and repaint work and so the worst
+    /// possible moment to wait on it. Commit p99 went from 1.35 ms to 55.36 ms, half
+    /// the frames in each motion were lost, and because the tick thread is what
+    /// dispatches commands it added up to 87 ms of keystroke latency after every
+    /// motion. The grey it was meant to fix was not visibly better.
+    /// </para>
+    /// <para>
+    /// The remaining flash of unpainted window is not ours to fix here. The
+    /// application owns its repaint; a window manager can only ask. komorebi documents
+    /// the same artifact and ships its animations at 60 fps rather than 144, which is
+    /// the lever that actually works - fewer frames give each one more time to be
+    /// painted.
+    /// </para>
     /// </remarks>
     private const uint FrameFlags =
         DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;

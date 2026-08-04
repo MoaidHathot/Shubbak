@@ -174,7 +174,7 @@ public sealed class ConfigLoader
 
     private static readonly string[] KnownAnimationKeys =
     [
-        "enabled", "animate-new-windows", "minimum-distance",
+        "enabled", "animate-new-windows", "minimum-distance", "fps",
         "window-open", "window-move", "layout-change", "workspace-switch",
     ];
 
@@ -420,6 +420,7 @@ public sealed class ConfigLoader
             AnimateNewWindows = Bool(node, "animate-new-windows", animation.AnimateNewWindows),
             MinimumAnimatedDistance = Math.Max(
                 0, Int(node, "minimum-distance", animation.MinimumAnimatedDistance)),
+            FramesPerSecond = FramesPerSecond(node, animation.FramesPerSecond),
             WindowOpen = Profile(node, "window-open", animation.WindowOpen),
             WindowMove = Profile(node, "window-move", animation.WindowMove),
             LayoutChange = Profile(node, "layout-change", animation.LayoutChange),
@@ -427,6 +428,44 @@ public sealed class ConfigLoader
         };
 
         return config with { Animation = animation };
+    }
+
+    /// <summary>
+    /// Reads <c>fps</c>, refusing rates that cannot produce motion anyone can see.
+    /// </summary>
+    /// <remarks>
+    /// Clamped rather than rejected, because a frame rate is a preference and a
+    /// configuration that is merely ambitious should still start. The warning says
+    /// what was used, so a rate that was silently ignored does not look like one that
+    /// was silently honoured.
+    /// </remarks>
+    private int FramesPerSecond(KdlNode parent, int fallback)
+    {
+        KdlNode? node = parent.Child("fps");
+        if (node is null) return fallback;
+
+        if (node.Arguments.Count == 0 || !node.Arguments[0].TryAsInt(out int fps))
+            return fallback;
+
+        int clamped = Math.Clamp(
+            fps,
+            Core.Animation.AnimationOptions.MinimumFps,
+            Core.Animation.AnimationOptions.MaximumFps);
+
+        if (clamped != fps)
+        {
+            Report(Diagnostic.Warning(
+                "SHB0435",
+                $"Animation 'fps' of {fps} is outside the supported range " +
+                $"{Core.Animation.AnimationOptions.MinimumFps}-" +
+                $"{Core.Animation.AnimationOptions.MaximumFps}; {clamped} will be used.",
+                node.Arguments[0].Span,
+                "Below the minimum the motion reads as a series of jumps. Above the " +
+                "maximum the frames are asked for faster than any panel shows them or " +
+                "any application repaints them, so the work is done and then discarded."));
+        }
+
+        return clamped;
     }
 
     /// <summary>

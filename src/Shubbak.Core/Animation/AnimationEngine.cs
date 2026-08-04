@@ -60,6 +60,49 @@ public sealed record AnimationOptions
     /// </remarks>
     public bool AnimateNewWindows { get; init; }
 
+    /// <summary>
+    /// How many frames a second the daemon aims to commit while anything is moving.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sixty, not the panel's refresh rate, and deliberately lower than the 143 this
+    /// used to be fixed at. A window manager does not paint anything: it repositions
+    /// windows and each application repaints itself, on its own thread, at whatever
+    /// rate it can manage. Asking for more frames does not buy smoother motion past
+    /// the point where applications keep up - it just asks them to discard and redraw
+    /// their contents more often, and the ones that cannot fall behind and show bare
+    /// background where their content should be.
+    /// </para>
+    /// <para>
+    /// At 143 the daemon was measured delivering 13 to 16 frames in a 140 ms motion -
+    /// about 100 Hz - so sixty costs far less in practice than the numbers suggest
+    /// while nearly halving the repaint load on every window being moved. komorebi
+    /// defaults to the same sixty and documents the same artifact as a known
+    /// limitation.
+    /// </para>
+    /// <para>
+    /// Raise it if your applications keep up and you want the motion finer; the cost
+    /// is CPU in this process and repaint pressure in theirs.
+    /// </para>
+    /// </remarks>
+    public int FramesPerSecond { get; init; } = 60;
+
+    /// <summary>How long one frame lasts, derived from <see cref="FramesPerSecond"/>.</summary>
+    public TimeSpan FramePeriod =>
+        TimeSpan.FromMilliseconds(1000.0 / Math.Clamp(FramesPerSecond, MinimumFps, MaximumFps));
+
+    /// <summary>
+    /// Below this the motion reads as a series of jumps rather than movement.
+    /// </summary>
+    public const int MinimumFps = 15;
+
+    /// <summary>
+    /// Above this the daemon is asking for frames faster than any panel displays them
+    /// and faster than any application repaints them, so the extra work is discarded
+    /// by the compositor and paid for twice.
+    /// </summary>
+    public const int MaximumFps = 240;
+
     public AnimationProfile WindowOpen { get; init; } =
         new(TimeSpan.FromMilliseconds(180), Easing.EaseOutExpo);
 
