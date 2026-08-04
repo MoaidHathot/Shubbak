@@ -15,7 +15,6 @@ public enum WinEventKind
     Shown,
     Hidden,
     TitleChanged,
-    LocationChanged,
     Cloaked,
     Uncloaked,
     Foreground,
@@ -61,7 +60,24 @@ public sealed class WinEventSource : IDisposable
         (PInvoke.EVENT_OBJECT_SHOW, WinEventKind.Shown),
         (PInvoke.EVENT_OBJECT_HIDE, WinEventKind.Hidden),
         (PInvoke.EVENT_OBJECT_NAMECHANGE, WinEventKind.TitleChanged),
-        (PInvoke.EVENT_OBJECT_LOCATIONCHANGE, WinEventKind.LocationChanged),
+
+        // EVENT_OBJECT_LOCATIONCHANGE is deliberately absent.
+        //
+        // It was subscribed and then discarded by an empty case, which is not the same
+        // as being free. WINEVENT_SKIPOWNPROCESS does not help: it skips windows owned
+        // by this process, and every managed window belongs to another one. So every
+        // DeferWindowPos the animation path issued came straight back as a callback,
+        // and callbacks arrive through this thread's message queue, which is exactly
+        // what the pump waits on with QS_ALLINPUT.
+        //
+        // The loop therefore paced itself against its own output: commit a frame, be
+        // woken by the echo of that frame, commit another. The 7 ms frame interval was
+        // a ceiling that was never reached, and the only thing limiting the rate was
+        // how long EndDeferWindowPos took - which is the definition of a spin. A
+        // dragged window produced 122 of these a second on its own, each waking a pump
+        // that would throw it away.
+        //
+        // Nothing downstream wants it. MoveSizeEnd is the event that carries intent.
         (PInvoke.EVENT_OBJECT_CLOAKED, WinEventKind.Cloaked),
         (PInvoke.EVENT_OBJECT_UNCLOAKED, WinEventKind.Uncloaked),
         (PInvoke.EVENT_SYSTEM_FOREGROUND, WinEventKind.Foreground),
