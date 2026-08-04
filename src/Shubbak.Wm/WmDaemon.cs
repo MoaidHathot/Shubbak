@@ -739,50 +739,9 @@ public sealed class WmDaemon : IDisposable
         // hand overrules it, which is the whole point of toggle-managed.
         if (!forced && _windows.AlreadyDecided(handle)) return;
 
-        // Concealed windows are considered only during the initial adoption pass, and
-        // even then only to be reconciled against the session below.
-        ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: _restoring);
+        if (!PassesFilter(handle, forced)) return;
 
-        if (!decision.Manageable && !forced)
-        {
-            // Attributes are built here rather than above because reading them costs a
-            // process handle, and the overwhelming majority of windows are rejected
-            // without ever needing them. Paying that only for the rejections a rule is
-            // allowed to overturn keeps the common path as cheap as it was.
-            if (WindowFilter.CanBeOverridden(decision.Reason) && _rules.ShouldForceManage(ToAttributes(handle)))
-            {
-                Log.Debug(LogCategory.Rule,
-                    $"managing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
-                    $"despite {decision.Explain()}: a rule asked for it");
-            }
-            else
-            {
-                // At trace level this is the answer to "why is that window floating?",
-                // recorded as it happens rather than reconstructed afterwards. The class
-                // is included because it is what a rule has to match on, and transient
-                // windows - shell flyouts especially - are gone long before anything can
-                // be pointed at them to ask.
-                if (Log.IsEnabled(LogLevel.Trace))
-                    Log.Trace(LogCategory.Window,
-                        $"skip 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
-                        $"[{Win32Window.GetClassName(handle)}]: {decision.Explain()}");
-
-                return;
-            }
-        }
-        else if (!decision.Manageable)
-        {
-            // Asked for by hand. Only the rules that keep the desktop itself out are
-            // absolute; everything else is a heuristic the user is entitled to overrule.
-            if (!WindowFilter.CanBeOverridden(decision.Reason))
-            {
-                Log.Warn(LogCategory.Window,
-                    $"refusing to manage 0x{handle:X}: {decision.Explain()}");
-                return;
-            }
-        }
-
-        var attributes = ToAttributes(handle);
+        WindowAttributes attributes = ToAttributes(handle);
 
         if (!forced && _rules.ShouldIgnore(attributes))
         {
@@ -796,95 +755,14 @@ public sealed class WmDaemon : IDisposable
             return;
         }
 
-        var window = new WindowNode(handle, Win32Window.BuildIdentity(handle))
-        {
-            State = WindowFilter.InitialStateFor(handle, _config.InitialWindowState),
-        };
-
-        // A window that starts floating has no remembered position, and the layout
-        // engine treats a floating window's rectangle as the user's to keep - so
-        // without this it would be "kept" at the origin with no size, and the window
-        // would be flung into the corner the instant it appeared.
-        //
-        // Dialogs are the case that matters: Win+R and Save boxes size themselves to
-        // their content, which is precisely why they are not tiled.
-        if (window.State == WindowState.Floating)
-        {
-            // Visible frame, matching what the layout means by a rectangle. See the
-            // same conversion in HandleUserMove.
-            Rect bounds = WindowCommitter.VisibleBounds(handle);
-            if (!bounds.IsEmpty) window.FloatingRect = bounds;
-        }
+        WindowNode window = BuildNode(handle);
 
         // A saved session wins during the initial adoption pass, so a restart puts
         // windows back where they were rather than piling them onto whichever
         // workspace happens to be active.
         WorkspaceNode? remembered = _restoring ? RestoredWorkspaceFor(window) : null;
 
-        // A window still concealed at this point was concealed by whoever ran last -
-        // us, before a crash or a kill. Revive it only when the session names it.
-        // Without that evidence it belongs to the application that hid it: a tray
-        // host, a message-only helper, a media-key listener. A desktop carries dozens.
-        //
-        // Tested against the session match, deliberately, and not against the resolved
-        // workspace. An earlier version checked the latter, which falls back to a real
-        // workspace and so is never null - the guard never fired and startup revealed
-        // eighty-four background windows on an ordinary desktop.
-        if (_restoring && WindowCommitter.IsConcealed(handle))
-        {
-            if (remembered is null)
-            {
-                // Set aside rather than excluded. It is concealed right now and no
-                // session entry claims it, so it is not ours to reveal - but that is a
-                // statement about this moment, not about the window.
-                //
-                // Recorded as permanently ignored before, which was wrong in a way
-                // that took a while to see: an application sitting in the tray when
-                // Shubbak starts was never managed again, however many times it was
-                // opened. Closing and reopening it worked, because that made a new
-                // window with a handle the set had never heard of - which is exactly
-                // how the fault was reported.
-                _windows.SetAside(handle);
-
-                if (Log.IsEnabled(LogLevel.Debug))
-                    Log.Debug(LogCategory.Window,
-                        $"leaving concealed 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
-                        "alone for now: no session entry claims it");
-
-                return;
-            }
-
-            // A budget, not because the check above is expected to fail, but because
-            // it already did once. The session cannot justify reviving more windows
-            // than it remembers, so exceeding that is proof of a logic error and the
-            // damage is visible to the user immediately. Refusing costs a window that
-            // stays concealed; not refusing carpets the desktop.
-            if (_revived >= _revivalBudget)
-            {
-                Log.Error(LogCategory.Window,
-                    $"refusing to revive 0x{handle:X}: already revived {_revived} window(s) " +
-                    $"for a session of {_revivalBudget}. This is a bug - please report it.");
-
-                _windows.Exclude(handle);
-                return;
-            }
-
-            // Claimed, but not revealed here. Whether this window belongs on screen is
-            // the layout's decision, and the layout has not run yet - the first pass is
-            // on the first tick, after the hooks are installed and the startup commands
-            // have been shell-executed.
-            //
-            // Un-cloaking it now put every remembered window on the desktop at once,
-            // stacked at whatever positions they had last run, until that first pass
-            // hid the ones belonging to other workspaces again. Leaving it concealed
-            // costs nothing: Show already reverses a concealment it did not perform,
-            // which is the path this window takes the moment its workspace is shown.
-            _revived++;
-
-            Log.Info(LogCategory.Window,
-                $"claimed concealed 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
-                $"-> workspace {remembered.Name}");
-        }
+        if (!ClaimIfConcealed(handle, window, remembered)) return;
 
         WorkspaceNode? workspace = remembered ?? WorkspaceFor(handle);
 
@@ -920,6 +798,195 @@ public sealed class WmDaemon : IDisposable
         ApplyRules(window, attributes, RuleTrigger.OnManage);
 
         _layoutDirty = true;
+    }
+
+    /// <summary>
+    /// Whether the built-in filter, and any rule allowed to overrule it, let this
+    /// window through.
+    /// </summary>
+    private bool PassesFilter(nint handle, bool forced)
+    {
+        // Concealed windows are considered only during the initial adoption pass, and
+        // even then only to be reconciled against the session below.
+        ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: _restoring);
+
+        if (decision.Manageable) return true;
+
+        if (forced)
+        {
+            // Asked for by hand. Only the rules that keep the desktop itself out are
+            // absolute; everything else is a heuristic the user is entitled to overrule.
+            if (WindowFilter.CanBeOverridden(decision.Reason)) return true;
+
+            Log.Warn(LogCategory.Window, $"refusing to manage 0x{handle:X}: {decision.Explain()}");
+            return false;
+        }
+
+        // Attributes are built here rather than at the top of adoption because reading
+        // them costs a process handle, and the overwhelming majority of windows are
+        // rejected without ever needing them. Paying that only for the rejections a
+        // rule is allowed to overturn keeps the common path as cheap as it was.
+        if (WindowFilter.CanBeOverridden(decision.Reason) && _rules.ShouldForceManage(ToAttributes(handle)))
+        {
+            Log.Debug(LogCategory.Rule,
+                $"managing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
+                $"despite {decision.Explain()}: a rule asked for it");
+
+            return true;
+        }
+
+        // At trace level this is the answer to "why is that window floating?", recorded
+        // as it happens rather than reconstructed afterwards. The class is included
+        // because it is what a rule has to match on, and transient windows - shell
+        // flyouts especially - are gone long before anything can be pointed at them.
+        if (Log.IsEnabled(LogLevel.Trace))
+        {
+            Log.Trace(LogCategory.Window,
+                $"skip 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
+                $"[{Win32Window.GetClassName(handle)}]: {decision.Explain()}");
+        }
+
+        return false;
+    }
+
+    /// <summary>Builds the tree node for a window about to be adopted.</summary>
+    private WindowNode BuildNode(nint handle)
+    {
+        var window = new WindowNode(handle, Win32Window.BuildIdentity(handle))
+        {
+            State = WindowFilter.InitialStateFor(handle, _config.InitialWindowState),
+        };
+
+        // A window that starts floating has no remembered position, and the layout
+        // engine treats a floating window's rectangle as the user's to keep - so
+        // without this it would be "kept" at the origin with no size, and the window
+        // would be flung into the corner the instant it appeared.
+        //
+        // Dialogs are the case that matters: Win+R and Save boxes size themselves to
+        // their content, which is precisely why they are not tiled.
+        if (window.State == WindowState.Floating)
+        {
+            // Visible frame, matching what the layout means by a rectangle. See the
+            // same conversion in HandleUserMove.
+            Rect bounds = WindowCommitter.VisibleBounds(handle);
+            if (!bounds.IsEmpty) window.FloatingRect = bounds;
+        }
+
+        return window;
+    }
+
+    /// <summary>
+    /// Decides what becomes of a window that is still concealed as it is adopted.
+    /// </summary>
+    /// <returns>Whether adoption should continue.</returns>
+    private bool ClaimIfConcealed(nint handle, WindowNode window, WorkspaceNode? remembered)
+    {
+        ConcealedVerdict verdict = JudgeConcealed(
+            restoring: _restoring,
+            concealed: _restoring && WindowCommitter.IsConcealed(handle),
+            claimedBySession: remembered is not null,
+            revived: _revived,
+            revivalBudget: _revivalBudget);
+
+        switch (verdict)
+        {
+            case ConcealedVerdict.LeaveAlone:
+                _windows.SetAside(handle);
+
+                if (Log.IsEnabled(LogLevel.Debug))
+                {
+                    Log.Debug(LogCategory.Window,
+                        $"leaving concealed 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
+                        "alone for now: no session entry claims it");
+                }
+
+                return false;
+
+            case ConcealedVerdict.TooManyRevived:
+                Log.Error(LogCategory.Window,
+                    $"refusing to revive 0x{handle:X}: already revived {_revived} window(s) " +
+                    $"for a session of {_revivalBudget}. This is a bug - please report it.");
+
+                _windows.Exclude(handle);
+                return false;
+
+            case ConcealedVerdict.Revive:
+                // Claimed, but not revealed here. Whether this window belongs on screen
+                // is the layout's decision, and the layout has not run yet - the first
+                // pass is on the first tick, after the hooks are installed and the
+                // startup commands have been shell-executed.
+                //
+                // Un-cloaking it now put every remembered window on the desktop at once,
+                // stacked at whatever positions they had last run, until that first pass
+                // hid the ones belonging to other workspaces again. Leaving it concealed
+                // costs nothing: Show already reverses a concealment it did not perform,
+                // which is the path this window takes the moment its workspace is shown.
+                _revived++;
+
+                Log.Info(LogCategory.Window,
+                    $"claimed concealed 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
+                    $"-> workspace {remembered!.Name}");
+
+                return true;
+
+            case ConcealedVerdict.Adopt:
+            default:
+                return true;
+        }
+    }
+
+    /// <summary>What becomes of a window that is concealed as adoption reaches it.</summary>
+    internal enum ConcealedVerdict
+    {
+        /// <summary>Not concealed, or not a restore. Carry on.</summary>
+        Adopt,
+
+        /// <summary>Concealed and unclaimed: not ours to reveal, for now.</summary>
+        LeaveAlone,
+
+        /// <summary>Claimed, but by more windows than the session can account for.</summary>
+        TooManyRevived,
+
+        /// <summary>Claimed by the session, and within budget.</summary>
+        Revive,
+    }
+
+    /// <summary>
+    /// Whether a concealed window should be revived, set aside, or refused.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A window still concealed at this point was concealed by whoever ran last - us,
+    /// before a crash or a kill. It is revived only when the session names it. Without
+    /// that evidence it belongs to the application that hid it: a tray host, a
+    /// message-only helper, a media-key listener. A desktop carries dozens.
+    /// </para>
+    /// <para>
+    /// The claim is tested against the session match deliberately, and not against the
+    /// resolved workspace. An earlier version checked the latter, which falls back to a
+    /// real workspace and so is never null - the guard never fired, and startup
+    /// revealed eighty-four background windows on an ordinary desktop.
+    /// </para>
+    /// <para>
+    /// The budget exists not because the claim check is expected to fail, but because
+    /// it already did once. The session cannot justify reviving more windows than it
+    /// remembers, so exceeding that is proof of a logic error, and the damage is
+    /// visible to the user immediately. Refusing costs a window that stays concealed;
+    /// not refusing carpets the desktop.
+    /// </para>
+    /// </remarks>
+    internal static ConcealedVerdict JudgeConcealed(
+        bool restoring,
+        bool concealed,
+        bool claimedBySession,
+        int revived,
+        int revivalBudget)
+    {
+        if (!restoring || !concealed) return ConcealedVerdict.Adopt;
+        if (!claimedBySession) return ConcealedVerdict.LeaveAlone;
+        if (revived >= revivalBudget) return ConcealedVerdict.TooManyRevived;
+
+        return ConcealedVerdict.Revive;
     }
 
     /// <summary>
