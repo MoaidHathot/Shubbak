@@ -427,16 +427,9 @@ public sealed class WmDaemon : IDisposable
 
             if (deltaMs > 0) _tickInterval.Record(deltaMs);
 
-            // Read before anything can start or finish a motion, so the frame interval
-            // describes gaps between ticks that were both animating rather than the
-            // gap into or out of an idle stretch.
+            // Read before anything can start or finish a motion, so a motion that both
+            // begins and ends inside this tick is still recognised as one.
             bool wasAnimating = _animation.IsAnimating;
-
-            if (wasAnimating && deltaMs > 0)
-            {
-                _frameInterval.Record(deltaMs);
-                _animatingMs += deltaMs;
-            }
 
             DrainKeyboard();
             DrainWindowEvents();
@@ -462,7 +455,7 @@ public sealed class WmDaemon : IDisposable
             bool started = !wasAnimating && _animation.IsAnimating;
             if (started) _animationsStarted++;
 
-            if (_animation.IsAnimating) AdvanceAnimation(ClampAnimationStep(deltaMs));
+            if (_animation.IsAnimating) MaybeAdvanceFrame(now);
 
             // Reported once per motion, not once per frame - an instrument that logs
             // at frame rate becomes the thing it is measuring.
@@ -472,7 +465,13 @@ public sealed class WmDaemon : IDisposable
             // tick opened" and so left its frame count to be added to whatever the
             // next motion reported.
             if ((wasAnimating || started) && !_animation.IsAnimating)
+            {
+                // Cleared so the next motion's first frame is emitted immediately
+                // rather than waiting out a frame interval measured from the previous
+                // motion, which could have ended minutes ago.
+                _lastFrameTicks = 0;
                 reported = ReportMotionEnded();
+            }
 
             MaybeSyncMonitors(now);
             MaybeRefreshFocusBorder(now);
@@ -496,8 +495,74 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>
-    /// Says how the motion that has just finished went.
+    /// Emits an animation frame, but no faster than <see cref="FrameInterval"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The loop's wait is <c>MsgWaitForMultipleObjectsEx</c> with <c>QS_ALLINPUT</c>,
+    /// so it returns on any queue activity and the interval it asks for is an upper
+    /// bound, never a pace. Until the commit call stopped blocking, nothing noticed:
+    /// <c>EndDeferWindowPos</c> waited on each target window's thread and that wait
+    /// was, by accident, the frame clock.
+    /// </para>
+    /// <para>
+    /// Removing the block removed the clock. The first run without it emitted frames
+    /// at a p50 of 0.81 ms - about 1230 Hz against the 143 Hz asked for, roughly two
+    /// and a half times as many frames as a motion should contain. Every one of those
+    /// carries <c>SWP_NOCOPYBITS</c> and so tells the target to discard its client
+    /// area and repaint. No application can do that a thousand times a second, and the
+    /// visible result was a window whose geometry kept up while its content did not:
+    /// bare grey where the content should be.
+    /// </para>
+    /// <para>
+    /// So the pace is now explicit rather than a side effect of blocking on other
+    /// people's message loops. The loop may still wake as often as it likes - it has
+    /// keyboard and window events to service - but a frame is emitted only when one is
+    /// actually due.
+    /// </para>
+    /// </remarks>
+    private void MaybeAdvanceFrame(long now)
+    {
+        // A first frame has no previous frame to be spaced from, and is emitted at
+        // once: the motion has just been retargeted and the windows are still at their
+        // old positions.
+        bool first = _lastFrameTicks == 0;
+
+        double sinceFrameMs = first
+            ? 0
+            : (now - _lastFrameTicks) * 1000.0 / Stopwatch.Frequency;
+
+        if (!first && !IsFrameDue(sinceFrameMs)) return;
+
+        if (!first)
+        {
+            // Recorded here rather than per tick, so this is the interval between
+            // frames that were actually committed - which is what a frame rate means.
+            _frameInterval.Record(sinceFrameMs);
+            _animatingMs += sinceFrameMs;
+        }
+
+        AdvanceAnimation(ClampAnimationStep(sinceFrameMs));
+
+        _lastFrameTicks = now;
+    }
+
+    /// <summary>When the last animation frame was committed. Zero between motions.</summary>
+    private long _lastFrameTicks;
+
+    /// <summary>
+    /// Whether enough time has passed since the last frame to commit another.
+    /// </summary>
+    /// <remarks>
+    /// A floor on the interval, not a ceiling. The pump's wait is only ever an upper
+    /// bound - it returns on any queue activity - so without this the frame rate is
+    /// whatever the message traffic happens to be, which measured 1230 Hz against a
+    /// 143 Hz target and flooded every window being moved with more repaint requests
+    /// than it could serve.
+    /// </remarks>
+    internal static bool IsFrameDue(double sinceLastFrameMs) =>
+        sinceLastFrameMs >= FrameInterval.TotalMilliseconds;
+
     /// <remarks>
     /// <para>
     /// <see cref="LogCategory.Animation"/> is declared, named in the category guidance
@@ -530,15 +595,13 @@ public sealed class WmDaemon : IDisposable
 
         if (!Log.IsEnabled(LogLevel.Debug)) return false;
 
-        // Plus one because N frames span N-1 gaps. The accumulated time starts at the
-        // second frame - the first tick of a motion delivers a frame but its interval
-        // is the gap out of idle, which can be 250 ms and describes nothing. Without
-        // the correction every motion reported a surplus of exactly one frame, which
-        // would have made the ratio useless for spotting the dropped frames it exists
-        // to spot.
+        // Plus one because N frames span N-1 gaps, and the accumulated time is the
+        // span from the first committed frame to the last. Without the correction
+        // every motion reported a surplus of exactly one frame, which would have made
+        // the ratio useless for spotting the dropped frames it exists to spot.
         //
-        // A surplus can still be real: window events wake the loop early, so during a
-        // workspace switch the tick runs faster than the interval it asks for.
+        // Now that the frame clock enforces a floor on the interval, a surplus is no
+        // longer possible and a deficit means frames were genuinely late.
         double due = FrameInterval.TotalMilliseconds > 0
             ? animatingMs / FrameInterval.TotalMilliseconds + 1
             : 0;
