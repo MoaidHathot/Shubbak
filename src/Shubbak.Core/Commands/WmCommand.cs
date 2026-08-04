@@ -44,6 +44,55 @@ public abstract record WmCommand
     /// </para>
     /// </remarks>
     public virtual bool TargetsFocusedWindow => false;
+
+    /// <summary>
+    /// Whether holding the key down should run this command again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Windows delivers auto-repeat as repeated key-downs with no release between, and
+    /// every one of them used to be executed. For focus and resize that is exactly
+    /// what the user wants and is why holding the key feels right. For the rest it is
+    /// not: <c>close</c> held for a second closes everything on the workspace, and
+    /// <c>shell-exec</c> held for a second starts thirty terminals.
+    /// </para>
+    /// <para>
+    /// Written as one list rather than an override per command, unlike
+    /// <see cref="TargetsFocusedWindow"/>. That property states something about each
+    /// command in isolation; this one is a policy about which commands are dangerous
+    /// to run in a burst, and a policy is easier to get right when it can be read in
+    /// one place.
+    /// </para>
+    /// <para>
+    /// Repeating is the default, because the two mistakes are not equal. A navigation
+    /// command that stops repeating is immediately obvious and merely irritating,
+    /// while a destructive one that repeats is discovered by losing something. Any
+    /// binding can override this with <c>repeat=#false</c> or <c>repeat=#true</c>.
+    /// </para>
+    /// </remarks>
+    public bool RepeatsOnHold => this is not (
+        // Toggles, which flip back and forth at the hardware repeat rate.
+        ToggleStickyCommand or
+        ToggleTilingDirectionCommand or
+        ToggleFloatingCommand or
+        ToggleFullscreenCommand or
+        ToggleMinimisedCommand or
+        ToggleManagedCommand or
+        TogglePauseCommand or
+        CycleLayoutCommand or
+        ScratchpadCommand or
+
+        // Destructive, or expensive, or both.
+        CloseWindowCommand or
+        ExitCommand or
+        ShellExecCommand or
+        ReloadConfigCommand or
+        RedrawCommand or
+
+        // Entering or leaving a mode repeatedly leaves which one is active a matter
+        // of when the key happened to be released.
+        EnableBindingModeCommand or
+        DisableBindingModeCommand);
 }
 
 // ---- focus -----------------------------------------------------------------

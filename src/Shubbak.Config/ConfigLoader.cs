@@ -646,7 +646,36 @@ public sealed class ConfigLoader
             return null;
         }
 
-        return new Keybinding(key, commands, node.Span);
+        bool? repeat = null;
+
+        // Properties on a bind node were read by nothing at all, so the natural thing
+        // to write - bind "alt+q" repeat=#false { close } - parsed cleanly, produced no
+        // diagnostic, and was silently ignored.
+        foreach ((string name, KdlValue value) in node.Properties)
+        {
+            if (string.Equals(name, "repeat", StringComparison.OrdinalIgnoreCase))
+            {
+                if (value.TryAsBool(out bool wanted)) repeat = wanted;
+                else
+                {
+                    Report(Diagnostic.Warning(
+                        "SHB0432",
+                        $"'repeat' on binding '{keyText}' must be #true or #false.",
+                        value.Span,
+                        "Write repeat=#false to stop the binding running while the key is held."));
+                }
+
+                continue;
+            }
+
+            Report(Diagnostic.Warning(
+                "SHB0433",
+                $"Unknown property '{name}' on binding '{keyText}'; it will be ignored.",
+                value.Span,
+                "The only property a binding takes is repeat=#true or repeat=#false."));
+        }
+
+        return new Keybinding(key, commands, node.Span, repeat);
     }
 
     /// <summary>

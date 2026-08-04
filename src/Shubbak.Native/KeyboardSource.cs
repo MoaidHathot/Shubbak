@@ -23,11 +23,13 @@ public enum KeyModifiers
 /// <param name="Modifiers">Modifiers held at the time.</param>
 /// <param name="IsKeyDown">False for key-up.</param>
 /// <param name="IsInjected">True when synthesised by software rather than typed.</param>
+/// <param name="IsRepeat">True when this is auto-repeat rather than a fresh press.</param>
 public readonly record struct KeyEvent(
     ushort VirtualKey,
     KeyModifiers Modifiers,
     bool IsKeyDown,
-    bool IsInjected);
+    bool IsInjected,
+    bool IsRepeat);
 
 /// <summary>
 /// A global low-level keyboard hook.
@@ -271,20 +273,31 @@ public sealed class KeyboardSource : IDisposable
 
         KeyModifiers modifiers = ReadModifiers();
 
-        var key = new KeyEvent(
-            virtualKey,
-            modifiers,
-            isKeyDown,
-            (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0);
-
         bool bound = source._probe is { } probe && probe(virtualKey, modifiers, true);
 
         if (bound)
         {
+            // Auto-repeat arrives as repeated key-downs with no release between them,
+            // and the swallow flag is exactly that state: set by the first press and
+            // cleared by the release. A press that finds it already set is therefore a
+            // repeat, at no cost - the array is already here for another reason.
+            bool repeat = source.WasSwallowed(virtualKey);
+
+            var key = new KeyEvent(
+                virtualKey,
+                modifiers,
+                IsKeyDown: true,
+                (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0,
+                repeat);
+
             source.Enqueue(in key);
             source.MarkSwallowed(virtualKey);
 
             // Swallow, so the focused application never sees the keystroke.
+            //
+            // Repeats are swallowed too, whether or not the binding will act on one.
+            // Letting them through would send the key to the application halfway
+            // through being held, which is worse than either behaviour on its own.
             return new LRESULT(1);
         }
 

@@ -18,7 +18,17 @@ public readonly record struct KeyBinding(int Modifiers, ushort VirtualKey, strin
 public sealed record Keybinding(
     KeyBinding Key,
     IReadOnlyList<WmCommand> Commands,
-    TextSpan Span);
+    TextSpan Span,
+    bool? Repeat = null)
+{
+    /// <summary>Whether holding the key should keep running this binding.</summary>
+    /// <remarks>
+    /// The config wins when it says anything. Otherwise the commands decide, and a
+    /// binding that runs several repeats only if all of them are safe to - the
+    /// dangerous one in the list is the one that matters.
+    /// </remarks>
+    public bool RepeatsOnHold => Repeat ?? Commands.All(command => command.RepeatsOnHold);
+}
 
 /// <summary>
 /// A named set of bindings that replaces the default set while active.

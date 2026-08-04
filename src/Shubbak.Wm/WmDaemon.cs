@@ -409,6 +409,22 @@ public sealed class WmDaemon : IDisposable
             if (Log.IsEnabled(LogLevel.Debug))
                 Log.Debug(LogCategory.Hook, $"{binding.Key.Display} -> {Describe(binding.Commands)}");
 
+            // Auto-repeat. Windows sends repeated key-downs with no release between,
+            // and every one of them used to be executed: holding the close key closed
+            // everything on the workspace, and holding a shell-exec key started a
+            // process per repeat.
+            //
+            // Skipped after the resolve rather than before it, so the trace above still
+            // shows the key being held - which is the one thing that makes "why did
+            // that happen thirty times" answerable.
+            if (key.IsRepeat && !binding.RepeatsOnHold)
+            {
+                if (Log.IsEnabled(LogLevel.Trace))
+                    Log.Trace(LogCategory.Hook, $"{binding.Key.Display}: ignoring auto-repeat");
+
+                continue;
+            }
+
             Execute(binding.Commands);
         }
     }
