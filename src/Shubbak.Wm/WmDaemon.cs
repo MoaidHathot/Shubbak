@@ -530,8 +530,17 @@ public sealed class WmDaemon : IDisposable
 
         if (!Log.IsEnabled(LogLevel.Debug)) return false;
 
+        // Plus one because N frames span N-1 gaps. The accumulated time starts at the
+        // second frame - the first tick of a motion delivers a frame but its interval
+        // is the gap out of idle, which can be 250 ms and describes nothing. Without
+        // the correction every motion reported a surplus of exactly one frame, which
+        // would have made the ratio useless for spotting the dropped frames it exists
+        // to spot.
+        //
+        // A surplus can still be real: window events wake the loop early, so during a
+        // workspace switch the tick runs faster than the interval it asks for.
         double due = FrameInterval.TotalMilliseconds > 0
-            ? animatingMs / FrameInterval.TotalMilliseconds
+            ? animatingMs / FrameInterval.TotalMilliseconds + 1
             : 0;
 
         Log.Debug(LogCategory.Animation,
