@@ -320,18 +320,92 @@ public sealed class KeyboardSource : IDisposable
     /// passed through. Press it a second time and it works.
     /// </para>
     /// <para>
-    /// Still allocation-free and still microseconds: this is four reads of a state
-    /// table, not a system call that can block.
+    /// Still allocation-free and still microseconds: these are reads of a state
+    /// table, not system calls that can block. The left and right keys are read
+    /// separately rather than through the merged <c>VK_MENU</c> and
+    /// <c>VK_CONTROL</c>, because telling the sides apart is the only way to
+    /// recognise AltGr - see <see cref="DeriveModifiers"/>.
     /// </para>
     /// </remarks>
-    private static KeyModifiers ReadModifiers()
+    private static KeyModifiers ReadModifiers() => DeriveModifiers(
+        leftAlt: IsHeld(VIRTUAL_KEY.VK_LMENU),
+        rightAlt: IsHeld(VIRTUAL_KEY.VK_RMENU),
+        leftControl: IsHeld(VIRTUAL_KEY.VK_LCONTROL),
+        rightControl: IsHeld(VIRTUAL_KEY.VK_RCONTROL),
+        shift: IsHeld(VIRTUAL_KEY.VK_SHIFT),
+        windows: IsHeld(VIRTUAL_KEY.VK_LWIN) || IsHeld(VIRTUAL_KEY.VK_RWIN));
+
+    /// <summary>
+    /// Turns the physical key states into the modifier set a binding is matched on.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separated from reading the keyboard so the one decision in it can be tested.
+    /// That decision is AltGr.
+    /// </para>
+    /// <para>
+    /// On layouts that have AltGr - German, French, Polish, Spanish, the Nordics,
+    /// Arabic 102, and many more - AltGr is not a key. Pressing it makes the layout
+    /// emit <b>left Control followed by right Alt</b>. Read through
+    /// <c>VK_CONTROL</c> and <c>VK_MENU</c>, which do not say which side was pressed,
+    /// that is indistinguishable from someone holding Control and Alt.
+    /// </para>
+    /// <para>
+    /// So AltGr+X reported <c>Alt | Control</c>. Matching is exact - the table is
+    /// keyed on the packed modifier set - so what it collided with was every binding
+    /// written <c>alt+ctrl+X</c>. The hook swallows what it matches, so on those
+    /// layouts the character never arrived: AltGr+Q is @ on German, AltGr+A is ą on
+    /// Polish, AltGr+2 is @ on Spanish. The key stopped producing anything, in every
+    /// application on the machine, with nothing about the symptom pointing at a
+    /// window manager.
+    /// </para>
+    /// <para>
+    /// The shipped example config contained two such bindings and the author's own
+    /// three, so this was not hypothetical for anyone who started from either and
+    /// then switched layout.
+    /// </para>
+    /// <para>
+    /// What it costs is that left Control with right Alt can no longer be typed as
+    /// Control+Alt. On a layout with AltGr that combination is not typeable in the
+    /// first place - it is exactly what the layout emits - and on one without it,
+    /// left Alt or right Control reaches the same binding. This is the side to err
+    /// on: the failure it removes breaks typing everywhere, and the one it introduces
+    /// leaves a keybinding with three other ways to be pressed.
+    /// </para>
+    /// <para>
+    /// The injected flag is deliberately not used for this, though the hook records
+    /// it. <c>LLKHF_INJECTED</c> marks events synthesised through <c>SendInput</c>;
+    /// the AltGr Control comes from layout processing beneath that and does not carry
+    /// it, so a check on it would silently do nothing.
+    /// </para>
+    /// <para>
+    /// Public, and a plain function of six booleans, so the AltGr rule can be proved
+    /// by a test. It cannot be exercised on a US keyboard, and getting it wrong stops
+    /// characters appearing across the whole machine, so "we reasoned about it" is not
+    /// good enough.
+    /// </para>
+    /// </remarks>
+    public static KeyModifiers DeriveModifiers(
+        bool leftAlt,
+        bool rightAlt,
+        bool leftControl,
+        bool rightControl,
+        bool shift,
+        bool windows)
     {
+        bool altGr = leftControl && rightAlt;
+
+        // Whatever is held over and above AltGr still counts, so a user pressing
+        // AltGr and left Alt together gets Alt.
+        bool alt = altGr ? leftAlt : leftAlt || rightAlt;
+        bool control = altGr ? rightControl : leftControl || rightControl;
+
         KeyModifiers modifiers = KeyModifiers.None;
 
-        if (IsHeld(VIRTUAL_KEY.VK_MENU)) modifiers |= KeyModifiers.Alt;
-        if (IsHeld(VIRTUAL_KEY.VK_CONTROL)) modifiers |= KeyModifiers.Control;
-        if (IsHeld(VIRTUAL_KEY.VK_SHIFT)) modifiers |= KeyModifiers.Shift;
-        if (IsHeld(VIRTUAL_KEY.VK_LWIN) || IsHeld(VIRTUAL_KEY.VK_RWIN)) modifiers |= KeyModifiers.Windows;
+        if (alt) modifiers |= KeyModifiers.Alt;
+        if (control) modifiers |= KeyModifiers.Control;
+        if (shift) modifiers |= KeyModifiers.Shift;
+        if (windows) modifiers |= KeyModifiers.Windows;
 
         return modifiers;
     }
