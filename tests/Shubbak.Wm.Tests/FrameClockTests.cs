@@ -62,13 +62,32 @@ public sealed class FrameClockTests
     }
 
     [Fact]
-    public void TheBoundaryIsInclusive()
+    public void AWakeThatLandsSlightlyEarlyStillCounts()
     {
-        // Exclusive would push every frame to the next wake. The pump asks for exactly
-        // this interval, so the tick that arrives on time is the common case, not an
-        // edge case - rejecting it would halve the frame rate.
-        Assert.True(WmDaemon.IsFrameDue(FrameMs, FrameMs));
-        Assert.False(WmDaemon.IsFrameDue(FrameMs - 0.01, FrameMs));
+        // The pump expresses its timeout in whole milliseconds and a frame interval
+        // usually is not one: 60 fps is 16.6666 ms, which truncated to 16 meant the
+        // pump woke reliably just short of a frame being due, the frame was refused,
+        // and the next came a whole cycle later. Measured, that was 30.52 ms between
+        // frames against the 16.67 asked for - half the rate, from a third of a
+        // millisecond.
+        //
+        // The pump now rounds its timeout up, but events wake it too, so the floor
+        // tolerates a wake up to a millisecond early rather than spending a whole
+        // interval on it.
+        const double SixtyFps = 1000.0 / 60;
+
+        Assert.True(WmDaemon.IsFrameDue(16, SixtyFps));
+    }
+
+    [Fact]
+    public void AWakeThatIsProperlyEarlyDoesNotCount()
+    {
+        // The slack is a millisecond, not a licence. Half an interval early is the
+        // flood this exists to prevent, not a rounding artefact.
+        const double SixtyFps = 1000.0 / 60;
+
+        Assert.False(WmDaemon.IsFrameDue(SixtyFps / 2, SixtyFps));
+        Assert.False(WmDaemon.IsFrameDue(FrameMs - 2, FrameMs));
     }
 
     [Fact]
