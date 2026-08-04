@@ -16,6 +16,14 @@
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\Shubbak.Native\Shubbak.Native.csproj" />
     <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
+
+    <!--
+      So check-config validates the whole file rather than half of it. The bar's
+      section is in the same config, and a typo in it was reported nowhere at all.
+      Taj.Core is the pure model - no drawing, no Win32 - so this costs the CLI
+      nothing but the parser it already needed.
+    -->
+    <ProjectReference Include="..\Taj.Core\Taj.Core.csproj" />
   </ItemGroup>
 
 </Project>

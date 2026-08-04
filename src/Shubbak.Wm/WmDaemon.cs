@@ -150,35 +150,52 @@ public sealed class WmDaemon : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        // Startup is eight distinct pieces of work and used to report none of them.
+        // When it took eleven seconds, the log said only that adoption had finished
+        // and, much later, that the work area had settled - with no way to tell which
+        // of the six things between them was responsible.
+        long phase = Stopwatch.GetTimestamp();
+
         // Before any window or monitor is touched: without it Windows reports
         // virtualised coordinates on scaled displays and every computed rectangle
         // lands in the wrong place.
         MonitorSource.EnableDpiAwareness();
+        phase = ReportPhase("dpi awareness", phase);
 
         _configPath = configPath;
         LoadConfig(configPath, initial: true);
+        phase = ReportPhase("config", phase);
 
         SyncMonitors();
+        phase = ReportPhase("monitors", phase);
+
         AdoptExistingWindows();
+        phase = ReportPhase("adopting windows", phase);
 
         _winEvents = new WinEventSource { WorkQueued = _loop.Wake };
         _winEvents.Start();
+        phase = ReportPhase("window event hooks", phase);
 
         _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
         _keyboard.Start(_bindings.IsBound);
+        phase = ReportPhase("keyboard hook", phase);
 
         _ipc = new IpcServer { Warn = message => Log.Warn(LogCategory.Ipc, message) };
         _ipc.Start(new WmDaemonIpc(this).HandleAsync);
+        phase = ReportPhase("ipc server", phase);
 
         RunStartupCommands();
+        phase = ReportPhase("startup commands", phase);
 
         SettleWorkArea();
+        _ = ReportPhase("settling the work area", phase);
 
         _layoutDirty = true;
         _loop.Tick += OnTick;
         _loop.NextTimeout = NextTimeout;
 
-        Log.Info(LogCategory.Wm, $"started: {_windows.ManagedCount} windows adopted, " +
+        Log.Info(LogCategory.Wm, $"started in {Since(_startedTicks):F0} ms: " +
+            $"{_windows.ManagedCount} windows adopted, " +
             $"{_wm.Root.Monitors.Count} monitors, {_config.Keybindings.Count} keybindings, " +
             $"{_config.Rules.Count} rules");
 
@@ -225,6 +242,30 @@ public sealed class WmDaemon : IDisposable
     }
 
     public void Stop() => _loop.Stop();
+
+    /// <summary>Milliseconds since a <see cref="Stopwatch"/> timestamp.</summary>
+    private static double Since(long ticks) =>
+        (Stopwatch.GetTimestamp() - ticks) * 1000.0 / Stopwatch.Frequency;
+
+    /// <summary>
+    /// Logs how long one startup phase took, and returns the timestamp for the next.
+    /// </summary>
+    /// <remarks>
+    /// At debug rather than trace: this is the first thing to look at when someone
+    /// says starting up is slow, and asking them to reproduce at trace level - which
+    /// also logs every window it considers - is asking them to find one number in
+    /// several hundred lines.
+    /// </remarks>
+    private static long ReportPhase(string name, long since)
+    {
+        double elapsed = Since(since);
+
+        // Only the slow ones. Six lines saying "0 ms" on every start would bury the
+        // one line that matters on the start where something goes wrong.
+        if (elapsed >= 50) Log.Debug(LogCategory.Wm, $"startup: {name} took {elapsed:F0} ms");
+
+        return Stopwatch.GetTimestamp();
+    }
 
     // ---- the tick ----------------------------------------------------------
 
@@ -1228,6 +1269,45 @@ public sealed class WmDaemon : IDisposable
             Log.Info(LogCategory.Wm,
                 $"restored the view: {target.Name} on {focused.DeviceId}");
         }
+
+        KeepTheWindowInFrontInView();
+    }
+
+    /// <summary>
+    /// Overrides the restored view when it would hide the window the user is looking at.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The session is a memory of where things were last time; the foreground window
+    /// is where the user is now. When they disagree, now wins.
+    /// </para>
+    /// <para>
+    /// This is not hypothetical - it is how Shubbak is almost always started. You
+    /// launch it from a terminal, and the session remembers some other workspace as
+    /// the one that was showing, so the first thing the window manager does is switch
+    /// away from the window you just typed into. From the outside that reads as having
+    /// lost the terminal, or as the thing having crashed and taken the desktop with it.
+    /// </para>
+    /// <para>
+    /// Nothing has been moved at this point, so the foreground window really is what is
+    /// on screen rather than something Shubbak has just put there.
+    /// </para>
+    /// </remarks>
+    private void KeepTheWindowInFrontInView()
+    {
+        nint foreground = Win32Window.GetForeground();
+
+        if (!_windows.TryGet(foreground, out WindowNode? inFront)) return;
+        if (inFront.Workspace is not { } itsWorkspace) return;
+
+        // Already visible: the session and the desktop agree, and there is nothing to do.
+        if (inFront.IsOnADisplayedWorkspace) return;
+
+        Publish(_wm.ActivateWorkspace(itsWorkspace));
+
+        Log.Info(LogCategory.Wm,
+            $"showing {itsWorkspace.Name} instead: it has the window in front " +
+            $"(\"{inFront.Identity.Title.Truncate(40)}\")");
     }
 
     // ---- rules -------------------------------------------------------------
@@ -2428,13 +2508,22 @@ public sealed class WmDaemon : IDisposable
     {
         if (_config.StartupCommands.Count == 0) return;
 
-        const int DeadlineMs = 1_000;
+        const double DeadlineMs = 1_000;
         const int PollMs = 50;
+
+        // Real elapsed time, not the sum of the sleeps we asked for.
+        //
+        // This loop used to count `waited += 50` per iteration and stop at a thousand,
+        // which is a limit of twenty iterations wearing a deadline's clothes. When
+        // something inside an iteration was slow the loop had no idea: a start that
+        // took eleven and a half seconds reported "work area settled after 200 ms",
+        // because two hundred was all it had ever been counting.
+        long started = Stopwatch.GetTimestamp();
 
         bool changed = false;
         int stable = 0;
 
-        for (int waited = 0; waited < DeadlineMs; waited += PollMs)
+        while (Since(started) < DeadlineMs)
         {
             Thread.Sleep(PollMs);
 
@@ -2445,7 +2534,14 @@ public sealed class WmDaemon : IDisposable
 
             if (MonitorLayoutChanged(monitors))
             {
+                long syncing = Stopwatch.GetTimestamp();
+
                 SyncMonitors(monitors);
+
+                // Narrows a slow settle to its cause. Reconciling monitors republishes
+                // every workspace, so it is the expensive half and the one worth timing.
+                if (Since(syncing) >= 50)
+                    Log.Debug(LogCategory.Monitor, $"monitor sync took {Since(syncing):F0} ms");
 
                 changed = true;
                 stable = 0;
@@ -2457,14 +2553,20 @@ public sealed class WmDaemon : IDisposable
             // is the state this exists to avoid.
             if (changed && ++stable >= 2)
             {
-                Log.Debug(LogCategory.Monitor, $"work area settled after {waited} ms");
+                Log.Debug(LogCategory.Monitor, $"work area settled after {Since(started):F0} ms");
                 return;
             }
         }
 
-        // Nothing reserved anything. Whatever was launched was not a bar, so there was
-        // never a strip to wait for; the windows have not been placed yet either way.
-        if (!changed) Log.Debug(LogCategory.Monitor, "work area unchanged after startup commands");
+        // Neither outcome was reported before. Falling out of the loop having seen the
+        // work area move but never settle is the interesting case, and it said nothing
+        // at all - so a bar that kept resizing itself looked exactly like a bar that
+        // had never registered.
+        Log.Debug(
+            LogCategory.Monitor,
+            changed
+                ? $"work area still moving after {Since(started):F0} ms; laying out anyway"
+                : "work area unchanged after startup commands");
     }
 
     // ---- plumbing ----------------------------------------------------------
