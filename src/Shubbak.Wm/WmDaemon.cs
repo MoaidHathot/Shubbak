@@ -1297,17 +1297,41 @@ public sealed class WmDaemon : IDisposable
     {
         nint foreground = Win32Window.GetForeground();
 
-        if (!_windows.TryGet(foreground, out WindowNode? inFront)) return;
-        if (inFront.Workspace is not { } itsWorkspace) return;
+        _ = _windows.TryGet(foreground, out WindowNode? inFront);
 
-        // Already visible: the session and the desktop agree, and there is nothing to do.
-        if (inFront.IsOnADisplayedWorkspace) return;
+        if (WorkspaceToKeepInView(inFront) is not { } itsWorkspace) return;
 
         Publish(_wm.ActivateWorkspace(itsWorkspace));
 
         Log.Info(LogCategory.Wm,
             $"showing {itsWorkspace.Name} instead: it has the window in front " +
-            $"(\"{inFront.Identity.Title.Truncate(40)}\")");
+            $"(\"{inFront!.Identity.Title.Truncate(40)}\")");
+    }
+
+    /// <summary>
+    /// The workspace that must be shown so the window in front stays visible, or null
+    /// when the restored view already shows it.
+    /// </summary>
+    /// <remarks>
+    /// Separated from reading the desktop so the decision can be tested. Getting it
+    /// wrong is not subtle - it either switches away from the window the user is
+    /// looking at, or overrides a perfectly good restored view for no reason.
+    /// </remarks>
+    internal static WorkspaceNode? WorkspaceToKeepInView(WindowNode? inFront)
+    {
+        // Nothing in front, or nothing Shubbak manages. A window it does not manage
+        // is not on a workspace at all, so there is no view that would show it.
+        if (inFront?.Workspace is not { } workspace) return null;
+
+        // A workspace no monitor is hosting cannot be displayed, so activating it
+        // would show the user nothing at all. Declared in the config but not yet
+        // taken by a monitor is the ordinary way to be in this state.
+        if (workspace.Monitor is null) return null;
+
+        // The session and the desktop agree. Activating it again would be a no-op the
+        // state machine short-circuits anyway, but saying so here is clearer than
+        // relying on that.
+        return inFront.IsOnADisplayedWorkspace ? null : workspace;
     }
 
     // ---- rules -------------------------------------------------------------
