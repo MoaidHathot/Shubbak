@@ -62,6 +62,58 @@ public sealed class WmDaemon : IDisposable
 
     private readonly LatencyStats _tickInterval = new(4096, "tick interval");
 
+    /// <summary>
+    /// How far apart ticks landed, counted only while something was moving.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="_tickInterval"/> because that one is bimodal and
+    /// therefore unreadable. The loop waits 250 ms when idle and 7 ms while
+    /// animating, so a percentile over both is a statement about the ratio between
+    /// them rather than about either - on a desktop nobody is touching it reads about
+    /// 4 Hz and means nothing.
+    /// </para>
+    /// <para>
+    /// A percentile over this one is a frame rate, which is the number the animation
+    /// work has to be judged by and the number nothing has ever reported.
+    /// </para>
+    /// </remarks>
+    private readonly LatencyStats _frameInterval = new(4096, "frame interval");
+
+    /// <summary>How long committing one frame of motion took.</summary>
+    /// <remarks>
+    /// Timed on its own rather than as part of the tick, because ADR 0001 measured
+    /// 94.6% of frame time inside this call at twenty windows - 93% to 97% across the
+    /// configurations it tried - and nothing has checked that since the spike. Paired
+    /// with <see cref="_frameBatchSize"/>, without which the duration means nothing.
+    /// </remarks>
+    private readonly LatencyStats _commitFrameDuration = new(4096, "commit frame");
+
+    /// <summary>How many windows moved in each frame.</summary>
+    /// <remarks>
+    /// A frame of two windows and a frame of twenty are not the same measurement, and
+    /// a duration without this beside it cannot be compared against anything.
+    /// </remarks>
+    private readonly LatencyStats _frameBatchSize = new(4096, "frame batch");
+
+    /// <summary>Bytes allocated by each tick, on this thread.</summary>
+    /// <remarks>
+    /// The line ADR 0001 constraint 2 draws, which has never been measured in the
+    /// shipping binary. Allocation here means a collection here, and a collection
+    /// suspends every thread in the process - including the one holding a keystroke
+    /// the user is waiting on.
+    /// </remarks>
+    private readonly LatencyStats _tickAllocation = new(4096, "tick allocation");
+
+    /// <summary>Wall-clock milliseconds spent with something in motion.</summary>
+    private double _animatingMs;
+
+    /// <summary>Frames actually committed, against what the interval asked for.</summary>
+    private long _framesDelivered;
+
+    /// <summary>Motions started, so the report can say how many animations that was.</summary>
+    private long _animationsStarted;
+
     private readonly long _startedTicks = Stopwatch.GetTimestamp();
 
     /// <summary>Window geometry captured when a mouse drag started.</summary>
@@ -360,6 +412,11 @@ public sealed class WmDaemon : IDisposable
 
     private void OnTick()
     {
+        // A thread-local read, not a collection or a walk. Taken here and again in
+        // the finally so the figure covers the whole tick.
+        long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        bool reported = false;
+
         try
         {
             long now = Stopwatch.GetTimestamp();
@@ -369,6 +426,17 @@ public sealed class WmDaemon : IDisposable
             _lastTickTicks = now;
 
             if (deltaMs > 0) _tickInterval.Record(deltaMs);
+
+            // Read before anything can start or finish a motion, so the frame interval
+            // describes gaps between ticks that were both animating rather than the
+            // gap into or out of an idle stretch.
+            bool wasAnimating = _animation.IsAnimating;
+
+            if (wasAnimating && deltaMs > 0)
+            {
+                _frameInterval.Record(deltaMs);
+                _animatingMs += deltaMs;
+            }
 
             DrainKeyboard();
             DrainWindowEvents();
@@ -389,7 +457,22 @@ public sealed class WmDaemon : IDisposable
                 _layoutDirty = false;
             }
 
+            // Counted here rather than in Retarget: a layout pass retargets many
+            // windows at once and that is one motion as far as the report is concerned.
+            bool started = !wasAnimating && _animation.IsAnimating;
+            if (started) _animationsStarted++;
+
             if (_animation.IsAnimating) AdvanceAnimation(ClampAnimationStep(deltaMs));
+
+            // Reported once per motion, not once per frame - an instrument that logs
+            // at frame rate becomes the thing it is measuring.
+            //
+            // "started" is in the condition for the motion short enough to begin and
+            // finish inside one tick, which never satisfies "was animating when the
+            // tick opened" and so left its frame count to be added to whatever the
+            // next motion reported.
+            if ((wasAnimating || started) && !_animation.IsAnimating)
+                reported = ReportMotionEnded();
 
             MaybeSyncMonitors(now);
             MaybeRefreshFocusBorder(now);
@@ -405,7 +488,57 @@ public sealed class WmDaemon : IDisposable
         {
             _tickDuration.Record(
                 (Stopwatch.GetTimestamp() - _lastTickTicks) * 1000.0 / Stopwatch.Frequency);
+
+            // Skipped on the tick that logged: see ReportMotionEnded.
+            if (!reported)
+                _tickAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - allocatedBefore);
         }
+    }
+
+    /// <summary>
+    /// Says how the motion that has just finished went.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="LogCategory.Animation"/> is declared, named in the category guidance
+    /// as where to look when motion stutters, and until now written to by nothing.
+    /// </para>
+    /// <para>
+    /// Once per motion, not once per frame. At 144 Hz a per-frame line is 144 strings
+    /// and 144 ring writes a second for as long as anything moves, which is an
+    /// instrument that becomes the thing it is measuring.
+    /// </para>
+    /// </remarks>
+    /// <returns>
+    /// Whether anything was logged, so the caller can drop that tick's allocation
+    /// sample. This is the one place in the tick that is *expected* to allocate - it
+    /// builds a string - and a measurement of allocation that includes the allocation
+    /// performed by the measurement answers a question nobody asked. One dropped
+    /// sample per motion, out of a ring of four thousand, costs nothing.
+    /// </returns>
+    private bool ReportMotionEnded()
+    {
+        double animatingMs = _animatingMs;
+        long delivered = _framesDelivered;
+
+        // Reset first and unconditionally. Behind the level check these grew across
+        // every motion of the session, so "delivered against due" stopped describing
+        // a motion and started describing the whole run - and _animatingMs never
+        // stopped growing.
+        _animatingMs = 0;
+        _framesDelivered = 0;
+
+        if (!Log.IsEnabled(LogLevel.Debug)) return false;
+
+        double due = FrameInterval.TotalMilliseconds > 0
+            ? animatingMs / FrameInterval.TotalMilliseconds
+            : 0;
+
+        Log.Debug(LogCategory.Animation,
+            $"motion ended: {delivered} frames delivered of {due:F0} due " +
+            $"over {animatingMs:F0} ms");
+
+        return true;
     }
 
     private void DrainKeyboard()
@@ -1122,11 +1255,15 @@ public sealed class WmDaemon : IDisposable
             $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms all-time",
 
             $"- **Ticks over 6.94 ms budget**: {_tickDuration.CountOver(6.94)} of the last {_tickDuration.Count}",
+            $"- **Allocated per tick** (last {_tickAllocation.Count}): p50 {_tickAllocation.Percentile(0.5):F0} B, " +
+            $"p99 {_tickAllocation.Percentile(0.99):F0} B, max {_tickAllocation.Max:F0} B all-time",
             $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
             $"- **Dropped log entries**: {Log.Dropped}",
             $"- **GC**: gen0 {GC.CollectionCount(0)}, gen1 {GC.CollectionCount(1)}, gen2 {GC.CollectionCount(2)}",
             $"- **Allocated**: {GC.GetTotalAllocatedBytes(precise: false) / (1024 * 1024)} MB",
         }));
+
+        report.AddSection("Animation", DescribeAnimation());
 
         report.AddCodeSection("Window tree", TreeRenderer.Render(_wm.Root, _wm.FocusedWindow));
 
@@ -1143,6 +1280,59 @@ public sealed class WmDaemon : IDisposable
         }
 
         return report.AddRecentLog().AddFooter().ToString();
+    }
+
+    /// <summary>
+    /// What the animation path actually delivered.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from the Performance section because the tick interval cannot answer
+    /// any of it. The loop has two modes - 250 ms idle and 7 ms animating - so every
+    /// percentile over the combined figure describes the ratio between them rather
+    /// than either one. There was no configuration in which that line answered "did
+    /// the last animation deliver its frames".
+    /// </para>
+    /// <para>
+    /// Frames due is derived from the interval the loop asks for, not from the
+    /// display. Until the interval comes from a refresh rate, "delivered against due"
+    /// says whether the loop met its own target and nothing about whether that target
+    /// matches the panel - which is why the line below says the interval is fixed.
+    /// </para>
+    /// </remarks>
+    private string DescribeAnimation()
+    {
+        if (_frameInterval.Count == 0)
+            return "Nothing has been animated yet, so there is nothing to report.";
+
+        double p50 = _frameInterval.Percentile(0.5);
+
+        return string.Join('\n', new[]
+        {
+            $"- **Enabled**: {_config.Animation.Enabled}" +
+            $"{(_config.Animation.AnimateNewWindows ? ", including new windows" : "")}",
+
+            $"- **Asking for**: {FrameInterval.TotalMilliseconds:F2} ms " +
+            $"(~{(FrameInterval.TotalMilliseconds > 0 ? 1000.0 / FrameInterval.TotalMilliseconds : 0):F0} Hz), " +
+            "fixed - not derived from any monitor's refresh rate",
+
+            $"- **Frame interval** (last {_frameInterval.Count}, animating only): " +
+            $"p50 {p50:F2} ms, p99 {_frameInterval.Percentile(0.99):F2} ms, " +
+            $"max {_frameInterval.Max:F2} ms all-time " +
+            $"(~{(p50 > 0 ? 1000.0 / p50 : 0):F0} Hz)",
+
+            $"- **Motions**: {_animationsStarted}",
+
+            $"- **Commit frame** (last {_commitFrameDuration.Count}): " +
+            $"p50 {_commitFrameDuration.Percentile(0.5):F2} ms, " +
+            $"p99 {_commitFrameDuration.Percentile(0.99):F2} ms, " +
+            $"max {_commitFrameDuration.Max:F2} ms all-time",
+
+            $"- **Windows per frame** (last {_frameBatchSize.Count}): " +
+            $"p50 {_frameBatchSize.Percentile(0.5):F0}, " +
+            $"p99 {_frameBatchSize.Percentile(0.99):F0}, " +
+            $"max {_frameBatchSize.Max:F0} all-time",
+        });
     }
 
     /// <summary>
@@ -2132,9 +2322,19 @@ public sealed class WmDaemon : IDisposable
         int count = _animation.Tick(deltaMs, _frameScratch);
         if (count == 0) return;
 
+        _framesDelivered++;
+        _frameBatchSize.Record(count);
+
+        long committing = Stopwatch.GetTimestamp();
+
         // One atomic transaction per frame, exactly as in the S2 spike: the
         // unbatched alternative dropped 33-42% of frames at 144 Hz.
         _committer.CommitFrame(_frameScratch.AsSpan(0, count));
+
+        // Timed on its own. ADR 0001 measured 94.6% of frame time inside this call at
+        // twenty windows, and that has not been checked in the shipping binary since.
+        _commitFrameDuration.Record(
+            (Stopwatch.GetTimestamp() - committing) * 1000.0 / Stopwatch.Frequency);
 
         // A window that has just stopped moving has almost certainly repainted its own
         // frame on the way, and applications that draw their own frame rewrite the

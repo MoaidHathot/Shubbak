@@ -142,4 +142,44 @@ public sealed class LatencyStatsTests
         Assert.Equal(3, stats.Count);
         Assert.Equal(3, stats.Max, 0);
     }
+
+    [Fact]
+    public void RecordingAllocatesNothing()
+    {
+        // The claim every other test here leans on, asserted rather than stated. The
+        // daemon calls this up to four times per tick and the tick runs at 144 Hz
+        // while anything is moving, so a single allocation per call is a gen0
+        // collection every few seconds - and a collection suspends every thread in
+        // the process, including the one holding a keystroke the user is waiting on.
+        var stats = new LatencyStats(64, "test");
+
+        // Warm up first: the very first call JITs the method, and tiered compilation
+        // allocates on behalf of the runtime in a way that has nothing to do with
+        // what Record does afterwards.
+        for (int i = 0; i < 200; i++) stats.Record(i);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+
+        // Past capacity on purpose, so the eviction path is measured too.
+        for (int i = 0; i < 1000; i++) stats.Record(i * 1.5);
+
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void SamplesNeedNotBeDurations()
+    {
+        // The type is named for latency and its first uses were all times, but the
+        // daemon also records bytes allocated per tick and windows moved per frame.
+        // Nothing here is time-specific, and the report formats the unit itself.
+        var stats = new LatencyStats(8, "bytes");
+
+        stats.Record(0);
+        stats.Record(4096);
+        stats.Record(1024);
+
+        Assert.Equal(1024, stats.Percentile(0.5), 0);
+        Assert.Equal(4096, stats.Max, 0);
+        Assert.DoesNotContain(" ms", stats.ToString(), StringComparison.Ordinal);
+    }
 }
