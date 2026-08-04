@@ -42,3 +42,23 @@ jobs:
       # everyone starts from.
       - name: Validate the example config
         run: dotnet run --project src/Shubbak.Cli --configuration Release --no-build -- check-config docs/shubbak.example.kdl
+
+      # The README quotes a test count in two places. It has been corrected by hand
+      # three times and was wrong on each of the three occasions somebody looked, so
+      # it is checked rather than remembered.
+      - name: Check the README's test count
+        shell: pwsh
+        run: |
+          $declared = (Select-String -Path tests\*\*.cs -Pattern '^\s*\[(Fact|Theory)' -AllMatches).Count
+          $claimed = (Select-String -Path README.md -Pattern '(\d+) test methods' -AllMatches).Matches |
+              ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique
+
+          if ($claimed.Count -eq 0) { throw "README no longer states a test count; remove this check or restore the figure." }
+
+          foreach ($n in $claimed) {
+            if ($n -ne $declared) {
+              throw "README says $n test methods; the tree declares $declared. Update README.md."
+            }
+          }
+
+          Write-Output "README test count is correct: $declared"

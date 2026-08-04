@@ -94,7 +94,7 @@ public sealed class ConfigLoader
         Dictionary<string, AppDefinition> apps = ParseApps(document);
         List<WorkspaceConfig> workspaces = ParseWorkspaces(document.Node("workspaces"));
 
-        return config with
+        ShubbakConfig loaded = config with
         {
             Apps = apps,
             Workspaces = workspaces,
@@ -102,7 +102,61 @@ public sealed class ConfigLoader
             BindingModes = ParseBindingModes(document.Node("binding-modes"), workspaces),
             Rules = ParseRules(document.Node("rules"), apps),
         };
+
+        WarnAboutUndeclaredBindingModes(loaded);
+
+        return loaded;
     }
+
+    /// <summary>
+    /// Reports commands that enter a binding mode nobody declared.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A post-pass, because keybindings are parsed before the modes are known and
+    /// this needs both.
+    /// </para>
+    /// <para>
+    /// Caught at runtime as well, where it is refused out loud - but by then the user
+    /// has pressed a key and watched nothing happen. This is the moment the mistake
+    /// can be pointed at, with a line and a caret, before it has cost them anything.
+    /// </para>
+    /// </remarks>
+    private void WarnAboutUndeclaredBindingModes(ShubbakConfig config)
+    {
+        string[] declared = [.. config.BindingModes.Select(mode => mode.Name)];
+
+        foreach (Keybinding binding in AllBindings(config))
+        {
+            foreach (WmCommand command in binding.Commands)
+            {
+                if (command is not EnableBindingModeCommand enter) continue;
+                if (declared.Contains(enter.Mode, StringComparer.OrdinalIgnoreCase)) continue;
+
+                string? guess = Suggestion.Closest(enter.Mode, declared);
+
+                Report(Diagnostic.Warning(
+                    "SHB0434",
+                    $"Binding '{binding.Key.Display}' enters binding mode '{enter.Mode}', " +
+                    "which is not declared.",
+                    binding.Span,
+                    declared.Length == 0
+                        ? "No binding modes are declared. Add one with binding-modes { mode \"pause\" { ... } }."
+                        : guess is not null
+                            ? $"Did you mean '{guess}'?"
+                            : $"Declared modes: {string.Join(", ", declared)}."));
+            }
+        }
+    }
+
+    /// <summary>Every binding in the config, default and per-mode alike.</summary>
+    /// <remarks>
+    /// A mode can enter another mode, so the bindings inside modes have to be checked
+    /// too - and a typo there is harder to notice, because reaching it means being in
+    /// the first mode already.
+    /// </remarks>
+    private static IEnumerable<Keybinding> AllBindings(ShubbakConfig config) =>
+        config.Keybindings.Concat(config.BindingModes.SelectMany(mode => mode.Keybindings));
 
     private static readonly string[] KnownSections =
     [

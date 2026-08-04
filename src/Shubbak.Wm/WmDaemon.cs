@@ -1727,17 +1727,24 @@ public sealed class WmDaemon : IDisposable
         }
     }
 
-    /// <summary>Runs a command through the shell, detached.</summary>
+    /// <summary>Runs a command, detached.</summary>
     private static void ShellExecute(string commandLine)
     {
         try
         {
             (string file, string arguments) = SplitCommandLine(commandLine);
 
+            bool direct = CanLaunchDirectly(file);
+
             using var process = new Process();
             process.StartInfo = new ProcessStartInfo(file, arguments)
             {
-                UseShellExecute = true,
+                UseShellExecute = !direct,
+
+                // Only honoured on the direct path; the shell ignores it. That is a
+                // behaviour change for a console program launched by full path, which
+                // used to show a window despite this being set. The setting says what
+                // was always wanted.
                 CreateNoWindow = true,
             };
 
@@ -1747,6 +1754,45 @@ public sealed class WmDaemon : IDisposable
         {
             Log.Error(LogCategory.Command, $"shell-exec failed: {commandLine}", ex);
         }
+    }
+
+    /// <summary>
+    /// Whether a target can be started directly rather than through the shell.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every startup command went through <c>ShellExecuteEx</c>, which is what
+    /// <c>UseShellExecute</c> means, and it is slow: launching the bar took
+    /// <b>2,126 ms</b> of a 2,472 ms startup on the author's machine - 86% of it -
+    /// and the bar had not begun running when the call returned, so none of that time
+    /// was the bar starting. It was all shell overhead.
+    /// </para>
+    /// <para>
+    /// <c>CreateProcess</c>, which is what the direct path uses, takes milliseconds.
+    /// It cannot do everything the shell can, so it is used only where it is
+    /// definitely equivalent: an executable, named by a full path, that exists.
+    /// </para>
+    /// <para>
+    /// Everything else keeps the shell, and needs it. A <c>.bat</c> or <c>.cmd</c>
+    /// requires a command processor; a <c>.lnk</c> needs resolving; a URL or a
+    /// document needs a verb looked up; and a bare name like <c>notepad</c> needs a
+    /// path search this deliberately does not attempt.
+    /// </para>
+    /// </remarks>
+    internal static bool CanLaunchDirectly(string file)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return false;
+
+        // A relative or bare name would have to be resolved, and resolving it the same
+        // way the shell does is exactly the work being avoided.
+        if (!Path.IsPathFullyQualified(file)) return false;
+
+        if (!string.Equals(Path.GetExtension(file), ".exe", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        // Checked last: it touches the disk, and the cheap tests above rule out most
+        // of what reaches here.
+        return File.Exists(file);
     }
 
     private static (string File, string Arguments) SplitCommandLine(string commandLine)

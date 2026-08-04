@@ -147,6 +147,8 @@ public static class TajConfigLoader
                 continue;
             }
 
+            WarnAboutUnknown(node, KnownBarRuleKeys, "setting on a bar rule", "TAJ0019", diagnostics);
+
             rules.Add(new BarRule(
                 profileName,
                 SettingText(node, "workspace"),
@@ -208,6 +210,8 @@ public static class TajConfigLoader
             return null;
         }
 
+        WarnAboutUnknown(node, KnownSourceKeys, "setting on a source", "TAJ0018", diagnostics);
+
         string kind = SettingText(node, "kind") ?? "time";
         string argument = SettingText(node, "format") ?? SettingText(node, "command") ?? string.Empty;
 
@@ -245,6 +249,52 @@ public static class TajConfigLoader
     /// <summary>What may appear inside a <c>zone</c>: its settings, and the widgets.</summary>
     private static readonly string[] KnownZoneKeys =
         ["justify", "grow", "gap", "workspaces", "spacer", "text"];
+
+    /// <summary>Styling every widget accepts, whatever kind it is.</summary>
+    /// <remarks>
+    /// Both spellings of colour throughout, because the config is read by people who
+    /// write one or the other and being told off for either would be absurd.
+    /// </remarks>
+    private static readonly string[] CommonWidgetKeys =
+        ["id", "font-size", "bold", "italic", "colour", "color", "background", "radius"];
+
+    private static readonly string[] KnownWorkspacesKeys =
+    [
+        .. CommonWidgetKeys,
+        "active-background", "active-colour", "active-color",
+        "focused-background", "focused-colour", "focused-color",
+        "empty-colour", "empty-color",
+        "hover-background", "hover-colour", "hover-color",
+        "hide-empty",
+    ];
+
+    private static readonly string[] KnownSpacerKeys = [.. CommonWidgetKeys, "width", "grow"];
+
+    private static readonly string[] KnownTextKeys = [.. CommonWidgetKeys, "template", "on-click", "when"];
+
+    /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
+    private static readonly string[] KnownConditionKeys =
+        ["value", "not", "of", "font-size", "bold", "italic", "colour", "color", "background"];
+
+    private static readonly string[] KnownSourceKeys =
+        ["kind", "format", "command", "interval", "timezone"];
+
+    private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor"];
+
+    /// <summary>The settings a widget of the given kind accepts, or null if it is not a widget.</summary>
+    /// <remarks>
+    /// Null for an unrecognised kind, so nothing is said about its properties. The
+    /// zone that contains it has already reported the kind itself, and adding a
+    /// complaint about every property on a node the user has been told is wrong
+    /// buries the one that matters.
+    /// </remarks>
+    private static string[]? KnownKeysFor(string widget) => widget switch
+    {
+        "workspaces" => KnownWorkspacesKeys,
+        "spacer" => KnownSpacerKeys,
+        "text" => KnownTextKeys,
+        _ => null,
+    };
 
     /// <summary>
     /// Reports anything the loader does not recognise.
@@ -427,12 +477,14 @@ public static class TajConfigLoader
     /// widget, so marking a value usually costs a colour and nothing more.
     /// </remarks>
     private static List<WidgetCondition> ParseConditions(
-        KdlNode node, VisualStyle baseStyle, FontStyle baseFont)
+        KdlNode node, VisualStyle baseStyle, FontStyle baseFont, List<Diagnostic> diagnostics)
     {
         List<WidgetCondition> conditions = [];
 
         foreach (KdlNode child in node.ChildrenNamed("when"))
         {
+            WarnAboutUnknown(child, KnownConditionKeys, "setting in a 'when' block", "TAJ0017", diagnostics);
+
             // `value` matches, `not` matches everything else. One or the other, and
             // the bare argument form spells `value`.
             string? negated = SettingText(child, "not");
@@ -492,6 +544,9 @@ public static class TajConfigLoader
         };
 
         var box = new BoxStyle(Padding: Edges.Symmetric(6, 0));
+
+        if (KnownKeysFor(node.Name) is { } widgetKeys)
+            WarnAboutUnknown(node, widgetKeys, $"setting on a '{node.Name}' widget", "TAJ0016", diagnostics);
 
         switch (node.Name)
         {
@@ -568,7 +623,7 @@ public static class TajConfigLoader
                 return new TemplateWidget(id, template, style, box)
                 {
                     OnClick = SettingText(node, "on-click"),
-                    Conditions = ParseConditions(node, style, widgetFont),
+                    Conditions = ParseConditions(node, style, widgetFont, diagnostics),
                 };
             }
 
