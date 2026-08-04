@@ -386,7 +386,7 @@ public sealed class GdiRenderer : ITajRenderer
     /// </remarks>
     private COLORREF ToColorRef(Colour colour)
     {
-        // Alpha is resolved by blending against the bar''s own background rather than
+        // Alpha is resolved by blending against the bar's own background rather than
         // being discarded. GDI has no compositing, so a half-transparent colour used
         // to render fully opaque - which made `empty-colour` and the dimmed inactive
         // workspaces indistinguishable from the active ones despite the config

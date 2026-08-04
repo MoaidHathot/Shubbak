@@ -322,7 +322,7 @@ public sealed class LogTests : IDisposable
             Assert.True(
                 elapsed < TimeSpan.FromSeconds(5),
                 $"2000 log calls took {elapsed.TotalMilliseconds:F0}ms, which suggests " +
-                "writing is happening on the caller''s thread again.");
+                "writing is happening on the caller's thread again.");
         }
         finally
         {
