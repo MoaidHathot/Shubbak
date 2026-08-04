@@ -1161,22 +1161,24 @@ public sealed class WmDaemon : IDisposable
             path);
     }
 
-    private bool ShouldIgnore(WindowAttributes attributes)
-    {
-        foreach (WindowRule rule in _config.Rules)
-        {
-            if (rule.Trigger != RuleTrigger.OnManage) continue;
-            if (!rule.Matches(attributes, _config.Apps)) continue;
-
-            foreach (WmCommand command in rule.Commands)
-                if (command is IgnoreCommand) return true;
-        }
-
-        return false;
-    }
+    private bool ShouldIgnore(WindowAttributes attributes) =>
+        HasAdoptionRule<IgnoreCommand>(attributes);
 
     /// <summary>Whether a rule asks for a window the built-in filter passed over.</summary>
-    private bool ShouldForceManage(WindowAttributes attributes)
+    private bool ShouldForceManage(WindowAttributes attributes) =>
+        HasAdoptionRule<ManageCommand>(attributes);
+
+    /// <summary>
+    /// Whether any rule matching <paramref name="attributes"/> carries a command of
+    /// the given kind.
+    /// </summary>
+    /// <remarks>
+    /// Only <see cref="RuleTrigger.OnManage"/> rules are consulted. Both questions
+    /// this answers are asked while deciding whether to adopt a window, which is a
+    /// moment the later triggers have not reached yet.
+    /// </remarks>
+    private bool HasAdoptionRule<TCommand>(WindowAttributes attributes)
+        where TCommand : WmCommand
     {
         foreach (WindowRule rule in _config.Rules)
         {
@@ -1184,7 +1186,7 @@ public sealed class WmDaemon : IDisposable
             if (!rule.Matches(attributes, _config.Apps)) continue;
 
             foreach (WmCommand command in rule.Commands)
-                if (command is ManageCommand) return true;
+                if (command is TCommand) return true;
         }
 
         return false;
@@ -1212,17 +1214,17 @@ public sealed class WmDaemon : IDisposable
 
     // ---- commands ----------------------------------------------------------
 
+    /// <summary>Runs a sequence of commands, as a keybinding or a rule does.</summary>
+    /// <remarks>
+    /// The outcome is dropped rather than ignored. A command that resolves to nothing
+    /// has already published its own rejection, carrying a far better explanation than
+    /// anything reconstructed here, and that is what reaches the log and the IPC
+    /// subscribers. Only a caller that owes someone an answer - the pipe - needs the
+    /// outcome handed back, and it calls <see cref="RunCommand"/> for itself.
+    /// </remarks>
     private void Execute(IEnumerable<WmCommand> commands)
     {
-        foreach (WmCommand command in commands)
-        {
-            if (!ResolveTarget(command)) continue;
-
-            CommandOutcome outcome = _executor.Execute(command);
-
-            Publish(outcome.Result);
-            PerformHostAction(outcome);
-        }
+        foreach (WmCommand command in commands) _ = RunCommand(command);
     }
 
     /// <summary>
@@ -1756,6 +1758,30 @@ public sealed class WmDaemon : IDisposable
         ReferenceEquals(monitor.ActiveWorkspace, workspace);
 
     /// <summary>
+    /// Whether a periodic job is due, recording that it ran when it is.
+    /// </summary>
+    /// <remarks>
+    /// The tick carries three jobs on their own timers - monitors, the focus border,
+    /// the session - and each had written out this arithmetic for itself. Converting
+    /// Stopwatch ticks to milliseconds in three places is three chances to get the
+    /// conversion the wrong way round, and the symptom would be a job that silently
+    /// never runs or one that runs every pass.
+    /// </remarks>
+    /// <param name="intervalMs">The shortest gap between runs.</param>
+    /// <param name="now">The current timestamp, shared by every job on this tick.</param>
+    /// <param name="last">
+    /// When the job last ran, updated in place. Zero means it never has, which is
+    /// always due - the first pass should not have to wait out an interval.
+    /// </param>
+    private static bool DueEvery(double intervalMs, long now, ref long last)
+    {
+        if (last != 0 && (now - last) * 1000.0 / Stopwatch.Frequency < intervalMs) return false;
+
+        last = now;
+        return true;
+    }
+
+    /// <summary>
     /// Periodically re-reads the monitor layout.
     /// </summary>
     /// <remarks>
@@ -1779,15 +1805,7 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void MaybeSyncMonitors(long now)
     {
-        const double IntervalMs = 2_000;
-
-        if (_lastMonitorSyncTicks != 0 &&
-            (now - _lastMonitorSyncTicks) * 1000.0 / Stopwatch.Frequency < IntervalMs)
-        {
-            return;
-        }
-
-        _lastMonitorSyncTicks = now;
+        if (!DueEvery(2_000, now, ref _lastMonitorSyncTicks)) return;
 
         // Enumerated once and handed to both, rather than each asking the display
         // configuration for itself. Asking twice a second, forever, for the whole life
@@ -1843,16 +1861,7 @@ public sealed class WmDaemon : IDisposable
     private void MaybeSaveSession(long now)
     {
         if (_animation.IsAnimating) return;
-
-        const double IntervalMs = 30_000;
-
-        if (_lastSessionSaveTicks != 0 &&
-            (now - _lastSessionSaveTicks) * 1000.0 / Stopwatch.Frequency < IntervalMs)
-        {
-            return;
-        }
-
-        _lastSessionSaveTicks = now;
+        if (!DueEvery(30_000, now, ref _lastSessionSaveTicks)) return;
 
         if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true, focusedMonitor: _wm.FocusedMonitor);
     }
@@ -1995,17 +2004,8 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void MaybeRefreshFocusBorder(long now)
     {
-        const double IntervalMs = 1_000;
-
         if (!_config.Effects.Enabled) return;
-
-        if (_lastBorderRefreshTicks != 0 &&
-            (now - _lastBorderRefreshTicks) * 1000.0 / Stopwatch.Frequency < IntervalMs)
-        {
-            return;
-        }
-
-        _lastBorderRefreshTicks = now;
+        if (!DueEvery(1_000, now, ref _lastBorderRefreshTicks)) return;
 
         if (_borderedWindow is not { } window) return;
         if (!Win32Window.Exists((nint)window.Handle)) return;
