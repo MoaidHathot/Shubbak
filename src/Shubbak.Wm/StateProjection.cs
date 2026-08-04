@@ -66,7 +66,6 @@ internal static class StateProjection
             wm.IsPaused);
     }
 
-    /// <summary>Serialises an event's payload for publication.</summary>
     /// <summary>
     /// Describes every workspace, tagged with the index of the monitor it is on.
     /// </summary>
@@ -87,6 +86,7 @@ internal static class StateProjection
                 yield return Describe(workspace, index, focused);
     }
 
+    /// <summary>Serialises an event's payload for publication.</summary>
     public static string Payload(WmEvent wmEvent, WindowManager wm)
     {
         WindowNode? focused = wm.FocusedWindow;
