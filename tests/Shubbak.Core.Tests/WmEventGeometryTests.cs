@@ -1,4 +1,5 @@
 using System.Reflection;
+using Shubbak.Core.Animation;
 using Shubbak.Core.Tree;
 using Shubbak.Core.Wm;
 
@@ -128,6 +129,50 @@ public sealed class WmEventGeometryTests
 
         Assert.False(batch.AffectGeometry());
         Assert.False(Array.Empty<WmEvent>().AffectGeometry());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AWorkspaceSwitchOutranksALayoutChangeInEitherOrder(bool switchFirst)
+    {
+        // Activating a workspace commonly brings a different layout with it, so both
+        // arrive in one batch. The switch is what the user is watching.
+        WindowNode window = TreeBuilder.Window();
+        var activated = new WorkspaceActivated(TreeBuilder.Workspace(), null, TreeBuilder.Monitor());
+        var relaid = new LayoutChanged(TreeBuilder.Row(window), "grid");
+
+        IReadOnlyList<WmEvent> batch = switchFirst ? [activated, relaid] : [relaid, activated];
+
+        Assert.Equal(AnimationKind.WorkspaceSwitch, batch.LayoutAnimationKind());
+    }
+
+    [Fact]
+    public void EachKindComesFromTheEventThatCausedIt()
+    {
+        WindowNode window = TreeBuilder.Window();
+        ContainerNode container = TreeBuilder.Row(window);
+
+        Assert.Equal(
+            AnimationKind.WorkspaceSwitch,
+            new WorkspaceActivated(TreeBuilder.Workspace(), null, TreeBuilder.Monitor()).LayoutAnimationKind());
+
+        Assert.Equal(AnimationKind.LayoutChange, new LayoutChanged(container, "grid").LayoutAnimationKind());
+        Assert.Equal(AnimationKind.LayoutChange, new ContainerResized(container).LayoutAnimationKind());
+    }
+
+    [Fact]
+    public void AnOrdinaryMoveCarriesNoOpinionAboutTheMotion()
+    {
+        // Null means "nothing to say", and the caller keeps the window-move profile.
+        // Every event answering with a kind would make the two tunable profiles fire
+        // for changes that are not layout changes or workspace switches at all.
+        WindowNode window = TreeBuilder.Window();
+
+        Assert.Null(new WindowMoved(window, null, TreeBuilder.Workspace()).LayoutAnimationKind());
+        Assert.Null(new WindowFocused(window, null).LayoutAnimationKind());
+        Assert.Null(new CommandRejected("focus", "nothing there").LayoutAnimationKind());
+        Assert.Null(Array.Empty<WmEvent>().LayoutAnimationKind());
     }
 
     [Fact]

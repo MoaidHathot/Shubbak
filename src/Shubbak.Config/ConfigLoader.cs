@@ -400,7 +400,8 @@ public sealed class ConfigLoader
                     "SHB0421",
                     $"Unknown easing curve '{curveName}'; using ease-out.",
                     c.Span,
-                    "Available: linear, ease-in, ease-out, ease-in-out, ease-out-back, ease-out-expo."));
+                    "Available: linear, ease-in, ease-out, ease-in-out, ease-out-back, " +
+                    "ease-out-expo, or cubic-bezier(x1, y1, x2, y2)."));
             }
         }
 

@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Shubbak.Core.Animation;
 
 /// <summary>
@@ -47,9 +49,18 @@ public readonly record struct Easing
     public static Easing CubicBezier(double x1, double y1, double x2, double y2) =>
         new(Math.Clamp(x1, 0, 1), y1, Math.Clamp(x2, 0, 1), y2);
 
+    /// <summary>
+    /// Resolves a curve written in config: a named one, or <c>cubic-bezier(...)</c>.
+    /// </summary>
+    /// <remarks>
+    /// The custom form is the reason the type stores CSS control points at all, and
+    /// for a long time there was no way to write one - <see cref="CubicBezier"/> had
+    /// no callers anywhere, so the documented reason for the design was unreachable by
+    /// the people it was made for.
+    /// </remarks>
     public static bool TryParse(string name, out Easing easing)
     {
-        switch (name?.ToLowerInvariant())
+        switch (name?.Trim().ToLowerInvariant())
         {
             case "linear": easing = Linear; return true;
             case "ease-in": easing = EaseIn; return true;
@@ -57,8 +68,54 @@ public readonly record struct Easing
             case "ease-in-out": easing = EaseInOut; return true;
             case "ease-out-back": easing = EaseOutBack; return true;
             case "ease-out-expo": easing = EaseOutExpo; return true;
-            default: easing = EaseOut; return false;
+            default: return TryParseCubicBezier(name, out easing);
         }
+    }
+
+    /// <summary>Parses the CSS <c>cubic-bezier(x1, y1, x2, y2)</c> form.</summary>
+    /// <remarks>
+    /// The x control points are clamped to [0, 1] because a bezier used for easing
+    /// must be a function of time, and one that runs backwards has no meaning here.
+    /// The y points are left alone on purpose: outside that range is exactly how a
+    /// curve overshoots, which is what ease-out-back is.
+    /// </remarks>
+    private static bool TryParseCubicBezier(string? text, out Easing easing)
+    {
+        easing = EaseOut;
+
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        ReadOnlySpan<char> span = text.AsSpan().Trim();
+        const string Prefix = "cubic-bezier";
+
+        if (!span.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)) return false;
+
+        span = span[Prefix.Length..].TrimStart();
+
+        if (span.Length < 2 || span[0] != '(' || span[^1] != ')') return false;
+
+        span = span[1..^1];
+
+        // Five, so a fifth argument is detected rather than silently ignored.
+        Span<Range> parts = stackalloc Range[5];
+        if (span.Split(parts, ',') != 4) return false;
+
+        Span<double> points = stackalloc double[4];
+
+        for (int i = 0; i < 4; i++)
+        {
+            if (!double.TryParse(
+                span[parts[i]].Trim(),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out points[i]))
+            {
+                return false;
+            }
+        }
+
+        easing = CubicBezier(points[0], points[1], points[2], points[3]);
+        return true;
     }
 
     /// <summary>

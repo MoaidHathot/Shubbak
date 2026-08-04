@@ -1,7 +1,9 @@
+using Shubbak.Core.Animation;
+
 namespace Shubbak.Core.Wm;
 
 /// <summary>
-/// Whether an event can change where windows sit.
+/// What an event implies for the next layout pass.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -66,5 +68,54 @@ public static class WmEventGeometry
                 return true;
 
         return false;
+    }
+
+    /// <summary>
+    /// Which animation profile a change of this kind should be shown with.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="AnimationKind.LayoutChange"/> and
+    /// <see cref="AnimationKind.WorkspaceSwitch"/> had a tunable duration and curve
+    /// each, were parsed by the config loader, and appeared in the example config
+    /// everybody starts from - and nothing in the program ever constructed either.
+    /// Setting them did nothing whatsoever, and nothing said so.
+    /// </para>
+    /// <para>
+    /// That is exactly the silent failure the config loader exists to eliminate,
+    /// occurring in the loader's own accepted output: it would warn about a misspelt
+    /// key while accepting a correctly spelt one that had no effect.
+    /// </para>
+    /// <para>
+    /// Null means the event says nothing about how the motion should look, and the
+    /// ordinary window-move profile applies.
+    /// </para>
+    /// </remarks>
+    public static AnimationKind? LayoutAnimationKind(this WmEvent wmEvent) => wmEvent switch
+    {
+        WorkspaceActivated => AnimationKind.WorkspaceSwitch,
+        LayoutChanged or ContainerResized => AnimationKind.LayoutChange,
+        _ => null,
+    };
+
+    /// <summary>The profile a whole batch of events should be shown with.</summary>
+    /// <remarks>
+    /// A workspace switch outranks a layout change, because activating a workspace
+    /// commonly brings a different layout with it and the switch is the thing the user
+    /// is actually watching.
+    /// </remarks>
+    public static AnimationKind? LayoutAnimationKind(this IReadOnlyList<WmEvent> events)
+    {
+        AnimationKind? found = null;
+
+        for (int i = 0; i < events.Count; i++)
+        {
+            if (events[i].LayoutAnimationKind() is not { } kind) continue;
+            if (kind == AnimationKind.WorkspaceSwitch) return kind;
+
+            found ??= kind;
+        }
+
+        return found;
     }
 }
