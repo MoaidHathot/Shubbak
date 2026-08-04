@@ -356,6 +356,21 @@ binding-modes {
 // ---------------------------------------------------------------------------
 
 bar {
+    // How long to keep waiting for the window manager after losing it, in
+    // seconds, before closing the bar. 0 waits for ever.
+    //
+    // Only counted once the bar has connected at least once: a bar that has never
+    // reached a window manager waits indefinitely, because it is normally launched
+    // by the window manager's own startup command and can win the race.
+    //
+    // If the window manager comes back inside the window, the bar reconnects and
+    // the clock resets - so restarting the daemon does not cost you the bar.
+    //
+    // A clean `wm-exit` does not wait for this at all: the window manager
+    // announces that it is going and the bar follows within a frame. This is the
+    // safety net for the times it cannot, such as being killed outright.
+    window-manager-timeout 30
+
     // The interval is how often a value is *checked*, not how often the bar
     // redraws: an unchanged value is suppressed. So a clock showing minutes can be
     // polled twice a second for a prompt tick without redrawing twice a second.

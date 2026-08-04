@@ -182,6 +182,25 @@ public static class IpcProtocol
     public const string ResyncTopic = "wm.resync";
 
     /// <summary>
+    /// Told to every client as the window manager exits.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A bar launched by the window manager should go when it does. Without being
+    /// told, the only signal is the pipe closing - which is indistinguishable from the
+    /// window manager being restarted, so a client cannot act on it immediately
+    /// without dying every time the daemon is reloaded.
+    /// </para>
+    /// <para>
+    /// Best-effort, deliberately. Publishing enqueues to each client's outbox and the
+    /// server does not flush on the way out, so a client that is slow to read may miss
+    /// it. Clients must therefore still cope with the pipe simply going away; this
+    /// only makes the common case prompt rather than making it certain.
+    /// </para>
+    /// </remarks>
+    public const string ShutdownTopic = "wm.shutdown";
+
+    /// <summary>
     /// Every topic the window manager publishes.
     /// </summary>
     /// <remarks>
@@ -211,6 +230,7 @@ public static class IpcProtocol
         "binding_mode.changed",
         "command.rejected",
         "config.reloaded",
+        ShutdownTopic,
         ResyncTopic,
     };
 

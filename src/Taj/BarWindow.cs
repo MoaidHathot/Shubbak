@@ -39,6 +39,17 @@ public sealed class BarWindow : IDisposable
     private static readonly Dictionary<nint, BarWindow> s_windows = [];
     private static bool s_classRegistered;
 
+    /// <summary>
+    /// Raised when a bar window is asked to close, meaning the process should stop.
+    /// </summary>
+    /// <remarks>
+    /// Static because the window procedure has to be - it is an
+    /// <c>UnmanagedCallersOnly</c> entry point, so it cannot close over an instance.
+    /// There is one message loop behind however many bars, so any window closing is
+    /// the process closing.
+    /// </remarks>
+    public static event Action? RequestShutdown;
+
     private readonly BarModel _model;
     private readonly int _monitorIndex;
 
@@ -371,6 +382,15 @@ public sealed class BarWindow : IDisposable
 
                     case PInvoke.WM_MOUSELEAVE:
                         window.OnMouseLeave();
+                        return new LRESULT(0);
+
+                    case PInvoke.WM_CLOSE:
+                        // Closing any bar closes the bar. There is one message loop
+                        // behind however many monitors, so a window going is the
+                        // process going - and without this, closing the window left
+                        // Taj running with nothing to show, which is how `taj-exit`
+                        // and Task Manager's "End task" both used to do nothing.
+                        RequestShutdown?.Invoke();
                         return new LRESULT(0);
 
                     case PInvoke.WM_DESTROY:

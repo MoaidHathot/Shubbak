@@ -184,6 +184,18 @@ public sealed class WmDaemon : IDisposable
 
         _loop.Run(TimeSpan.FromMilliseconds(8));
 
+        // Announced first, before the work below, and deliberately so. Publishing only
+        // queues the message onto each client's outbox for its writer task to send, and
+        // the server does not flush on the way out - so the more real work that happens
+        // between saying this and tearing the pipe down, the likelier it is to arrive.
+        // Saving the session and un-concealing take tens of milliseconds, which is the
+        // margin.
+        //
+        // Still best-effort. A bar has to cope with the pipe simply going away too,
+        // because a kill gives no warning at all; this makes the ordinary case prompt
+        // rather than making it certain.
+        _ipc?.Publish(IpcProtocol.ShutdownTopic, "{}");
+
         // A clean shutdown is the one chance to record the arrangement exactly as
         // the user left it, rather than as it was up to thirty seconds earlier.
         if (_windows.ManagedCount > 0) SessionStore.Save(_wm.Root, _sessionPath, focusedMonitor: _wm.FocusedMonitor);

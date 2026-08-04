@@ -144,6 +144,13 @@ internal static class Program
 
             connection.ConfigReloaded += () => s_reloadRequested = true;
 
+            // The window manager going away takes the bar with it. Signalled rather
+            // than acted on, for the same reason a reload is: this runs on the
+            // connection's pump thread, and the windows belong to the message loop.
+            connection.WindowManagerStopped += () => s_running = false;
+
+            connection.WindowManagerTimeout = config.WindowManagerTimeout;
+
             bar.CommandRequested += command => _ = connection.SendCommandAsync(command);
 
             if (!bar.Create(monitors[index]))
@@ -250,6 +257,11 @@ internal static class Program
             e.Cancel = true;
             s_running = false;
         };
+
+        // Closing any bar window closes the bar. Reaches here from `shubbak taj-exit`,
+        // from Task Manager's "End task", and from anything else that politely asks a
+        // window to go.
+        BarWindow.RequestShutdown += () => s_running = false;
 
         while (s_running)
         {

@@ -60,6 +60,24 @@ public sealed class IpcProtocolTests
     }
 
     [Fact]
+    public void TheShutdownTopicIsDeclaredToo()
+    {
+        // A bar has to be able to subscribe to the one that says the window manager
+        // is going, or it sits there attached to nothing.
+        Assert.Contains(IpcProtocol.ShutdownTopic, IpcProtocol.Topics);
+    }
+
+    [Fact]
+    public void TheTwoLifecycleTopicsAreNamespacedApartFromTheStateOnes()
+    {
+        // wm.* is about the window manager itself; everything else is about what it
+        // manages. A client can subscribe to one without the other.
+        Assert.StartsWith("wm.", IpcProtocol.ResyncTopic, StringComparison.Ordinal);
+        Assert.StartsWith("wm.", IpcProtocol.ShutdownTopic, StringComparison.Ordinal);
+        Assert.NotEqual(IpcProtocol.ResyncTopic, IpcProtocol.ShutdownTopic);
+    }
+
+    [Fact]
     public void TheLimitsAreSane()
     {
         // Every one of these was unbounded, and they compound: unbounded clients

@@ -50,6 +50,7 @@ internal static class Program
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "restore" => Restore(args),
+                "taj-exit" => TajExit(),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
@@ -65,6 +66,48 @@ internal static class Program
             Console.Error.WriteLine($"shubbak: {ex.Message}");
             return 1;
         }
+    }
+
+    /// <summary>
+    /// Closes the bar, without going through the window manager.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately not over IPC. The case that most needs this is a bar left behind
+    /// by a window manager that is already gone - and a command routed through the
+    /// window manager cannot reach it.
+    /// </para>
+    /// <para>
+    /// So it asks the windows themselves. <c>WM_CLOSE</c> is a request rather than a
+    /// kill: Taj answers it by leaving its message loop, which unregisters the appbar
+    /// and gives back the strip of screen it reserved. Terminating the process instead
+    /// skips that, and the shell can be left holding space for a bar that no longer
+    /// exists.
+    /// </para>
+    /// </remarks>
+    private static int TajExit()
+    {
+        const string BarWindowClass = "TajBarWindow";
+
+        int closed = 0;
+
+        foreach (nint handle in Win32Window.EnumerateTopLevel())
+        {
+            if (!string.Equals(Win32Window.GetClassName(handle), BarWindowClass, StringComparison.Ordinal))
+                continue;
+
+            WindowActions.Close(handle);
+            closed++;
+        }
+
+        if (closed == 0)
+        {
+            Console.Error.WriteLine("shubbak: no bar is running.");
+            return 2;
+        }
+
+        Console.WriteLine($"closed {closed} bar window(s)");
+        return 0;
     }
 
     /// <summary>Brings back windows that some earlier run left concealed.</summary>
@@ -602,6 +645,19 @@ internal static class Program
             shubbak layout --cycle
             shubbak toggle-floating
             shubbak wm-reload-config
+            shubbak wm-exit
+
+          wm-exit stops the window manager properly: it saves the session, brings
+          every concealed window back, and takes the bar down with it. Terminating
+          the process instead strands windows off screen - use 'restore' if that
+          has already happened.
+
+        PROCESSES
+          taj-exit             Close the bar, leaving the window manager running.
+                               Asks its windows to close rather than terminating
+                               it, so the strip of screen it reserved is given
+                               back. Works when no window manager is running,
+                               which is the case that most needs it.
 
         DIAGNOSTICS
           diagnose [reason]    Write a self-contained report: environment, config,
