@@ -73,6 +73,8 @@ public static class TajConfigLoader
 
         if (parsed.HasErrors || bar is null) return (CreateDefault(), diagnostics);
 
+        WarnAboutUnknown(bar, KnownBarKeys, "setting in 'bar'", "TAJ0013", diagnostics);
+
         Dictionary<string, BarProfile> profiles = new(StringComparer.OrdinalIgnoreCase);
 
         // Declared sources are collected first, then the built-ins fill in whatever
@@ -232,6 +234,59 @@ public static class TajConfigLoader
     private static KdlValue? Setting(KdlNode node, string name) =>
         node.Child(name)?.Argument(0) ?? node.Property(name);
 
+    /// <summary>Children of <c>bar</c> the loader understands.</summary>
+    private static readonly string[] KnownBarKeys =
+        ["source", "profile", "rule", "window-manager-timeout"];
+
+    /// <summary>Settings a <c>profile</c> understands, as a child or a property.</summary>
+    private static readonly string[] KnownProfileKeys =
+        ["extends", "edge", "height", "background", "foreground", "font", "font-size", "padding", "zone"];
+
+    /// <summary>What may appear inside a <c>zone</c>: its settings, and the widgets.</summary>
+    private static readonly string[] KnownZoneKeys =
+        ["justify", "grow", "gap", "workspaces", "spacer", "text"];
+
+    /// <summary>
+    /// Reports anything the loader does not recognise.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Taj used to drop unknown nodes without a word, on the grounds that a config
+    /// written for a newer Taj should still produce a working bar. That is a good
+    /// reason to keep loading, and no reason at all to keep quiet: the overwhelmingly
+    /// more common case is not a config from the future but a typo, and the symptom is
+    /// a setting that appears to have no effect.
+    /// </para>
+    /// <para>
+    /// So they stay warnings rather than errors - the bar still builds - and they say
+    /// what was probably meant. The same treatment the window manager's own loader
+    /// gives its sections and settings, which this file had never had.
+    /// </para>
+    /// <para>
+    /// Both children and properties, because a setting can be written either way.
+    /// </para>
+    /// </remarks>
+    private static void WarnAboutUnknown(
+        KdlNode node, string[] known, string what, string code, List<Diagnostic> diagnostics)
+    {
+        foreach (KdlNode child in node.Children) Warn(child.Name, child.Span);
+
+        foreach ((string name, KdlValue value) in node.Properties) Warn(name, value.Span);
+
+        void Warn(string name, TextSpan span)
+        {
+            if (known.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
+
+            string? guess = Suggestion.Closest(name, known);
+
+            diagnostics.Add(Diagnostic.Warning(
+                code,
+                $"Unknown {what} '{name}'; it will be ignored.",
+                span,
+                guess is null ? null : $"Did you mean '{guess}'?"));
+        }
+    }
+
     private static string? SettingText(KdlNode node, string name) =>
         Setting(node, name)?.AsString();
 
@@ -260,6 +315,8 @@ public static class TajConfigLoader
             diagnostics.Add(Diagnostic.Error("TAJ0004", "A bar profile must be named.", node.Span));
             return null;
         }
+
+        WarnAboutUnknown(node, KnownProfileKeys, "setting in a profile", "TAJ0014", diagnostics);
 
         // `extends` lets a profile change one thing about another, which is what
         // makes a per-workspace variant a few lines rather than a duplicate.
@@ -336,6 +393,8 @@ public static class TajConfigLoader
         KdlNode node, Colour foreground, FontStyle font, List<Diagnostic> diagnostics)
     {
         string id = node.Argument(0)?.AsString() ?? "zone";
+
+        WarnAboutUnknown(node, KnownZoneKeys, "widget or setting in a zone", "TAJ0015", diagnostics);
 
         JustifyContent justify = (SettingText(node, "justify") ?? "start").ToLowerInvariant() switch
         {

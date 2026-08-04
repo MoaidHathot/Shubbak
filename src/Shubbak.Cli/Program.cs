@@ -597,13 +597,26 @@ internal static class Program
         foreach (Diagnostic diagnostic in result.Diagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
 
-        int errors = result.Errors.Count();
-        int warnings = result.Warnings.Count();
+        // The bar's section lives in the same file and was checked by nothing. A
+        // mistyped bar setting produced no diagnostic here and no diagnostic there -
+        // the only symptom was a setting that appeared to do nothing.
+        (Taj.Core.TajConfig bar, IReadOnlyList<Diagnostic> barDiagnostics) =
+            Taj.Core.TajConfigLoader.Load(source);
+
+        foreach (Diagnostic diagnostic in barDiagnostics)
+            Console.Error.Write(diagnostic.Render(source, path));
+
+        int errors = result.Errors.Count() +
+            barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+
+        int warnings = result.Warnings.Count() +
+            barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
 
         Console.WriteLine(
             errors == 0 && warnings == 0
                 ? $"{path}: ok - {result.Config.Keybindings.Count} keybindings, " +
-                  $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules " +
+                  $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules, " +
+                  $"{bar.Profiles.Count} bar profile(s) " +
                   $"(found via {location.Origin})"
                 : $"{path}: {errors} error(s), {warnings} warning(s)");
 
