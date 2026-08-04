@@ -37,10 +37,10 @@ public sealed class LatencyStatsTests
     }
 
     [Fact]
-    public void SamplesPastCapacityAreDroppedNotGrown()
+    public void SamplesPastCapacityEvictTheOldest()
     {
-        // Recording happens on the tick, so it must not allocate; dropping is the only
-        // option that cannot perturb the thing being measured.
+        // Recording happens on the tick, so it must not allocate. It overwrites rather
+        // than growing, and the set stays at capacity for the life of the process.
         var stats = new LatencyStats(4, "test");
 
         for (int i = 0; i < 100; i++) stats.Record(i);
@@ -50,9 +50,61 @@ public sealed class LatencyStatsTests
     }
 
     [Fact]
-    public void TheMaximumSurvivesBeingDropped()
+    public void ThePercentilesDescribeRecentBehaviourRatherThanTheFirstFewThousandTicks()
     {
-        // The worst case is the one worth keeping even once the window is full.
+        // The set used to fill once and drop everything afterwards, so a daemon that
+        // had been up for an hour still reported its first few thousand ticks - which
+        // for a window manager means startup, while it adopts windows and lays out for
+        // the first time, and nothing since.
+        //
+        // Ninety-six then four: with a capacity of four, only the fours should be left.
+        var stats = new LatencyStats(4, "test");
+
+        for (int i = 0; i < 96; i++) stats.Record(1000);
+        for (int i = 0; i < 4; i++) stats.Record(7);
+
+        Assert.Equal(7, stats.Percentile(0.5), 0);
+        Assert.Equal(7, stats.Percentile(0.99), 0);
+        Assert.Equal(0, stats.CountOver(100));
+
+        // The worst pause ever seen survives being overwritten, because it is usually
+        // the only trace a stall leaves.
+        Assert.Equal(1000, stats.Max, 0);
+    }
+
+    [Fact]
+    public void WrappingSeveralTimesLeavesNoStaleSamples()
+    {
+        // Capacity three, nine samples: the ring has to come round exactly three times
+        // and leave only the last three, with nothing from the earlier passes.
+        var stats = new LatencyStats(3, "test");
+
+        foreach (double sample in new double[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 })
+            stats.Record(sample);
+
+        Assert.Equal(3, stats.Count);
+        Assert.Equal(7, stats.Percentile(0.01), 0);
+        Assert.Equal(9, stats.Percentile(0.99), 0);
+    }
+
+    [Fact]
+    public void ResettingLetsTheNextSampleStartAtTheBeginning()
+    {
+        var stats = new LatencyStats(4, "test");
+
+        for (int i = 0; i < 10; i++) stats.Record(500);
+
+        stats.Reset();
+        stats.Record(3);
+
+        Assert.Equal(1, stats.Count);
+        Assert.Equal(3, stats.Percentile(0.5), 0);
+    }
+
+    [Fact]
+    public void TheMaximumSurvivesBeingOverwritten()
+    {
+        // The worst case is the one worth keeping even once the window has moved past it.
         var stats = new LatencyStats(2, "test");
 
         stats.Record(1);
