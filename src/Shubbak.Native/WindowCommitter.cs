@@ -342,21 +342,29 @@ public sealed class WindowCommitter
     {
         if (handles is null) return;
 
+        foreach (nint handle in handles) Raise(handle);
+    }
+
+    /// <summary>Brings one window to the front of the ordinary stacking order.</summary>
+    /// <remarks>
+    /// Public because an animated window never reaches <see cref="Commit"/>, which is
+    /// where <c>Placement.Raise</c> is otherwise honoured. The layout pass raises those
+    /// itself, at the moment it hands the window to the animation engine.
+    /// </remarks>
+    public static void Raise(nint handle)
+    {
+        if (!Win32Window.Exists(handle)) return;
+
         // HWND_TOP = 0. A sentinel rather than a real handle.
         var top = new HWND(0);
 
-        foreach (nint handle in handles)
-        {
-            if (!Win32Window.Exists(handle)) continue;
-
-            PInvoke.SetWindowPos(
-                new HWND(handle), top, 0, 0, 0, 0,
-                SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
-                SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
-                SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
-                SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
-                SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING);
-        }
+        PInvoke.SetWindowPos(
+            new HWND(handle), top, 0, 0, 0, 0,
+            SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
+            SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
+            SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
+            SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING);
     }
 
     private static void ApplyBatch(List<(nint Handle, Rect Rect)> moves)
