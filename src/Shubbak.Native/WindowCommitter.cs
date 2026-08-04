@@ -62,19 +62,13 @@ public sealed class WindowCommitter
     /// and always ready to answer. Real targets are not.
     /// </para>
     /// <para>
-    /// Animation waypoints only, deliberately, and the frame that reaches the target
-    /// is excluded. The flag makes the move asynchronous, which means the target has
-    /// not necessarily resized - let alone repainted - by the time the call returns.
-    /// For a waypoint a later frame supersedes, that is invisible. For the frame a
-    /// window comes to rest on it is not: the window sits at its final size showing
-    /// bare background until its own thread gets round to painting, which is visible
-    /// as a grey panel where the content should be, and most obvious on a window that
-    /// has just grown.
-    /// </para>
-    /// <para>
-    /// So the settling frame is sent synchronously and the cost is paid once per
-    /// window per motion rather than on all fourteen or so frames - about 3.7 ms
-    /// against the 52 ms that blocking on every frame was costing.
+    /// Animation only, deliberately. The flag makes the move asynchronous, so
+    /// <c>GetWindowRect</c> can briefly report the old rectangle - harmless for a
+    /// waypoint that a later frame supersedes, and harmless for the final frame
+    /// because "is the window already where we put it?" is answered from
+    /// <see cref="_lastApplied"/> rather than by asking Windows. Placement outside an
+    /// animation keeps the synchronous flags until there is a measurement saying it
+    /// should not.
     /// </para>
     /// <para>
     /// Windows ignores the flag when the calling thread and the target window's thread
@@ -84,37 +78,6 @@ public sealed class WindowCommitter
     /// </remarks>
     private const uint FrameFlags =
         DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
-
-    /// <summary>
-    /// Which flags an animation frame is sent with.
-    /// </summary>
-    /// <remarks>
-    /// Per window rather than per batch, because <c>DeferWindowPos</c> takes flags per
-    /// window and tracks do not finish together. A window that has arrived is settled
-    /// synchronously on the frame it arrives, even while its neighbours are still in
-    /// flight.
-    /// </remarks>
-    /// <summary>
-    /// Whether an animation frame may be posted rather than sent.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Public because it is the only part of the flag rule that can be checked without
-    /// a real window and a real busy application, and the rule is worth checking:
-    /// neither half of it is observable from outside. A waypoint sent synchronously is
-    /// just a slow frame, and a settling frame sent asynchronously is just a brief
-    /// flash of grey. Both are easy to reintroduce in a refactor.
-    /// </para>
-    /// <para>
-    /// That the two flag sets are otherwise identical is guaranteed by construction
-    /// rather than by a test: <see cref="FrameFlags"/> is <see cref="DefaultFlags"/>
-    /// plus one bit, and <see cref="FlagsFor"/> chooses between exactly those two.
-    /// </para>
-    /// </remarks>
-    public static bool ShouldSendAsynchronously(AnimationFrame frame) => !frame.IsFinal;
-
-    private static uint FlagsFor(AnimationFrame frame) =>
-        ShouldSendAsynchronously(frame) ? FrameFlags : DefaultFlags;
 
     private readonly Dictionary<nint, Rect> _lastCommitted = [];
 
@@ -483,7 +446,7 @@ public sealed class WindowCommitter
     /// <param name="rect">Where its visible frame should end up.</param>
     /// <param name="flags">
     /// Defaults to the synchronous <see cref="DefaultFlags"/>. The animation path
-    /// passes <see cref="FlagsFor"/>, because a fallback frame is still a frame and
+    /// passes <see cref="FrameFlags"/>, because a fallback frame is still a frame and
     /// blocking on a busy target is exactly as bad when the batch failed as when it
     /// did not.
     /// </param>
@@ -647,7 +610,7 @@ public sealed class WindowCommitter
         if (batch.IsNull)
         {
             foreach (AnimationFrame frame in frames)
-                MoveSingle((nint)frame.Handle, frame.Rect, FlagsFor(frame));
+                MoveSingle((nint)frame.Handle, frame.Rect, FrameFlags);
         }
         else
         {
@@ -665,7 +628,7 @@ public sealed class WindowCommitter
                 batch = PInvoke.DeferWindowPos(
                     batch, new HWND((nint)frame.Handle), HWND.Null,
                     target.X, target.Y, target.Width, target.Height,
-                    (SET_WINDOW_POS_FLAGS)FlagsFor(frame));
+                    (SET_WINDOW_POS_FLAGS)FrameFlags);
 
                 if (batch.IsNull)
                 {
@@ -675,7 +638,7 @@ public sealed class WindowCommitter
             }
 
             if (ok) PInvoke.EndDeferWindowPos(batch);
-            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect, FlagsFor(frame));
+            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect, FrameFlags);
         }
 
         lock (_lastCommitted)
