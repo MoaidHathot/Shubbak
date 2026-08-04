@@ -228,6 +228,24 @@ workspaces {
 // ---------------------------------------------------------------------------
 // Keybindings
 // ---------------------------------------------------------------------------
+//
+// Holding a key repeats it. That is what makes holding alt+h walk the focus
+// across a workspace, and it is the default.
+//
+// Commands where repeating would be wrong opt out on their own: close,
+// shell-exec, exit, reload-config, and every toggle. Any binding can override
+// that either way with repeat=#true or repeat=#false.
+//
+// Keys you can name, beyond letters, digits and F1-F24: enter, escape, space,
+// tab, backspace, delete, insert, home, end, pageup, pagedown, the four arrows,
+// numpad0-9 (also kp0-9 or num0-9), numpad_add and its siblings, volume_up,
+// media_play_pause, browser_back, printscreen, capslock, numlock, scrolllock,
+// pause, apps, oem_102, and bare punctuation such as - or [.
+//
+// Two things Windows decides rather than Shubbak. A numpad key only reports as
+// numpad0-9 while Num Lock is on; with it off those keys report home, end and
+// the arrows instead. And letters resolve positionally, so alt+a on AZERTY is
+// the key where Q sits on QWERTY.
 
 keybindings {
     // Focus.

@@ -6,9 +6,27 @@ namespace Shubbak.Config;
 /// Parses key binding strings such as <c>alt+shift+3</c>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Accepts the spellings GlazeWM users already have in their configs, including
 /// <c>oem_quotes</c> and bare punctuation like <c>alt+-</c>, so migrating a config
 /// does not mean relearning key names.
+/// </para>
+/// <para>
+/// Two caveats that belong to Windows rather than to this parser, and that no
+/// diagnostic here can detect:
+/// </para>
+/// <para>
+/// A numpad key only reports <c>VK_NUMPAD0</c>-<c>VK_NUMPAD9</c> while Num Lock is
+/// on. With it off the same physical keys report the navigation codes - home, end,
+/// the arrows - so <c>alt+numpad1</c> will not fire, and <c>alt+end</c> will.
+/// </para>
+/// <para>
+/// Letters and punctuation resolve to virtual-key codes, which are positional. On
+/// AZERTY <c>alt+a</c> binds the key where Q sits on QWERTY, and <c>;</c> is a
+/// different physical key on most non-US layouts. Whether that is right depends on
+/// whether the user means the key labelled A or the key where A is on QWERTY, and
+/// there is currently no way to say which.
+/// </para>
 /// </remarks>
 public static class KeyParser
 {
@@ -18,8 +36,11 @@ public static class KeyParser
     public const int ModShift = 1 << 2;
     public const int ModWindows = 1 << 3;
 
-    private static readonly Dictionary<string, ushort> s_namedKeys =
-        new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, ushort> s_namedKeys = BuildNamedKeys();
+
+    private static Dictionary<string, ushort> BuildNamedKeys()
+    {
+        var keys = new Dictionary<string, ushort>(StringComparer.OrdinalIgnoreCase)
         {
             ["backspace"] = 0x08,
             ["tab"] = 0x09,
@@ -39,6 +60,42 @@ public static class KeyParser
             ["insert"] = 0x2D,
             ["delete"] = 0x2E,
 
+            // Locks and system keys.
+            ["pause"] = 0x13,
+            ["capslock"] = 0x14,
+            ["printscreen"] = 0x2C,
+            ["prtsc"] = 0x2C,
+            ["apps"] = 0x5D,
+            ["menu"] = 0x5D,
+            ["numlock"] = 0x90,
+            ["scrolllock"] = 0x91,
+
+            // Numpad operators. The digits are added below.
+            ["numpad_multiply"] = 0x6A,
+            ["numpad_add"] = 0x6B,
+            ["numpad_separator"] = 0x6C,
+            ["numpad_subtract"] = 0x6D,
+            ["numpad_decimal"] = 0x6E,
+            ["numpad_divide"] = 0x6F,
+
+            // Browser keys, as found on most keyboards with a media row.
+            ["browser_back"] = 0xA6,
+            ["browser_forward"] = 0xA7,
+            ["browser_refresh"] = 0xA8,
+            ["browser_stop"] = 0xA9,
+            ["browser_search"] = 0xAA,
+            ["browser_favorites"] = 0xAB,
+            ["browser_home"] = 0xAC,
+
+            // Media keys.
+            ["volume_mute"] = 0xAD,
+            ["volume_down"] = 0xAE,
+            ["volume_up"] = 0xAF,
+            ["media_next"] = 0xB0,
+            ["media_prev"] = 0xB1,
+            ["media_stop"] = 0xB2,
+            ["media_play_pause"] = 0xB3,
+
             // OEM keys. GlazeWM's own names are accepted alongside the punctuation
             // they represent, because existing configs use them.
             ["oem_1"] = 0xBA,        // ;:
@@ -56,7 +113,28 @@ public static class KeyParser
             ["oem_6"] = 0xDD,        // ]}
             ["oem_7"] = 0xDE,        // '"
             ["oem_quotes"] = 0xDE,
+
+            // The key beside left shift on every non-US physical keyboard, and the
+            // one beside it on some. Absent before, so an ISO keyboard had two keys
+            // that simply could not be named.
+            ["oem_8"] = 0xDF,
+            ["oem_102"] = 0xE2,
+            ["backslash_iso"] = 0xE2,
         };
+
+        // Three spellings each, because all three get guessed and none is obviously
+        // the right one to have picked.
+        for (ushort digit = 0; digit <= 9; digit++)
+        {
+            ushort code = (ushort)(0x60 + digit);
+
+            keys[$"numpad{digit}"] = code;
+            keys[$"kp{digit}"] = code;
+            keys[$"num{digit}"] = code;
+        }
+
+        return keys;
+    }
 
     /// <summary>Single punctuation characters mapped to their virtual-key codes.</summary>
     private static readonly Dictionary<char, ushort> s_punctuation = new()
@@ -123,7 +201,11 @@ public static class KeyParser
                     "SHB0203",
                     $"Unknown key '{part}' in binding '{text}'.",
                     span,
-                    "Use a letter, digit, F-key, a name such as 'enter' or 'left', or punctuation such as '-'.");
+                    "Use a letter, digit, F-key, punctuation such as '-', or a name: " +
+                    "enter, escape, space, tab, backspace, delete, insert, home, end, " +
+                    "pageup, pagedown, the arrows, numpad0-9 (also kp0-9 or num0-9), " +
+                    "numpad_add and friends, volume_up, media_play_pause, browser_back, " +
+                    "printscreen, capslock, numlock, scrolllock, pause, apps, or oem_102.");
                 return false;
             }
 
