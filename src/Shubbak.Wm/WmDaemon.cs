@@ -104,6 +104,16 @@ public sealed class WmDaemon : IDisposable
     private string? _configPath;
 
     private bool _layoutDirty;
+
+    /// <summary>How the next layout pass should animate whatever it moves.</summary>
+    /// <remarks>
+    /// Carried from the events that made the layout dirty, because the reason for a
+    /// pass is known when it is requested and gone by the time it runs. Without it the
+    /// layout-change and workspace-switch profiles were unreachable: both were parsed,
+    /// documented and tunable, and nothing ever constructed either.
+    /// </remarks>
+    private AnimationKind _pendingLayoutKind = AnimationKind.WindowMove;
+
     private bool _disposed;
 
     private Session? _session;
@@ -1679,6 +1689,11 @@ public sealed class WmDaemon : IDisposable
     {
         IReadOnlyList<Placement> placements = _wm.ComputePlacements();
 
+        // Taken once and reset here rather than at the end, so a pass that throws does
+        // not leave the next one wearing a reason that has already been spent.
+        AnimationKind movementKind = _pendingLayoutKind;
+        _pendingLayoutKind = AnimationKind.WindowMove;
+
         _commitScratch.Clear();
 
         // Everything that should be off screen goes first, before anything is
@@ -1728,7 +1743,7 @@ public sealed class WmDaemon : IDisposable
                 ? inFlight
                 : WindowCommitter.VisibleBounds(handle);
 
-            AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : AnimationKind.WindowMove;
+            AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : movementKind;
 
             // A window joining the layout for the first time.
             //
@@ -2218,6 +2233,14 @@ public sealed class WmDaemon : IDisposable
         _config = result.Config;
         _wm.Options = _config.ToWmOptions();
         _animation.Options = _config.Animation;
+
+        // Tick never consults Enabled - only Retarget does - so swapping the options
+        // stopped new animations and let every in-flight one run to completion. A
+        // reload that turns animation off should stop the ones already moving, which is
+        // what Clear is for and what nothing had ever called it for. The reload marks
+        // the layout dirty, so the windows are placed at their targets on the next pass
+        // rather than left wherever the motion had reached.
+        if (!_config.Animation.Enabled) _animation.Clear();
         _committer.HideMethod = _config.HideMethod;
         _committer.KeepInTaskbar = _config.KeepInTaskbar;
 
@@ -2512,6 +2535,11 @@ public sealed class WmDaemon : IDisposable
         // playing video, a terminal showing its directory - held the whole computer at
         // a fine timer for passes that could not move anything.
         if (result.Events.AffectGeometry()) _layoutDirty = true;
+
+        // Why the pass is happening, recorded while it is still known. A workspace
+        // switch and a layout change look different on purpose, and each has its own
+        // duration and curve in the config.
+        if (result.Events.LayoutAnimationKind() is { } animation) _pendingLayoutKind = animation;
 
         // One level of recursion, and it terminates: clearing the mode is always
         // accepted by the table, so this cannot come back here a second time.
