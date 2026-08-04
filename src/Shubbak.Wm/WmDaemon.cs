@@ -579,8 +579,34 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     /// <param name="sinceLastFrameMs">Time since the last committed frame.</param>
     /// <param name="frameMs">One frame, in milliseconds.</param>
+    /// <remarks>
+    /// <para>
+    /// Allows a wake that lands up to <see cref="FrameSlackMs"/> early to count. The
+    /// pump's timeout is whole milliseconds and a frame interval usually is not, and
+    /// the pump is also woken by keyboard and window events that have nothing to do
+    /// with the frame clock - during a workspace switch, constantly. Without the
+    /// slack, a wake a fraction of a millisecond short is refused and the frame waits
+    /// out another entire interval, which halves the rate rather than trimming it.
+    /// </para>
+    /// <para>
+    /// Emitting a frame a fraction early costs a fraction of a frame and corrects
+    /// itself on the next one, because the clock measures from the frame actually
+    /// committed rather than from a fixed schedule.
+    /// </para>
+    /// </remarks>
     internal static bool IsFrameDue(double sinceLastFrameMs, double frameMs) =>
-        sinceLastFrameMs >= frameMs;
+        sinceLastFrameMs >= frameMs - FrameSlackMs;
+
+    /// <summary>
+    /// How early a wake may be and still count as a frame.
+    /// </summary>
+    /// <remarks>
+    /// One millisecond, which is the resolution the pump can express a timeout in and
+    /// the resolution <c>TimerResolution</c> asks the system scheduler for while
+    /// anything is animating. Asking for finer than the clock beneath it can deliver
+    /// is how the rate got halved in the first place.
+    /// </remarks>
+    private const double FrameSlackMs = 1.0;
 
     /// <remarks>
     /// <para>

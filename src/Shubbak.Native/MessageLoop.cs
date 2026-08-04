@@ -133,10 +133,24 @@ public sealed class MessageLoop : IDisposable
     /// </remarks>
     private unsafe void WaitForWork(TimeSpan requested, int defaultMs)
     {
+        // Rounded up, not truncated. The timeout is whole milliseconds and a frame
+        // interval usually is not: 60 fps is 16.6666 ms, which truncated to 16 meant
+        // the pump woke reliably just before a frame was due.
+        //
+        // Sleeping fractionally longer than asked costs a fraction of a frame.
+        // Sleeping fractionally less costs an entire one, because whatever is being
+        // paced by the timeout then waits out another whole interval - which is how a
+        // third of a millisecond turned 60 fps into a measured 33.
+        //
+        // Not covered by a test here, deliberately: the loop runs at roughly the same
+        // rate either way, so a pass count cannot see the difference. What the
+        // truncation broke was the frame clock in the daemon, and that is where the
+        // assertion lives. This is the other half of the fix, and correct on its own
+        // terms - a wait must not return before it was asked to.
         uint timeout =
             requested == Timeout.InfiniteTimeSpan
                 ? 0xFFFFFFFFu
-                : (uint)Math.Clamp((int)requested.TotalMilliseconds, 0, defaultMs * 1000);
+                : (uint)Math.Clamp((int)Math.Ceiling(requested.TotalMilliseconds), 0, defaultMs * 1000);
 
         if (timeout == 0) return;
 
