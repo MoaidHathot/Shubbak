@@ -84,6 +84,19 @@ animation {
     // nudge costs a dozen frames and reads as lag rather than motion.
     minimum-distance 8
 
+    // Whether a window joining the layout for the first time slides into its tile.
+    //
+    // Off, because the rectangle it would travel from is whatever size the
+    // application opened at - it was never part of the arrangement, so the motion
+    // describes nothing that happened. It is also the most expensive animation
+    // there is: a window that relays out its contents on every resize does so once
+    // per frame, which File Explorer makes very obvious.
+    //
+    // When on it uses the window-open profile below rather than window-move, so a
+    // shorter open than move is easy to arrange - which is usually what stops it
+    // feeling sluggish.
+    animate-new-windows #false
+
     // Curves matter more than durations for how motion feels: ease-out covers most
     // of the distance immediately, so it reads as responsive.
     // Available: linear, ease-in, ease-out, ease-in-out, ease-out-back, ease-out-expo

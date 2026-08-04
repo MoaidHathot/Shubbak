@@ -1668,20 +1668,27 @@ public sealed class WmDaemon : IDisposable
 
             AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : AnimationKind.WindowMove;
 
-            // A window joining the layout for the first time is placed, not animated.
-            // The rectangle it would travel from is the size the application happened
-            // to open at - it was never part of the arrangement, so the motion carries
-            // nothing and simply drags a full-sized window across the screen.
+            // A window joining the layout for the first time.
             //
-            // It also costs the most where it is worst: a window that is expensive to
-            // resize relays out its contents on every frame, and File Explorer doing
-            // that eighteen times in a hundred and forty milliseconds is exactly the
-            // stutter this removes.
+            // Placed rather than animated unless asked otherwise, because the
+            // rectangle it would travel from is whatever size the application opened
+            // at - it was never part of the arrangement, so the motion describes
+            // nothing that happened. It is also the most expensive animation there is:
+            // a window that relays out its contents on every resize does so once per
+            // frame, which File Explorer makes very obvious.
+            //
+            // When it is wanted, it uses the window-open profile rather than
+            // window-move, so the two can be tuned apart.
             if (_arriving.Remove(handle))
             {
-                _animation.Remove(placement.Window.Handle);
-                _commitScratch.Add(placement);
-                continue;
+                if (!_config.Animation.AnimateNewWindows)
+                {
+                    _animation.Remove(placement.Window.Handle);
+                    _commitScratch.Add(placement);
+                    continue;
+                }
+
+                kind = AnimationKind.WindowOpen;
             }
 
             if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
