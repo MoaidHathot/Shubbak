@@ -36,6 +36,7 @@ public sealed class WmDaemon : IDisposable
     private readonly WindowManager _wm;
     private readonly CommandExecutor _executor;
     private readonly BindingTable _bindings = new();
+    private readonly RuleEngine _rules = new();
     private readonly WindowCommitter _committer = new();
     private readonly MessageLoop _loop = new();
     private readonly AnimationEngine _animation = new();
@@ -62,20 +63,6 @@ public sealed class WmDaemon : IDisposable
     /// pass that first gives it a rectangle.
     /// </remarks>
     private readonly HashSet<nint> _arriving = [];
-
-    /// <summary>
-    /// Whether any rule is waiting on a title change or a focus change.
-    /// </summary>
-    /// <remarks>
-    /// Building the attributes a rule matches on costs four Win32 calls and opens a
-    /// process handle, and it was paid on every title change and every focus change
-    /// whether or not a single rule was listening - which browsers, terminals and
-    /// media players make continuous. Almost every configuration has no rule on
-    /// either trigger, so almost every configuration was paying for nothing.
-    /// </remarks>
-    private bool _hasTitleChangeRules;
-
-    private bool _hasFocusRules;
 
     /// <summary>How long each tick took, and how far apart they landed.</summary>
     /// <remarks>
@@ -597,7 +584,7 @@ public sealed class WmDaemon : IDisposable
                     // nowhere, so a rule written against a title that only appears
                     // once the application has loaded - a document name, a call in
                     // progress - silently never ran.
-                    if (_hasTitleChangeRules)
+                    if (_rules.HasRulesFor(RuleTrigger.OnTitleChange))
                         ApplyRules(titled, ToAttributes(handle), RuleTrigger.OnTitleChange);
                     break;
                 }
@@ -628,7 +615,7 @@ public sealed class WmDaemon : IDisposable
                         Publish(_wm.FocusWindow(focused));
 
                         // on="focus" rules, likewise dispatched from nowhere until now.
-                        if (_hasFocusRules)
+                        if (_rules.HasRulesFor(RuleTrigger.OnFocus))
                             ApplyRules(focused, ToAttributes(handle), RuleTrigger.OnFocus);
                     }
                 }
@@ -769,7 +756,7 @@ public sealed class WmDaemon : IDisposable
             // process handle, and the overwhelming majority of windows are rejected
             // without ever needing them. Paying that only for the rejections a rule is
             // allowed to overturn keeps the common path as cheap as it was.
-            if (WindowFilter.CanBeOverridden(decision.Reason) && ShouldForceManage(ToAttributes(handle)))
+            if (WindowFilter.CanBeOverridden(decision.Reason) && _rules.ShouldForceManage(ToAttributes(handle)))
             {
                 Log.Debug(LogCategory.Rule,
                     $"managing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
@@ -804,7 +791,7 @@ public sealed class WmDaemon : IDisposable
 
         var attributes = ToAttributes(handle);
 
-        if (!forced && ShouldIgnore(attributes))
+        if (!forced && _rules.ShouldIgnore(attributes))
         {
             // Remembered, so the same window is not re-evaluated on every one of the
             // many events it will generate over its lifetime.
@@ -1181,43 +1168,18 @@ public sealed class WmDaemon : IDisposable
             path);
     }
 
-    private bool ShouldIgnore(WindowAttributes attributes) =>
-        HasAdoptionRule<IgnoreCommand>(attributes);
-
-    /// <summary>Whether a rule asks for a window the built-in filter passed over.</summary>
-    private bool ShouldForceManage(WindowAttributes attributes) =>
-        HasAdoptionRule<ManageCommand>(attributes);
-
-    /// <summary>
-    /// Whether any rule matching <paramref name="attributes"/> carries a command of
-    /// the given kind.
-    /// </summary>
-    /// <remarks>
-    /// Only <see cref="RuleTrigger.OnManage"/> rules are consulted. Both questions
-    /// this answers are asked while deciding whether to adopt a window, which is a
-    /// moment the later triggers have not reached yet.
-    /// </remarks>
-    private bool HasAdoptionRule<TCommand>(WindowAttributes attributes)
-        where TCommand : WmCommand
-    {
-        foreach (WindowRule rule in _config.Rules)
-        {
-            if (rule.Trigger != RuleTrigger.OnManage) continue;
-            if (!rule.Matches(attributes, _config.Apps)) continue;
-
-            foreach (WmCommand command in rule.Commands)
-                if (command is TCommand) return true;
-        }
-
-        return false;
-    }
-
     private void ApplyRules(WindowNode window, WindowAttributes attributes, RuleTrigger trigger)
     {
-        foreach (WindowRule rule in _config.Rules)
+        IReadOnlyList<WindowRule> rules = _rules.For(trigger);
+
+        // Indexed rather than foreach: this runs on the tick path for every title
+        // change once any rule wants them, and the enumerator for an IReadOnlyList is
+        // an interface call per element that allocates.
+        for (int i = 0; i < rules.Count; i++)
         {
-            if (rule.Trigger != trigger) continue;
-            if (!rule.Matches(attributes, _config.Apps)) continue;
+            WindowRule rule = rules[i];
+
+            if (!_rules.Matches(rule, attributes)) continue;
 
             // Rules act on the window they matched, so focus is moved there first.
             // Otherwise `move --workspace 5` in a rule would move whatever the user
@@ -2158,7 +2120,7 @@ public sealed class WmDaemon : IDisposable
         {
             Log.Warn(LogCategory.Config, "no config file found; using defaults");
             _ = _bindings.Load(_config);
-            IndexRuleTriggers();
+            _rules.Load(_config);
             return;
         }
 
@@ -2195,7 +2157,7 @@ public sealed class WmDaemon : IDisposable
         // while the state machine, the report and the bar all still announced the mode.
         string? lostMode = _bindings.Load(_config);
 
-        IndexRuleTriggers();
+        _rules.Load(_config);
 
         // The other moment a key stops being bound. A binding deleted here leaves any
         // swallow flag it set with nothing to clear it, and the next press of that key
@@ -2265,7 +2227,7 @@ public sealed class WmDaemon : IDisposable
         foreach (nint handle in _managed.Keys.ToArray())
         {
             if (!Win32Window.Exists(handle)) continue;
-            if (!ShouldIgnore(ToAttributes(handle))) continue;
+            if (!_rules.ShouldIgnore(ToAttributes(handle))) continue;
 
             Log.Info(LogCategory.Rule,
                 $"releasing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\": " +
@@ -2280,19 +2242,6 @@ public sealed class WmDaemon : IDisposable
             if (_managed.ContainsKey(handle)) continue;
 
             TryManage(handle);
-        }
-    }
-
-    /// <summary>Records which rule triggers any rule actually uses.</summary>
-    private void IndexRuleTriggers()
-    {
-        _hasTitleChangeRules = false;
-        _hasFocusRules = false;
-
-        foreach (WindowRule rule in _config.Rules)
-        {
-            if (rule.Trigger == RuleTrigger.OnTitleChange) _hasTitleChangeRules = true;
-            if (rule.Trigger == RuleTrigger.OnFocus) _hasFocusRules = true;
         }
     }
 
