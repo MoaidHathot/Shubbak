@@ -290,6 +290,7 @@ public sealed class ConfigLoader
         animation = animation with
         {
             Enabled = Bool(node, "enabled", animation.Enabled),
+            AnimateNewWindows = Bool(node, "animate-new-windows", animation.AnimateNewWindows),
             MinimumAnimatedDistance = Math.Max(
                 0, Int(node, "minimum-distance", animation.MinimumAnimatedDistance)),
             WindowOpen = Profile(node, "window-open", animation.WindowOpen),

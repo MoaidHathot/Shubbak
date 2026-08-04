@@ -35,6 +35,31 @@ public sealed record AnimationOptions
     /// <summary>Whether to animate at all.</summary>
     public bool Enabled { get; init; } = true;
 
+    /// <summary>
+    /// Whether a window joining the layout for the first time animates into its tile.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off by default. The rectangle such a window would travel from is whatever size
+    /// the application happened to open at - it was never part of the arrangement, so
+    /// the motion describes nothing that happened.
+    /// </para>
+    /// <para>
+    /// It is also the most expensive animation there is: a window that relays out its
+    /// contents on every resize does so once per frame, and File Explorer doing that
+    /// through a whole animation is a visible stutter rather than a slide. That was
+    /// bad enough to be worth turning off entirely while the loop was delivering half
+    /// the frames it was supposed to; with that fixed it is worth having as a choice
+    /// rather than a decision made for everyone.
+    /// </para>
+    /// <para>
+    /// When on, it uses the <see cref="WindowOpen"/> profile rather than
+    /// <see cref="WindowMove"/>, so the two can be tuned apart - a shorter open than
+    /// move is usually what stops it feeling sluggish.
+    /// </para>
+    /// </remarks>
+    public bool AnimateNewWindows { get; init; }
+
     public AnimationProfile WindowOpen { get; init; } =
         new(TimeSpan.FromMilliseconds(180), Easing.EaseOutExpo);
 
