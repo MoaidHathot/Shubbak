@@ -80,6 +80,19 @@ gaps {
 animation {
     enabled #true
 
+    // Frames a second to aim for while anything is moving. 15 to 240; 60 by default.
+    //
+    // Shubbak paints nothing. It repositions windows, and each application repaints
+    // itself on its own thread at whatever rate it can manage. Past the point where
+    // applications keep up, asking for more frames does not buy smoother motion - it
+    // asks every window being moved to discard and redraw its contents more often,
+    // and the ones that cannot fall behind and briefly show bare background where
+    // their content should be.
+    //
+    // Raise it if your applications keep up and you want finer motion. The cost is
+    // CPU here and repaint pressure in them.
+    fps 60
+
     // Below this many pixels a move is applied instantly. Animating a three-pixel
     // nudge costs a dozen frames and reads as lag rather than motion.
     minimum-distance 8

@@ -361,8 +361,17 @@ public sealed class WmDaemon : IDisposable
         return _animation.IsAnimating || _layoutDirty ? FrameInterval : IdleInterval;
     }
 
-    /// <summary>Roughly 144 Hz, the rate ADR 0001 gates the animation path on.</summary>
-    private static readonly TimeSpan FrameInterval = TimeSpan.FromMilliseconds(7);
+    /// <summary>
+    /// How long one animation frame lasts, from configuration.
+    /// </summary>
+    /// <remarks>
+    /// Was a fixed 7 ms - "roughly 144 Hz, the rate ADR 0001 gates the animation path
+    /// on" - which conflated the rate the design was <i>proved sound at</i> with the
+    /// rate it should <i>ask for</i>. The first measurement of the shipping binary
+    /// found it delivering about 100 Hz regardless, and the frames it did deliver were
+    /// arriving faster than the applications being moved could repaint.
+    /// </remarks>
+    private TimeSpan FrameInterval => _config.Animation.FramePeriod;
 
     /// <summary>
     /// The longest the loop sits idle before looking around on its own.
@@ -407,8 +416,14 @@ public sealed class WmDaemon : IDisposable
     /// invisible; instant is the bug.
     /// </para>
     /// </remarks>
-    internal static double ClampAnimationStep(double deltaMs) =>
-        Math.Min(deltaMs, FrameInterval.TotalMilliseconds * 2);
+    /// <param name="deltaMs">Elapsed time the tick wants to hand to the engine.</param>
+    /// <param name="frameMs">
+    /// One frame, in milliseconds. Passed rather than read from configuration so the
+    /// rule holds at whatever rate the frame clock is running at, and so a test can
+    /// state the rate it is asserting about instead of inheriting today's default.
+    /// </param>
+    internal static double ClampAnimationStep(double deltaMs, double frameMs) =>
+        Math.Min(deltaMs, frameMs * 2);
 
     private void OnTick()
     {
@@ -523,6 +538,8 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void MaybeAdvanceFrame(long now)
     {
+        double frameMs = FrameInterval.TotalMilliseconds;
+
         // A first frame has no previous frame to be spaced from, and is emitted at
         // once: the motion has just been retargeted and the windows are still at their
         // old positions.
@@ -532,7 +549,7 @@ public sealed class WmDaemon : IDisposable
             ? 0
             : (now - _lastFrameTicks) * 1000.0 / Stopwatch.Frequency;
 
-        if (!first && !IsFrameDue(sinceFrameMs)) return;
+        if (!first && !IsFrameDue(sinceFrameMs, frameMs)) return;
 
         if (!first)
         {
@@ -542,7 +559,7 @@ public sealed class WmDaemon : IDisposable
             _animatingMs += sinceFrameMs;
         }
 
-        AdvanceAnimation(ClampAnimationStep(sinceFrameMs));
+        AdvanceAnimation(ClampAnimationStep(sinceFrameMs, frameMs));
 
         _lastFrameTicks = now;
     }
@@ -560,8 +577,10 @@ public sealed class WmDaemon : IDisposable
     /// 143 Hz target and flooded every window being moved with more repaint requests
     /// than it could serve.
     /// </remarks>
-    internal static bool IsFrameDue(double sinceLastFrameMs) =>
-        sinceLastFrameMs >= FrameInterval.TotalMilliseconds;
+    /// <param name="sinceLastFrameMs">Time since the last committed frame.</param>
+    /// <param name="frameMs">One frame, in milliseconds.</param>
+    internal static bool IsFrameDue(double sinceLastFrameMs, double frameMs) =>
+        sinceLastFrameMs >= frameMs;
 
     /// <remarks>
     /// <para>
@@ -1386,7 +1405,8 @@ public sealed class WmDaemon : IDisposable
 
             $"- **Asking for**: {FrameInterval.TotalMilliseconds:F2} ms " +
             $"(~{(FrameInterval.TotalMilliseconds > 0 ? 1000.0 / FrameInterval.TotalMilliseconds : 0):F0} Hz), " +
-            "fixed - not derived from any monitor's refresh rate",
+            $"from `animation {{ fps {_config.Animation.FramesPerSecond} }}` - " +
+            "not derived from any monitor's refresh rate",
 
             $"- **Frame interval** (last {_frameInterval.Count}, animating only): " +
             $"p50 {p50:F2} ms, p99 {_frameInterval.Percentile(0.99):F2} ms, " +
