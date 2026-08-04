@@ -44,12 +44,20 @@ jobs:
         run: dotnet run --project src/Shubbak.Cli --configuration Release --no-build -- check-config docs/shubbak.example.kdl
 
       # The README quotes a test count in two places. It has been corrected by hand
-      # three times and was wrong on each of the three occasions somebody looked, so
-      # it is checked rather than remembered.
+      # four times and was wrong on each of the four occasions somebody looked - the
+      # last time within the same commit that added this check, because the count was
+      # taken before the last test file was written. So it is checked rather than
+      # remembered.
       - name: Check the README's test count
         shell: pwsh
         run: |
-          $declared = (Select-String -Path tests\*\*.cs -Pattern '^\s*\[(Fact|Theory)' -AllMatches).Count
+          # Recursive: a test in a nested folder would otherwise be invisible to the
+          # very check that exists to notice drift.
+          $files = Get-ChildItem -Path tests -Recurse -Filter *.cs -File |
+              Where-Object { $_.FullName -notmatch '\\obj\\|\\bin\\' }
+
+          $declared = ($files | Select-String -Pattern '^\s*\[(Fact|Theory)' -AllMatches).Count
+
           $claimed = (Select-String -Path README.md -Pattern '(\d+) test methods' -AllMatches).Matches |
               ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique
 
