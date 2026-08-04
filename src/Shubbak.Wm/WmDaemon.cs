@@ -930,14 +930,18 @@ public sealed class WmDaemon : IDisposable
             // The number that says whether the loop runs at the rate it asks for. It
             // asks for 8 ms; a plain sleep is rounded up to the system timer
             // resolution, so this is the only honest answer.
-            $"- **Tick interval**: p50 {_tickInterval.Percentile(0.5):F2} ms, " +
-            $"p99 {_tickInterval.Percentile(0.99):F2} ms, max {_tickInterval.Max:F2} ms " +
+            //
+            // Over the most recent samples rather than the whole run, and said so
+            // explicitly: these once described the first four thousand ticks and then
+            // never moved, so a daemon up for an hour was quoting its own startup.
+            $"- **Tick interval** (last {_tickInterval.Count}): p50 {_tickInterval.Percentile(0.5):F2} ms, " +
+            $"p99 {_tickInterval.Percentile(0.99):F2} ms, max {_tickInterval.Max:F2} ms all-time " +
             $"(~{(_tickInterval.Percentile(0.5) > 0 ? 1000.0 / _tickInterval.Percentile(0.5) : 0):F0} Hz)",
 
-            $"- **Tick duration**: p50 {_tickDuration.Percentile(0.5):F2} ms, " +
-            $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms",
+            $"- **Tick duration** (last {_tickDuration.Count}): p50 {_tickDuration.Percentile(0.5):F2} ms, " +
+            $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms all-time",
 
-            $"- **Ticks over 6.94 ms budget**: {_tickDuration.CountOver(6.94)} of {_tickDuration.Count} sampled",
+            $"- **Ticks over 6.94 ms budget**: {_tickDuration.CountOver(6.94)} of the last {_tickDuration.Count}",
             $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
             $"- **Dropped log entries**: {Log.Dropped}",
             $"- **GC**: gen0 {GC.CollectionCount(0)}, gen1 {GC.CollectionCount(1)}, gen2 {GC.CollectionCount(2)}",
