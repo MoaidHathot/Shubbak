@@ -5,6 +5,7 @@ using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Commands;
 using Shubbak.Core.Layouts;
+using Shubbak.Core.Rendering;
 using Shubbak.Core.Tree;
 using Shubbak.Core.Wm;
 using Shubbak.Ipc;
@@ -2017,65 +2018,18 @@ public sealed class WmDaemon : IDisposable
     {
         nint handle = (nint)window.Handle;
 
-        if (colour is null || !TryParseColour(colour, out byte r, out byte g, out byte b))
+        if (!Colour.TryParse(colour, out Colour parsed))
         {
             WindowActions.ClearBorderColour(handle);
             return;
         }
 
-        WindowActions.SetBorderColour(handle, r, g, b);
-    }
-
-    /// <summary>Parses <c>#RGB</c> or <c>#RRGGBB</c>.</summary>
-    private static bool TryParseColour(string text, out byte r, out byte g, out byte b)
-    {
-        r = g = b = 0;
-
-        ReadOnlySpan<char> span = text.AsSpan().Trim();
-        if (span.Length > 0 && span[0] == '#') span = span[1..];
-
-        switch (span.Length)
-        {
-            case 3:
-                if (!Nibble(span[0], out int sr) || !Nibble(span[1], out int sg) || !Nibble(span[2], out int sb))
-                    return false;
-
-                // #abc means #aabbcc.
-                r = (byte)(sr * 17);
-                g = (byte)(sg * 17);
-                b = (byte)(sb * 17);
-                return true;
-
-            case 6 or 8:
-                return Byte(span[0], span[1], out r)
-                    && Byte(span[2], span[3], out g)
-                    && Byte(span[4], span[5], out b);
-
-            default:
-                return false;
-        }
-
-        static bool Nibble(char c, out int value)
-        {
-            value = c switch
-            {
-                >= '0' and <= '9' => c - '0',
-                >= 'a' and <= 'f' => c - 'a' + 10,
-                >= 'A' and <= 'F' => c - 'A' + 10,
-                _ => -1,
-            };
-
-            return value >= 0;
-        }
-
-        static bool Byte(char high, char low, out byte value)
-        {
-            value = 0;
-            if (!Nibble(high, out int h) || !Nibble(low, out int l)) return false;
-
-            value = (byte)((h << 4) | l);
-            return true;
-        }
+        // Alpha is discarded on purpose here rather than by accident. DWMWA_BORDER_COLOR
+        // takes a COLORREF, which has nowhere to put it. The shared parser accepts
+        // #RRGGBBAA because the bar can honour it; this is the one caller that cannot,
+        // and the copy that used to live here quietly accepted eight digits and threw
+        // the alpha away without either of those being a decision.
+        WindowActions.SetBorderColour(handle, parsed.R, parsed.G, parsed.B);
     }
 
     // ---- monitors ----------------------------------------------------------

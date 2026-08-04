@@ -25,4 +25,13 @@
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      The daemon's interesting methods are internal, which left the parts most worth
+      testing - command dispatch, window inspection, the diagnostic report - with no
+      way to reach them at all.
+    -->
+    <InternalsVisibleTo Include="Shubbak.Wm.Tests" />
+  </ItemGroup>
+
 </Project>

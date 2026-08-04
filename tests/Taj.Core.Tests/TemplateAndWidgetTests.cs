@@ -1,3 +1,4 @@
+using Shubbak.Core.Rendering;
 using Taj.Core;
 using Taj.Core.Layout;
 using Taj.Core.Sources;
