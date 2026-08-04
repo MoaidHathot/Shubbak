@@ -407,7 +407,7 @@ public sealed class WmDaemon : IDisposable
             }
 
             if (Log.IsEnabled(LogLevel.Debug))
-                Log.Debug(LogCategory.Hook, $"{binding.Key.Display} -> {Describe(binding.Commands)}");
+                Log.Debug(LogCategory.Hook, $"{binding.Key.Display} -> {binding.Commands.Describe()}");
 
             // Auto-repeat. Windows sends repeated key-downs with no release between,
             // and every one of them used to be executed: holding the close key closed
@@ -428,9 +428,6 @@ public sealed class WmDaemon : IDisposable
             Execute(binding.Commands);
         }
     }
-
-    private static string Describe(IReadOnlyList<WmCommand> commands) =>
-        string.Join("; ", commands.Select(c => c.Name));
 
     private void DrainWindowEvents()
     {
@@ -557,7 +554,7 @@ public sealed class WmDaemon : IDisposable
         if (Log.IsEnabled(LogLevel.Trace))
         {
             Log.Trace(LogCategory.Window,
-                $"{notification.Kind} 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 48)}\"");
+                $"{notification.Kind} 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(48)}\"");
         }
 
         switch (notification.Kind)
@@ -748,7 +745,7 @@ public sealed class WmDaemon : IDisposable
         {
             Log.Debug(LogCategory.Window,
                 result.Succeeded
-                    ? $"dropped \"{Truncate(window.Identity.Title, 32)}\" at {cursor.X},{cursor.Y}"
+                    ? $"dropped \"{window.Identity.Title.Truncate(32)}\" at {cursor.X},{cursor.Y}"
                     : $"drop rejected: {result.RejectionReason}");
         }
 
@@ -775,7 +772,7 @@ public sealed class WmDaemon : IDisposable
             if (WindowFilter.CanBeOverridden(decision.Reason) && ShouldForceManage(ToAttributes(handle)))
             {
                 Log.Debug(LogCategory.Rule,
-                    $"managing 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\" " +
+                    $"managing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
                     $"despite {decision.Explain()}: a rule asked for it");
             }
             else
@@ -787,7 +784,7 @@ public sealed class WmDaemon : IDisposable
                 // be pointed at them to ask.
                 if (Log.IsEnabled(LogLevel.Trace))
                     Log.Trace(LogCategory.Window,
-                        $"skip 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\" " +
+                        $"skip 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
                         $"[{Win32Window.GetClassName(handle)}]: {decision.Explain()}");
 
                 return;
@@ -814,7 +811,7 @@ public sealed class WmDaemon : IDisposable
             _ignored.Add(handle);
 
             Log.Debug(LogCategory.Rule,
-                $"ignoring 0x{handle:X} \"{Truncate(attributes.Title, 40)}\" ({attributes.ProcessName})");
+                $"ignoring 0x{handle:X} \"{attributes.Title.Truncate(40)}\" ({attributes.ProcessName})");
 
             return;
         }
@@ -873,7 +870,7 @@ public sealed class WmDaemon : IDisposable
 
                 if (Log.IsEnabled(LogLevel.Debug))
                     Log.Debug(LogCategory.Window,
-                        $"leaving concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                        $"leaving concealed 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
                         "alone for now: no session entry claims it");
 
                 return;
@@ -907,7 +904,7 @@ public sealed class WmDaemon : IDisposable
             _revived++;
 
             Log.Info(LogCategory.Window,
-                $"claimed concealed 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                $"claimed concealed 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
                 $"-> workspace {remembered.Name}");
         }
 
@@ -927,7 +924,7 @@ public sealed class WmDaemon : IDisposable
             // as managed would leave it on screen at its original position for the
             // life of the process, on top of everything the layout does control.
             Log.Warn(LogCategory.Window,
-                $"not managing 0x{handle:X} \"{Truncate(attributes.Title, 40)}\": " +
+                $"not managing 0x{handle:X} \"{attributes.Title.Truncate(40)}\": " +
                 $"{adoption.RejectionReason ?? "no workspace available"}");
 
             _ignored.Add(handle);
@@ -939,7 +936,7 @@ public sealed class WmDaemon : IDisposable
         Publish(adoption);
 
         Log.Info(LogCategory.Window,
-            $"managed 0x{handle:X} \"{Truncate(attributes.Title, 40)}\" " +
+            $"managed 0x{handle:X} \"{attributes.Title.Truncate(40)}\" " +
             $"({attributes.ProcessName}) [{attributes.ClassName}] {window.State} " +
             $"-> workspace {window.Workspace?.Name ?? "?"}");
 
@@ -971,7 +968,7 @@ public sealed class WmDaemon : IDisposable
         Publish(_wm.UnmanageWindow(window));
 
         Log.Info(LogCategory.Window,
-            $"unmanaged 0x{handle:X} \"{Truncate(window.Identity.Title, 40)}\"");
+            $"unmanaged 0x{handle:X} \"{window.Identity.Title.Truncate(40)}\"");
 
         _layoutDirty = true;
     }
@@ -1083,7 +1080,7 @@ public sealed class WmDaemon : IDisposable
         {
             case WindowNode window:
                 output.AppendLine(
-                    $"{indent}window 0x{window.Handle:X} \"{Truncate(window.Identity.Title, 40)}\" " +
+                    $"{indent}window 0x{window.Handle:X} \"{window.Identity.Title.Truncate(40)}\" " +
                     $"({window.Identity.ProcessName}) {window.State} " +
                     $"ratio={window.SizeRatio:F3} {window.Rect}" +
                     $"{(ReferenceEquals(window, _wm.FocusedWindow) ? " [focused]" : "")}");
@@ -1101,9 +1098,6 @@ public sealed class WmDaemon : IDisposable
                 break;
         }
     }
-
-    private static string Truncate(string text, int max) =>
-        text.Length <= max ? text : string.Concat(text.AsSpan(0, max - 1), "\u2026");
 
     /// <summary>
     /// Places a new window on the workspace of the monitor it appeared on.
@@ -1147,7 +1141,7 @@ public sealed class WmDaemon : IDisposable
             window.State = state;
 
         Log.Debug(LogCategory.Window,
-            $"restored \"{Truncate(window.Identity.Title, 32)}\" to workspace {workspace.Name}");
+            $"restored \"{window.Identity.Title.Truncate(32)}\" to workspace {workspace.Name}");
 
         return workspace;
     }
@@ -1394,7 +1388,7 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private static string DescribeForeground(nint foreground, ManageDecision decision)
     {
-        string title = Truncate(Win32Window.GetTitle(foreground), 40);
+        string title = Win32Window.GetTitle(foreground).Truncate(40);
         string className = Win32Window.GetClassName(foreground);
 
         return
@@ -1577,7 +1571,7 @@ public sealed class WmDaemon : IDisposable
 
         if (_managed.ContainsKey(handle))
         {
-            string title = Truncate(Win32Window.GetTitle(handle), 40);
+            string title = Win32Window.GetTitle(handle).Truncate(40);
 
             // Ordered deliberately: TryUnmanage clears the ignore entry as its first
             // act, so marking it has to come afterwards or the release is undone by
@@ -1595,7 +1589,7 @@ public sealed class WmDaemon : IDisposable
         if (_managed.ContainsKey(handle))
         {
             Log.Info(LogCategory.Window,
-                $"took on 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\"");
+                $"took on 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\"");
         }
     }
 
@@ -1826,7 +1820,7 @@ public sealed class WmDaemon : IDisposable
                 nint handle = (nint)placement.Window.Handle;
 
                 Log.Trace(LogCategory.Layout,
-                    $"  0x{handle:X} \"{Truncate(placement.Window.Identity.Title, 24)}\" " +
+                    $"  0x{handle:X} \"{placement.Window.Identity.Title.Truncate(24)}\" " +
                     $"ws={placement.Window.Workspace?.Name ?? "-"} " +
                     $"want={(placement.Visible ? "shown" : "hidden")} " +
                     $"is={(Win32Window.IsVisible(handle) ? "visible" : "invisible")}/" +
@@ -1845,19 +1839,13 @@ public sealed class WmDaemon : IDisposable
         // desktop to that workspace, where nothing had been placed yet.
         if (_wm.FocusedWindow is { } focused &&
             Win32Window.GetForeground() != (nint)focused.Handle &&
-            IsOnADisplayedWorkspace(focused))
+            focused.IsOnADisplayedWorkspace)
         {
             WindowActions.Focus((nint)focused.Handle);
         }
 
         ApplyFocusBorder(geometryChanged: true);
     }
-
-    /// <summary>Whether a window sits on the workspace its monitor is showing.</summary>
-    private static bool IsOnADisplayedWorkspace(WindowNode window) =>
-        window.Workspace is { } workspace &&
-        workspace.Monitor is { } monitor &&
-        ReferenceEquals(monitor.ActiveWorkspace, workspace);
 
     /// <summary>
     /// Whether a periodic job is due, recording that it ran when it is.
@@ -2338,7 +2326,7 @@ public sealed class WmDaemon : IDisposable
             if (!ShouldIgnore(ToAttributes(handle))) continue;
 
             Log.Info(LogCategory.Rule,
-                $"releasing 0x{handle:X} \"{Truncate(Win32Window.GetTitle(handle), 40)}\": " +
+                $"releasing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\": " +
                 "a rule now excludes it");
 
             TryUnmanage(handle);

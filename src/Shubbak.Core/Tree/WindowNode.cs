@@ -56,6 +56,21 @@ public sealed class WindowNode : Node
     /// <summary>True when the layout engine should size this window.</summary>
     public bool IsTiled => State is WindowState.Tiling;
 
+    /// <summary>
+    /// True when this window sits on the workspace its monitor is currently showing.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from being focused, and from being on the active workspace of the
+    /// focused monitor. Every monitor shows one workspace at a time, so a window can
+    /// be perfectly visible on a display nobody is looking at - and one that is not
+    /// on any displayed workspace must never be brought to the foreground, however
+    /// firmly the tree believes it has focus.
+    /// </remarks>
+    public bool IsOnADisplayedWorkspace =>
+        Workspace is { } workspace &&
+        workspace.Monitor is { } monitor &&
+        ReferenceEquals(monitor.ActiveWorkspace, workspace);
+
     /// <summary>Keeps the window above others of the same kind.</summary>
     public bool IsAlwaysOnTop { get; set; }
 
