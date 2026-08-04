@@ -41,28 +41,15 @@ public sealed class WmDaemon : IDisposable
     private readonly MessageLoop _loop = new();
     private readonly AnimationEngine _animation = new();
 
-    private readonly Dictionary<nint, WindowNode> _managed = [];
-    private readonly HashSet<nint> _ignored = [];
-
     /// <summary>
-    /// Windows that were concealed when Shubbak started and that no session claimed.
+    /// Which windows Shubbak manages, and which it has decided not to.
     /// </summary>
     /// <remarks>
-    /// Distinct from <see cref="_ignored"/>, which is a decision about the window - a
-    /// rule excluded it, or the user let go of it. This is a decision about a moment:
-    /// the window was in the tray at startup and there was no evidence it was ours to
-    /// reveal. The moment it shows itself, that evidence arrives and it is reconsidered.
+    /// Four sets that have to agree with one another, kept together with the
+    /// operations that move a window between them. Nearly every window-lifecycle bug
+    /// this program has had lived in their interplay rather than in any one of them.
     /// </remarks>
-    private readonly HashSet<nint> _dormant = [];
-
-    /// <summary>
-    /// Windows taken on since the last layout, which are placed rather than animated.
-    /// </summary>
-    /// <remarks>
-    /// Cleared as each one is placed, so a window is only ever exempt for the single
-    /// pass that first gives it a rectangle.
-    /// </remarks>
-    private readonly HashSet<nint> _arriving = [];
+    private readonly WindowRegistry _windows = new();
 
     /// <summary>How long each tick took, and how far apart they landed.</summary>
     /// <remarks>
@@ -191,7 +178,7 @@ public sealed class WmDaemon : IDisposable
         _loop.Tick += OnTick;
         _loop.NextTimeout = NextTimeout;
 
-        Log.Info(LogCategory.Wm, $"started: {_managed.Count} windows adopted, " +
+        Log.Info(LogCategory.Wm, $"started: {_windows.ManagedCount} windows adopted, " +
             $"{_wm.Root.Monitors.Count} monitors, {_config.Keybindings.Count} keybindings, " +
             $"{_config.Rules.Count} rules");
 
@@ -199,7 +186,7 @@ public sealed class WmDaemon : IDisposable
 
         // A clean shutdown is the one chance to record the arrangement exactly as
         // the user left it, rather than as it was up to thirty seconds earlier.
-        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, focusedMonitor: _wm.FocusedMonitor);
+        if (_windows.ManagedCount > 0) SessionStore.Save(_wm.Root, _sessionPath, focusedMonitor: _wm.FocusedMonitor);
 
         RestoreConcealedWindows();
 
@@ -551,7 +538,7 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Uncloaked:
                 // Coming out of the tray is the evidence that was missing at startup,
                 // so a window set aside then gets another look now.
-                _dormant.Remove(handle);
+                _windows.NoLongerSetAside(handle);
                 TryManage(handle);
                 break;
 
@@ -576,7 +563,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.TitleChanged:
-                if (_managed.TryGetValue(handle, out WindowNode? titled))
+                if (_windows.TryGet(handle, out WindowNode? titled))
                 {
                     Publish(_wm.UpdateTitle(titled, Win32Window.GetTitle(handle)));
 
@@ -608,7 +595,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.Foreground:
-                if (_managed.TryGetValue(handle, out WindowNode? focused))
+                if (_windows.TryGet(handle, out WindowNode? focused))
                 {
                     if (!ReferenceEquals(_wm.FocusedWindow, focused))
                     {
@@ -626,19 +613,19 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.MinimiseStart:
-                if (_managed.TryGetValue(handle, out WindowNode? minimising))
+                if (_windows.TryGet(handle, out WindowNode? minimising))
                     Publish(_wm.SetWindowState(minimising, WindowState.Minimised));
                 break;
 
             case WinEventKind.MinimiseEnd:
-                if (_managed.TryGetValue(handle, out WindowNode? restoring))
+                if (_windows.TryGet(handle, out WindowNode? restoring))
                     Publish(_wm.SetWindowState(restoring, WindowState.Tiling));
                 break;
 
             case WinEventKind.MoveSizeStart:
                 // The starting geometry is what distinguishes a move from a resize,
                 // and a real drag from a click on a title bar.
-                if (_managed.ContainsKey(handle)) _dragOrigin[handle] = Win32Window.GetBounds(handle);
+                if (_windows.IsManaged(handle)) _dragOrigin[handle] = Win32Window.GetBounds(handle);
                 break;
 
             case WinEventKind.MoveSizeEnd:
@@ -672,7 +659,7 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void HandleUserMove(nint handle)
     {
-        if (!_managed.TryGetValue(handle, out WindowNode? window)) return;
+        if (!_windows.TryGet(handle, out WindowNode? window)) return;
 
         Rect before = _dragOrigin.TryGetValue(handle, out Rect recorded) ? recorded : window.Rect;
         _dragOrigin.Remove(handle);
@@ -743,8 +730,14 @@ public sealed class WmDaemon : IDisposable
 
     private void TryManage(nint handle, bool forced = false)
     {
-        if (_managed.ContainsKey(handle)) return;
-        if (!forced && (_ignored.Contains(handle) || _dormant.Contains(handle))) return;
+        // Already ours, whoever asked. Everything below assumes the window is not in
+        // the tree yet.
+        if (_windows.IsManaged(handle)) return;
+
+        // A verdict already reached - refused by a rule, or set aside at startup - is
+        // not revisited on every one of the many events a window raises. Asking by
+        // hand overrules it, which is the whole point of toggle-managed.
+        if (!forced && _windows.AlreadyDecided(handle)) return;
 
         // Concealed windows are considered only during the initial adoption pass, and
         // even then only to be reconciled against the session below.
@@ -795,15 +788,13 @@ public sealed class WmDaemon : IDisposable
         {
             // Remembered, so the same window is not re-evaluated on every one of the
             // many events it will generate over its lifetime.
-            _ignored.Add(handle);
+            _windows.Exclude(handle);
 
             Log.Debug(LogCategory.Rule,
                 $"ignoring 0x{handle:X} \"{attributes.Title.Truncate(40)}\" ({attributes.ProcessName})");
 
             return;
         }
-
-        _ignored.Remove(handle);
 
         var window = new WindowNode(handle, Win32Window.BuildIdentity(handle))
         {
@@ -853,7 +844,7 @@ public sealed class WmDaemon : IDisposable
                 // opened. Closing and reopening it worked, because that made a new
                 // window with a handle the set had never heard of - which is exactly
                 // how the fault was reported.
-                _dormant.Add(handle);
+                _windows.SetAside(handle);
 
                 if (Log.IsEnabled(LogLevel.Debug))
                     Log.Debug(LogCategory.Window,
@@ -874,7 +865,7 @@ public sealed class WmDaemon : IDisposable
                     $"refusing to revive 0x{handle:X}: already revived {_revived} window(s) " +
                     $"for a session of {_revivalBudget}. This is a bug - please report it.");
 
-                _ignored.Add(handle);
+                _windows.Exclude(handle);
                 return;
             }
 
@@ -914,12 +905,11 @@ public sealed class WmDaemon : IDisposable
                 $"not managing 0x{handle:X} \"{attributes.Title.Truncate(40)}\": " +
                 $"{adoption.RejectionReason ?? "no workspace available"}");
 
-            _ignored.Add(handle);
+            _windows.Exclude(handle);
             return;
         }
 
-        _managed[handle] = window;
-        _arriving.Add(handle);
+        _windows.Adopt(handle, window);
         Publish(adoption);
 
         Log.Info(LogCategory.Window,
@@ -932,13 +922,20 @@ public sealed class WmDaemon : IDisposable
         _layoutDirty = true;
     }
 
-    private void TryUnmanage(nint handle)
+    /// <summary>
+    /// Lets go of a window.
+    /// </summary>
+    /// <param name="handle">The window.</param>
+    /// <param name="thenExclude">
+    /// Whether to refuse it afterwards, for a release the user or a rule asked for
+    /// rather than one the window brought on itself by closing. Passed through rather
+    /// than done by the caller because releasing forgets every verdict, so excluding
+    /// first would be undone here - and the two callers that want it used to have to
+    /// remember that for themselves.
+    /// </param>
+    private void TryUnmanage(nint handle, bool thenExclude = false)
     {
-        _ignored.Remove(handle);
-        _dormant.Remove(handle);
-        _arriving.Remove(handle);
-
-        if (!_managed.Remove(handle, out WindowNode? window)) return;
+        if (_windows.Release(handle, thenExclude) is not { } window) return;
 
         if (ReferenceEquals(_borderedWindow, window)) _borderedWindow = null;
 
@@ -974,8 +971,8 @@ public sealed class WmDaemon : IDisposable
         {
             $"- **Monitors**: {_wm.Root.Monitors.Count}",
             $"- **Workspaces**: {_wm.Root.AllWorkspaces().Count()}",
-            $"- **Managed windows**: {_managed.Count}",
-            $"- **Ignored windows**: {_ignored.Count}",
+            $"- **Managed windows**: {_windows.ManagedCount}",
+            $"- **Ignored windows**: {_windows.ExcludedCount}",
             $"- **Focused**: {_wm.FocusedWindow?.Identity.Title ?? "(none)"}",
             $"- **Binding mode**: {_wm.BindingMode ?? "(default)"}",
             $"- **Paused**: {_wm.IsPaused}",
@@ -1249,7 +1246,7 @@ public sealed class WmDaemon : IDisposable
         //
         // A genuine click raises a foreground event, which updates focus properly. This
         // check exists only to notice a window Shubbak does not manage at all.
-        if (_managed.ContainsKey(foreground)) return true;
+        if (_windows.IsManaged(foreground)) return true;
 
         // Toggle-managed is exempt: acting on a window Shubbak does not manage is the
         // entire purpose of it, and it reads the foreground window itself.
@@ -1273,7 +1270,7 @@ public sealed class WmDaemon : IDisposable
         {
             TryManage(foreground, forced: true);
 
-            if (_managed.TryGetValue(foreground, out WindowNode? adopted))
+            if (_windows.TryGet(foreground, out WindowNode? adopted))
             {
                 Publish(_wm.FocusWindow(adopted));
                 return true;
@@ -1387,7 +1384,7 @@ public sealed class WmDaemon : IDisposable
 
         report.AppendLine($"manageable   {(decision.Manageable ? "yes" : "no")} - {decision.Explain()}");
 
-        if (_managed.TryGetValue(handle, out WindowNode? window))
+        if (_windows.TryGet(handle, out WindowNode? window))
         {
             report.AppendLine($"managed      yes");
             report.AppendLine($"  node       #{window.Id}");
@@ -1397,7 +1394,7 @@ public sealed class WmDaemon : IDisposable
         }
         else
         {
-            report.AppendLine($"managed      no{(_ignored.Contains(handle) ? " (excluded by a rule)" : "")}");
+            report.AppendLine($"managed      no{(_windows.IsExcluded(handle) ? " (excluded by a rule)" : "")}");
         }
 
         report.AppendLine();
@@ -1473,24 +1470,24 @@ public sealed class WmDaemon : IDisposable
             return;
         }
 
-        if (_managed.ContainsKey(handle))
+        if (_windows.IsManaged(handle))
         {
             string title = Win32Window.GetTitle(handle).Truncate(40);
 
-            // Ordered deliberately: TryUnmanage clears the ignore entry as its first
-            // act, so marking it has to come afterwards or the release is undone by
-            // the very next event.
-            TryUnmanage(handle);
-            _ignored.Add(handle);
+            // Excluded as part of the release rather than after it. Releasing forgets
+            // every verdict about a window, so marking it separately beforehand would
+            // be wiped, and the window would be taken straight back by the very next
+            // event it raised.
+            TryUnmanage(handle, thenExclude: true);
 
             Log.Info(LogCategory.Window, $"released 0x{handle:X} \"{title}\" - now unmanaged");
             return;
         }
 
-        _ignored.Remove(handle);
+        _windows.Reconsider(handle);
         TryManage(handle, forced: true);
 
-        if (_managed.ContainsKey(handle))
+        if (_windows.IsManaged(handle))
         {
             Log.Info(LogCategory.Window,
                 $"took on 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\"");
@@ -1532,7 +1529,7 @@ public sealed class WmDaemon : IDisposable
             case HostAction.Redraw:
                 // Forget every cached rectangle so the next pass re-applies all of
                 // them, even the ones already thought to be correct.
-                foreach (nint handle in _managed.Keys) _committer.Forget(handle);
+                foreach (nint handle in _windows.Handles) _committer.Forget(handle);
                 _layoutDirty = true;
                 break;
 
@@ -1670,7 +1667,7 @@ public sealed class WmDaemon : IDisposable
             //
             // When it is wanted, it uses the window-open profile rather than
             // window-move, so the two can be tuned apart.
-            if (_arriving.Remove(handle))
+            if (_windows.TakeArriving(handle))
             {
                 if (!_config.Animation.AnimateNewWindows)
                 {
@@ -1857,7 +1854,7 @@ public sealed class WmDaemon : IDisposable
         if (_animation.IsAnimating) return;
         if (!DueEvery(30_000, now, ref _lastSessionSaveTicks)) return;
 
-        if (_managed.Count > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true, focusedMonitor: _wm.FocusedMonitor);
+        if (_windows.ManagedCount > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true, focusedMonitor: _wm.FocusedMonitor);
     }
 
     /// <summary>Drives one frame of in-flight window motion.</summary>
@@ -1896,7 +1893,7 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void RefreshBorderFor(nint handle)
     {
-        if (!_managed.TryGetValue(handle, out WindowNode? window)) return;
+        if (!_windows.TryGet(handle, out WindowNode? window)) return;
 
         ApplyBorder(window, ColourFor(window, ReferenceEquals(window, _borderedWindow)));
     }
@@ -2191,9 +2188,7 @@ public sealed class WmDaemon : IDisposable
             // Windows released by hand are re-examined too. That is the honest reading
             // of a reload, and toggle-managed is one key away for anything that should
             // go back.
-            int forgotten = _ignored.Count + _dormant.Count;
-            _ignored.Clear();
-            _dormant.Clear();
+            int forgotten = _windows.ForgetVerdicts();
 
             ReconsiderOpenWindows();
 
@@ -2224,7 +2219,7 @@ public sealed class WmDaemon : IDisposable
     private void ReconsiderOpenWindows()
     {
         // Copied: releasing a window mutates the dictionary being walked.
-        foreach (nint handle in _managed.Keys.ToArray())
+        foreach (nint handle in _windows.HandlesSnapshot())
         {
             if (!Win32Window.Exists(handle)) continue;
             if (!_rules.ShouldIgnore(ToAttributes(handle))) continue;
@@ -2233,13 +2228,12 @@ public sealed class WmDaemon : IDisposable
                 $"releasing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\": " +
                 "a rule now excludes it");
 
-            TryUnmanage(handle);
-            _ignored.Add(handle);
+            TryUnmanage(handle, thenExclude: true);
         }
 
         foreach (nint handle in Win32Window.EnumerateTopLevel())
         {
-            if (_managed.ContainsKey(handle)) continue;
+            if (_windows.IsManaged(handle)) continue;
 
             TryManage(handle);
         }
