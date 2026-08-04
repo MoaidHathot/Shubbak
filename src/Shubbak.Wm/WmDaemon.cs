@@ -1674,11 +1674,26 @@ public sealed class WmDaemon : IDisposable
 
         _commitScratch.Clear();
 
-        // Everything that should be off screen goes first, before anything is
-        // revealed. Revealing as we went meant the incoming workspace was on screen
-        // while the outgoing one still was, so a switch showed both at once for a
-        // frame - two sets of windows overlapping, which is the moment the user
-        // notices and the hardest one to photograph.
+        ConcealOutgoing(placements);
+
+        foreach (Placement placement in placements) Schedule(placement, movementKind);
+
+        CommitScheduled(placements.Count);
+        TraceLayout(placements);
+        FocusIfDisplayed();
+
+        ApplyFocusBorder(geometryChanged: true);
+    }
+
+    /// <summary>Takes every window that should be off screen off it, before anything is shown.</summary>
+    /// <remarks>
+    /// Revealing as we went meant the incoming workspace was on screen while the
+    /// outgoing one still was, so a switch showed both at once for a frame - two sets
+    /// of windows overlapping, which is the moment the user notices and the hardest
+    /// one to photograph.
+    /// </remarks>
+    private void ConcealOutgoing(IReadOnlyList<Placement> placements)
+    {
         foreach (Placement placement in placements)
         {
             if (placement.Visible) continue;
@@ -1686,133 +1701,155 @@ public sealed class WmDaemon : IDisposable
             _animation.Remove(placement.Window.Handle);
             _committer.Conceal((nint)placement.Window.Handle);
         }
+    }
+
+    /// <summary>
+    /// Decides whether one window is animated to its new rectangle or simply placed
+    /// there, and queues it accordingly.
+    /// </summary>
+    private void Schedule(Placement placement, AnimationKind movementKind)
+    {
+        nint handle = (nint)placement.Window.Handle;
+
+        // Hidden windows are never animated: moving something the user cannot see is
+        // wasted work, and it would keep the animation engine busy for every window on
+        // every inactive workspace. They are still committed, so they hold a correct
+        // rectangle for when the workspace is shown.
+        if (!placement.Visible)
+        {
+            _commitScratch.Add(placement);
+            return;
+        }
+
+        // Visibility is applied here, separately from geometry, because an animated
+        // window never reaches Commit - the animation engine drives it frame by frame
+        // instead. Leaving the reveal to Commit meant a window whose position changed
+        // was animated into place while still concealed, so a workspace that had been
+        // switched away from came back empty.
+        _committer.Reveal(handle);
+
+        // Where the window is now: mid-flight position if it is already moving,
+        // otherwise its real position on screen.
+        //
+        // Measured as the visible frame, because that is what a layout rectangle
+        // describes. GetWindowRect includes the window's shadow, so comparing it
+        // against the target reported a difference for every shadowed window even when
+        // it had not moved at all - and a focus change re-runs the layout, so every
+        // focus change animated the window out by the width of its own shadow and back.
+        Rect current = _animation.TryGetCurrent(placement.Window.Handle, out Rect inFlight)
+            ? inFlight
+            : WindowCommitter.VisibleBounds(handle);
+
+        AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : movementKind;
+
+        // A window joining the layout for the first time.
+        //
+        // Placed rather than animated unless asked otherwise, because the rectangle it
+        // would travel from is whatever size the application opened at - it was never
+        // part of the arrangement, so the motion describes nothing that happened. It is
+        // also the most expensive animation there is: a window that relays out its
+        // contents on every resize does so once per frame, which File Explorer makes
+        // very obvious.
+        //
+        // When it is wanted, it uses the window-open profile rather than window-move,
+        // so the two can be tuned apart.
+        if (_windows.TakeArriving(handle))
+        {
+            if (!_config.Animation.AnimateNewWindows)
+            {
+                _animation.Remove(placement.Window.Handle);
+                _commitScratch.Add(placement);
+                return;
+            }
+
+            kind = AnimationKind.WindowOpen;
+        }
+
+        if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
+        {
+            // Raised here, because an animated window never reaches Commit and Commit
+            // is where Raise is otherwise honoured. The layout engine sets it for
+            // exactly two things - a fullscreen or maximised window, and the focused
+            // window in a layout whose rectangles overlap, which is monocle - so
+            // entering any of those did not bring the window forward whenever the
+            // rectangle also moved. Which is almost always: a window already in the
+            // right place is not animated at all, so the feature worked only in the
+            // cases where it was not needed.
+            //
+            // Before the motion rather than after it. A window travelling to the front
+            // should be in front while it travels.
+            if (placement.Raise) WindowCommitter.Raise(handle);
+
+            // Animated: the tick loop drives the geometry from here.
+            return;
+        }
+
+        _commitScratch.Add(placement);
+    }
+
+    /// <summary>Moves every window that is not being animated, in one transaction.</summary>
+    private void CommitScheduled(int total)
+    {
+        if (_commitScratch.Count == 0) return;
+
+        int moved = _committer.Commit(_commitScratch, static p => (nint)p.Window.Handle);
+
+        if (moved > 0 && Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.Debug(LogCategory.Layout,
+                $"placed {moved}/{total} windows, {_animation.ActiveCount} animating");
+        }
+    }
+
+    /// <summary>
+    /// Records what the layout wanted and what the desktop actually shows.
+    /// </summary>
+    /// <remarks>
+    /// A window that is visible when it should not be is either mis-decided by the
+    /// layout or mis-applied afterwards, and there is no way to tell which from the
+    /// outside. This is the only place both answers appear together.
+    /// </remarks>
+    private static void TraceLayout(IReadOnlyList<Placement> placements)
+    {
+        if (!Log.IsEnabled(LogLevel.Trace)) return;
 
         foreach (Placement placement in placements)
         {
             nint handle = (nint)placement.Window.Handle;
 
-            // Hidden windows are never animated: moving something the user cannot
-            // see is wasted work, and it would keep the animation engine busy for
-            // every window on every inactive workspace. They are still committed,
-            // so they hold a correct rectangle for when the workspace is shown.
-            if (!placement.Visible)
-            {
-                _commitScratch.Add(placement);
-                continue;
-            }
-
-            // Visibility is applied here, separately from geometry, because an
-            // animated window never reaches Commit - the animation engine drives it
-            // frame by frame instead. Leaving the reveal to Commit meant a window
-            // whose position changed was animated into place while still concealed,
-            // so a workspace that had been switched away from came back empty.
-            _committer.Reveal(handle);
-
-            // Where the window is now: mid-flight position if it is already moving,
-            // otherwise its real position on screen.
-            //
-            // Measured as the visible frame, because that is what a layout rectangle
-            // describes. GetWindowRect includes the window's shadow, so comparing it
-            // against the target reported a difference for every shadowed window even
-            // when it had not moved at all - and a focus change re-runs the layout, so
-            // every focus change animated the window out by the width of its own shadow
-            // and back again.
-            Rect current = _animation.TryGetCurrent(placement.Window.Handle, out Rect inFlight)
-                ? inFlight
-                : WindowCommitter.VisibleBounds(handle);
-
-            AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : movementKind;
-
-            // A window joining the layout for the first time.
-            //
-            // Placed rather than animated unless asked otherwise, because the
-            // rectangle it would travel from is whatever size the application opened
-            // at - it was never part of the arrangement, so the motion describes
-            // nothing that happened. It is also the most expensive animation there is:
-            // a window that relays out its contents on every resize does so once per
-            // frame, which File Explorer makes very obvious.
-            //
-            // When it is wanted, it uses the window-open profile rather than
-            // window-move, so the two can be tuned apart.
-            if (_windows.TakeArriving(handle))
-            {
-                if (!_config.Animation.AnimateNewWindows)
-                {
-                    _animation.Remove(placement.Window.Handle);
-                    _commitScratch.Add(placement);
-                    continue;
-                }
-
-                kind = AnimationKind.WindowOpen;
-            }
-
-            if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
-            {
-                // Raised here, because an animated window never reaches Commit and
-                // Commit is where Raise is otherwise honoured. The layout engine sets
-                // it for exactly two things - a fullscreen or maximised window, and
-                // the focused window in a layout whose rectangles overlap, which is
-                // monocle - so entering any of those did not bring the window forward
-                // whenever the rectangle also moved. Which is almost always: a window
-                // that is already in the right place is not animated at all, so the
-                // feature worked only in the cases where it was not needed.
-                //
-                // Before the motion rather than after it. A window travelling to the
-                // front should be in front while it travels.
-                if (placement.Raise) WindowCommitter.Raise(handle);
-
-                // Animated: the tick loop drives the geometry from here.
-                continue;
-            }
-
-            _commitScratch.Add(placement);
+            Log.Trace(LogCategory.Layout,
+                $"  0x{handle:X} \"{placement.Window.Identity.Title.Truncate(24)}\" " +
+                $"ws={placement.Window.Workspace?.Name ?? "-"} " +
+                $"want={(placement.Visible ? "shown" : "hidden")} " +
+                $"is={(Win32Window.IsVisible(handle) ? "visible" : "invisible")}/" +
+                $"{Win32Window.GetCloakState(handle)} {placement.Rect}");
         }
+    }
 
-        if (_commitScratch.Count > 0)
-        {
-            int moved = _committer.Commit(_commitScratch, static p => (nint)p.Window.Handle);
+    /// <summary>
+    /// Brings the focused window to the foreground, if the layout just put it on screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// After geometry, because focusing a window that is about to move makes it flash
+    /// at its old position first.
+    /// </para>
+    /// <para>
+    /// Only ever to a window the layout just decided to show. Adoption focuses each
+    /// window it takes on, so at startup the focused window is whichever one the
+    /// enumeration happened to reach last - frequently on a workspace that is not
+    /// displayed. Forcing that to the foreground raised it over the workspace the user
+    /// was actually looking at, and the resulting foreground event then switched the
+    /// desktop to that workspace, where nothing had been placed yet.
+    /// </para>
+    /// </remarks>
+    private void FocusIfDisplayed()
+    {
+        if (_wm.FocusedWindow is not { } focused) return;
+        if (!focused.IsOnADisplayedWorkspace) return;
+        if (Win32Window.GetForeground() == (nint)focused.Handle) return;
 
-            if (moved > 0 && Log.IsEnabled(LogLevel.Debug))
-                Log.Debug(LogCategory.Layout,
-                    $"placed {moved}/{placements.Count} windows, {_animation.ActiveCount} animating");
-        }
-
-        // The whole picture, at trace level: what each window's workspace is and
-        // whether the layout decided it should be on screen. A window that is visible
-        // when it should not be is either mis-decided here or mis-applied afterwards,
-        // and there is no way to tell which from the outside.
-        if (Log.IsEnabled(LogLevel.Trace))
-        {
-            foreach (Placement placement in placements)
-            {
-                nint handle = (nint)placement.Window.Handle;
-
-                Log.Trace(LogCategory.Layout,
-                    $"  0x{handle:X} \"{placement.Window.Identity.Title.Truncate(24)}\" " +
-                    $"ws={placement.Window.Workspace?.Name ?? "-"} " +
-                    $"want={(placement.Visible ? "shown" : "hidden")} " +
-                    $"is={(Win32Window.IsVisible(handle) ? "visible" : "invisible")}/" +
-                    $"{Win32Window.GetCloakState(handle)} {placement.Rect}");
-            }
-        }
-
-        // Focus is applied after geometry: focusing a window that is about to move
-        // makes it flash at its old position first.
-        //
-        // Only ever to a window the layout just decided to show. Adoption focuses each
-        // window it takes on, so at startup the focused window is whichever one the
-        // enumeration happened to reach last - frequently on a workspace that is not
-        // displayed. Forcing it to the foreground raised it over the workspace the user
-        // was actually looking at, and the resulting foreground event then switched the
-        // desktop to that workspace, where nothing had been placed yet.
-        if (_wm.FocusedWindow is { } focused &&
-            Win32Window.GetForeground() != (nint)focused.Handle &&
-            focused.IsOnADisplayedWorkspace)
-        {
-            WindowActions.Focus((nint)focused.Handle);
-        }
-
-        ApplyFocusBorder(geometryChanged: true);
+        WindowActions.Focus((nint)focused.Handle);
     }
 
     /// <summary>
