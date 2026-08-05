@@ -63,6 +63,42 @@ public sealed class BindingRepeatTests
     }
 
     [Fact]
+    public void SendingTheFocusedWindowAwayDoesNot()
+    {
+        // Reported from use, and the reason this list needed a rule rather than a
+        // list of things that felt dangerous.
+        //
+        // Two chat windows sat side by side on one workspace. Holding the move key
+        // half a second too long sent both away, and it looked as though the two
+        // windows were being treated as a pair. They were not: the first repeat moved
+        // the focused window, focus fell to its neighbour, and the second repeat moved
+        // that. The neighbour of a window is very often another window of the same
+        // application, which is what made it look like a relationship.
+        //
+        // It is the same trap as close - already excluded because holding it "closed
+        // everything on the workspace" - and it was missed because the consequence is
+        // recoverable rather than final.
+        Assert.False(Bind(new MoveToWorkspaceCommand("3")).RepeatsOnHold);
+        Assert.False(Bind(new TagCommand("3", Core.Wm.TagMode.Add)).RepeatsOnHold);
+        Assert.False(Bind(new ClearTagsCommand()).RepeatsOnHold);
+        Assert.False(Bind(new MoveWorkspaceToMonitorCommand(Core.Geometry.Direction.Left)).RepeatsOnHold);
+    }
+
+    [Fact]
+    public void TheTestIsWhetherARepeatActsOnTheSameThing()
+    {
+        // The distinction the first version of this list missed. Moving a window
+        // within its layout keeps it focused, so holding the key pushes one window
+        // further and further - which is what the user is asking for. Moving it to
+        // another workspace does not, so holding the key sends a procession of
+        // windows after it.
+        //
+        // Both are called "move". Only one of them can be held.
+        Assert.True(Bind(new MoveDirectionCommand(Core.Geometry.Direction.Left)).RepeatsOnHold);
+        Assert.False(Bind(new MoveToWorkspaceCommand("3")).RepeatsOnHold);
+    }
+
+    [Fact]
     public void TheDangerousCommandInAListDecidesForTheWholeBinding()
     {
         // A binding runs its commands together, so it can only be as repeatable as its
