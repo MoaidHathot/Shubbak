@@ -1594,12 +1594,13 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private string DescribeAnimation()
     {
-        if (_frameInterval.Count == 0)
-            return "Nothing has been animated yet, so there is nothing to report.";
-
-        double p50 = _frameInterval.Percentile(0.5);
-
-        return string.Join('\n', new[]
+        // Split into what the daemon is set up to do and what it has been observed
+        // doing, because only the second half needs samples. Reporting them together
+        // meant an idle desktop answered "nothing has been animated yet" to questions
+        // like which frame rate is in force and whether the system has animation
+        // switched off - which are exactly the questions somebody asks before anything
+        // has moved. Twice now a line has been added here and been invisible for it.
+        var lines = new List<string>
         {
             $"- **Enabled**: {_config.Animation.Enabled}" +
             $"{(_config.Animation.AnimateNewWindows ? ", including new windows" : "")}",
@@ -1616,19 +1617,26 @@ public sealed class WmDaemon : IDisposable
                 ? $"from `animation {{ fps {fixedFps} }}`"
                 : $"from the fastest display attached ({_displayHz} Hz)")}",
 
+            $"- **Fine timer held while animating**: {_fineTimerHeldWhileAnimating}",
+        };
+
+        if (_frameInterval.Count == 0)
+        {
+            lines.Add("- Nothing has been animated yet, so there is nothing measured to report.");
+            return string.Join('\n', lines);
+        }
+
+        double p50 = _frameInterval.Percentile(0.5);
+
+        lines.AddRange(
+        [
+
             $"- **Frame interval** (last {_frameInterval.Count}, animating only): " +
             $"p50 {p50:F2} ms, p99 {_frameInterval.Percentile(0.99):F2} ms, " +
             $"max {_frameInterval.Max:F2} ms all-time " +
             $"(~{(p50 > 0 ? 1000.0 / p50 : 0):F0} Hz)",
 
             $"- **Motions**: {_animationsStarted}",
-
-            // Whether the pump's own clock was doing what the frame rate assumes, at
-            // the only time that matters. The default Windows timer granularity is
-            // 15.625 ms, which on its own would hold any rate above about 64 Hz to a
-            // fraction of what it asked for, entirely independently of the arithmetic
-            // above.
-            $"- **Fine timer held while animating**: {_fineTimerHeldWhileAnimating}",
 
             $"- **Wake overshoot while pacing** (last {_loop.WakeOvershootPacing.Count}, " +
             $"timed-out waits only): p50 {_loop.WakeOvershootPacing.Percentile(0.5):F2} ms, " +
@@ -1644,7 +1652,9 @@ public sealed class WmDaemon : IDisposable
             $"p50 {_frameBatchSize.Percentile(0.5):F0}, " +
             $"p99 {_frameBatchSize.Percentile(0.99):F0}, " +
             $"max {_frameBatchSize.Max:F0} all-time",
-        });
+        ]);
+
+        return string.Join('\n', lines);
     }
 
     /// <summary>
