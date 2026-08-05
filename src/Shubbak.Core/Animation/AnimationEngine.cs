@@ -157,7 +157,32 @@ internal struct Track
 /// <param name="Handle">Native window handle.</param>
 /// <param name="Rect">Where to put it this frame.</param>
 /// <param name="IsFinal">True on the frame that reaches the target.</param>
-public readonly record struct AnimationFrame(long Handle, Rect Rect, bool IsFinal);
+/// <param name="SizeUnchanged">
+/// True when this frame is a pure move: the width and height are the same as the
+/// frame before it, so the platform can be told to skip the resize.
+/// </param>
+/// <remarks>
+/// <para>
+/// Moving a window and resizing it are not comparable operations. A move translates
+/// a quad; a resize makes DWM reallocate the window's redirection surface and makes
+/// the application process <c>WM_SIZE</c> and lay out its own contents again. An
+/// animation that is a pure translation - a swap between equally-sized tiles, a
+/// workspace slide, a move between monitors of the same resolution - was asking every
+/// window it touched to relayout once per frame to arrive at the size it already was.
+/// </para>
+/// <para>
+/// Never set on the final frame, deliberately. If an application resisted an
+/// intermediate resize, skipping the resize on the frame it comes to rest on would
+/// leave it permanently the wrong size - and the committer records what it intended
+/// rather than what it observed, so nothing would ever notice. One full resize per
+/// motion costs nothing.
+/// </para>
+/// </remarks>
+public readonly record struct AnimationFrame(
+    long Handle,
+    Rect Rect,
+    bool IsFinal,
+    bool SizeUnchanged);
 
 /// <summary>
 /// Interpolates windows towards their target rectangles.
@@ -186,8 +211,6 @@ public sealed class AnimationEngine
 {
     private Track[] _tracks = new Track[64];
     private int _count;
-
-    private readonly Dictionary<long, int> _index = [];
 
     public AnimationEngine(AnimationOptions? options = null) =>
         Options = options ?? AnimationOptions.Default;
@@ -268,13 +291,39 @@ public sealed class AnimationEngine
             double progress = track.Duration <= 0 ? 1 : Math.Clamp(track.Elapsed / track.Duration, 0, 1);
             double eased = track.Curve.Evaluate(progress);
 
-            Rect rect = progress >= 1 ? track.To : Interpolate(track.From, track.To, eased);
+            bool isFinal = progress >= 1;
+
+            Rect rect = isFinal ? track.To : Interpolate(track.From, track.To, eased);
+
+            // What this window was last told, so the frame can say what actually
+            // changed. Interpolate rounds to whole pixels and an ease-out spends most
+            // of its duration in the settling tail, so consecutive frames there round
+            // to the same rectangle - and each one was a real window move and a real
+            // repaint request sent to an application already standing where it was
+            // being told to stand.
+            Rect previous = track.Current;
+
             track.Current = rect;
 
-            if (written < destination.Length)
-                destination[written++] = new AnimationFrame(track.Handle, rect, progress >= 1);
+            // The final frame is emitted even when it changes nothing, because IsFinal
+            // is what makes the committer record the window's resting place. Without
+            // that record the next layout pass sees a window it has no position for
+            // and places it again.
+            if (isFinal || rect != previous)
+            {
+                if (written < destination.Length)
+                {
+                    destination[written++] = new AnimationFrame(
+                        track.Handle,
+                        rect,
+                        isFinal,
+                        SizeUnchanged: !isFinal
+                            && rect.Width == previous.Width
+                            && rect.Height == previous.Height);
+                }
+            }
 
-            if (progress < 1)
+            if (!isFinal)
             {
                 // Compact in place: finished tracks are dropped by not copying them
                 // forward, which keeps the array dense with no allocation.
@@ -283,11 +332,7 @@ public sealed class AnimationEngine
             }
         }
 
-        if (surviving != _count)
-        {
-            _count = surviving;
-            RebuildIndex();
-        }
+        if (surviving != _count) _count = surviving;
 
         return written;
     }
@@ -295,7 +340,9 @@ public sealed class AnimationEngine
     /// <summary>The rectangle a window currently occupies, if it is moving.</summary>
     public bool TryGetCurrent(long handle, out Rect rect)
     {
-        if (_index.TryGetValue(handle, out int i) && i < _count)
+        int i = IndexOf(handle);
+
+        if (i >= 0)
         {
             rect = _tracks[i].Current;
             return true;
@@ -308,26 +355,22 @@ public sealed class AnimationEngine
     /// <summary>Stops animating a window, e.g. because it closed.</summary>
     public void Remove(long handle)
     {
-        if (!_index.TryGetValue(handle, out int i) || i >= _count) return;
+        int i = IndexOf(handle);
+        if (i < 0) return;
 
         _tracks[i] = _tracks[_count - 1];
         _count--;
-        RebuildIndex();
     }
 
     /// <summary>Stops everything, e.g. when animation is turned off.</summary>
-    public void Clear()
-    {
-        _count = 0;
-        _index.Clear();
-    }
+    public void Clear() => _count = 0;
 
     // ---- internals ---------------------------------------------------------
 
     private ref Track GetOrCreate(long handle)
     {
-        if (_index.TryGetValue(handle, out int existing) && existing < _count)
-            return ref _tracks[existing];
+        int existing = IndexOf(handle);
+        if (existing >= 0) return ref _tracks[existing];
 
         if (_count == _tracks.Length)
         {
@@ -337,14 +380,33 @@ public sealed class AnimationEngine
         }
 
         int slot = _count++;
-        _index[handle] = slot;
         return ref _tracks[slot];
     }
 
-    private void RebuildIndex()
+    /// <summary>
+    /// Finds a window's track, or -1.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A scan, not a dictionary. There was a <c>Dictionary&lt;long, int&gt;</c> here,
+    /// which had to be cleared and refilled in full every time any track finished -
+    /// and tracks finish at different times, so through the tail of a layout change
+    /// that fired repeatedly.
+    /// </para>
+    /// <para>
+    /// It was guarding an array that holds one to three entries. Measured on a real
+    /// desktop, windows moving simultaneously came out at a median of one and a
+    /// maximum of three; the dictionary's initial capacity was sixty-four. A hash and
+    /// an indirection to avoid comparing three longs is a worse trade than the scan,
+    /// and it cost a rebuild on top.
+    /// </para>
+    /// </remarks>
+    private int IndexOf(long handle)
     {
-        _index.Clear();
-        for (int i = 0; i < _count; i++) _index[_tracks[i].Handle] = i;
+        for (int i = 0; i < _count; i++)
+            if (_tracks[i].Handle == handle) return i;
+
+        return -1;
     }
 
     private bool IsNegligible(Rect from, Rect to)

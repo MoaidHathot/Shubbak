@@ -98,6 +98,29 @@ public sealed class WindowCommitter
     private const uint FrameFlags =
         DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
 
+    /// <summary>
+    /// The flags one animation frame is sent with.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SWP_NOSIZE</c> when the frame changes only position. Moving a window
+    /// translates a quad; resizing it makes DWM reallocate the window's redirection
+    /// surface and makes the application process <c>WM_SIZE</c> and lay its own
+    /// contents out again. An animation that is a pure translation - a swap between
+    /// equally-sized tiles, a workspace slide, a move between monitors of the same
+    /// resolution - was asking every window it touched for that work on every frame,
+    /// to arrive at the size the window already was.
+    /// </para>
+    /// <para>
+    /// The engine decides, because it is the only thing that knows what the previous
+    /// frame said, and it never sets the flag on the frame a window comes to rest on.
+    /// </para>
+    /// </remarks>
+    private static uint FlagsFor(AnimationFrame frame) =>
+        frame.SizeUnchanged
+            ? FrameFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_NOSIZE
+            : FrameFlags;
+
     private readonly Dictionary<nint, Rect> _lastCommitted = [];
 
     /// <summary>
@@ -465,7 +488,7 @@ public sealed class WindowCommitter
     /// <param name="rect">Where its visible frame should end up.</param>
     /// <param name="flags">
     /// Defaults to the synchronous <see cref="DefaultFlags"/>. The animation path
-    /// passes <see cref="FrameFlags"/>, because a fallback frame is still a frame and
+    /// passes <see cref="FlagsFor"/>, because a fallback frame is still a frame and
     /// blocking on a busy target is exactly as bad when the batch failed as when it
     /// did not.
     /// </param>
@@ -629,7 +652,7 @@ public sealed class WindowCommitter
         if (batch.IsNull)
         {
             foreach (AnimationFrame frame in frames)
-                MoveSingle((nint)frame.Handle, frame.Rect, FrameFlags);
+                MoveSingle((nint)frame.Handle, frame.Rect, FlagsFor(frame));
         }
         else
         {
@@ -647,7 +670,7 @@ public sealed class WindowCommitter
                 batch = PInvoke.DeferWindowPos(
                     batch, new HWND((nint)frame.Handle), HWND.Null,
                     target.X, target.Y, target.Width, target.Height,
-                    (SET_WINDOW_POS_FLAGS)FrameFlags);
+                    (SET_WINDOW_POS_FLAGS)FlagsFor(frame));
 
                 if (batch.IsNull)
                 {
@@ -657,7 +680,7 @@ public sealed class WindowCommitter
             }
 
             if (ok) PInvoke.EndDeferWindowPos(batch);
-            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect, FrameFlags);
+            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect, FlagsFor(frame));
         }
 
         lock (_lastCommitted)
