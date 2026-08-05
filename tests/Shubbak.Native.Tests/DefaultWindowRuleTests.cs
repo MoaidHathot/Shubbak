@@ -90,9 +90,36 @@ public sealed class DefaultWindowRuleTests
     }
 
     [Fact]
+    public void TheLockScreenIsNotAWindowToTile()
+    {
+        // Locking the machine creates two of these, and they are hosted by explorer -
+        // so, like the language switcher above, the process cannot be excluded without
+        // excluding File Explorer with it.
+        //
+        // Found in a log rather than reasoned about:
+        //
+        //   managed 0xFF088A "Backstop Window" (explorer)
+        //       [LockScreenBackstopFrame] Tiling -> workspace 3
+        //   managed 0x7096C "Input Occlusion Window" (explorer)
+        //       [LockScreenInputOcclusionFrame] Tiling -> workspace 3
+        //
+        // And they are not transient. That pair sat in the tree for three and a half
+        // hours, from the machine locking until it was next unlocked, so a workspace
+        // holding one real window spent the night splitting itself three ways with two
+        // invisible participants.
+        Assert.True(WindowFilter.IsExcludedClassName("LockScreenBackstopFrame"));
+        Assert.True(WindowFilter.IsExcludedClassName("LockScreenInputOcclusionFrame"));
+    }
+
+    [Fact]
     public void OrdinaryClassesAreNotExcluded()
     {
         Assert.False(WindowFilter.IsExcludedClassName("MozillaWindowClass"));
         Assert.False(WindowFilter.IsExcludedClassName("CabinetWClass"));
+
+        // Explorer's own windows in particular, since the two exclusions above are
+        // explorer-hosted and an over-broad match would take the file manager with
+        // them.
+        Assert.False(WindowFilter.IsExcludedClassName("ExplorerWClass"));
     }
 }
