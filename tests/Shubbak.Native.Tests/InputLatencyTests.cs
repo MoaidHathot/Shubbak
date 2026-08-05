@@ -25,6 +25,7 @@ namespace Shubbak.Native.Tests;
 /// hook being moved back onto a shared thread, or work creeping into the callback.
 /// </para>
 /// </remarks>
+[Collection(SharedKeyboardHook.Name)]
 public sealed class InputLatencyTests
 {
     /// <summary>
