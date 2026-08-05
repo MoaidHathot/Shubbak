@@ -130,6 +130,28 @@ public sealed class ShadowMarginTests
         Assert.Equal(rect, WindowCommitter.Shrink(rect, margins));
     }
 
+    /// <summary>
+    /// Whether a window has been taken off screen, by whichever means.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not <c>!IsVisible</c>, which is what these tests used to wait for. Concealment
+    /// defaults to cloaking, and a cloaked window still reports
+    /// <c>IsWindowVisible</c> as true - so that condition can only ever be satisfied
+    /// by the <c>SW_HIDE</c> fallback.
+    /// </para>
+    /// <para>
+    /// It was satisfied, and that was the problem. The harness used to create its
+    /// windows with <c>WS_EX_NOACTIVATE</c>, which keeps them out of the shell's
+    /// application view collection, so cloaking failed and concealment fell through to
+    /// hiding every time. These tests were therefore exercising the fallback while
+    /// appearing to cover the default, and neither of them noticed.
+    /// </para>
+    /// </remarks>
+    private static bool IsConcealed(nint handle) =>
+        !Win32Window.IsVisible(handle) ||
+        Win32Window.GetCloakState(handle) != Win32Window.CloakState.None;
+
     [Fact]
     public void AConcealedWindowIsStillMovedToItsRectangle()
     {
@@ -151,10 +173,10 @@ public sealed class ShadowMarginTests
                 new Core.Tree.WindowNode(window.Handle, Identity), wanted, Visible: false)],
             static p => (nint)p.Window.Handle);
 
-        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
+        TestWindow.PumpUntil(() => IsConcealed(window.Handle));
 
         // Off screen, and nonetheless exactly where the layout asked for it.
-        Assert.False(Win32Window.IsVisible(window.Handle));
+        Assert.True(IsConcealed(window.Handle));
         Assert.Equal(wanted, WindowCommitter.VisibleBounds(window.Handle));
     }
 
@@ -173,7 +195,7 @@ public sealed class ShadowMarginTests
             [new Core.Layouts.Placement(node, away, Visible: false)],
             static p => (nint)p.Window.Handle);
 
-        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
+        TestWindow.PumpUntil(() => IsConcealed(window.Handle));
 
         Core.Geometry.Rect whileHidden = WindowCommitter.VisibleBounds(window.Handle);
 
@@ -181,8 +203,9 @@ public sealed class ShadowMarginTests
             [new Core.Layouts.Placement(node, away, Visible: true)],
             static p => (nint)p.Window.Handle);
 
-        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
+        TestWindow.PumpUntil(() => !IsConcealed(window.Handle));
 
+        Assert.False(IsConcealed(window.Handle), "the window was never revealed");
         Assert.Equal(away, whileHidden);
         Assert.Equal(away, WindowCommitter.VisibleBounds(window.Handle));
     }

@@ -16,6 +16,8 @@ public enum ExclusionReason
     ChildWindow,
     ToolWindow,
     NotInAltTabList,
+    CannotActivate,
+    OwnedPopup,
     ZeroSized,
     ShellWindow,
     NoTitle,
@@ -45,6 +47,10 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
         ExclusionReason.ChildWindow => "window is a child, not top-level",
         ExclusionReason.ToolWindow => "window has WS_EX_TOOLWINDOW and not WS_EX_APPWINDOW",
         ExclusionReason.NotInAltTabList => "window is owned by another window, so it is not an Alt+Tab target",
+        ExclusionReason.CannotActivate =>
+            "window has WS_EX_NOACTIVATE, so clicking it can never give it focus",
+        ExclusionReason.OwnedPopup =>
+            "window is owned by another window and has no title bar, so it is a menu or popup rather than a window",
         ExclusionReason.ZeroSized => "window has no area",
         ExclusionReason.ShellWindow => "window belongs to the shell (desktop or Progman)",
         ExclusionReason.NoTitle => "window has no title",
@@ -103,6 +109,13 @@ public static class WindowFilter
         "LockApp",
         "ShellHost",
         "InputApp",
+
+        // The credential and Windows Hello prompt. Shipped by komorebi and absent
+        // here, which is the gap worth closing: a prompt asking for a PIN or a
+        // fingerprint is the last window that should be resized into a tile, and it
+        // arrives without warning.
+        "CredentialUIBroker",
+
         "Windows.Internal.ShellExperience",
         "WindowsInternal.ComposableShell.Experiences.TextInput.InputApp",
     };
@@ -162,6 +175,11 @@ public static class WindowFilter
         // night splitting itself three ways with two invisible participants.
         "LockScreenBackstopFrame",
         "LockScreenInputOcclusionFrame",
+
+        // Office's splash screen, which appears before the application window and is
+        // gone by the time anyone could want it tiled. Tiling it rearranges the
+        // workspace twice for a window nobody interacts with.
+        "MsoSplash",
 
         "EdgeUiInputTopWndClass",
         "NarratorHelperWindow",
@@ -236,6 +254,33 @@ public static class WindowFilter
         {
             return ManageDecision.No(ExclusionReason.ToolWindow);
         }
+
+        // A window that declines to be activated cannot be focused by clicking it, so
+        // a tile holding one is a pane the user can look at and never use. Tiling it
+        // also takes space from windows that can be used.
+        //
+        // Structural rather than named, which is the point: this and the check below
+        // reject a shape of window instead of a list of window names. The named lists
+        // further down only catch what has already gone wrong for somebody, which is
+        // why the lock screen sat in a workspace for three and a half hours before
+        // anyone thought to add it.
+        //
+        // GlazeWM applies the same rule for the same reason. komorebi arrives at a
+        // similar place from the other direction, by requiring WS_CAPTION - which is
+        // stricter, and which it can afford because it ships a database of two hundred
+        // applications to walk back the false positives.
+        if ((exStyle & WINDOW_EX_STYLE.WS_EX_NOACTIVATE) != 0)
+            return ManageDecision.No(ExclusionReason.CannotActivate);
+
+        // An owned window with no title bar is a menu, an autocomplete popup or a
+        // tooltip that happens to be top-level. The Alt+Tab test below catches most
+        // owned windows, but not one that is its owner's last active popup - which is
+        // exactly what a menu that has just been opened is.
+        //
+        // Owned windows that do have a title bar are dialogs, and those are wanted:
+        // this rejects the shape of a popup, not the fact of having an owner.
+        if (Win32Window.HasOwner(handle) && (style & WINDOW_STYLE.WS_CAPTION) == 0)
+            return ManageDecision.No(ExclusionReason.OwnedPopup);
 
         string className = Win32Window.GetClassName(handle);
         if (s_excludedClasses.Contains(className))
@@ -319,6 +364,14 @@ public static class WindowFilter
         // The heuristics.
         ExclusionReason.ToolWindow => true,
         ExclusionReason.NotInAltTabList => true,
+
+        // Both are structural, and both are still opinions. An application may set
+        // WS_EX_NOACTIVATE and expect to be driven by something other than a click,
+        // and an owned frameless window is only usually a menu. A rule saying
+        // otherwise knows more than the shape of the window does.
+        ExclusionReason.CannotActivate => true,
+        ExclusionReason.OwnedPopup => true,
+
         ExclusionReason.NoTitle => true,
         ExclusionReason.ExcludedClass => true,
         ExclusionReason.ExcludedProcess => true,

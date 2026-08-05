@@ -44,11 +44,18 @@ internal sealed class TestWindow : IDisposable
     private Exception? _failure;
     private bool _disposed;
 
-    public TestWindow(string title = "Shubbak test window", bool visible = true)
+    public TestWindow(
+        string title = "Shubbak test window",
+        bool visible = true,
+        WINDOW_STYLE style = DefaultStyle,
+        WINDOW_EX_STYLE exStyle = 0,
+        TestWindow? owner = null)
     {
         FailIfAWindowManagerIsRunning();
 
-        _thread = new Thread(() => Run(title, visible))
+        HWND ownerHandle = owner?._handle ?? HWND.Null;
+
+        _thread = new Thread(() => Run(title, visible, style, exStyle, ownerHandle))
         {
             Name = "Shubbak test window",
             IsBackground = true,
@@ -62,6 +69,26 @@ internal sealed class TestWindow : IDisposable
         if (_handle.IsNull)
             throw new InvalidOperationException("the test window never appeared");
     }
+
+    /// <summary>
+    /// What an ordinary manageable window looks like.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These windows used to carry <c>WS_EX_NOACTIVATE</c> as well, to stop them
+    /// stealing focus from whoever was running the tests. That was doing nothing:
+    /// <see cref="SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE"/> below is what actually shows a
+    /// window without activating it, and it was already being used.
+    /// </para>
+    /// <para>
+    /// It mattered once the filter began rejecting windows that decline activation,
+    /// because the harness was then building windows the filter would refuse while
+    /// tests asserted they were manageable - the harness and the rule contradicting
+    /// each other, with thirty-five call sites sitting on top.
+    /// </para>
+    /// </remarks>
+    private const WINDOW_STYLE DefaultStyle =
+        WINDOW_STYLE.WS_POPUP | WINDOW_STYLE.WS_CAPTION | WINDOW_STYLE.WS_SYSMENU;
 
     /// <summary>
     /// Refuses to run these tests while a window manager is live.
@@ -126,19 +153,20 @@ internal sealed class TestWindow : IDisposable
     /// <summary>Kept for tests that only need a moment to pass.</summary>
     public static void PumpOnce() => Thread.Sleep(20);
 
-    private unsafe void Run(string title, bool visible)
+    private unsafe void Run(
+        string title, bool visible, WINDOW_STYLE style, WINDOW_EX_STYLE exStyle, HWND owner)
     {
         try
         {
             EnsureClassRegistered();
 
             _handle = PInvoke.CreateWindowEx(
-                WINDOW_EX_STYLE.WS_EX_NOACTIVATE,
+                exStyle,
                 ClassName,
                 title,
-                WINDOW_STYLE.WS_POPUP | WINDOW_STYLE.WS_CAPTION | WINDOW_STYLE.WS_SYSMENU,
+                style,
                 100, 100, 320, 240,
-                HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
+                owner, (SafeHandle?)null, (SafeHandle?)null, null);
 
             if (_handle.IsNull)
                 throw new InvalidOperationException(

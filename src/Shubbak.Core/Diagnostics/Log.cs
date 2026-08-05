@@ -82,8 +82,25 @@ public static class Log
     /// Whether anything would be recorded at this level.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Compares against the ring buffer's threshold, not the sink's, because the
     /// ring records one level deeper than the sink writes.
+    /// </para>
+    /// <para>
+    /// The consequence is worth stating plainly, because it is not obvious and it has
+    /// been measured. Raising the level by one notch raises what the ring keeps by one
+    /// notch too, so <b>configuring <c>debug</c> switches on the <c>trace</c> call
+    /// sites</b> - every one of which then builds its string, whether or not the sink
+    /// will write it.
+    /// </para>
+    /// <para>
+    /// On the window manager's tick that is a 27-fold difference in allocation:
+    /// measured at 51,040 bytes at the 99th percentile with <c>debug</c> configured,
+    /// against 1,880 with <c>info</c>. Nothing is wrong with the design - a report
+    /// from someone who had not thought to enable logging is exactly what the extra
+    /// level buys - but the cost belongs to the level above the one the user chose,
+    /// and that is the surprising part.
+    /// </para>
     /// </remarks>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsEnabled(LogLevel level) => level >= RingLevel();
