@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Shubbak.Core.Diagnostics;
 
 namespace Shubbak.Native.Tests;
 
@@ -183,6 +184,7 @@ public sealed class MessageLoopTests
         Assert.True(timer.IsHeld, "timeBeginPeriod(1) was refused, so this measures nothing");
 
         loop.NextTimeout = () => TimeSpan.FromMilliseconds(10);
+        loop.IsPacingFrames = true;
 
         Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(10));
 
@@ -190,7 +192,9 @@ public sealed class MessageLoopTests
         {
             Thread.Sleep(400);
 
-            Assert.True(loop.WakeOvershoot.Count > 5, $"only {loop.WakeOvershoot.Count} samples");
+            Assert.True(
+                loop.WakeOvershootPacing.Count > 5,
+                $"only {loop.WakeOvershootPacing.Count} samples");
 
             // A low percentile rather than the median. Transient load on the machine
             // pushes the upper tail out and can move a median by several milliseconds,
@@ -199,9 +203,46 @@ public sealed class MessageLoopTests
             // every single wait, including the luckiest. So the question this asks -
             // "did any wait come back near when it was asked to?" - separates the two
             // granularities without depending on the machine being quiet.
-            double best = loop.WakeOvershoot.Percentile(0.1);
+            double best = loop.WakeOvershootPacing.Percentile(0.1);
 
             Assert.True(best < 4, $"even the promptest waits overshot 10 ms by {best:F2} ms");
+        }
+        finally
+        {
+            loop.Stop();
+            thread.Join(TimeSpan.FromSeconds(2));
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OvershootGoesToTheBucketTheCallerAskedFor(bool pacing)
+    {
+        // The whole point of the split, and the thing that fails silently if the flag
+        // is wired backwards or never set: everything lands in one bucket and the
+        // figure is contaminated exactly as it was before, while still looking like a
+        // measurement. That is how the first version of this instrument reported a
+        // 12 ms overshoot on animation frames that were never measured.
+        using var timer = new TimerResolution(1);
+        using var loop = new MessageLoop();
+
+        timer.Acquire();
+
+        loop.NextTimeout = () => TimeSpan.FromMilliseconds(10);
+        loop.IsPacingFrames = pacing;
+
+        Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(10));
+
+        try
+        {
+            Thread.Sleep(200);
+
+            LatencyStats used = pacing ? loop.WakeOvershootPacing : loop.WakeOvershootIdle;
+            LatencyStats unused = pacing ? loop.WakeOvershootIdle : loop.WakeOvershootPacing;
+
+            Assert.True(used.Count > 0, $"pacing={pacing} recorded nothing in the bucket it asked for");
+            Assert.Equal(0, unused.Count);
         }
         finally
         {
