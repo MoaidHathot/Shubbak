@@ -112,11 +112,13 @@ public sealed class SessionStoreTests
         Assert.Null(SessionStore.Match(
             session,
             new WindowIdentity { ProcessName = "code", ClassName = "SomethingElse", Title = "main.cs" },
+            handle: 0,
             claimed));
 
         Assert.Null(SessionStore.Match(
             session,
             new WindowIdentity { ProcessName = "other", ClassName = "Chrome_WidgetWin_1", Title = "main.cs" },
+            handle: 0,
             claimed));
     }
 
@@ -138,6 +140,7 @@ public sealed class SessionStoreTests
                 ClassName = "MozillaWindowClass",
                 Title = "Something entirely different - Firefox",
             },
+            handle: 0,
             []);
 
         Assert.NotNull(matched);
@@ -161,6 +164,7 @@ public sealed class SessionStoreTests
         RememberedWindow? matched = SessionStore.Match(
             session,
             new WindowIdentity { ProcessName = "firefox", ClassName = "MozillaWindowClass", Title = "Mail" },
+            handle: 0,
             []);
 
         Assert.NotNull(matched);
@@ -188,9 +192,9 @@ public sealed class SessionStoreTests
             Title = "unrecognised",
         };
 
-        RememberedWindow? first = SessionStore.Match(session, identity, claimed);
-        RememberedWindow? second = SessionStore.Match(session, identity, claimed);
-        RememberedWindow? third = SessionStore.Match(session, identity, claimed);
+        RememberedWindow? first = SessionStore.Match(session, identity, handle: 0, claimed);
+        RememberedWindow? second = SessionStore.Match(session, identity, handle: 0, claimed);
+        RememberedWindow? third = SessionStore.Match(session, identity, handle: 0, claimed);
 
         Assert.NotNull(first);
         Assert.NotNull(second);
