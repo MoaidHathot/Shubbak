@@ -94,18 +94,19 @@ gaps {
 animation {
     enabled #true
 
-    // Frames a second to aim for while anything is moving. 15 to 240; 60 by default.
+    // Frames a second to aim for while anything is moving.
     //
-    // Shubbak paints nothing. It repositions windows, and each application repaints
-    // itself on its own thread at whatever rate it can manage. Past the point where
-    // applications keep up, asking for more frames does not buy smoother motion - it
-    // asks every window being moved to discard and redraw its contents more often,
-    // and the ones that cannot fall behind and briefly show bare background where
-    // their content should be.
+    // "auto" (the default) follows the refresh rate of the fastest display attached,
+    // re-read as monitors come and go. Any other answer is a guess about hardware
+    // Shubbak can simply ask about, and the guess is wrong in both directions: on a
+    // 60 Hz panel, asking for 90 means half as many frames again as the display can
+    // present, thrown away by the compositor after every application has already been
+    // told to repaint. On a 240 Hz panel a fixed 60 delivers a quarter of what the
+    // panel would take.
     //
-    // Raise it if your applications keep up and you want finer motion. The cost is
-    // CPU here and repaint pressure in them.
-    fps 60
+    // A number overrides it, and is worth having on a very fast panel where the
+    // applications rather than the display are the limit. 15 to 240.
+    fps "auto"
 
     // Below this many pixels a move is applied instantly. Animating a three-pixel
     // nudge costs a dozen frames and reads as lag rather than motion.
