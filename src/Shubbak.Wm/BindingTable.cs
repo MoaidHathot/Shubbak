@@ -22,15 +22,41 @@ namespace Shubbak.Wm;
 public sealed class BindingTable
 {
     /// <summary>
-    /// Bindings for the default mode, keyed by packed modifiers+key.
+    /// Everything a lookup needs, published as one reference.
     /// </summary>
-    private Dictionary<int, Keybinding> _default = [];
+    /// <remarks>
+    /// <para>
+    /// These were four separate fields, written one after another by a reload on the
+    /// daemon thread and read on the keyboard hook thread with nothing ordering the
+    /// two. The hook could therefore see a mixture: the new default table alongside
+    /// the previous active mode, or - worse - the window between clearing the active
+    /// mode and re-selecting it, during which every keystroke resolved against the
+    /// defaults instead of the mode.
+    /// </para>
+    /// <para>
+    /// That is not theoretical. Reloading while a non-pass-through mode is active
+    /// meant keystrokes briefly stopped being swallowed, which for a <c>pause</c>
+    /// mode is exactly the behaviour it exists to prevent.
+    /// </para>
+    /// <para>
+    /// Marking each field <c>volatile</c> would not have fixed it. Four volatile
+    /// fields are still four writes, and consistency <i>between</i> them is the
+    /// property that matters. One immutable record behind one volatile reference
+    /// makes a reload a single publication: the hook reads the reference once and
+    /// everything it then looks at belongs together.
+    /// </para>
+    /// </remarks>
+    private sealed record Snapshot(
+        Dictionary<int, Keybinding> Default,
+        Dictionary<string, ModeTable> Modes,
+        ModeTable? ActiveMode,
+        string? ActiveModeName);
 
-    private Dictionary<string, ModeTable> _modes =
-        new(StringComparer.OrdinalIgnoreCase);
-
-    private ModeTable? _activeMode;
-    private string? _activeModeName;
+    private volatile Snapshot _state = new(
+        [],
+        new Dictionary<string, ModeTable>(StringComparer.OrdinalIgnoreCase),
+        null,
+        null);
 
     private sealed record ModeTable(Dictionary<int, Keybinding> Bindings, bool PassThrough);
 
@@ -81,42 +107,41 @@ public sealed class BindingTable
             modes[mode.Name] = new ModeTable(bindings, mode.PassThrough);
         }
 
-        string? wasActive = _activeModeName;
+        string? wasActive = _state.ActiveModeName;
 
-        _default = defaults;
-        _modes = modes;
-        _activeMode = null;
-        _activeModeName = null;
+        // Re-selected against the new tables before anything is published, so the hook
+        // never observes the gap between losing the old mode and regaining the new one.
+        ModeTable? active = wasActive is not null && modes.TryGetValue(wasActive, out ModeTable? kept)
+            ? kept
+            : null;
 
-        if (wasActive is null) return null;
+        _state = new Snapshot(defaults, modes, active, active is null ? null : wasActive);
 
-        // Re-selected against the new tables. SetMode reports whether the name still
-        // means anything, which is the one thing the caller has to know: a mode that
-        // has been deleted from the config leaves the keyboard on the defaults, and
-        // everything that reports the mode has to be told so.
-        return SetMode(wasActive) ? null : wasActive;
+        // A mode that has been deleted from the config leaves the keyboard on the
+        // defaults, and everything that reports the mode has to be told so.
+        return wasActive is not null && active is null ? wasActive : null;
     }
 
     /// <summary>Switches binding mode; null returns to the default set.</summary>
     /// <returns>False when no such mode is declared, in which case nothing changed.</returns>
     public bool SetMode(string? mode)
     {
+        Snapshot state = _state;
+
         if (mode is null)
         {
-            _activeMode = null;
-            _activeModeName = null;
+            _state = state with { ActiveMode = null, ActiveModeName = null };
             return true;
         }
 
-        if (!_modes.TryGetValue(mode, out ModeTable? table)) return false;
+        if (!state.Modes.TryGetValue(mode, out ModeTable? table)) return false;
 
-        _activeMode = table;
-        _activeModeName = mode;
+        _state = state with { ActiveMode = table, ActiveModeName = mode };
         return true;
     }
 
     /// <summary>Names of the configured binding modes.</summary>
-    public IEnumerable<string> ModeNames => _modes.Keys;
+    public IEnumerable<string> ModeNames => _state.Modes.Keys;
 
     /// <summary>
     /// Whether a keystroke is bound. Called from the hook callback.
@@ -132,7 +157,11 @@ public sealed class BindingTable
 
         int key = Pack((int)modifiers, virtualKey);
 
-        ModeTable? mode = _activeMode;
+        // Read once. Re-reading would reintroduce exactly what the snapshot removes:
+        // a reload landing between two reads and answering half of one question with
+        // the old table and half with the new.
+        Snapshot state = _state;
+        ModeTable? mode = state.ActiveMode;
 
         if (mode is not null)
         {
@@ -151,7 +180,7 @@ public sealed class BindingTable
             return !mode.PassThrough && !IsModifierKey(virtualKey);
         }
 
-        return _default.ContainsKey(key);
+        return state.Default.ContainsKey(key);
     }
 
     /// <summary>Whether a key is a modifier, and so never a binding by itself.</summary>
@@ -169,12 +198,16 @@ public sealed class BindingTable
     {
         int key = Pack((int)modifiers, virtualKey);
 
-        ModeTable? mode = _activeMode;
+        // Read once. Re-reading would reintroduce exactly what the snapshot removes:
+        // a reload landing between two reads and answering half of one question with
+        // the old table and half with the new.
+        Snapshot state = _state;
+        ModeTable? mode = state.ActiveMode;
 
         if (mode is not null)
             return mode.Bindings.GetValueOrDefault(key);
 
-        return _default.GetValueOrDefault(key);
+        return state.Default.GetValueOrDefault(key);
     }
 
     private static int Pack(KeyBinding binding) => Pack(binding.Modifiers, binding.VirtualKey);
