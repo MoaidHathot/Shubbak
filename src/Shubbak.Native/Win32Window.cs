@@ -307,10 +307,25 @@ public static class Win32Window
     internal static WINDOW_EX_STYLE GetExStyle(nint handle) =>
         (WINDOW_EX_STYLE)(uint)PInvoke.GetWindowLong(new HWND(handle), WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE);
 
+    /// <summary>
+    /// Whether another window owns this one.
+    /// </summary>
+    /// <remarks>
+    /// <c>GA_ROOTOWNER</c> walks the parent and owner chain and returns the window
+    /// itself when there is nothing above it, so a result that differs is the presence
+    /// of an owner. Used rather than <c>GetWindow(GW_OWNER)</c> because the ancestor
+    /// call is already imported for the Alt+Tab test and answers the same question.
+    /// </remarks>
+    internal static bool HasOwner(nint handle)
+    {
+        var hwnd = new HWND(handle);
+
+        return PInvoke.GetAncestor(hwnd, GET_ANCESTOR_FLAGS.GA_ROOTOWNER) != hwnd;
+    }
+
     /// <summary>Raw window style bits, for the inspector to display.</summary>
     public static uint GetStyleBits(nint handle) =>
         (uint)PInvoke.GetWindowLong(new HWND(handle), WINDOW_LONG_PTR_INDEX.GWL_STYLE);
-
     /// <summary>Raw extended style bits, for the inspector to display.</summary>
     public static uint GetExStyleBits(nint handle) =>
         (uint)PInvoke.GetWindowLong(new HWND(handle), WINDOW_LONG_PTR_INDEX.GWL_EXSTYLE);

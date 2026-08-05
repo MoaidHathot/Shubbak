@@ -112,6 +112,101 @@ public sealed class DefaultWindowRuleTests
     }
 
     [Fact]
+    public void AWindowThatDeclinesActivationIsNotTiled()
+    {
+        // Structural, not named. A window carrying WS_EX_NOACTIVATE never becomes the
+        // foreground window when clicked, so a tile holding one is a pane the user can
+        // look at and never use - while taking space from windows they can.
+        //
+        // This is the kind of rule the named lists cannot express. A blocklist only
+        // catches what has already gone wrong for somebody, which is why the lock
+        // screen occupied a workspace for three and a half hours before anyone thought
+        // to add its class.
+        using var window = new TestWindow(
+            exStyle: Windows.Win32.UI.WindowsAndMessaging.WINDOW_EX_STYLE.WS_EX_NOACTIVATE);
+
+        ManageDecision decision = WindowFilter.Evaluate(window.Handle);
+
+        Assert.False(decision.Manageable);
+        Assert.Equal(ExclusionReason.CannotActivate, decision.Reason);
+    }
+
+    [Fact]
+    public void AnOwnedWindowWithNoTitleBarIsAMenu()
+    {
+        // Autocomplete popups, title-bar menus and tooltips that happen to be
+        // top-level. The Alt+Tab test catches most owned windows, but not one that is
+        // its owner's last active popup - which is exactly what a menu that has just
+        // been opened is.
+        using var owner = new TestWindow("owner");
+
+        using var popup = new TestWindow(
+            "popup",
+            style: Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP,
+            owner: owner);
+
+        ManageDecision decision = WindowFilter.Evaluate(popup.Handle);
+
+        Assert.False(decision.Manageable);
+        Assert.Equal(ExclusionReason.OwnedPopup, decision.Reason);
+    }
+
+    [Fact]
+    public void AnOwnedWindowWithATitleBarIsADialogAndIsStillConsidered()
+    {
+        // The rule rejects the shape of a popup, not the fact of having an owner. A
+        // dialog is owned and has a title bar, and refusing those would be a much
+        // larger change than intended - it is the difference between ignoring menus
+        // and ignoring every Save As box.
+        using var owner = new TestWindow("owner");
+        using var dialog = new TestWindow("dialog", owner: owner);
+
+        ManageDecision decision = WindowFilter.Evaluate(dialog.Handle);
+
+        Assert.NotEqual(ExclusionReason.OwnedPopup, decision.Reason);
+    }
+
+    [Fact]
+    public void AnOrdinaryWindowIsStillManageable()
+    {
+        // The guard on the two rules above. Both are structural, so a mistake in
+        // either rejects windows nobody complained about - which is the failure mode
+        // that made requiring WS_CAPTION too expensive to adopt.
+        using var window = new TestWindow();
+
+        ManageDecision decision = WindowFilter.Evaluate(window.Handle);
+
+        Assert.True(decision.Manageable, $"an ordinary window was rejected: {decision.Explain()}");
+    }
+
+    [Fact]
+    public void BothStructuralRulesCanBeOverruledByAConfiguredRule()
+    {
+        // Structural does not mean certain. An application may set WS_EX_NOACTIVATE
+        // and expect to be driven by something other than a click, and an owned
+        // frameless window is only usually a menu. A rule saying otherwise knows more
+        // than the shape of the window does.
+        Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.CannotActivate));
+        Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.OwnedPopup));
+    }
+
+    [Fact]
+    public void TheCredentialPromptIsNotAWindowToTile()
+    {
+        // A prompt asking for a PIN or a fingerprint, which arrives without warning
+        // and should never be resized into a tile. komorebi ships this and we did not.
+        Assert.True(WindowFilter.IsExcludedProcessName("CredentialUIBroker"));
+    }
+
+    [Fact]
+    public void ASplashScreenIsNotAWindowToTile()
+    {
+        // Office shows this before the application window and takes it away again.
+        // Tiling it rearranges the workspace twice for something nobody interacts with.
+        Assert.True(WindowFilter.IsExcludedClassName("MsoSplash"));
+    }
+
+    [Fact]
     public void OrdinaryClassesAreNotExcluded()
     {
         Assert.False(WindowFilter.IsExcludedClassName("MozillaWindowClass"));
