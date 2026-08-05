@@ -1621,14 +1621,36 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>
-    /// Places a new window on the workspace of the monitor it appeared on.
+    /// Picks the workspace a newly-managed window is placed on.
     /// </summary>
     /// <remarks>
-    /// Using the window's own monitor rather than the focused one matters on
-    /// multi-monitor setups: an application launched onto a secondary display should
-    /// stay there rather than teleporting to wherever focus happened to be.
+    /// <para>
+    /// Follows focus by default: the workspace being looked at is what someone who has
+    /// just pressed a launcher key means, and it is what every comparable window
+    /// manager does.
+    /// </para>
+    /// <para>
+    /// It previously always used the active workspace of whichever monitor the window
+    /// opened on, reasoning that an application launched onto a secondary display
+    /// should stay there rather than teleporting to wherever focus happened to be.
+    /// That is right for an application that chooses its display deliberately, and
+    /// wrong for the far more common case: Windows reopens most applications wherever
+    /// they were last, which has nothing to do with where the user is now. The
+    /// reported symptom was launching something while working on one monitor and
+    /// finding it had opened on the other.
+    /// </para>
+    /// <para>
+    /// The old behaviour is still available, because the reasoning behind it was not
+    /// wrong - only wrong as a default.
+    /// </para>
     /// </remarks>
-    private WorkspaceNode? WorkspaceFor(nint handle)
+    private WorkspaceNode? WorkspaceFor(nint handle) =>
+        _config.NewWindowPlacement == NewWindowPlacement.FollowWindow
+            ? WorkspaceOfMonitorContaining(handle)
+            : _wm.FocusedWorkspace ?? WorkspaceOfMonitorContaining(handle);
+
+    /// <summary>The active workspace of whichever monitor the window opened on.</summary>
+    private WorkspaceNode? WorkspaceOfMonitorContaining(nint handle)
     {
         MonitorInfo? info = MonitorSource.ForWindow(handle);
         if (info is null) return null;

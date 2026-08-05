@@ -86,6 +86,20 @@ public sealed record ShubbakConfig
 
     public WindowState InitialWindowState { get; init; } = WindowState.Tiling;
 
+    /// <summary>
+    /// Which workspace a newly-managed window lands on.
+    /// </summary>
+    /// <remarks>
+    /// Follows focus, because that is what every comparable window manager does and
+    /// what pressing a launcher key means. It was previously the active workspace of
+    /// whichever monitor the window opened on, which sounds equivalent and is not:
+    /// Windows reopens most applications wherever they were last, so a window would
+    /// arrive on a display the user was not looking at and read as having gone
+    /// missing. <see cref="NewWindowPlacement.FollowWindow"/> restores that for
+    /// applications that pick their display deliberately.
+    /// </remarks>
+    public NewWindowPlacement NewWindowPlacement { get; init; } = NewWindowPlacement.FollowFocus;
+
     public bool ToggleWorkspaceOnRefocus { get; init; }
 
     public bool FollowWindowOnMove { get; init; }

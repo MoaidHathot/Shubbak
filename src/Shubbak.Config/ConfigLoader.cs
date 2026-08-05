@@ -169,7 +169,7 @@ public sealed class ConfigLoader
         "focus-follows-cursor", "toggle-workspace-on-refocus", "follow-window-on-move",
         "cursor-jump", "initial-window-state", "hide-method", "keep-in-taskbar",
         "default-layout", "unmanaged-window-commands", "allow-shell-exec-over-ipc",
-        "startup-command",
+        "startup-command", "new-window-placement",
     ];
 
     private static readonly string[] KnownAnimationKeys =
@@ -241,6 +241,7 @@ public sealed class ConfigLoader
             CursorJumpOnMonitorFocus = CursorJump(node, "monitor"),
             CursorJumpOnWindowFocus = CursorJump(node, "window"),
             InitialWindowState = InitialState(node, config.InitialWindowState),
+            NewWindowPlacement = Placement(node, config.NewWindowPlacement),
             HideMethod = HideMethod(node, config.HideMethod),
             UnmanagedWindowCommands = UnmanagedCommands(node, config.UnmanagedWindowCommands),
             AllowShellExecOverIpc = Bool(node, "allow-shell-exec-over-ipc", config.AllowShellExecOverIpc),
@@ -281,6 +282,29 @@ public sealed class ConfigLoader
 
         string configured = Text(jump, "trigger", "monitor") ?? "monitor";
         return string.Equals(configured, trigger, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Reads <c>new-window-placement</c>: <c>"focus"</c> or <c>"window"</c>.
+    /// </summary>
+    private NewWindowPlacement Placement(KdlNode node, NewWindowPlacement fallback)
+    {
+        string? text = Text(node, "new-window-placement", null);
+        if (text is null) return fallback;
+
+        switch (text.ToLowerInvariant())
+        {
+            case "focus": return NewWindowPlacement.FollowFocus;
+            case "window": return NewWindowPlacement.FollowWindow;
+            default:
+                Report(Diagnostic.Error(
+                    "SHB0436",
+                    $"Unknown new window placement '{text}'.",
+                    SpanOf(node, "new-window-placement"),
+                    "Use 'focus' to open new windows on the workspace you are looking at, " +
+                    "or 'window' to open them on the monitor the window itself appeared on."));
+                return fallback;
+        }
     }
 
     private WindowState InitialState(KdlNode node, WindowState fallback)

@@ -17,6 +17,20 @@ general {
     // New windows start tiled.
     initial-window-state "tiling"
 
+    // Which workspace a new window lands on.
+    //
+    //   focus   (default) - the workspace you are looking at.
+    //   window            - the active workspace of whichever monitor the window
+    //                       itself opened on.
+    //
+    // These differ only on a multi-monitor desktop, and there they differ often:
+    // Windows reopens most applications wherever they were last, which has nothing
+    // to do with where you are now. "window" was the original behaviour and is
+    // right for an application that picks its display deliberately - a slideshow
+    // going to the projector - but as a default it meant launching something while
+    // working on one monitor could open it on the other.
+    new-window-placement "focus"
+
     // What a command that targets a window does when the focused window is one
     // Shubbak does not manage - a dialog, a tray popup, an app it passed over.
     //
