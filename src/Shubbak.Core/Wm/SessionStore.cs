@@ -17,6 +17,35 @@ namespace Shubbak.Core.Wm;
 /// <param name="Tags">Workspaces it also belonged to.</param>
 /// <param name="Sticky">Whether it followed every workspace.</param>
 /// <param name="State">Tiling, floating, and so on.</param>
+/// <param name="Handle">
+/// The native window handle, which is an exact identity for as long as the window
+/// exists.
+/// </param>
+/// <remarks>
+/// <para>
+/// The handle is the only field here that distinguishes two windows of the same
+/// application reliably, and it is why it was added. Process and class are identical
+/// between them by definition, and the title is not stable: a browser's title is
+/// whatever page it is showing and a chat application's is whichever conversation is
+/// open, so both change while Shubbak is not running.
+/// </para>
+/// <para>
+/// When every distinguishing field has gone stale, two windows of one application
+/// each match the first unclaimed entry for that application, and which of them gets
+/// there first is enumeration order. The observed result was two browser windows
+/// swapping workspaces after a resume, and two chat windows landing on top of each
+/// other.
+/// </para>
+/// <para>
+/// It survives what actually happens - Shubbak restarting, or the machine sleeping -
+/// because neither disturbs a window belonging to an application that kept running.
+/// It does not survive the application restarting, and nothing could: at that point
+/// the two windows are genuinely indistinguishable, and the older fields take over.
+/// </para>
+/// <para>
+/// Zero when absent, so a session written before this existed still loads.
+/// </para>
+/// </remarks>
 public sealed record RememberedWindow(
     string ProcessName,
     string ClassName,
@@ -24,7 +53,8 @@ public sealed record RememberedWindow(
     string Workspace,
     IReadOnlyList<string> Tags,
     bool Sticky,
-    string State);
+    string State,
+    long Handle = 0);
 
 /// <summary>Which workspace a monitor was showing.</summary>
 /// <param name="DeviceId">The monitor's device id.</param>
@@ -111,7 +141,8 @@ public sealed class SessionStore
                 workspace.Name,
                 [.. window.Tags],
                 window.IsSticky,
-                window.State.ToString()));
+                window.State.ToString(),
+                window.Handle));
         }
 
         List<RememberedMonitor> monitors = [];
@@ -294,12 +325,37 @@ public sealed class SessionStore
     /// The workspace a window should be restored to, or null if it is unrecognised.
     /// </summary>
     /// <remarks>
-    /// Scored rather than matched exactly. The process and class must agree - they
-    /// are stable - and a matching title hash breaks ties between several windows of
-    /// the same application, which is what puts three browser windows back on three
-    /// different workspaces rather than all on the first one.
+    /// <para>
+    /// Scored rather than matched exactly. The process and class must agree - they are
+    /// stable - and what breaks ties between several windows of the same application
+    /// is, in order of how much it is worth: the same handle, then the same title.
+    /// </para>
+    /// <para>
+    /// The handle is the addition that made this correct. Process and class cannot
+    /// separate two windows of one application, and a title does not survive the
+    /// window being used: a browser's is whatever page it is showing, a chat
+    /// application's is whichever conversation is open. With both stale, every window
+    /// of that application scored the same and each took the first unclaimed entry,
+    /// so which one landed where was decided by enumeration order. Two browser windows
+    /// swapped workspaces across a resume, and two chat windows ended up on top of
+    /// each other.
+    /// </para>
+    /// <para>
+    /// A handle is only trusted alongside an agreeing process and class, because
+    /// Windows reuses handle values. That does not make a stale match impossible, but
+    /// it confines the consequence to the case that was already being got wrong.
+    /// </para>
     /// </remarks>
-    public static RememberedWindow? Match(Session session, WindowIdentity identity, HashSet<int> claimed)
+    /// <param name="session">The saved session to match against.</param>
+    /// <param name="identity">What rules match on: process, class, title.</param>
+    /// <param name="handle">
+    /// The window's native handle. Passed separately rather than folded into
+    /// <paramref name="identity"/>, which is defined as the attributes a rule can
+    /// match on and the bar can display - a handle is neither.
+    /// </param>
+    /// <param name="claimed">Entries already taken by an earlier window.</param>
+    public static RememberedWindow? Match(
+        Session session, WindowIdentity identity, long handle, HashSet<int> claimed)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(identity);
@@ -323,15 +379,25 @@ public sealed class SessionStore
             if (!string.Equals(candidate.ClassName, identity.ClassName, StringComparison.Ordinal))
                 continue;
 
-            // Process and class agreeing is enough to restore; a title match on top
-            // of that is what disambiguates several windows of the same app.
-            int score = candidate.TitleHash == titleHash ? 2 : 1;
+            // Process and class agreeing is enough to restore. Everything above that
+            // exists to decide between several windows of the same application, and
+            // the handle is the only one of them that is still true after the window
+            // has been used.
+            int score = 1;
+
+            if (candidate.TitleHash == titleHash) score = 2;
+
+            if (candidate.Handle != 0 && candidate.Handle == handle) score = 3;
 
             if (score > bestScore)
             {
                 bestScore = score;
                 best = candidate;
                 bestIndex = i;
+
+                // Nothing can beat an exact identity, and continuing risks a later
+                // entry with a matching title taking it instead.
+                if (score == 3) break;
             }
         }
 

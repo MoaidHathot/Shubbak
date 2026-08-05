@@ -1649,7 +1649,7 @@ public sealed class WmDaemon : IDisposable
     {
         if (_session is null) return null;
 
-        RememberedWindow? remembered = SessionStore.Match(_session, window.Identity, _claimedSessionEntries);
+        RememberedWindow? remembered = SessionStore.Match(_session, window.Identity, window.Handle, _claimedSessionEntries);
         if (remembered is null) return null;
 
         WorkspaceNode? workspace = _wm.Root.FindWorkspace(remembered.Workspace);

@@ -54,7 +54,7 @@ public static class WindowRecovery
         {
             WindowIdentity identity = Win32Window.BuildIdentity(handle);
 
-            if (SessionStore.Match(session, identity, claimed) is null) continue;
+            if (SessionStore.Match(session, identity, handle, claimed) is null) continue;
 
             found.Add(Describe(handle));
         }
