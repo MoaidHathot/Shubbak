@@ -69,6 +69,13 @@ public abstract record WmCommand
     /// while a destructive one that repeats is discovered by losing something. Any
     /// binding can override this with <c>repeat=#false</c> or <c>repeat=#true</c>.
     /// </para>
+    /// <para>
+    /// The test a command has to pass is not "is it destructive" but <b>does repeating
+    /// it act on the same thing</b>. Moving the focused window within its layout keeps
+    /// the focus, so holding the key pushes one window further; moving it to another
+    /// workspace does not, so holding the key sends a procession of windows after it.
+    /// That distinction is what the first version of this list got wrong.
+    /// </para>
     /// </remarks>
     public bool RepeatsOnHold => this is not (
         // Toggles, which flip back and forth at the hardware repeat rate.
@@ -88,6 +95,25 @@ public abstract record WmCommand
         ShellExecCommand or
         ReloadConfigCommand or
         RedrawCommand or
+
+        // Commands that take the focused window off this workspace, which is the same
+        // trap as close and was missed because the consequence is recoverable rather
+        // than final. Once the window is gone, focus falls to whatever was next to it,
+        // so the repeat acts on a different window - and the one it acts on is the
+        // neighbour, which for two windows of the same application sitting side by
+        // side is the one that makes it look as though the pair were being treated as
+        // a unit.
+        //
+        // Holding the key half a second longer therefore sends two windows where one
+        // was meant to go. Repeating cannot be right for any of these: there is no
+        // reading of "hold to move the window to workspace three" that means "and then
+        // its neighbour, and then the one after that".
+        MoveToWorkspaceCommand or
+        TagCommand or
+        ClearTagsCommand or
+
+        // Two monitors makes this a toggle in all but name.
+        MoveWorkspaceToMonitorCommand or
 
         // Entering or leaving a mode repeatedly leaves which one is active a matter
         // of when the key happened to be released.
