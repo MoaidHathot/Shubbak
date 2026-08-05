@@ -2605,10 +2605,20 @@ public sealed class WmDaemon : IDisposable
             _frameScratch = new AnimationFrame[Math.Max(_animation.ActiveCount * 2, 128)];
 
         int count = _animation.Tick(deltaMs, _frameScratch);
-        if (count == 0) return;
 
+        // Counted before the early return, and the batch size recorded even when it is
+        // zero. The engine now declines to emit a frame for a window whose rectangle
+        // has not changed since the last one - which through the settling tail of an
+        // ease-out is most of them - so a tick that commits nothing is the optimisation
+        // working, not a frame being missed.
+        //
+        // Counting it as a miss would have made "frames delivered against due" report a
+        // growing deficit the better this got, which is the sort of instrument that
+        // sends the next person looking in precisely the wrong direction.
         _framesDelivered++;
         _frameBatchSize.Record(count);
+
+        if (count == 0) return;
 
         long committing = Stopwatch.GetTimestamp();
 
