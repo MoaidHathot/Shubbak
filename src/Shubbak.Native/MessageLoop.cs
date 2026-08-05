@@ -61,24 +61,46 @@ public sealed class MessageLoop : IDisposable
     public bool IsRunning => _running;
 
     /// <summary>
-    /// How much longer than asked a wait that ran to its timeout actually took.
+    /// Whether the wait that follows is pacing something, rather than idling.
+    /// </summary>
+    /// <remarks>
+    /// Set by whoever supplies <see cref="NextTimeout"/>, because only they know what
+    /// the interval they asked for is for. It exists to keep the two kinds of wait
+    /// apart in <see cref="WakeOvershootPacing"/> and <see cref="WakeOvershootIdle"/>:
+    /// they differ by an order of magnitude in both the interval requested and the
+    /// resolution available, so a percentile over the two together describes neither.
+    /// </remarks>
+    public bool IsPacingFrames { get; set; }
+
+    /// <summary>
+    /// How much longer than asked a paced wait that ran to its timeout actually took.
     /// </summary>
     /// <remarks>
     /// <para>
     /// The measurement that says whether the fine timer resolution is really in
     /// effect. Windows' default timer granularity is 15.625 ms, so without it a
     /// request for 12 ms comes back at about 15.6 and one for 17 ms at about 31 -
-    /// which would produce exactly the frame rates the daemon has been measuring, from
-    /// a cause that has nothing to do with its own arithmetic.
+    /// which reproduces every frame rate measured here from a cause that has nothing
+    /// to do with the caller's arithmetic.
     /// </para>
     /// <para>
     /// Only waits that timed out are recorded. A wait cut short by a message or a
-    /// signal says nothing about the clock, and mixing the two would bury the answer
-    /// in a distribution of unrelated numbers - which is the mistake the combined tick
-    /// interval made before the frame interval was separated from it.
+    /// signal says nothing about the clock.
     /// </para>
     /// </remarks>
-    public LatencyStats WakeOvershoot { get; } = new(4096, "wake overshoot");
+    public LatencyStats WakeOvershootPacing { get; } = new(4096, "wake overshoot pacing");
+
+    /// <summary>
+    /// The same, for waits that were not pacing anything.
+    /// </summary>
+    /// <remarks>
+    /// Kept apart rather than discarded, because it is the contrast that makes the
+    /// other number legible: this is what coarse granularity looks like, measured on
+    /// the same machine at the same time. Reported together, the single figure was
+    /// dominated by these - long idle waits with the fine timer deliberately released
+    /// - and read as though animation frames were arriving twelve milliseconds late.
+    /// </remarks>
+    public LatencyStats WakeOvershootIdle { get; } = new(4096, "wake overshoot idle");
 
     /// <summary>Waits that ran to their timeout.</summary>
     public long WaitsTimedOut => Interlocked.Read(ref _waitsTimedOut);
@@ -210,7 +232,11 @@ public sealed class MessageLoop : IDisposable
 
             double elapsedMs = (Stopwatch.GetTimestamp() - before) * 1000.0 / Stopwatch.Frequency;
 
-            WakeOvershoot.Record(elapsedMs - timeout);
+            // Bucketed by what the wait was for. Read together these two answer
+            // opposite questions and cancel each other out.
+            LatencyStats sink = IsPacingFrames ? WakeOvershootPacing : WakeOvershootIdle;
+
+            sink.Record(elapsedMs - timeout);
         }
         else
         {

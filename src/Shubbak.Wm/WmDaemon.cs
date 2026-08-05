@@ -357,6 +357,20 @@ public sealed class WmDaemon : IDisposable
         {
             _timerResolution.Acquire();
 
+            // Sampled here rather than read when a report is asked for. The timer is
+            // held only while something is moving, so by the time anyone runs
+            // `diagnose` it has correctly been released - and reporting that instant
+            // said "fine timer held: False", which reads as a fault and is in fact the
+            // release working as intended. What is worth knowing is whether it was
+            // held while it mattered.
+            _fineTimerHeldWhileAnimating = _timerResolution.IsHeld;
+
+            // Tells the pump which bucket this wait belongs in. A frame interval and a
+            // quarter-second idle wait differ by an order of magnitude in both what is
+            // asked for and what resolution is available, so measured together they
+            // describe neither.
+            _loop.IsPacingFrames = true;
+
             // Only what is left of the current frame, not a fresh one. The pump is
             // woken by keyboard and window events as well as by its own timeout - and
             // during a workspace switch, by a storm of cloak and uncloak events - so
@@ -372,11 +386,21 @@ public sealed class WmDaemon : IDisposable
         }
 
         _timerResolution.Release();
+        _loop.IsPacingFrames = false;
 
         // The wait is the other question, and has a different answer: a pending pass
         // does want to run promptly.
         return _layoutDirty ? FrameInterval : IdleInterval;
     }
+
+    /// <summary>
+    /// Whether the fine timer was held the last time a frame was being paced.
+    /// </summary>
+    /// <remarks>
+    /// False until something has animated. See the sampling site for why this is not
+    /// simply <c>_timerResolution.IsHeld</c> read at report time.
+    /// </remarks>
+    private bool _fineTimerHeldWhileAnimating;
 
     /// <summary>
     /// How long to wait before the next animation frame is due.
@@ -1410,6 +1434,18 @@ public sealed class WmDaemon : IDisposable
             $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms all-time",
 
             $"- **Ticks over 6.94 ms budget**: {_tickDuration.CountOver(6.94)} of the last {_tickDuration.Count}",
+            $"- **Waits**: {_loop.WaitsTimedOut} ran out, {_loop.WaitsInterrupted} cut short " +
+            "by a message or signal",
+
+            // The contrast that makes the pacing figure legible: this is what the
+            // default 15.625 ms granularity looks like, measured on the same machine
+            // at the same time, with the fine timer deliberately released because
+            // nothing is moving. Reported together with the pacing waits, these
+            // dominated and made animation frames appear twelve milliseconds late.
+            $"- **Wake overshoot while idle** (last {_loop.WakeOvershootIdle.Count}): " +
+            $"p50 {_loop.WakeOvershootIdle.Percentile(0.5):F2} ms, " +
+            $"p99 {_loop.WakeOvershootIdle.Percentile(0.99):F2} ms",
+
             $"- **Allocated per tick** (last {_tickAllocation.Count}): p50 {_tickAllocation.Percentile(0.5):F0} B, " +
             $"p99 {_tickAllocation.Percentile(0.99):F0} B, max {_tickAllocation.Max:F0} B all-time",
             $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
@@ -1479,20 +1515,17 @@ public sealed class WmDaemon : IDisposable
 
             $"- **Motions**: {_animationsStarted}",
 
-            // Whether the pump's own clock is doing what the frame rate assumes. The
-            // default Windows timer granularity is 15.625 ms, which on its own would
-            // hold any rate above about 64 Hz to a fraction of what it asked for -
-            // entirely independently of the daemon's arithmetic. Reported so the two
-            // explanations can be told apart rather than argued about.
-            $"- **Fine timer held**: {_timerResolution.IsHeld}",
+            // Whether the pump's own clock was doing what the frame rate assumes, at
+            // the only time that matters. The default Windows timer granularity is
+            // 15.625 ms, which on its own would hold any rate above about 64 Hz to a
+            // fraction of what it asked for, entirely independently of the arithmetic
+            // above.
+            $"- **Fine timer held while animating**: {_fineTimerHeldWhileAnimating}",
 
-            $"- **Wake overshoot** (last {_loop.WakeOvershoot.Count}, timed-out waits only): " +
-            $"p50 {_loop.WakeOvershoot.Percentile(0.5):F2} ms, " +
-            $"p99 {_loop.WakeOvershoot.Percentile(0.99):F2} ms, " +
-            $"max {_loop.WakeOvershoot.Max:F2} ms all-time",
-
-            $"- **Waits**: {_loop.WaitsTimedOut} ran out, {_loop.WaitsInterrupted} cut short " +
-            $"by a message or signal",
+            $"- **Wake overshoot while pacing** (last {_loop.WakeOvershootPacing.Count}, " +
+            $"timed-out waits only): p50 {_loop.WakeOvershootPacing.Percentile(0.5):F2} ms, " +
+            $"p99 {_loop.WakeOvershootPacing.Percentile(0.99):F2} ms, " +
+            $"max {_loop.WakeOvershootPacing.Max:F2} ms all-time",
 
             $"- **Commit frame** (last {_commitFrameDuration.Count}): " +
             $"p50 {_commitFrameDuration.Percentile(0.5):F2} ms, " +
