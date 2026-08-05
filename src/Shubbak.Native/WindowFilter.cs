@@ -143,6 +143,26 @@ public static class WindowFilter
         // long enough that waiting for it to go away does not work either. Only the
         // class identifies it.
         "Shell_InputSwitchTopLevelWindow",
+
+        // The lock screen, which is the same shape of problem. Locking the machine
+        // creates these two, and they are hosted by explorer - so, as above, the
+        // process cannot be excluded without excluding File Explorer with it.
+        //
+        // Observed rather than guessed. They were found being adopted as ordinary
+        // tiling windows:
+        //
+        //   managed 0xFF088A "Backstop Window" (explorer)
+        //       [LockScreenBackstopFrame] Tiling -> workspace 3
+        //   managed 0x7096C "Input Occlusion Window" (explorer)
+        //       [LockScreenInputOcclusionFrame] Tiling -> workspace 3
+        //
+        // They are not transient. That pair stayed in the tree for three and a half
+        // hours, from the machine locking to the next time it was unlocked and the
+        // windows destroyed, so a workspace that had one real window on it spent the
+        // night splitting itself three ways with two invisible participants.
+        "LockScreenBackstopFrame",
+        "LockScreenInputOcclusionFrame",
+
         "EdgeUiInputTopWndClass",
         "NarratorHelperWindow",
         "Xaml_WindowedPopupClass",
