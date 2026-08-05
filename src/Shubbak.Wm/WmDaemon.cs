@@ -3230,7 +3230,17 @@ public sealed class WmDaemon : IDisposable
             if (wmEvent is WindowStateChanged changed && _config.Effects.Enabled)
                 RefreshBorderFor((nint)changed.Window.Handle);
 
-            _ipc?.Publish(wmEvent.Topic, StateProjection.Payload(wmEvent, _wm));
+            // Asked before the payload is built, not after. Payload is a full JSON
+            // serialisation and it is an argument, so it used to run whether or not
+            // anybody was connected and whether or not anybody connected had asked for
+            // this topic - Publish only discovers there is nobody to send it to once
+            // the string already exists.
+            //
+            // Measured, this was the largest single allocator on the daemon thread: a
+            // p99 of about 64 KB per call, ahead of the layout pass. A workspace switch
+            // emits a dozen events.
+            if (_ipc is { } ipc && ipc.HasSubscribers(wmEvent.Topic))
+                ipc.Publish(wmEvent.Topic, StateProjection.Payload(wmEvent, _wm));
         }
 
         // Only when something can actually have moved.
