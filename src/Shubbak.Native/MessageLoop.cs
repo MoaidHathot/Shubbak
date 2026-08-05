@@ -43,7 +43,18 @@ public sealed class MessageLoop : IDisposable
 
     private uint _threadId;
     private volatile bool _running;
-    private bool _disposed;
+
+    /// <summary>
+    /// Set before <see cref="_wake"/> is disposed, so <see cref="Wake"/> mostly
+    /// avoids touching a disposed handle.
+    /// </summary>
+    /// <remarks>
+    /// Volatile because it is written on the thread calling <see cref="Dispose"/> and
+    /// read on the keyboard hook thread, which without it has no guarantee of ever
+    /// seeing the write. It narrows the window rather than closing it - see
+    /// <see cref="Wake"/> for why the check alone is not enough.
+    /// </remarks>
+    private volatile bool _disposed;
 
     /// <summary>Raised on each pass, after the queue has been emptied.</summary>
     public event Action? Tick;
@@ -120,13 +131,39 @@ public sealed class MessageLoop : IDisposable
     /// Wakes the pump. Safe to call from any thread, including a hook callback.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// One <c>SetEvent</c>, which does not allocate and returns in about a
     /// microsecond - within what ADR 0001 constraint 1 allows inside the keyboard
     /// hook, and the reason a keystroke no longer waits for a timer.
+    /// </para>
+    /// <para>
+    /// The catch is not defensive padding. This is reached from the keyboard hook -
+    /// <c>Callback</c> to <c>Enqueue</c> to <c>WorkQueued</c> to here - and the flag
+    /// check is check-then-act: a keystroke arriving while <see cref="Dispose"/> runs
+    /// can pass the check, lose the race, and call <c>Set</c> on a disposed handle.
+    /// The resulting <see cref="ObjectDisposedException"/> would leave a managed
+    /// exception propagating out of an <c>UnmanagedCallersOnly</c> callback into
+    /// Win32, which is a dead process rather than a lost keystroke.
+    /// </para>
+    /// <para>
+    /// So pressing a key at the moment the daemon shut down could crash it. Rare,
+    /// because the window is a few instructions wide - and shutdown is exactly when
+    /// somebody is holding the key combination that asked for it.
+    /// </para>
     /// </remarks>
     public void Wake()
     {
-        if (!_disposed) _wake.Set();
+        if (_disposed) return;
+
+        try
+        {
+            _wake.Set();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposal won the race. There is nothing left to wake, which is the
+            // outcome the caller wanted anyway.
+        }
     }
 
     /// <summary>

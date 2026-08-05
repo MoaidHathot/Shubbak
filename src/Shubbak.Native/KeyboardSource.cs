@@ -115,6 +115,20 @@ public sealed class KeyboardSource : IDisposable
     public long Dropped => Interlocked.Read(ref _dropped);
 
     /// <summary>
+    /// Times the hook callback threw and the keystroke was passed through.
+    /// </summary>
+    /// <remarks>
+    /// Should be zero forever. It is reported rather than merely counted because the
+    /// callback cannot log - it runs on the thread every keystroke on the machine
+    /// passes through, and building a string there is exactly what it may not do. A
+    /// non-zero value means a binding silently stopped working, which is otherwise
+    /// indistinguishable from having configured it wrong.
+    /// </remarks>
+    public long Faults => Interlocked.Read(ref _faults);
+
+    private long _faults;
+
+    /// <summary>
     /// Installs the hook on a dedicated thread and begins delivering keystrokes.
     /// </summary>
     /// <param name="probe">Decides which keystrokes are bound and get swallowed.</param>
@@ -237,8 +251,53 @@ public sealed class KeyboardSource : IDisposable
     /// <summary>
     /// THE HOT PATH. Must not allocate, lock, or call anything that can block.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Wrapped, because this is an <c>UnmanagedCallersOnly</c> callback: an exception
+    /// leaving it propagates into Win32 and the process dies. It was the only such
+    /// callback in the project without a guard, and the path to one was live rather
+    /// than theoretical - <see cref="Enqueue"/> raises <see cref="WorkQueued"/>, which
+    /// the daemon points at its message pump's <c>Wake</c>, which called <c>Set</c> on
+    /// an event that shutdown may already have disposed. Pressing a key while the
+    /// daemon was exiting could take the process down, and shutdown is precisely when
+    /// somebody is holding the combination that asked for it.
+    /// </para>
+    /// <para>
+    /// That path is fixed at its source. This is here because the hot path is the
+    /// wrong place to find out about the next one.
+    /// </para>
+    /// <para>
+    /// The failure behaviour is to pass the keystroke through. A binding that does not
+    /// fire is an irritation; a keystroke swallowed by a callback that is already
+    /// failing is a keyboard that has stopped working, with no way left to type the
+    /// combination that would stop the daemon.
+    /// </para>
+    /// <para>
+    /// The catch allocates nothing and takes no lock - an interlocked increment and a
+    /// return. Logging here would build a string on the thread every keystroke on the
+    /// machine passes through, which is the constraint this method exists under, so
+    /// the count is surfaced in <c>diagnose</c> instead. A fault nobody can see is
+    /// barely better than the crash.
+    /// </para>
+    /// </remarks>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static unsafe LRESULT Callback(int nCode, WPARAM wParam, LPARAM lParam)
+    {
+        try
+        {
+            return Dispatch(nCode, wParam, lParam);
+        }
+        catch
+        {
+            KeyboardSource? source = s_instance;
+            if (source is not null) Interlocked.Increment(ref source._faults);
+
+            return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+        }
+    }
+
+    /// <summary>The callback's body, separated so the guard around it stays legible.</summary>
+    private static unsafe LRESULT Dispatch(int nCode, WPARAM wParam, LPARAM lParam)
     {
         if (nCode < 0) return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
 

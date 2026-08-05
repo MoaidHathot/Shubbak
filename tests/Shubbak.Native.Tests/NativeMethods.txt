@@ -23,3 +23,12 @@ GetCurrentThreadId
 WM_QUIT
 PostMessage
 WM_CLOSE
+
+// Synthesising a keystroke, so the hook callback can be driven for real. The only
+// way to prove the guard around it survives a fault: without it the exception
+// leaves an UnmanagedCallersOnly callback and takes the test host with it.
+SendInput
+INPUT
+INPUT_TYPE
+KEYBD_EVENT_FLAGS
+VIRTUAL_KEY

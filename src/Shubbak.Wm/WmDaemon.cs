@@ -1449,6 +1449,14 @@ public sealed class WmDaemon : IDisposable
             $"- **Allocated per tick** (last {_tickAllocation.Count}): p50 {_tickAllocation.Percentile(0.5):F0} B, " +
             $"p99 {_tickAllocation.Percentile(0.99):F0} B, max {_tickAllocation.Max:F0} B all-time",
             $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
+
+            // Should be zero forever. Non-zero means the hook callback threw and the
+            // keystroke was passed through to the application instead of being acted
+            // on - a binding that silently stopped working, which from the outside is
+            // indistinguishable from having configured it wrong. The callback cannot
+            // log the fault itself without allocating on the thread every keystroke on
+            // the machine passes through, so it counts and this reports.
+            $"- **Hook faults**: {_keyboard?.Faults ?? 0}",
             $"- **Dropped log entries**: {Log.Dropped}",
             $"- **GC**: gen0 {GC.CollectionCount(0)}, gen1 {GC.CollectionCount(1)}, gen2 {GC.CollectionCount(2)}",
             $"- **Allocated**: {GC.GetTotalAllocatedBytes(precise: false) / (1024 * 1024)} MB",
