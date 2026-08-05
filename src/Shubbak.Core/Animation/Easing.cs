@@ -123,9 +123,11 @@ public readonly record struct Easing
     /// </summary>
     /// <remarks>
     /// A cubic bezier used for easing is parametric in both axes, so finding y for a
-    /// given x needs a solve. Newton-Raphson converges in three or four iterations
-    /// here, and the whole thing is branch-light and allocation-free because it runs
-    /// once per window per frame inside the tick loop
+    /// given x needs a solve. Newton-Raphson handles the well-behaved curves in three
+    /// or four iterations; the ones with a flat end - which includes ease-out, the
+    /// default for most motion - fall through to bisection instead. Either way the
+    /// whole thing is branch-light and allocation-free, because it runs once per window
+    /// per frame inside the tick loop
     /// (docs/adr/0001-language-choice.md, constraint 2).
     /// </remarks>
     public double Evaluate(double t)
@@ -157,10 +159,25 @@ public readonly record struct Easing
 
         // Fall back to bisection if Newton stalls, which can happen on curves with
         // a near-flat segment.
+        //
+        // "Can happen" understates it. Newton bails the moment the slope is flat, and
+        // x'(0) is 3*x1 while x'(1) is 3*(1-x2) - so any curve with a control point on
+        // the x axis at 0 or 1 has a genuinely flat end and lands here immediately.
+        // ease-out is (0, 0, 0.58, 1), which is the default for window moves, layout
+        // changes and workspace switches: the most-used curve in the project reaches
+        // bisection on every solve near the start of its travel.
         double low = 0, high = 1;
         u = x;
 
-        for (int i = 0; i < 12; i++)
+        // Twenty, not twelve. Each pass halves the bracket, so twelve bounds the answer
+        // at 2^-12, or 2.4e-4 - while the loop below compares against an epsilon of
+        // 1e-6 it could not reach in the iterations it was given. Measured, that showed
+        // up as a worst-case error of 2.7e-4 on ease-out and ease-in.
+        //
+        // The cost is nothing in the common case: the loop exits on the epsilon, so the
+        // extra passes are only spent when they are the difference between converging
+        // and stopping early.
+        for (int i = 0; i < 20; i++)
         {
             double value = Bezier(u, _x1, _x2);
             if (Math.Abs(value - x) < 1e-6) break;

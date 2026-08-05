@@ -151,7 +151,6 @@ internal struct Track
     public double Elapsed;
     public double Duration;
     public Easing Curve;
-    public bool Active;
 }
 
 /// <summary>A window's position for the current frame.</summary>
@@ -238,7 +237,6 @@ public sealed class AnimationEngine
         track.Elapsed = 0;
         track.Duration = profile.Duration.TotalMilliseconds;
         track.Curve = profile.Curve;
-        track.Active = true;
 
         return true;
     }
@@ -259,8 +257,12 @@ public sealed class AnimationEngine
         for (int i = 0; i < _count; i++)
         {
             ref Track track = ref _tracks[i];
-            if (!track.Active) continue;
 
+            // No liveness flag to check. There was one, set to true when a track was
+            // created and never set to anything else, so the guard here could not fail
+            // - a branch on every track on every frame, protecting against a state the
+            // engine has no way to produce. Tracks stop existing by being left out of
+            // the compaction below, not by being marked dead.
             track.Elapsed += deltaMilliseconds;
 
             double progress = track.Duration <= 0 ? 1 : Math.Clamp(track.Elapsed / track.Duration, 0, 1);
