@@ -455,21 +455,38 @@ public sealed class ConfigLoader
     }
 
     /// <summary>
-    /// Reads <c>fps</c>, refusing rates that cannot produce motion anyone can see.
+    /// Reads <c>fps</c>: a number, or <c>"auto"</c> to follow the display.
     /// </summary>
     /// <remarks>
-    /// Clamped rather than rejected, because a frame rate is a preference and a
-    /// configuration that is merely ambitious should still start. The warning says
-    /// what was used, so a rate that was silently ignored does not look like one that
-    /// was silently honoured.
+    /// Clamped rather than rejected when out of range, because a frame rate is a
+    /// preference and a configuration that is merely ambitious should still start. The
+    /// warning says what was used, so a rate that was silently ignored does not look
+    /// like one that was silently honoured.
     /// </remarks>
-    private int FramesPerSecond(KdlNode parent, int fallback)
+    private int? FramesPerSecond(KdlNode parent, int? fallback)
     {
         KdlNode? node = parent.Child("fps");
-        if (node is null) return fallback;
+        if (node is null || node.Arguments.Count == 0) return fallback;
 
-        if (node.Arguments.Count == 0 || !node.Arguments[0].TryAsInt(out int fps))
+        KdlValue argument = node.Arguments[0];
+
+        if (argument.Kind == KdlValueKind.Text &&
+            string.Equals(argument.StringValue, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (!argument.TryAsInt(out int fps))
+        {
+            Report(Diagnostic.Error(
+                "SHB0437",
+                "Animation 'fps' must be a number or \"auto\".",
+                argument.Span,
+                "Write fps \"auto\" to follow the display's refresh rate, which is the " +
+                "default, or a number such as fps 60 to override it."));
+
             return fallback;
+        }
 
         int clamped = Math.Clamp(
             fps,
@@ -483,7 +500,7 @@ public sealed class ConfigLoader
                 $"Animation 'fps' of {fps} is outside the supported range " +
                 $"{Core.Animation.AnimationOptions.MinimumFps}-" +
                 $"{Core.Animation.AnimationOptions.MaximumFps}; {clamped} will be used.",
-                node.Arguments[0].Span,
+                argument.Span,
                 "Below the minimum the motion reads as a series of jumps. Above the " +
                 "maximum the frames are asked for faster than any panel shows them or " +
                 "any application repaints them, so the work is done and then discarded."));

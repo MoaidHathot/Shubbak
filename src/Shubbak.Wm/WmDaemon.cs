@@ -461,16 +461,36 @@ public sealed class WmDaemon : IDisposable
         TimeSpan.FromMilliseconds(Math.Max(0, frameMs - sinceLastFrameMs));
 
     /// <summary>
-    /// How long one animation frame lasts, from configuration.
+    /// How long one animation frame lasts.
     /// </summary>
     /// <remarks>
-    /// Was a fixed 7 ms - "roughly 144 Hz, the rate ADR 0001 gates the animation path
-    /// on" - which conflated the rate the design was <i>proved sound at</i> with the
-    /// rate it should <i>ask for</i>. The first measurement of the shipping binary
-    /// found it delivering about 100 Hz regardless, and the frames it did deliver were
-    /// arriving faster than the applications being moved could repaint.
+    /// <para>
+    /// The display's refresh rate unless the configuration names a number. Was a fixed
+    /// 7 ms - "roughly 144 Hz, the rate ADR 0001 gates the animation path on" - which
+    /// conflated the rate the design was <i>proved sound at</i> with the rate it should
+    /// <i>ask for</i>, and then a configured constant, which moved the guess from the
+    /// program to the user without making it any better informed.
+    /// </para>
+    /// <para>
+    /// Neither could know what the panel does. Asking is one call, and the answer
+    /// changes when a monitor is plugged in or a refresh rate switched, which is why it
+    /// is re-read by the monitor sync rather than once at startup.
+    /// </para>
     /// </remarks>
-    private TimeSpan FrameInterval => _config.Animation.FramePeriod;
+    private TimeSpan FrameInterval =>
+        AnimationOptions.PeriodFor(_config.Animation.FramesPerSecond ?? _displayHz);
+
+    /// <summary>
+    /// The refresh rate frames are paced to when the configuration does not say.
+    /// </summary>
+    /// <remarks>
+    /// The fastest display attached, not the slowest and not the focused one. One
+    /// clock has to serve every monitor, and pacing to the slowest starves the fastest
+    /// of frames it could have shown, whereas pacing to the fastest only ever offers
+    /// the slower panel frames its compositor discards. Overshooting wastes work;
+    /// undershooting loses motion that cannot be recovered.
+    /// </remarks>
+    private int _displayHz = AnimationOptions.FallbackFps;
 
     /// <summary>
     /// The longest the loop sits idle before looking around on its own.
@@ -1584,10 +1604,17 @@ public sealed class WmDaemon : IDisposable
             $"- **Enabled**: {_config.Animation.Enabled}" +
             $"{(_config.Animation.AnimateNewWindows ? ", including new windows" : "")}",
 
+            // What the system says, separately from what the configuration says,
+            // because either one saying no is a no and a single combined "False" would
+            // send someone to edit a file that was never the reason.
+            $"- **System allows animation**: {_systemWantsAnimation}" +
+            $"{(_isRemoteSession ? " (but this is a remote session, so motion is off)" : "")}",
+
             $"- **Asking for**: {FrameInterval.TotalMilliseconds:F2} ms " +
             $"(~{(FrameInterval.TotalMilliseconds > 0 ? 1000.0 / FrameInterval.TotalMilliseconds : 0):F0} Hz), " +
-            $"from `animation {{ fps {_config.Animation.FramesPerSecond} }}` - " +
-            "not derived from any monitor's refresh rate",
+            $"{(_config.Animation.FramesPerSecond is { } fixedFps
+                ? $"from `animation {{ fps {fixedFps} }}`"
+                : $"from the fastest display attached ({_displayHz} Hz)")}",
 
             $"- **Frame interval** (last {_frameInterval.Count}, animating only): " +
             $"p50 {p50:F2} ms, p99 {_frameInterval.Percentile(0.99):F2} ms, " +
@@ -2566,8 +2593,79 @@ public sealed class WmDaemon : IDisposable
         // of the process is the same waste SettleWorkArea already avoids.
         IReadOnlyList<MonitorInfo> monitors = MonitorSource.Enumerate();
 
+        // Re-read here rather than once at startup, because both answers change while
+        // the program runs: a monitor is plugged in, a refresh rate is switched, a
+        // laptop panel drops to 60 on battery, or the user turns animations off in
+        // Accessibility while wondering why this one ignores them.
+        RefreshDisplayPreferences(monitors);
+
         if (MonitorLayoutChanged(monitors)) SyncMonitors(monitors);
     }
+
+    /// <summary>
+    /// Re-reads what the display and the system say about animating.
+    /// </summary>
+    private void RefreshDisplayPreferences(IReadOnlyList<MonitorInfo> monitors)
+    {
+        int fastest = 0;
+
+        foreach (MonitorInfo monitor in monitors)
+            fastest = Math.Max(fastest, DisplayPreferences.RefreshRateHz(monitor.DeviceId));
+
+        _displayHz = fastest > 0 ? fastest : AnimationOptions.FallbackFps;
+
+        _systemWantsAnimation = DisplayPreferences.SystemWantsAnimation();
+        _isRemoteSession = DisplayPreferences.IsRemoteSession();
+
+        ApplySystemAnimationPreference();
+    }
+
+    /// <summary>
+    /// Tells the engine whether the system is willing to have anything animated.
+    /// </summary>
+    /// <remarks>
+    /// Pushed into the engine's own options rather than checked at each call site, so
+    /// there is one place that decides and no path that can forget to ask. Anything
+    /// already moving is stopped, for the same reason a reload that turns animation off
+    /// stops it: leaving in-flight motion running means the setting appears not to have
+    /// worked.
+    /// </remarks>
+    private void ApplySystemAnimationPreference()
+    {
+        bool wanted = ShouldAnimate;
+
+        if (_animation.Options.Enabled == wanted) return;
+
+        _animation.Options = _animation.Options with { Enabled = wanted };
+
+        if (!wanted) _animation.Clear();
+
+        Log.Info(
+            LogCategory.Wm,
+            wanted
+                ? "animation enabled"
+                : $"animation disabled: {(_isRemoteSession ? "remote session" : "the system has animations turned off")}");
+    }
+
+    /// <summary>
+    /// Whether the user has left animations switched on in Windows.
+    /// </summary>
+    /// <remarks>
+    /// Combined with the configured setting rather than replacing it, because they
+    /// answer different questions: the configuration says what this program should do,
+    /// and this says what the person using the machine already asked every program to
+    /// do. Either one saying no is a no.
+    /// </remarks>
+    private bool _systemWantsAnimation = true;
+
+    /// <summary>Whether the session is being viewed over a remote connection.</summary>
+    private bool _isRemoteSession;
+
+    /// <summary>
+    /// Whether motion should be animated at all, taking the system into account.
+    /// </summary>
+    private bool ShouldAnimate =>
+        _config.Animation.Enabled && _systemWantsAnimation && !_isRemoteSession;
 
     /// <summary>
     /// Whether an already-read monitor list differs from the tree.
@@ -2929,6 +3027,13 @@ public sealed class WmDaemon : IDisposable
         // the layout dirty, so the windows are placed at their targets on the next pass
         // rather than left wherever the motion had reached.
         if (!_config.Animation.Enabled) _animation.Clear();
+
+        // Re-applied after the options were replaced, because assigning them wholesale
+        // has just discarded whatever the system said. A reload while animations are
+        // switched off in Windows, or while connected over remote desktop, would
+        // otherwise turn them back on until the next monitor sync noticed.
+        ApplySystemAnimationPreference();
+
         _committer.HideMethod = _config.HideMethod;
         _committer.KeepInTaskbar = _config.KeepInTaskbar;
 

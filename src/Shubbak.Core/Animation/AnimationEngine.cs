@@ -61,35 +61,37 @@ public sealed record AnimationOptions
     public bool AnimateNewWindows { get; init; }
 
     /// <summary>
-    /// How many frames a second the daemon aims to commit while anything is moving.
+    /// How many frames a second to aim for, or null to follow the display.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Sixty, not the panel's refresh rate, and deliberately lower than the 143 this
-    /// used to be fixed at. A window manager does not paint anything: it repositions
-    /// windows and each application repaints itself, on its own thread, at whatever
-    /// rate it can manage. Asking for more frames does not buy smoother motion past
-    /// the point where applications keep up - it just asks them to discard and redraw
-    /// their contents more often, and the ones that cannot fall behind and show bare
-    /// background where their content should be.
+    /// Null by default, meaning the refresh rate of the display being animated on.
+    /// Every other answer is a guess about hardware the program can simply ask about,
+    /// and the guess is wrong in both directions: on a sixty hertz panel, asking for
+    /// ninety means half as many frames again as the display can present, discarded by
+    /// the compositor after the applications have already been told to repaint; on a
+    /// faster panel a fixed sixty delivers a fraction of what the panel would take.
     /// </para>
     /// <para>
-    /// At 143 the daemon was measured delivering 13 to 16 frames in a 140 ms motion -
-    /// about 100 Hz - so sixty costs far less in practice than the numbers suggest
-    /// while nearly halving the repaint load on every window being moved. komorebi
-    /// defaults to the same sixty and documents the same artifact as a known
-    /// limitation.
+    /// A window manager does not paint anything. It repositions windows, and each
+    /// application repaints itself on its own thread at whatever rate it can manage -
+    /// so past the point where they keep up, more frames buy nothing and cost repaints.
+    /// The display's own rate is the one number that is neither a guess nor an
+    /// ambition.
     /// </para>
     /// <para>
-    /// Raise it if your applications keep up and you want the motion finer; the cost
-    /// is CPU in this process and repaint pressure in theirs.
+    /// Set a number to override, which is worth doing on a very fast panel where the
+    /// applications, not the display, are the limit.
     /// </para>
     /// </remarks>
-    public int FramesPerSecond { get; init; } = 60;
+    public int? FramesPerSecond { get; init; }
 
-    /// <summary>How long one frame lasts, derived from <see cref="FramesPerSecond"/>.</summary>
-    public TimeSpan FramePeriod =>
-        TimeSpan.FromMilliseconds(1000.0 / Math.Clamp(FramesPerSecond, MinimumFps, MaximumFps));
+    /// <summary>The rate to use when the display cannot be asked.</summary>
+    public const int FallbackFps = 60;
+
+    /// <summary>How long one frame lasts at a given rate.</summary>
+    public static TimeSpan PeriodFor(int framesPerSecond) =>
+        TimeSpan.FromMilliseconds(1000.0 / Math.Clamp(framesPerSecond, MinimumFps, MaximumFps));
 
     /// <summary>
     /// Below this the motion reads as a series of jumps rather than movement.

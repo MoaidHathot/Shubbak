@@ -143,3 +143,12 @@ PROCESS_POWER_THROTTLING_STATE
 PROCESS_POWER_THROTTLING_CURRENT_VERSION
 PROCESS_POWER_THROTTLING_EXECUTION_SPEED
 GetCurrentProcess
+
+// --- asking the system what it wants -----------------------------------------------
+SystemParametersInfo
+SYSTEM_PARAMETERS_INFO_ACTION
+GetSystemMetrics
+SYSTEM_METRICS_INDEX
+EnumDisplaySettings
+DEVMODEW
+ENUM_DISPLAY_SETTINGS_MODE
