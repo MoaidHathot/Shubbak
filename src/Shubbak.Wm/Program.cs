@@ -1,6 +1,7 @@
 using System.Runtime;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
+using Shubbak.Native;
 
 namespace Shubbak.Wm;
 
@@ -23,6 +24,17 @@ internal static class Program
         // latency trades a little memory for shorter pauses, which is the right way
         // round for something that sits between the user and every keypress.
         GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+
+        // Same argument, applied to the scheduler rather than the collector. A
+        // long-lived process with low average CPU is exactly what Windows moves onto
+        // efficiency cores and throttles under EcoQoS - a good default for a daemon,
+        // and the wrong one for a daemon holding a keyboard hook with a 300 ms
+        // deadline before the system silently unhooks it.
+        //
+        // Reported by `diagnose` rather than applied silently, because it trades
+        // power for punctuality and that is a trade someone on a laptop may want to
+        // know about.
+        PowerThrottling.OptOut();
 
         string? configPath = ResolveConfigPath(args);
 

@@ -105,6 +105,43 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private readonly LatencyStats _tickAllocation = new(4096, "tick allocation");
 
+    /// <summary>
+    /// Bytes allocated by each part of the tick, so the total can be attributed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The whole-tick figure said p50 0 B and p99 about 49 KB, which established
+    /// that the tick allocates in bursts and nothing else. Three candidates fit that
+    /// shape equally well - the layout pass, which builds arrays per container; the
+    /// event drain, which serialises a JSON payload per published event; and the log
+    /// calls, which build a string per keystroke because the ring's threshold sits a
+    /// level below the sink's and quietly makes <c>IsEnabled(Debug)</c> true.
+    /// </para>
+    /// <para>
+    /// Splitting the measurement is cheaper than arguing about it. Each of these is
+    /// two thread-local reads, and knowing which one it is decides whether the
+    /// logging threshold is worth changing at all.
+    /// </para>
+    /// </remarks>
+    private readonly LatencyStats _drainAllocation = new(4096, "drain allocation");
+
+    private readonly LatencyStats _layoutAllocation = new(4096, "layout allocation");
+
+    private readonly LatencyStats _frameAllocation = new(4096, "frame allocation");
+
+    /// <summary>
+    /// Bytes allocated publishing state to IPC subscribers.
+    /// </summary>
+    /// <remarks>
+    /// Counted apart from the drain it happens inside, because the drain has three
+    /// suspects and they want different fixes. This one is
+    /// <c>StateProjection.Payload</c>, a full JSON serialisation per event, evaluated
+    /// as an argument and so built whether or not anyone is subscribed to the topic.
+    /// What is left of the drain once this is subtracted is the log strings and the
+    /// event handling itself.
+    /// </remarks>
+    private readonly LatencyStats _publishAllocation = new(4096, "publish allocation");
+
     /// <summary>Wall-clock milliseconds spent with something in motion.</summary>
     private double _animatingMs;
 
@@ -508,15 +545,21 @@ public sealed class WmDaemon : IDisposable
             // begins and ends inside this tick is still recognised as one.
             bool wasAnimating = _animation.IsAnimating;
 
+            long beforeDrain = GC.GetAllocatedBytesForCurrentThread();
+
             DrainKeyboard();
             DrainWindowEvents();
             DrainInbox();
+
+            _drainAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeDrain);
 
             // Paused means the daemon keeps its hands off the desktop. The flag is left
             // set, so everything that accumulated while paused is applied in a single
             // pass on resuming rather than being lost.
             if (_layoutDirty && !_wm.IsPaused)
             {
+                long beforeLayout = GC.GetAllocatedBytesForCurrentThread();
+
                 // Cleared only once the pass has finished. Clearing first meant a
                 // throw left the desktop in whatever half-applied state the exception
                 // produced, with nothing to retry it until some unrelated event
@@ -525,6 +568,8 @@ public sealed class WmDaemon : IDisposable
                 // stutter that set is there to avoid.
                 ApplyLayout();
                 _layoutDirty = false;
+
+                _layoutAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeLayout);
             }
 
             // Counted here rather than in Retarget: a layout pass retargets many
@@ -532,7 +577,14 @@ public sealed class WmDaemon : IDisposable
             bool started = !wasAnimating && _animation.IsAnimating;
             if (started) _animationsStarted++;
 
-            if (_animation.IsAnimating) MaybeAdvanceFrame(now);
+            if (_animation.IsAnimating)
+            {
+                long beforeFrame = GC.GetAllocatedBytesForCurrentThread();
+
+                MaybeAdvanceFrame(now);
+
+                _frameAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeFrame);
+            }
 
             // Reported once per motion, not once per frame - an instrument that logs
             // at frame rate becomes the thing it is measuring.
@@ -1448,7 +1500,28 @@ public sealed class WmDaemon : IDisposable
 
             $"- **Allocated per tick** (last {_tickAllocation.Count}): p50 {_tickAllocation.Percentile(0.5):F0} B, " +
             $"p99 {_tickAllocation.Percentile(0.99):F0} B, max {_tickAllocation.Max:F0} B all-time",
+
+            // Split so the total can be attributed. Bursty allocation on this thread
+            // fits the layout pass, the event drain and the log calls equally well, and
+            // a figure that cannot say which is not worth optimising against.
+            $"  - drain p99 {_drainAllocation.Percentile(0.99):F0} B, max {_drainAllocation.Max:F0} B " +
+            $"({_drainAllocation.Count} samples), of which publish p99 " +
+            $"{_publishAllocation.Percentile(0.99):F0} B, max {_publishAllocation.Max:F0} B " +
+            $"({_publishAllocation.Count} calls)",
+            $"  - layout p99 {_layoutAllocation.Percentile(0.99):F0} B, max {_layoutAllocation.Max:F0} B " +
+            $"({_layoutAllocation.Count} passes)",
+            $"  - frame p99 {_frameAllocation.Percentile(0.99):F0} B, max {_frameAllocation.Max:F0} B " +
+            $"({_frameAllocation.Count} frames)",
             $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
+
+            // A process-level fact, so it belongs here rather than beside the animation
+            // figures - where it was first put, and where nobody saw it, because that
+            // whole section is skipped until something has moved. On a hybrid CPU the
+            // alternative to opting out is efficiency cores and a capped clock, which
+            // no measurement of the work itself can see: it shows up only as waking
+            // late, which is what the overshoot figures above measure.
+            $"- **Power throttling opted out**: {PowerThrottling.IsOptedOut}" +
+            $"{(PowerThrottling.Failure is { } why ? $" ({why})" : "")}",
 
             // Should be zero forever. Non-zero means the hook callback threw and the
             // keystroke was passed through to the application instead of being acted
@@ -3057,6 +3130,20 @@ public sealed class WmDaemon : IDisposable
     {
         if (result.Events.Count == 0) return;
 
+        long beforePublish = GC.GetAllocatedBytesForCurrentThread();
+
+        try
+        {
+            PublishCore(result);
+        }
+        finally
+        {
+            _publishAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforePublish);
+        }
+    }
+
+    private void PublishCore(WmResult result)
+    {
         // Corrected after the batch rather than inside it, so the state machine is not
         // mutated while its own events are being walked.
         bool undeclaredMode = false;

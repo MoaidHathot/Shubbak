@@ -135,3 +135,11 @@ QUEUE_STATUS_FLAGS
 MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS
 timeBeginPeriod
 timeEndPeriod
+
+// --- opting out of background power throttling -------------------------------------
+SetProcessInformation
+PROCESS_INFORMATION_CLASS
+PROCESS_POWER_THROTTLING_STATE
+PROCESS_POWER_THROTTLING_CURRENT_VERSION
+PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+GetCurrentProcess
