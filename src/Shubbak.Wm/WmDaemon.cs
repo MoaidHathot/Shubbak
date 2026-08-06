@@ -1541,7 +1541,16 @@ public sealed class WmDaemon : IDisposable
             // no measurement of the work itself can see: it shows up only as waking
             // late, which is what the overshoot figures above measure.
             $"- **Power throttling opted out**: {PowerThrottling.IsOptedOut}" +
-            $"{(PowerThrottling.Failure is { } why ? $" ({why})" : "")}",
+            $"{(PowerThrottling.OptOutFailure is { } why ? $" ({why})" : "")}",
+
+            // The setting that decides whether holding a fine timer means anything at
+            // all. Since Windows 11 a process with no visible window gets no
+            // resolution guarantee unless it asks for one explicitly, and nothing
+            // else reveals whether it did: `timeBeginPeriod` reports success either
+            // way. False here means the frame interval below is capped near 46 Hz no
+            // matter what the animation section claims to be asking for.
+            $"- **Honors timer resolution**: {PowerThrottling.HonorsTimerResolution}" +
+            $"{(PowerThrottling.TimerResolutionFailure is { } timerWhy ? $" ({timerWhy})" : "")}",
 
             // Should be zero forever. Non-zero means the hook callback threw and the
             // keystroke was passed through to the application instead of being acted
@@ -1617,6 +1626,12 @@ public sealed class WmDaemon : IDisposable
                 ? $"from `animation {{ fps {fixedFps} }}`"
                 : $"from the fastest display attached ({_displayHz} Hz)")}",
 
+            // Reports what `timeBeginPeriod` returned, not what Windows honoured.
+            // Those came apart once already and cost a long time to find: the call
+            // succeeds for a windowless process, so this reads True while waits
+            // overshoot by thirteen milliseconds. `Honors timer resolution` above is
+            // what makes it meaningful, and the p10 overshoot below is what proves
+            // it. Do not read this line on its own.
             $"- **Fine timer held while animating**: {_fineTimerHeldWhileAnimating}",
         };
 
@@ -1638,8 +1653,15 @@ public sealed class WmDaemon : IDisposable
 
             $"- **Motions**: {_animationsStarted}",
 
+            // p10 is here to separate two faults that p50 reports identically. If the
+            // best tenth of waits land inside a millisecond, the timer granularity is
+            // fine and anything worse is the scheduler being busy - a load problem.
+            // If even the best waits overshoot by ten or more, the granularity itself
+            // is coarse, every frame is late by construction, and no amount of idle
+            // CPU will help. Only the second one is worth changing code over.
             $"- **Wake overshoot while pacing** (last {_loop.WakeOvershootPacing.Count}, " +
-            $"timed-out waits only): p50 {_loop.WakeOvershootPacing.Percentile(0.5):F2} ms, " +
+            $"timed-out waits only): p10 {_loop.WakeOvershootPacing.Percentile(0.1):F2} ms, " +
+            $"p50 {_loop.WakeOvershootPacing.Percentile(0.5):F2} ms, " +
             $"p99 {_loop.WakeOvershootPacing.Percentile(0.99):F2} ms, " +
             $"max {_loop.WakeOvershootPacing.Max:F2} ms all-time",
 
