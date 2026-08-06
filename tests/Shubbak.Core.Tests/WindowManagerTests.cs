@@ -181,6 +181,84 @@ public sealed class WindowManagerTests
     }
 
     [Fact]
+    public void CrossingOntoAnEmptyMonitorLeavesFocusRecoverable()
+    {
+        // The reported failure. Moving a window off a monitor and then focusing onto
+        // the monitor just emptied cleared focus, and since every direction command
+        // navigates *from* a focused window, nothing on the keyboard could get it
+        // back - only a mouse click, which is a foreground change the daemon listens
+        // for. A real session sat like this for fourteen seconds.
+        WindowManager wm = WmFixture.Create(monitors: 2, workspaceNames: "1");
+        MonitorNode second = wm.Root.Monitors[1];
+        wm.AddWorkspace(new WorkspaceNode("2"), second);
+
+        WindowNode onFirst = wm.Open("left");
+        wm.Arrange();
+        wm.FocusWindow(onFirst);
+
+        // Crossing onto an empty monitor is allowed: it is how you aim the next
+        // window at an empty screen when new windows follow focus.
+        Assert.True(wm.FocusDirection(Direction.Right).Succeeded);
+        Assert.Null(wm.FocusedWindow);
+        Assert.Same(second, wm.FocusedMonitor);
+
+        // What matters is that it is not a one-way trip.
+        Assert.True(wm.FocusDirection(Direction.Left).Succeeded);
+        Assert.Same(onFirst, wm.FocusedWindow);
+    }
+
+    [Fact]
+    public void FocusDirectionLandsOnTheCurrentWorkspaceBeforeMoving()
+    {
+        // With focus cleared but windows still present, the first keypress should put
+        // the border back rather than send focus to another monitor. Moving is what
+        // the second press is for.
+        WindowManager wm = WmFixture.Create(monitors: 2, workspaceNames: "1");
+        wm.AddWorkspace(new WorkspaceNode("2"), wm.Root.Monitors[1]);
+
+        WindowNode a = wm.Open("a");
+        wm.Arrange();
+        wm.FocusWindow(null);
+
+        Assert.True(wm.FocusDirection(Direction.Right).Succeeded);
+        Assert.Same(a, wm.FocusedWindow);
+    }
+
+    [Fact]
+    public void FocusDirectionStillRejectsWhenThereIsNowhereToGo()
+    {
+        // Nothing focused, nothing to land on, no monitor that way. Recovery must not
+        // turn this into a false success - the rejection is what tells the user the
+        // keybinding is working and the layout is empty.
+        WindowManager wm = WmFixture.Create();
+        wm.FocusWindow(null);
+
+        WmResult result = wm.FocusDirection(Direction.Right);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(result.RejectionReason);
+    }
+
+    [Fact]
+    public void ClosingTheLastTiledWindowFallsBackToAFloatingOne()
+    {
+        // Same dead end reached a different way. Every scan in SuccessorFor filtered
+        // on IsTiled, so a workspace whose only remaining window was floating (or
+        // fullscreen, or maximised) yielded nothing and focus was cleared - which is
+        // what closing a window beside a fullscreen meeting would do.
+        WindowManager wm = WmFixture.Create();
+        WindowNode floating = wm.Open("floating");
+        wm.SetWindowState(floating, WindowState.Floating);
+
+        WindowNode tiled = wm.Open("tiled");
+        wm.FocusWindow(tiled);
+
+        wm.UnmanageWindow(tiled);
+
+        Assert.Same(floating, wm.FocusedWindow);
+    }
+
+    [Fact]
     public void FocusingAWindowOnAHiddenWorkspaceActivatesThatWorkspace()
     {
         WindowManager wm = WmFixture.Create(workspaceNames: ["1", "2"]);

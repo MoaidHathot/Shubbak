@@ -1,3 +1,4 @@
+using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Layouts;
 using Shubbak.Core.Tree;
@@ -538,7 +539,7 @@ public sealed class WindowManager
     public WmResult FocusDirection(Direction direction)
     {
         if (FocusedWindow is not { } from)
-            return Reject("focus", "No focused window.");
+            return FocusFromNothing(direction);
 
         if (FocusNavigator.Navigate(from, direction) is { } target)
         {
@@ -549,12 +550,62 @@ public sealed class WindowManager
         // Nothing that way within the workspace, so try the adjacent monitor. This
         // is the command layer's decision rather than the navigator's, because it
         // depends on monitor geometry and activates a workspace.
-        if (from.Monitor is { } monitor &&
+        return CrossToMonitor(from.Monitor, from.Rect, direction);
+    }
+
+    /// <summary>
+    /// Moves focus in a direction when nothing is focused.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Focus can legitimately be nothing. Crossing onto a monitor whose active
+    /// workspace is empty leaves it that way, and so does closing the last window
+    /// a workspace had. Without this the only way back is the mouse: every
+    /// direction command needs a focused window to navigate from, and the daemon
+    /// only pulls the system's idea of focus back in when the foreground window
+    /// *changes*, which pressing a key does not do. That combination stranded a
+    /// real session for fourteen seconds.
+    /// </para>
+    /// <para>
+    /// Landing on the current workspace is tried before moving, so the first
+    /// keypress puts the border back rather than sending focus somewhere the user
+    /// did not ask for. Only when there is nothing here to land on does the
+    /// direction get used, which is what makes an empty monitor a place you can
+    /// leave as well as arrive at.
+    /// </para>
+    /// </remarks>
+    private WmResult FocusFromNothing(Direction direction)
+    {
+        if (FocusedWorkspace is { } workspace &&
+            FocusPolicy.OnWorkspaceActivated(workspace) is { } landing)
+        {
+            SetFocus(landing);
+            return Complete();
+        }
+
+        if (FocusedMonitor is { } monitor)
+            return CrossToMonitor(monitor, monitor.Bounds, direction);
+
+        return Reject("focus", "No focused window.");
+    }
+
+    /// <summary>
+    /// Moves focus to the monitor in a direction, if there is one.
+    /// </summary>
+    /// <remarks>
+    /// Shared by the two ways of arriving here so that crossing from a window and
+    /// crossing from an empty monitor use the same geometry. The landing window may
+    /// be null when the destination workspace is empty; that is allowed, and
+    /// <see cref="FocusFromNothing"/> is what makes it recoverable.
+    /// </remarks>
+    private WmResult CrossToMonitor(MonitorNode? monitor, Rect origin, Direction direction)
+    {
+        if (monitor is not null &&
             Root.MonitorInDirection(monitor, direction) is { } neighbour &&
             neighbour.ActiveWorkspace is { } workspace)
         {
             FocusedMonitor = neighbour;
-            SetFocus(FocusPolicy.NearestTo(workspace, from.Rect));
+            SetFocus(FocusPolicy.NearestTo(workspace, origin));
             return Complete();
         }
 
@@ -1390,6 +1441,14 @@ public sealed class WindowManager
         {
             workspace.LastFocused = window;
             if (workspace.Monitor is { } monitor) FocusedMonitor = monitor;
+        }
+        else if (window is null)
+        {
+            // Worth a line, because losing focus is otherwise invisible. A command
+            // that clears it still reports success, so the log showed a focus
+            // keybinding working normally and then every later command refusing,
+            // with nothing in between to connect the two.
+            Log.Debug(LogCategory.Wm, "focus cleared");
         }
 
         Emit(new WindowFocused(window, previous));

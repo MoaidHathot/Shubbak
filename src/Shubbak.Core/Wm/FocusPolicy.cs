@@ -31,7 +31,8 @@ public static class FocusPolicy
     /// the answer depends on its position among its siblings.
     /// </param>
     /// <returns>
-    /// The successor, or <see langword="null"/> when the workspace will be empty.
+    /// The successor, or <see langword="null"/> when nothing focusable remains on
+    /// the workspace.
     /// </returns>
     public static WindowNode? SuccessorFor(WindowNode leaving)
     {
@@ -62,12 +63,21 @@ public static class FocusPolicy
             current = parent;
         }
 
-        // Last resort: anything still tiled on the workspace. Reached only when the
-        // tree shape is unusual, e.g. the window was inside a container whose other
+        // Last resort: anything still on the workspace. Reached only when the tree
+        // shape is unusual, e.g. the window was inside a container whose other
         // children are all floating.
-        return leaving.Workspace?
+        //
+        // Tiled first, then anything not minimised - the same two tiers as
+        // OnWorkspaceActivated, and for the same reason. Filtering this on IsTiled
+        // alone meant that closing the last tiled window beside a fullscreen or
+        // floating one returned nothing, focus was cleared, and the keyboard had no
+        // way to get it back.
+        List<WindowNode> remaining = [.. leaving.Workspace?
             .DescendantWindows()
-            .FirstOrDefault(w => w.IsTiled && !ReferenceEquals(w, leaving));
+            .Where(w => !ReferenceEquals(w, leaving) && w.State != WindowState.Minimised)
+            ?? []];
+
+        return remaining.FirstOrDefault(w => w.IsTiled) ?? remaining.FirstOrDefault();
     }
 
     /// <summary>
