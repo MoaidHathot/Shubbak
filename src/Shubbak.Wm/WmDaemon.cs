@@ -209,6 +209,18 @@ public sealed class WmDaemon : IDisposable
     /// <summary>Reused across frames so committing never allocates either.</summary>
     private readonly List<Placement> _commitScratch = [];
 
+    /// <summary>
+    /// Placements held back until the motion covering them lands.
+    /// </summary>
+    /// <remarks>
+    /// The whole placement, not just the handle, because a window leaving the screen
+    /// is both hidden and positioned and the rectangle has to survive the wait.
+    /// Re-checked against the registry when it runs, so a window released mid-flight
+    /// is simply not found and left alone rather than cloaked after Shubbak has
+    /// stopped managing it.
+    /// </remarks>
+    private readonly List<Placement> _deferredConceal = [];
+
     private IpcServer? _ipc;
 
     /// <summary>
@@ -615,6 +627,10 @@ public sealed class WmDaemon : IDisposable
             // next motion reported.
             if ((wasAnimating || started) && !_animation.IsAnimating)
             {
+                // The windows the motion was travelling to cover go now, one frame
+                // after it landed rather than one frame before it set off.
+                FlushDeferredConceal();
+
                 // Cleared so the next motion's first frame is emitted immediately
                 // rather than waiting out a frame interval measured from the previous
                 // motion, which could have ended minutes ago.
@@ -2392,9 +2408,12 @@ public sealed class WmDaemon : IDisposable
 
         _commitScratch.Clear();
 
-        ConcealOutgoing(placements);
+        // Visible windows first, because scheduling them is what starts a motion and
+        // whether one started decides what happens to the windows that are leaving.
+        foreach (Placement placement in placements)
+            if (placement.Visible) Schedule(placement, movementKind);
 
-        foreach (Placement placement in placements) Schedule(placement, movementKind);
+        ConcealOutgoing(placements);
 
         CommitScheduled(placements.Count);
         TraceLayout(placements);
@@ -2403,23 +2422,119 @@ public sealed class WmDaemon : IDisposable
         ApplyFocusBorder(geometryChanged: true);
     }
 
-    /// <summary>Takes every window that should be off screen off it, before anything is shown.</summary>
+    /// <summary>Takes every window that should be off screen off it.</summary>
     /// <remarks>
-    /// Revealing as we went meant the incoming workspace was on screen while the
-    /// outgoing one still was, so a switch showed both at once for a frame - two sets
-    /// of windows overlapping, which is the moment the user notices and the hardest
-    /// one to photograph.
+    /// <para>
+    /// Concealment is not a separate call: <c>Commit</c> hides any placement marked
+    /// invisible, and does it in the same transaction that positions it. So the way
+    /// to delay a window leaving the screen is to hold its placement back, not to
+    /// hold back a conceal - which is why an earlier attempt at this that only moved
+    /// the explicit <c>Conceal</c> changed nothing at all. The commit was doing it.
+    /// </para>
+    /// <para>
+    /// Immediately when the pass starts no motion, because revealing the arriving
+    /// workspace while the departing one was still up showed both at once for a
+    /// frame - two sets of windows overlapping, which is the moment the user notices
+    /// and the hardest one to photograph.
+    /// </para>
+    /// <para>
+    /// Held back when the pass did start one, because then both being on screen is
+    /// the animation rather than an artifact of it. Moving a workspace to the other
+    /// monitor animates its windows across; hiding the workspace they are coming to
+    /// cover at the start of that left the destination bare for the whole flight, so
+    /// the arriving window slid onto empty desktop instead of over the windows it was
+    /// replacing. A hundred and twenty milliseconds, and clearly wrong to look at.
+    /// </para>
+    /// <para>
+    /// The list is replaced rather than added to, so a later pass that decides one of
+    /// these should stay after all simply drops it.
+    /// </para>
     /// </remarks>
     private void ConcealOutgoing(IReadOnlyList<Placement> placements)
     {
+        _deferredConceal.Clear();
+
+        bool animating = _animation.IsAnimating;
+        int outgoing = 0;
+
         foreach (Placement placement in placements)
         {
             if (placement.Visible) continue;
 
+            outgoing++;
+
+            // Leaving, so it stops travelling wherever it was going: a window sliding
+            // towards a rectangle nobody will see is wasted work.
             _animation.Remove(placement.Window.Handle);
-            _committer.Conceal((nint)placement.Window.Handle);
+
+            if (animating)
+                _deferredConceal.Add(placement);
+            else
+                _commitScratch.Add(placement);
+        }
+
+        // Which branch was taken is invisible in the result - the same window ends up
+        // hidden either way, a tenth of a second apart - and telling them apart from
+        // the log is what this bug needed twice.
+        if (outgoing > 0 && Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.Debug(LogCategory.Layout,
+                $"conceal {(animating ? "deferred" : "now")} for {outgoing} window(s)");
         }
     }
+
+    /// <summary>Takes the windows a finished motion was covering off screen.</summary>
+    /// <remarks>
+    /// Re-checked against the tree rather than trusted, because the motion may have
+    /// run for several frames and a window that was leaving when it started can have
+    /// been focused, moved or released since. The deferred list says what to look at,
+    /// not what to do.
+    /// </remarks>
+    private void FlushDeferredConceal()
+    {
+        if (_deferredConceal.Count == 0) return;
+
+        foreach (Placement placement in _deferredConceal)
+        {
+            nint handle = (nint)placement.Window.Handle;
+            WindowNode? window = _windows.TryGet(handle, out WindowNode? found) ? found : null;
+
+            if (!ShouldStillConceal(window)) continue;
+
+            // Hidden, then still positioned - the same order Commit uses. A window on
+            // an inactive workspace has a rectangle like any other, so that showing
+            // the workspace shows a finished arrangement rather than a frame of
+            // windows piled at wherever they were last seen.
+            _committer.Conceal(handle);
+            _committer.CommitOne(handle, placement.Rect);
+        }
+
+        _deferredConceal.Clear();
+    }
+
+    /// <summary>
+    /// Whether a window queued for concealment should still be concealed now the
+    /// motion has finished.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A motion runs for a tenth of a second, which is long enough for the reason to
+    /// expire. Two ways it does, and both would be worse than the artifact deferring
+    /// was meant to fix.
+    /// </para>
+    /// <para>
+    /// A window released mid-flight is no longer Shubbak's to hide; concealing it
+    /// would leave it cloaked with nothing tracking it, which is the state
+    /// <c>shubbak restore</c> exists to clean up. That is <see langword="null"/> here,
+    /// because the registry no longer knows the handle.
+    /// </para>
+    /// <para>
+    /// A workspace switched back to during the motion puts the window on screen
+    /// again, and the queued instruction is then simply stale.
+    /// </para>
+    /// </remarks>
+    internal static bool ShouldStillConceal(WindowNode? window) =>
+        window is not null && !window.IsOnADisplayedWorkspace;
 
     /// <summary>
     /// Decides whether one window is animated to its new rectangle or simply placed
