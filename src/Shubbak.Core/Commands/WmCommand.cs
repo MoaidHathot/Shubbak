@@ -287,8 +287,14 @@ public sealed record TileCommand : WmCommand
     public override bool TargetsFocusedWindow => true;
 }
 
-/// <summary><c>toggle-fullscreen</c></summary>
-public sealed record ToggleFullscreenCommand : WmCommand
+/// <summary><c>toggle-fullscreen</c>, or <c>toggle-fullscreen --monitor</c></summary>
+/// <param name="WholeMonitor">
+/// Whether to fill the monitor rather than the work area. The work area is what the
+/// bar and taskbar have reserved, so the difference is visible exactly when
+/// something is docked - which for this window manager is always, since it launches
+/// its own bar.
+/// </param>
+public sealed record ToggleFullscreenCommand(bool WholeMonitor = false) : WmCommand
 {
     public override string Name => "toggle-fullscreen";
 

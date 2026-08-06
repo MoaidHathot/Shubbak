@@ -91,6 +91,51 @@ public sealed class LayoutEngineTests
     }
 
     [Fact]
+    public void MonitorFullscreenCoversTheStripTheBarReserved()
+    {
+        WindowNode a = TreeBuilder.Window("a");
+        WindowNode full = TreeBuilder.Window("full");
+
+        (RootNode root, MonitorNode monitor, _) = Setup(1000, 800, a, full);
+
+        // A bar docked along the top, which is what Taj reserves through the appbar
+        // API and what the window manager then reads back as the work area.
+        monitor.WorkArea = new Rect(0, 30, 1000, 770);
+        full.State = WindowState.MonitorFullscreen;
+
+        var options = new ArrangeOptions(OuterGap: Gaps.All(20), InnerGap: 10);
+        Placement placement = new LayoutEngine()
+            .Arrange(root, options)
+            .Single(p => p.Window == full);
+
+        // The whole monitor, reserved strip included. That single choice of
+        // rectangle is the entire difference from Fullscreen.
+        Assert.Equal(new Rect(0, 0, 1000, 800), placement.Rect);
+
+        // And raised, or it would be the right size and still behind the bar.
+        Assert.True(placement.Raise);
+    }
+
+    [Fact]
+    public void FullscreenStopsWhereTheBarBegins()
+    {
+        // The contrast that gives the pair its meaning: same tree, same gaps, one
+        // state apart. Without this, a regression that made both states use the same
+        // rectangle would leave the test above passing.
+        WindowNode full = TreeBuilder.Window("full");
+
+        (RootNode root, MonitorNode monitor, _) = Setup(1000, 800, full);
+
+        monitor.WorkArea = new Rect(0, 30, 1000, 770);
+        full.State = WindowState.Fullscreen;
+
+        var options = new ArrangeOptions(OuterGap: Gaps.All(20), InnerGap: 10);
+        IReadOnlyList<Placement> placements = new LayoutEngine().Arrange(root, options);
+
+        Assert.Equal(new Rect(0, 30, 1000, 770), placements.Single(p => p.Window == full).Rect);
+    }
+
+    [Fact]
     public void MinimisedWindowsAreAlwaysInvisible()
     {
         WindowNode a = TreeBuilder.Window("a");

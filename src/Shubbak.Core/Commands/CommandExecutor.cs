@@ -126,7 +126,7 @@ public sealed class CommandExecutor
             ToggleFloatingCommand => new(_wm.ToggleFloating()),
             FloatCommand => new(_wm.SetFocusedWindowState(Tree.WindowState.Floating)),
             TileCommand => new(_wm.SetFocusedWindowState(Tree.WindowState.Tiling)),
-            ToggleFullscreenCommand => new(_wm.ToggleFullscreen()),
+            ToggleFullscreenCommand c => new(_wm.ToggleFullscreen(c.WholeMonitor)),
             ToggleMinimisedCommand => new(_wm.ToggleMinimised()),
 
             EnableBindingModeCommand c => new(_wm.SetBindingMode(c.Mode)),

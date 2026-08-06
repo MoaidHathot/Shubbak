@@ -259,6 +259,44 @@ public sealed class WindowManagerTests
     }
 
     [Fact]
+    public void EachFullscreenModeTogglesAgainstItself()
+    {
+        // Deliberately not "any fullscreen restores tiling". Someone already
+        // fullscreen who asks for the whole monitor wants more room, not their
+        // layout back, so the two modes step between each other and only the key
+        // matching the current mode puts it back.
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.FocusWindow(a);
+
+        wm.ToggleFullscreen();
+        Assert.Equal(WindowState.Fullscreen, a.State);
+
+        wm.ToggleFullscreen(wholeMonitor: true);
+        Assert.Equal(WindowState.MonitorFullscreen, a.State);
+
+        wm.ToggleFullscreen();
+        Assert.Equal(WindowState.Fullscreen, a.State);
+
+        wm.ToggleFullscreen();
+        Assert.Equal(WindowState.Tiling, a.State);
+    }
+
+    [Fact]
+    public void WholeMonitorFullscreenReturnsToTiling()
+    {
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.FocusWindow(a);
+
+        wm.ToggleFullscreen(wholeMonitor: true);
+        Assert.Equal(WindowState.MonitorFullscreen, a.State);
+
+        wm.ToggleFullscreen(wholeMonitor: true);
+        Assert.Equal(WindowState.Tiling, a.State);
+    }
+
+    [Fact]
     public void FocusingAWindowOnAHiddenWorkspaceActivatesThatWorkspace()
     {
         WindowManager wm = WmFixture.Create(workspaceNames: ["1", "2"]);

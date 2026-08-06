@@ -151,7 +151,11 @@ public static class CommandParser
                 return true;
 
             case "toggle-fullscreen":
-                command = new ToggleFullscreenCommand();
+                // --monitor covers the bar and the taskbar; without it a fullscreen
+                // window stops at the work area, which is what most of the time is
+                // wanted and so stays the default.
+                command = new ToggleFullscreenCommand(
+                    Flag(rest, "--monitor") || Flag(rest, "--whole-monitor"));
                 return true;
 
             case "toggle-minimized" or "toggle-minimised":

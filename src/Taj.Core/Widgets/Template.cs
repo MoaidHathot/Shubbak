@@ -147,6 +147,9 @@ public static class Template
             case "icon":
                 return LayoutIcon(input);
 
+            case "state-icon":
+                return StateIcon(input);
+
             default:
                 // An unknown filter passes the value through unchanged rather than
                 // blanking the widget, so a typo degrades gracefully.
@@ -190,5 +193,33 @@ public static class Template
         "grid" => "\u253C",                      // ┼   divided both ways
         "monocle" => "\u25A0",                   // ■
         _ => layout,
+    };
+
+    /// <summary>
+    /// Replaces a window state with a glyph, or nothing when the state is ordinary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the states worth interrupting someone about get a glyph. Tiling is what
+    /// a window normally is, and a marker that is always lit is not a marker - so
+    /// those return the empty string, which a widget with <c>hide-when-empty</c>
+    /// then removes from the bar entirely rather than leaving a gap.
+    /// </para>
+    /// <para>
+    /// The outline and filled squares are deliberately a pair: one hollow for a
+    /// window that has stopped at the bar, one solid for a window that has covered
+    /// it. That reads as an intensity without needing a legend.
+    /// </para>
+    /// <para>
+    /// Both are inside the range Segoe UI Variable Text actually covers, for the same
+    /// reason the layout glyphs are - a borrowed glyph from a substitute font is
+    /// measured at one width and drawn at another, and comes out clipped.
+    /// </para>
+    /// </remarks>
+    private static string StateIcon(string state) => state switch
+    {
+        "fullscreen" => "\u25A1",                // □   fills the work area
+        "monitorfullscreen" => "\u25A0",         // ■   fills the monitor, bar included
+        _ => string.Empty,
     };
 }
