@@ -310,7 +310,13 @@ keybindings {
     // when you have not written a rule for it yet.
     bind "alt+shift+n" { toggle-managed }
 
+    // Two fullscreens, differing only in which rectangle the window gets. Plain
+    // alt+x fills the work area, so anything docked - the bar, the taskbar - stays
+    // visible. The shifted one fills the whole monitor and covers them, which is
+    // what GlazeWM's alt+x does. `--whole-monitor` is the same flag spelled out.
     bind "alt+x"       { toggle-fullscreen }
+    bind "alt+shift+x" { toggle-fullscreen --monitor }
+
     bind "alt+m"       { toggle-minimized }
     bind "alt+shift+q" { close }
 
@@ -441,7 +447,18 @@ bar {
         }
 
         zone "centre" justify="center" grow=1 {
-            text template="{{ window.title | truncate:90 }}"
+            // `window.state` is the focused window's state: tiling, floating,
+            // fullscreen, monitorfullscreen, maximised or minimised. The `state-icon`
+            // filter turns the two fullscreens into a hollow and a solid square and
+            // everything else into nothing, and a widget whose template renders empty
+            // hides itself - so this costs no space until there is something to say.
+            //
+            // Nothing marks the whole-monitor mode, because that mode covers the bar.
+            text id="window-state" template="{{ window.state | state-icon }}"
+
+            text template="{{ window.title | truncate:90 }}" {
+                when of="window.state" value="fullscreen" colour="#f9e2af"
+            }
         }
 
         // Two clocks, as in the Zebar config: Seattle dimmed on the left, local

@@ -1382,14 +1382,28 @@ public sealed class WindowManager
     }
 
     /// <summary>Toggles the focused window between fullscreen and tiling.</summary>
-    public WmResult ToggleFullscreen()
+    /// <param name="wholeMonitor">
+    /// Fill the monitor rather than the work area, covering the bar.
+    /// </param>
+    /// <remarks>
+    /// Each mode toggles against itself rather than against "any fullscreen", so
+    /// pressing the other key while already fullscreen switches between the two
+    /// rather than dropping back to tiling. Going from one to the other is the more
+    /// useful reading of that keypress: someone already fullscreen who asks for the
+    /// whole monitor wants more room, not their layout back.
+    /// </remarks>
+    public WmResult ToggleFullscreen(bool wholeMonitor = false)
     {
         if (FocusedWindow is not { } window)
             return Reject("toggle-fullscreen", "No focused window.");
 
+        WindowState target = wholeMonitor
+            ? WindowState.MonitorFullscreen
+            : WindowState.Fullscreen;
+
         return SetWindowState(
             window,
-            window.State == WindowState.Fullscreen ? WindowState.Tiling : WindowState.Fullscreen);
+            window.State == target ? WindowState.Tiling : target);
     }
 
     /// <summary>Toggles the focused window's minimised state.</summary>

@@ -14,6 +14,18 @@ public enum WindowState
     /// <summary>Fills its workspace, covering siblings.</summary>
     Fullscreen,
 
+    /// <summary>
+    /// Fills the whole monitor, covering the bar and anything else the work area
+    /// was keeping clear.
+    /// </summary>
+    /// <remarks>
+    /// The difference from <see cref="Fullscreen"/> is which rectangle it gets: the
+    /// monitor's bounds rather than its work area. That is the whole feature. The
+    /// bar is an ordinary non-topmost window, so a window placed over it and raised
+    /// covers it with no cooperation from either side.
+    /// </remarks>
+    MonitorFullscreen,
+
     /// <summary>Maximised via the native window command.</summary>
     Maximised,
 

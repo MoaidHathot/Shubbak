@@ -203,6 +203,15 @@ public sealed class WmConnection : IAsyncDisposable
                 UpdateFocusedWindow(notification.Data);
                 break;
 
+            case "window.state_changed":
+                // The payload is the window that changed, which is not necessarily
+                // the focused one - but a state change on an unfocused window cannot
+                // alter what the bar shows, and UpdateFocusedWindow only writes the
+                // values the title widget reads. Cheaper than a full refresh, and
+                // this fires on every fullscreen toggle.
+                UpdateFocusedWindow(notification.Data);
+                break;
+
             case "window.focused":
                 UpdateFocusedWindow(notification.Data);
 
@@ -269,25 +278,11 @@ public sealed class WmConnection : IAsyncDisposable
 
     private void UpdateFocusedWindow(string json)
     {
-        if (string.IsNullOrEmpty(json) || json == "null")
-        {
-            _model.SetValue("window.title", string.Empty);
-            _model.SetValue("window.process", string.Empty);
-            return;
-        }
+        if (FocusedWindow.Parse(json) is not { } values) return;
 
-        try
-        {
-            WindowInfo? window = JsonSerializer.Deserialize(json, IpcJsonContext.Default.WindowInfo);
-            if (window is null) return;
-
-            _model.SetValue("window.title", window.Title);
-            _model.SetValue("window.process", window.ProcessName);
-        }
-        catch (JsonException ex)
-        {
-            Log.Warn(LogCategory.Ipc, $"malformed window payload: {ex.Message}");
-        }
+        _model.SetValue(FocusedWindow.TitleKey, values.Title);
+        _model.SetValue(FocusedWindow.ProcessKey, values.Process);
+        _model.SetValue(FocusedWindow.StateKey, values.State);
     }
 
     private async Task RefreshAsync(IpcClient client)
@@ -336,8 +331,10 @@ public sealed class WmConnection : IAsyncDisposable
             ];
 
             _model.SetValue("workspaces", WorkspacesWidget.Encode(entries));
-            _model.SetValue("window.title", state.FocusedWindow?.Title ?? string.Empty);
-            _model.SetValue("window.process", state.FocusedWindow?.ProcessName ?? string.Empty);
+            _model.SetValue(FocusedWindow.TitleKey, state.FocusedWindow?.Title ?? string.Empty);
+            _model.SetValue(
+                FocusedWindow.ProcessKey, state.FocusedWindow?.ProcessName ?? string.Empty);
+            _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
             _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
             _model.SetValue("layout", FindActiveLayout(state));
 

@@ -117,7 +117,8 @@ public sealed class LayoutEngine
 
         MonitorNode? monitor = workspace.Monitor;
         Rect area = monitor?.WorkArea ?? workspace.Rect;
-        ArrangeWorkspaceInto(workspace, area, visible: workspace.IsActive, options);
+        ArrangeWorkspaceInto(
+            workspace, area, monitor?.Bounds ?? area, visible: workspace.IsActive, options);
 
         return _placements;
     }
@@ -127,12 +128,16 @@ public sealed class LayoutEngine
         foreach (WorkspaceNode workspace in monitor.Workspaces)
         {
             bool visible = ReferenceEquals(workspace, monitor.ActiveWorkspace);
-            ArrangeWorkspaceInto(workspace, monitor.WorkArea, visible, options);
+            ArrangeWorkspaceInto(workspace, monitor.WorkArea, monitor.Bounds, visible, options);
         }
     }
 
     private void ArrangeWorkspaceInto(
-        WorkspaceNode workspace, Rect workArea, bool visible, ArrangeOptions options)
+        WorkspaceNode workspace,
+        Rect workArea,
+        Rect monitorBounds,
+        bool visible,
+        ArrangeOptions options)
     {
         Rect area = workArea.Deflate(options.OuterGap);
         workspace.Rect = area;
@@ -143,7 +148,7 @@ public sealed class LayoutEngine
         // Floating, fullscreen, maximised and minimised windows sit outside the
         // tiling flow but still belong to the workspace, so they are emitted here
         // rather than being silently dropped by the recursion above.
-        ArrangeNonTiled(workspace, workArea, visible);
+        ArrangeNonTiled(workspace, workArea, monitorBounds, visible);
     }
 
     private void ArrangeContainer(
@@ -207,8 +212,14 @@ public sealed class LayoutEngine
     /// windows use this rather than the tiling area: gaps are a tiling concept, and
     /// a fullscreen window that honoured them would not be fullscreen.
     /// </param>
+    /// <param name="monitorBounds">
+    /// The whole monitor, including the strip the bar and taskbar reserved. Only
+    /// <see cref="WindowState.MonitorFullscreen"/> uses it, and that is the single
+    /// thing separating it from <see cref="WindowState.Fullscreen"/>.
+    /// </param>
     /// <param name="visible">Whether this workspace is the active one.</param>
-    private void ArrangeNonTiled(WorkspaceNode workspace, Rect workArea, bool visible)
+    private void ArrangeNonTiled(
+        WorkspaceNode workspace, Rect workArea, Rect monitorBounds, bool visible)
     {
         foreach (WindowNode window in workspace.DescendantWindows())
         {
@@ -218,6 +229,11 @@ public sealed class LayoutEngine
                 case WindowState.Maximised:
                     window.Rect = workArea;
                     _placements.Add(new Placement(window, workArea, visible, Raise: true));
+                    break;
+
+                case WindowState.MonitorFullscreen:
+                    window.Rect = monitorBounds;
+                    _placements.Add(new Placement(window, monitorBounds, visible, Raise: true));
                     break;
 
                 case WindowState.Floating:
