@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The packaged manifest. Identical to app.manifest except for uiAccess.
+
+  uiAccess="true" is what lets a window manager position windows that belong to
+  processes running at a higher integrity level than itself - Task Manager, an
+  installer, anything started with "Run as administrator". Without it those windows
+  cannot be moved at all: SetWindowPos returns ERROR_ACCESS_DENIED and the window
+  stays where it was, which shows up as a tile reserved for a window that never
+  arrives.
+
+  It is the same privilege a screen reader or an on-screen keyboard needs, and
+  Windows guards it accordingly. All three of these must hold or the process will
+  not start:
+
+    1. this manifest,
+    2. an Authenticode signature from a certificate the machine trusts,
+    3. installation under %ProgramFiles% or %SystemRoot%\System32.
+
+  That is why it is a separate file selected at package time rather than the default.
+  A build running from a source tree satisfies none of the last two, and a uiAccess
+  binary that fails the checks does not fall back to running without the privilege -
+  it fails to launch. Shipping this as the only manifest would make the project
+  impossible to run while developing it.
+
+  Select it with:  dotnet publish -p:ShubbakUiAccess=true
+
+  GlazeWM ships exactly this arrangement - asInvoker with uiAccess, signed, installed
+  under Program Files - which is why it tiles Task Manager without asking anyone to
+  run it as administrator.
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="Shubbak.Wm" type="win32" />
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="true" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

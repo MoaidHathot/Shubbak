@@ -16,6 +16,32 @@
     <!-- The animation and hook paths must not be perturbed by server GC. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+
+    <!--
+      uiAccess is what lets the window manager position windows belonging to
+      higher-integrity processes - Task Manager and anything else started as
+      administrator. Windows only honours it for a signed binary installed under
+      Program Files, and a uiAccess binary that fails those checks does not run
+      without the privilege, it fails to launch. So it is opt-in at package time and
+      off everywhere else, including here.
+
+        dotnet publish -p:ShubbakUiAccess=true
+
+      The two manifests differ by one attribute. Everything that depends on the
+      answer asks the running process rather than assuming, so nothing else changes
+      between the two builds.
+
+      Clean before switching. The manifest is baked into the apphost during build and
+      MSBuild does not treat this property as an input to it, so publishing with the
+      flag and then without it silently reuses the first apphost. A uiAccess binary
+      that is not signed and not under Program Files does not start at all - it fails
+      with "A referral was returned from the server" - so a stale one is a build that
+      cannot run, with nothing in the output to say why. Verified, not theorised.
+    -->
+    <ShubbakUiAccess Condition="'$(ShubbakUiAccess)' == ''">false</ShubbakUiAccess>
+
+    <ApplicationManifest Condition="'$(ShubbakUiAccess)' != 'true'">app.manifest</ApplicationManifest>
+    <ApplicationManifest Condition="'$(ShubbakUiAccess)' == 'true'">app.uiaccess.manifest</ApplicationManifest>
   </PropertyGroup>
 
   <ItemGroup>
