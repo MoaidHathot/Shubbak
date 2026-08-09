@@ -1050,7 +1050,8 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Foreground:
                 if (_windows.TryGet(handle, out WindowNode? focused))
                 {
-                    if (!ReferenceEquals(_wm.FocusedWindow, focused))
+                    if (ShouldFollowForeground(focused) &&
+                        !ReferenceEquals(_wm.FocusedWindow, focused))
                     {
                         Publish(_wm.FocusWindow(focused));
 
@@ -1496,6 +1497,17 @@ public sealed class WmDaemon : IDisposable
             $"- **Focused**: {_wm.FocusedWindow?.Identity.Title ?? "(none)"}",
             $"- **Binding mode**: {_wm.BindingMode ?? "(default)"}",
             $"- **Paused**: {_wm.IsPaused}",
+
+            // Read at report time rather than cached, because the interesting answer
+            // only exists while a game is running - and nobody reads a report then.
+            // Run `shubbak diagnose` from a second machine, or alt-tab out and look at
+            // the log, to find out what a given game reports here.
+            //
+            // What this can and cannot see is documented on UserActivity. Briefly: a
+            // Direct3D exclusive-fullscreen game is caught reliably, a borderless
+            // windowed one is indistinguishable from any other window and is not.
+            $"- **User activity**: {DisplayPreferences.CurrentActivity()}",
+
             $"- **Animating**: {_animation.ActiveCount}",
             $"- **Keybindings**: {_config.Keybindings.Count}",
             $"- **Rules**: {_config.Rules.Count}",
@@ -2535,6 +2547,40 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     internal static bool ShouldStillConceal(WindowNode? window) =>
         window is not null && !window.IsOnADisplayedWorkspace;
+
+    /// <summary>
+    /// Whether the system's choice of foreground window should become Shubbak's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Normally yes: the user clicked something, or alt-tabbed to it, and the window
+    /// manager follows.
+    /// </para>
+    /// <para>
+    /// Not when the window is on a workspace that is not displayed. Such a window is
+    /// cloaked, which also keeps it out of alt-tab, so the user cannot have picked
+    /// it - this is Windows choosing a fallback after we concealed whatever had the
+    /// foreground. Following it is actively destructive, because focusing a window on
+    /// a hidden workspace activates that workspace, which silently undoes the switch
+    /// that caused the concealment in the first place.
+    /// </para>
+    /// <para>
+    /// Reported as: switch to an empty workspace, launch something, and it opens on
+    /// the workspace you just left. An empty workspace cannot hold the foreground, so
+    /// the launcher taking it and giving it back put it on the old window, and from
+    /// there the whole switch unwound - active workspace included. Measured on a live
+    /// session, the reversion landed about four seconds after the keypress, which is
+    /// exactly long enough to have started typing.
+    /// </para>
+    /// <para>
+    /// komorebi has the same bug (issue #1676) and closed it as a fault in the
+    /// launcher that triggered it. It is not: any launcher will do, because the
+    /// foreground has to go somewhere while the launcher is up and there is nothing
+    /// on an empty workspace to give it back to.
+    /// </para>
+    /// </remarks>
+    internal static bool ShouldFollowForeground(WindowNode? window) =>
+        window is not null && window.IsOnADisplayedWorkspace;
 
     /// <summary>
     /// Decides whether one window is animated to its new rectangle or simply placed

@@ -1,6 +1,7 @@
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
+using Windows.Win32.UI.Shell;
 using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Shubbak.Native;
@@ -95,4 +96,79 @@ public static class DisplayPreferences
         // a rate anything can be derived from.
         return mode.dmDisplayFrequency <= 1 ? 0 : (int)mode.dmDisplayFrequency;
     }
+
+    /// <summary>
+    /// What the shell says the user is currently doing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SHQueryUserNotificationState</c> is the question Windows itself asks before
+    /// showing a toast: is now a bad moment. A window manager wants the same answer for
+    /// the same reason, and it is one call with no privileges and no handle.
+    /// </para>
+    /// <para>
+    /// Be clear about what it does and does not catch, because the difference decides
+    /// whether it can be relied on. <c>RUNNING_D3D_FULL_SCREEN</c> is a Direct3D
+    /// exclusive-fullscreen application - the classic full-screen game - and
+    /// <c>BUSY</c> is a full-screen window of any other kind. Both are reliable.
+    /// </para>
+    /// <para>
+    /// What it misses is the way most modern games actually run: borderless windowed,
+    /// which is an ordinary window covering the screen and is reported as
+    /// <c>ACCEPTS_NOTIFICATIONS</c> like anything else. There is no shell API that
+    /// distinguishes it, and the obvious geometric test - a caption-less window the
+    /// size of the monitor - now describes Shubbak's own whole-monitor fullscreen
+    /// exactly, so it cannot be used either.
+    /// </para>
+    /// <para>
+    /// So this is reported rather than acted on. It answers the question honestly for
+    /// the cases it covers, and says nothing about the rest.
+    /// </para>
+    /// </remarks>
+    public static UserActivity CurrentActivity()
+    {
+        // A failure is not "the user is free": it is "nobody knows". Treated as unknown
+        // so nothing downstream reads a failed call as permission.
+        if (PInvoke.SHQueryUserNotificationState(out QUERY_USER_NOTIFICATION_STATE state).Failed)
+            return UserActivity.Unknown;
+
+        return state switch
+        {
+            QUERY_USER_NOTIFICATION_STATE.QUNS_RUNNING_D3D_FULL_SCREEN =>
+                UserActivity.FullScreenGame,
+            QUERY_USER_NOTIFICATION_STATE.QUNS_BUSY => UserActivity.FullScreenApp,
+            QUERY_USER_NOTIFICATION_STATE.QUNS_PRESENTATION_MODE => UserActivity.Presenting,
+            QUERY_USER_NOTIFICATION_STATE.QUNS_QUIET_TIME => UserActivity.QuietTime,
+            QUERY_USER_NOTIFICATION_STATE.QUNS_ACCEPTS_NOTIFICATIONS => UserActivity.Ordinary,
+            _ => UserActivity.Unknown,
+        };
+    }
+}
+
+/// <summary>
+/// What the shell believes the user is doing, as far as it can tell.
+/// </summary>
+/// <remarks>
+/// Named for what each state means to a window manager rather than for the constant it
+/// came from, because the constants are named for notifications.
+/// </remarks>
+public enum UserActivity
+{
+    /// <summary>The call failed, or the answer is not one we recognise.</summary>
+    Unknown,
+
+    /// <summary>Nothing special: an ordinary desktop.</summary>
+    Ordinary,
+
+    /// <summary>A Direct3D exclusive-fullscreen application - a game, reliably.</summary>
+    FullScreenGame,
+
+    /// <summary>A full-screen window that is not Direct3D exclusive.</summary>
+    FullScreenApp,
+
+    /// <summary>Presentation mode: the user has asked not to be interrupted.</summary>
+    Presenting,
+
+    /// <summary>The first hour after a new user logs in for the first time.</summary>
+    QuietTime,
 }
