@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The ordinary manifest, used by every build that is not being packaged.
+
+  requestedExecutionLevel is asInvoker with uiAccess false, which is what a process
+  without a manifest gets anyway. It is written out rather than left implicit so that
+  the packaged manifest beside it - app.uiaccess.manifest, identical except for that
+  one attribute - is a one-line diff, and so that the attribute that matters is
+  visible in the file that does not use it.
+
+  DPI awareness is deliberately absent. It is set at startup with
+  SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2), which the manifest cannot
+  express as precisely, and declaring it in both places is a way to have them
+  disagree later.
+-->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="Shubbak.Wm" type="win32" />
+
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10 and 11. -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>

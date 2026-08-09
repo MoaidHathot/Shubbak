@@ -313,15 +313,15 @@ public static class WindowFilter
             // monitor entirely, while a gap waits for it on this one. That is exactly
             // how it was reported.
             //
-            // Overridable, and there are two ways the answer changes. Starting
-            // Shubbak elevated puts it at the same integrity level, so the gate stops
-            // firing. So does a manifest with uiAccess="true" - the privilege a
-            // screen reader uses to drive windows it does not own - which Windows
-            // honours only for a binary that is Authenticode signed and installed
-            // under %ProgramFiles%. GlazeWM does exactly that, which is why it tiles
-            // Task Manager without elevating and a build running from a source tree
-            // cannot. Neither is a list of application names, which is the point.
-            if (Win32Window.IsElevated(processId))
+            // Asked of this process first, and only then of the window, because the
+            // process answer decides whether the window question is worth asking. A
+            // build that can drive higher-integrity windows - elevated, or signed and
+            // installed under Program Files with uiAccess in its manifest, which is
+            // what GlazeWM ships - skips this gate entirely and manages them like
+            // anything else. That is deliberate: the packaged build should need no
+            // code change to gain the behaviour, and the check should disappear on
+            // its own rather than being a list of application names to maintain.
+            if (!Win32Privilege.CanDriveHigherIntegrity && Win32Window.IsElevated(processId))
                 return ManageDecision.No(ExclusionReason.Elevated);
 
             if (Win32Window.GetProcessPath(processId) is { } path &&

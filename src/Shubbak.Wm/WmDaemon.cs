@@ -1579,6 +1579,13 @@ public sealed class WmDaemon : IDisposable
             // windowed one is indistinguishable from any other window and is not.
             $"- **User activity**: {DisplayPreferences.CurrentActivity()}",
 
+            // The answer to "why will that window not tile" when nothing is wrong
+            // with the window. Stated as a capability rather than as elevation,
+            // because there are two ways to have it and only one of them involves
+            // running as administrator.
+            $"- **Can move elevated windows**: {Win32Privilege.CanDriveHigherIntegrity}" +
+            $" (uiAccess {Win32Privilege.HasUiAccess}, elevated {Win32Privilege.IsElevated})",
+
             $"- **Animating**: {_animation.ActiveCount}",
             $"- **Keybindings**: {_config.Keybindings.Count}",
             $"- **Rules**: {_config.Rules.Count}",

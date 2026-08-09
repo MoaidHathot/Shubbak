@@ -11,6 +11,12 @@ IsWindowVisible
 IsIconic
 IsZoomed
 IsHungAppWindow
+
+// --- can this process drive windows above its own integrity level? -----------------
+OpenProcessToken
+GetTokenInformation
+TOKEN_INFORMATION_CLASS
+TOKEN_ACCESS_MASK
 GetWindowRect
 GetClientRect
 GetWindowTextLength
