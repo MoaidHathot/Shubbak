@@ -99,6 +99,34 @@ public sealed class WindowCommitter
         DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
 
     /// <summary>
+    /// <see cref="DefaultFlags"/> plus <c>SWP_ASYNCWINDOWPOS</c>, for a window whose
+    /// thread has stopped answering.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same flags as <see cref="FrameFlags"/> and a different reason, so they are
+    /// named apart: one is a decision about animation, this is a defence against one
+    /// application taking the desktop down with it.
+    /// </para>
+    /// <para>
+    /// <c>EndDeferWindowPos</c> delivers the batch to each target window's thread and
+    /// waits. One thread that is not pumping therefore blocks the move of every other
+    /// window in the batch, and since a workspace switch is a batch, it blocks
+    /// switching workspaces at all. Reported as a black window - a window that is not
+    /// painting is a window that is not pumping - after which no workspace could be
+    /// switched to for some seconds, until the application either recovered or was
+    /// closed.
+    /// </para>
+    /// <para>
+    /// Asking asynchronously costs nothing that matters for a window in this state.
+    /// It is not going to redraw at the new size until it starts answering again, and
+    /// when it does it will process the position it was sent.
+    /// </para>
+    /// </remarks>
+    private const uint UnresponsiveFlags =
+        DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
+
+    /// <summary>
     /// The flags one animation frame is sent with.
     /// </summary>
     /// <remarks>
@@ -466,10 +494,15 @@ public sealed class WindowCommitter
         {
             Rect target = Expand(handle, rect);
 
+            // Checked per window, because the batch is only as fast as its slowest
+            // target and one stuck application should not decide how long a workspace
+            // switch takes for the other seven windows.
+            uint flags = Win32Window.IsHung(handle) ? UnresponsiveFlags : DefaultFlags;
+
             batch = PInvoke.DeferWindowPos(
                 batch, new HWND(handle), HWND.Null,
                 target.X, target.Y, target.Width, target.Height,
-                (SET_WINDOW_POS_FLAGS)DefaultFlags);
+                (SET_WINDOW_POS_FLAGS)flags);
 
             if (batch.IsNull)
             {
@@ -495,6 +528,11 @@ public sealed class WindowCommitter
     private static void MoveSingle(nint handle, Rect rect, uint flags = DefaultFlags)
     {
         Rect target = Expand(handle, rect);
+
+        // Same defence as the batch, and it matters more here: the fallback path
+        // places every window individually, so without this a single stuck window
+        // would block the ones queued behind it one after another.
+        if (flags == DefaultFlags && Win32Window.IsHung(handle)) flags = UnresponsiveFlags;
 
         PInvoke.SetWindowPos(
             new HWND(handle), HWND.Null,

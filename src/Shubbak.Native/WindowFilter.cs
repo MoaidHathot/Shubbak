@@ -145,7 +145,16 @@ public static class WindowFilter
         "IME",
         "MSCTFIME UI",
         "Default IME",
-        "TaskManagerWindow",
+
+        // Task Manager is deliberately absent from this list. It sat here among the
+        // shell plumbing, which is the wrong company: the rest of these are surfaces
+        // the user never arranges - IME hosts, OLE marshalling windows, taskbar
+        // thumbnails - whereas Task Manager is an ordinary application window that
+        // someone opens, reads, and wants beside something else. Excluding it meant
+        // it floated over a tiled workspace and had to be moved by hand.
+        //
+        // It still passes the structural gates on its own merits: it has a caption,
+        // it accepts activation, and it is not an owned popup.
         "OleMainThreadWndClass",
         "CicMarshalWndClass",
         "TaskListThumbnailWnd",

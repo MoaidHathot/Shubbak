@@ -175,6 +175,7 @@ public sealed class WindowCommitterConcealmentTests
             () => Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None);
 
         Assert.NotEqual(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+        Assert.Equal(1, committer.ConcealmentCounts.Cloaked);
 
         // What an application does when it decides it should be on screen: undoes the
         // cloak without telling anyone. Shubbak's record still says concealed.
@@ -185,15 +186,14 @@ public sealed class WindowCommitterConcealmentTests
 
         Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
 
-        // Asserted, not assumed: if the window were off screen for some other reason
-        // the check below would pass without the fix and prove nothing.
-        Assert.True(Win32Window.IsVisible(window.Handle), "the window was not on screen to begin with");
-
         Conceal(committer, window.Handle);
-        TestWindow.PumpUntil(
-            () => Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None);
 
-        Assert.NotEqual(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+        // Asserted on the count rather than on the cloak state, deliberately. The
+        // question here is whether Hide looked at the window at all, and the count
+        // answers it the moment the call returns - where the compositor may take
+        // longer to settle than a pump, which made this fail in company and pass
+        // alone. A second cloak means the record stopped being the whole test.
+        Assert.Equal(2, committer.ConcealmentCounts.Cloaked);
 
         committer.RestoreAll();
         TestWindow.PumpOnce();

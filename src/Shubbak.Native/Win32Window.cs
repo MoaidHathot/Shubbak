@@ -70,6 +70,17 @@ public static class Win32Window
 
     public static bool IsMaximised(nint handle) => PInvoke.IsZoomed(new HWND(handle));
 
+    /// <summary>
+    /// Whether the window's thread has stopped answering messages.
+    /// </summary>
+    /// <remarks>
+    /// Windows considers a window hung when its thread has not processed a message
+    /// for several seconds - the same judgement behind the "Not Responding" title and
+    /// the ghost window the shell paints over it. Cheap: it reads bookkeeping the
+    /// input system already keeps, and sends nothing.
+    /// </remarks>
+    public static bool IsHung(nint handle) => PInvoke.IsHungAppWindow(new HWND(handle));
+
     public static unsafe nint GetForeground() => (nint)PInvoke.GetForegroundWindow().Value;
 
     /// <summary>
