@@ -492,6 +492,11 @@ public sealed class WindowManager
 
         TreeOps.Detach(window);
 
+        // Forgotten here as well as checked at use. The check alone would be enough
+        // to stay correct, but holding a reference to a released node keeps its whole
+        // subtree alive for as long as nobody presses the key.
+        if (ReferenceEquals(_lastMinimised, window)) _lastMinimised = null;
+
         foreach (WorkspaceNode candidate in Root.AllWorkspaces())
             if (ReferenceEquals(candidate.LastFocused, window)) candidate.LastFocused = null;
 
@@ -1406,16 +1411,69 @@ public sealed class WindowManager
             window.State == target ? WindowState.Tiling : target);
     }
 
-    /// <summary>Toggles the focused window's minimised state.</summary>
+    /// <summary>
+    /// Puts the focused window away, or brings back the one put away last.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The obvious implementation - flip the focused window's state - cannot undo
+    /// itself. Minimising moves focus to a neighbour, because focus cannot stay on a
+    /// window that is no longer on screen, so the second press lands on a different
+    /// window and minimises that one too. Pressing a toggle twice left two windows
+    /// away and none of them back.
+    /// </para>
+    /// <para>
+    /// So the command remembers what it put away and offers it back first. Press to
+    /// hide, press again to return - which is what the name says and what pressing it
+    /// twice ought to do.
+    /// </para>
+    /// <para>
+    /// The cost is that two windows cannot be minimised with two presses of this key:
+    /// the second press returns the first window instead. That is the right trade.
+    /// Minimising is rare in a tiling window manager and every window keeps its own
+    /// minimise button and taskbar entry, whereas a toggle that cannot untoggle is
+    /// wrong every time it is used.
+    /// </para>
+    /// <para>
+    /// Only ever offers back a window it put away itself, that is still away, and
+    /// that is still in the tree. Restored from the taskbar, minimised by its own
+    /// button, or closed - in each case the memory is stale and the press means what
+    /// it plainly says instead.
+    /// </para>
+    /// </remarks>
     public WmResult ToggleMinimised()
     {
+        if (_lastMinimised is { State: WindowState.Minimised, Workspace: not null } remembered)
+        {
+            _lastMinimised = null;
+
+            WmResult restored = SetWindowState(remembered, WindowState.Tiling);
+
+            // Focused as well as restored: it was brought back to be used, and
+            // leaving focus on whatever inherited it when the window went away makes
+            // the press feel like it half worked.
+            SetFocus(remembered);
+
+            return restored;
+        }
+
         if (FocusedWindow is not { } window)
             return Reject("toggle-minimised", "No focused window.");
 
-        return SetWindowState(
-            window,
-            window.State == WindowState.Minimised ? WindowState.Tiling : WindowState.Minimised);
+        if (window.State == WindowState.Minimised)
+        {
+            _lastMinimised = null;
+            return SetWindowState(window, WindowState.Tiling);
+        }
+
+        _lastMinimised = window;
+        return SetWindowState(window, WindowState.Minimised);
     }
+
+    /// <summary>
+    /// The window <see cref="ToggleMinimised"/> last put away, if it is still away.
+    /// </summary>
+    private WindowNode? _lastMinimised;
 
     // ---- modes -------------------------------------------------------------
 
