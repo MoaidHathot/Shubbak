@@ -2879,6 +2879,37 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>
+    /// Makes the window agree with the tree about being minimised.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The tree's minimised state used to be notional. Nothing ever called
+    /// <c>ShowWindow</c>, and the only thing that realised it was the layout pass
+    /// concealing the window - so <c>toggle-minimized</c> produced a window that was
+    /// cloaked but not minimised: absent from the screen, absent from the taskbar's
+    /// idea of minimised, and restorable only by whatever could see through a cloak.
+    /// </para>
+    /// <para>
+    /// Written as a reconciliation rather than an action so that it works from both
+    /// directions. When Windows minimised the window and told us, the two already
+    /// agree and nothing happens. When a command changed the tree, they disagree and
+    /// the window is brought into line. One rule, no need to know which side started
+    /// it, and no way for a command and an event to fight.
+    /// </para>
+    /// </remarks>
+    private static void ReconcileMinimised(WindowNode window)
+    {
+        nint handle = (nint)window.Handle;
+        if (handle == 0 || !Win32Window.Exists(handle)) return;
+
+        bool wanted = window.State == WindowState.Minimised;
+        if (wanted == Win32Window.IsMinimised(handle)) return;
+
+        if (wanted) WindowActions.Minimise(handle);
+        else WindowActions.Restore(handle);
+    }
+
+    /// <summary>
     /// Whether a periodic job is due, recording that it ran when it is.
     /// </summary>
     /// <remarks>
@@ -3694,8 +3725,12 @@ public sealed class WmDaemon : IDisposable
             // A window that has just left or rejoined the tiling flow may be owed a
             // different border colour, and that is not a focus change, so nothing else
             // would repaint it - least of all for a window that is not the focused one.
-            if (wmEvent is WindowStateChanged changed && _config.Effects.Enabled)
-                RefreshBorderFor((nint)changed.Window.Handle);
+            if (wmEvent is WindowStateChanged changed)
+            {
+                ReconcileMinimised(changed.Window);
+
+                if (_config.Effects.Enabled) RefreshBorderFor((nint)changed.Window.Handle);
+            }
 
             // Asked before the payload is built, not after. Payload is a full JSON
             // serialisation and it is an argument, so it used to run whether or not

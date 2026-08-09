@@ -136,8 +136,19 @@ public sealed class LayoutEngineTests
     }
 
     [Fact]
-    public void MinimisedWindowsAreAlwaysInvisible()
+    public void MinimisedWindowsAreLeftToWindows()
     {
+        // No placement at all, which is a change from emitting an invisible one.
+        //
+        // An invisible placement means "conceal this", and concealing on Windows means
+        // cloaking, which is the mechanism virtual desktops use. The shell then treats
+        // the window as living on another desktop and its taskbar button stops
+        // restoring it - the click does nothing and the only way back is Task View.
+        // Reported from a window minimised by accident.
+        //
+        // Nothing is lost. Windows already has it off the desktop and in the taskbar,
+        // which is all that minimised means, and it takes no tiling space either way
+        // because it is not IsTiled.
         WindowNode a = TreeBuilder.Window("a");
         WindowNode minimised = TreeBuilder.Window("minimised");
 
@@ -146,7 +157,10 @@ public sealed class LayoutEngineTests
 
         IReadOnlyList<Placement> placements = new LayoutEngine().Arrange(root, ArrangeOptions.Default);
 
-        Assert.False(placements.Single(p => p.Window == minimised).Visible);
+        Assert.DoesNotContain(placements, p => p.Window == minimised);
+
+        // And it still surrenders its share of the workspace to the window that is
+        // tiled, which is the half of the old behaviour worth keeping.
         Assert.Equal(new Rect(0, 0, 1000, 800), placements.Single(p => p.Window == a).Rect);
     }
 
