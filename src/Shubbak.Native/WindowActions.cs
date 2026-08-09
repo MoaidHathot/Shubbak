@@ -64,6 +64,37 @@ public static class WindowActions
     }
 
     /// <summary>
+    /// Takes the foreground away from every window, giving it to the desktop.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For when the window manager has nothing to focus - an empty workspace being
+    /// displayed. Doing nothing leaves the system's foreground on whatever had it,
+    /// which is a window that has just been concealed; Windows then hands it back the
+    /// moment anything else releases the foreground, and a launcher opening and
+    /// closing is enough. That arrives as "go to that window", activates its
+    /// workspace, and silently undoes the switch to the empty one.
+    /// </para>
+    /// <para>
+    /// The desktop is the one window that is always present, always visible, and
+    /// belongs to no workspace, so parking the foreground there makes the system
+    /// agree with the tree instead of contradicting it.
+    /// </para>
+    /// <para>
+    /// GlazeWM does the same thing - its log says "Setting focus to the desktop
+    /// window" - when the last window on a workspace closes. It does not do it when
+    /// switching to an empty workspace, which is exactly why their issue #997 is
+    /// still open with this symptom.
+    /// </para>
+    /// </remarks>
+    public static unsafe bool FocusDesktop()
+    {
+        HWND shell = PInvoke.GetShellWindow();
+
+        return !shell.IsNull && Focus((nint)shell.Value);
+    }
+
+    /// <summary>
     /// Asks a window to close.
     /// </summary>
     /// <remarks>

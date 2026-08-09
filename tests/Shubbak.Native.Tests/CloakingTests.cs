@@ -167,33 +167,34 @@ public sealed class WindowCommitterConcealmentTests
         // concealed, so nothing ever looked at the window again and it could not be
         // concealed for the life of the process. A Teams meeting window was the one
         // that did it.
+        // Uses the hide method rather than the cloak, deliberately. The bug is in the
+        // bookkeeping and is identical for all three concealment methods, while the
+        // cloak is the one whose effect arrives when the compositor gets round to it -
+        // written against that, this passed alone and failed in company, which is
+        // worse than not having it. SW_HIDE flips a style bit that IsWindowVisible
+        // reads back immediately, so every step here is settled when it returns.
         using var window = new TestWindow();
-        var committer = new WindowCommitter();
+        var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
 
         Conceal(committer, window.Handle);
-        TestWindow.PumpUntil(
-            () => Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None);
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
 
-        Assert.NotEqual(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
-        Assert.Equal(1, committer.ConcealmentCounts.Cloaked);
+        Assert.False(Win32Window.IsVisible(window.Handle));
+        Assert.Equal(1, committer.ConcealmentCounts.Hidden);
 
-        // What an application does when it decides it should be on screen: undoes the
-        // cloak without telling anyone. Shubbak's record still says concealed.
-        Win32ApplicationView.Uncloak(window.Handle);
-        Win32Window.Uncloak(window.Handle);
-        TestWindow.PumpUntil(
-            () => Win32Window.GetCloakState(window.Handle) == Win32Window.CloakState.None);
+        // What an application does when it decides it should be on screen: puts
+        // itself back without telling anyone. Shubbak's record still says concealed.
+        window.ShowWithoutActivating();
+        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
 
-        Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+        Assert.True(Win32Window.IsVisible(window.Handle), "the window did not come back");
 
         Conceal(committer, window.Handle);
 
-        // Asserted on the count rather than on the cloak state, deliberately. The
-        // question here is whether Hide looked at the window at all, and the count
-        // answers it the moment the call returns - where the compositor may take
-        // longer to settle than a pump, which made this fail in company and pass
-        // alone. A second cloak means the record stopped being the whole test.
-        Assert.Equal(2, committer.ConcealmentCounts.Cloaked);
+        // A second concealment means Hide looked at the window rather than at its own
+        // record. With the record as the whole test this stayed at one, and the window
+        // could never be concealed again for the life of the process.
+        Assert.Equal(2, committer.ConcealmentCounts.Hidden);
 
         committer.RestoreAll();
         TestWindow.PumpOnce();

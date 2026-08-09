@@ -309,6 +309,45 @@ public static class Win32Window
         return new string(buffer[..(int)size]);
     }
 
+    /// <summary>
+    /// Whether a process runs at a higher integrity level than this one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Asked because an unelevated window manager cannot position an elevated
+    /// window: UIPI refuses the call. Measured rather than assumed - SetWindowPos on
+    /// Task Manager from an unelevated Shubbak returns false with
+    /// ERROR_ACCESS_DENIED, while the same call on Firefox succeeds.
+    /// </para>
+    /// <para>
+    /// <c>PROCESS_QUERY_INFORMATION</c> is the discriminator, and the choice of
+    /// access right is the whole trick. <c>PROCESS_QUERY_LIMITED_INFORMATION</c> is
+    /// deliberately granted across integrity levels - that is what "limited" means -
+    /// so reading the image path succeeds for an elevated process and says nothing.
+    /// The unlimited right is refused, and refused for exactly the reason that
+    /// matters here.
+    /// </para>
+    /// <para>
+    /// Opening the token is not a discriminator either, despite looking like one:
+    /// <c>OpenProcessToken</c> with <c>TOKEN_QUERY</c> succeeds against an elevated
+    /// process. Both were tried before this was written.
+    /// </para>
+    /// <para>
+    /// A process that refuses for some other reason - a protected process, one that
+    /// is exiting - is also one whose windows cannot be positioned, so treating the
+    /// refusal as "not ours to manage" is right whatever caused it.
+    /// </para>
+    /// </remarks>
+    public static bool IsElevated(uint processId)
+    {
+        if (processId == 0) return false;
+
+        using SafeFileHandle process = PInvoke.OpenProcess_SafeHandle(
+            PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_INFORMATION, false, processId);
+
+        return process.IsInvalid;
+    }
+
     // Win32 style enums are generated as internal and are deliberately not exposed:
     // Shubbak.Core must never see a Win32 type. Callers outside this assembly get
     // the derived predicates instead.
@@ -355,9 +394,12 @@ public static class Win32Window
             Title = GetTitle(handle),
             ProcessId = (int)processId,
 
-            // A path we could not read from a live process almost always means the
-            // process is at a higher integrity level than ours.
-            IsElevated = path is null && processId != 0,
+            // Asked properly rather than inferred from an unreadable path. That
+            // inference was wrong: the path is read with
+            // PROCESS_QUERY_LIMITED_INFORMATION, which is granted across integrity
+            // levels, so it succeeds for an elevated process and this was always
+            // false.
+            IsElevated = IsElevated(processId),
         };
     }
 

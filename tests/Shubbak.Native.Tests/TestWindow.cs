@@ -128,6 +128,18 @@ internal sealed class TestWindow : IDisposable
     public bool IsVisible => PInvoke.IsWindowVisible(_handle);
 
     /// <summary>
+    /// Puts the window back on screen behind Shubbak's back.
+    /// </summary>
+    /// <remarks>
+    /// Stands in for an application that decides it should be visible and shows
+    /// itself without telling the window manager. <c>SW_SHOWNA</c> rather than
+    /// <c>SW_SHOW</c> so it does not also take the foreground, which would make the
+    /// test about focus as well.
+    /// </remarks>
+    public void ShowWithoutActivating() =>
+        PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNA);
+
+    /// <summary>
     /// Waits for <paramref name="until"/> to hold.
     /// </summary>
     /// <remarks>
