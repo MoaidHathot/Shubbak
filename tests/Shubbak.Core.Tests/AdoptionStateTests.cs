@@ -50,6 +50,13 @@ public sealed class AdoptionStateTests
     {
         // The consequence that was actually visible. It holds a place in the tree but
         // must not be shown, or it occupies a tile it cannot draw into.
+        //
+        // Asserted as "no placement" rather than "an invisible placement". Those meant
+        // the same thing until an invisible placement started meaning "conceal it",
+        // which on Windows is a cloak - and a cloaked window's taskbar button stops
+        // restoring it, because the shell reads the cloak as the window living on
+        // another virtual desktop. Leaving a minimised window alone is both simpler
+        // and the only version that keeps the taskbar working.
         WindowManager wm = Create();
 
         wm.Open("ordinary");
@@ -57,10 +64,9 @@ public sealed class AdoptionStateTests
         WindowNode minimised = TreeBuilder.Window("minimised");
         wm.ManageWindow(minimised, workspace: null, state: WindowState.Minimised);
 
-        Placement placement = Assert.Single(
-            wm.ComputePlacements(), p => ReferenceEquals(p.Window, minimised));
-
-        Assert.False(placement.Visible);
+        Assert.DoesNotContain(
+            wm.ComputePlacements(),
+            p => ReferenceEquals(p.Window, minimised));
     }
 
     [Fact]

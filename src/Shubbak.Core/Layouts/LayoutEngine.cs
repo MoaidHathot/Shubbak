@@ -248,7 +248,18 @@ public sealed class LayoutEngine
                 }
 
                 case WindowState.Minimised:
-                    _placements.Add(new Placement(window, window.Rect, Visible: false));
+                    // Deliberately no placement. A minimised window is already off
+                    // screen, and the only thing a placement would do is conceal it -
+                    // which on Windows means cloaking it, which is the mechanism
+                    // virtual desktops use. The shell then reads the window as living
+                    // on another desktop, and clicking its taskbar button stops
+                    // restoring it: the button is there, the click does nothing, and
+                    // the only way back is Task View.
+                    //
+                    // Reported exactly that way, from a window minimised by accident.
+                    // Nothing is lost by leaving it alone - Windows is already showing
+                    // it in the taskbar and not on the desktop, which is the whole of
+                    // what minimised means.
                     break;
 
                 case WindowState.Tiling:
