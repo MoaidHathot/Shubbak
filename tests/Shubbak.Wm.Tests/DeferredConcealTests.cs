@@ -158,50 +158,42 @@ public sealed class ForegroundFollowTests
     {
         (WorkspaceNode shown, _) = Setup();
 
-        Assert.True(WmDaemon.ShouldFollowForeground(WindowOn(shown)));
+        Assert.True(WmDaemon.ShouldFollowForeground(WindowOn(shown), concealed: false));
     }
 
     [Fact]
-    public void AWindowOnAHiddenWorkspaceIsNotFollowed()
+    public void AWindowOnAHiddenWorkspaceIsStillFollowed()
     {
-        // The whole fix. Such a window is cloaked, which also keeps it out of
-        // alt-tab, so the user cannot have chosen it - this is Windows picking a
-        // fallback after we concealed whatever had the foreground.
+        // Clicking a taskbar button is how you reach a window when you cannot
+        // remember which workspace it is on, and a concealed window keeps its taskbar
+        // button so that you can. Following the foreground is what makes that work:
+        // focusing the window activates its workspace and reveals it.
         (_, WorkspaceNode hidden) = Setup();
 
-        Assert.False(WmDaemon.ShouldFollowForeground(WindowOn(hidden)));
+        Assert.True(WmDaemon.ShouldFollowForeground(WindowOn(hidden), concealed: true));
     }
 
     [Fact]
-    public void AWindowOnNoWorkspaceIsNotFollowed()
+    public void ConcealmentDoesNotDecideIt()
     {
-        // Mid-move between workspaces, or already detached. Nothing to activate and
-        // nothing the user could have clicked.
-        WindowNode window = new(
-            handle: 1,
-            new WindowIdentity { ProcessName = "process", ClassName = "Class", Title = "a" });
+        // The obvious discriminator, pinned as not being one. SwitchToThisWindow on a
+        // concealed window raises the foreground event without uncloaking, so a
+        // taskbar activation and a post-conceal fallback are identical at the moment
+        // the event arrives. Measured on a live desktop, not reasoned.
+        (_, WorkspaceNode hidden) = Setup();
 
-        Assert.False(WmDaemon.ShouldFollowForeground(window));
+        WindowNode window = WindowOn(hidden);
+
+        Assert.Equal(
+            WmDaemon.ShouldFollowForeground(window, concealed: true),
+            WmDaemon.ShouldFollowForeground(window, concealed: false));
     }
 
     [Fact]
-    public void TheTwoRulesAreExactOpposites()
+    public void NothingIsFollowedWhenThereIsNoWindow()
     {
-        // Worth pinning, because they read as though they might drift apart: a window
-        // is followed exactly when it is displayed, and concealed exactly when it is
-        // not. Any future change that makes both true, or both false, has broken one
-        // of them.
-        (WorkspaceNode shown, WorkspaceNode hidden) = Setup();
-
-        WindowNode visible = WindowOn(shown);
-        WindowNode invisible = WindowOn(hidden);
-
-        Assert.NotEqual(
-            WmDaemon.ShouldFollowForeground(visible),
-            WmDaemon.ShouldStillConceal(visible));
-
-        Assert.NotEqual(
-            WmDaemon.ShouldFollowForeground(invisible),
-            WmDaemon.ShouldStillConceal(invisible));
+        // The one case that is not a window Shubbak manages. Everything else is.
+        Assert.False(WmDaemon.ShouldFollowForeground(null, concealed: false));
+        Assert.False(WmDaemon.ShouldFollowForeground(null, concealed: true));
     }
 }

@@ -994,20 +994,24 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Created:
             case WinEventKind.Shown:
             case WinEventKind.Uncloaked:
-                // A window Shubbak already manages coming back on screen without
-                // being asked. Applications do this - a Teams meeting window was the
+                // A window Shubbak already manages coming back on screen without being
+                // asked. Applications do this - a Teams meeting window was the
                 // reported case - and nothing else notices, because a layout pass
                 // only runs when something changes and this changed nothing Shubbak
                 // knows about. Until it is put back it sits over whichever workspace
                 // is displayed, which reads as the window belonging to that workspace
                 // and the bar reporting it wrongly.
                 //
-                // Only ever puts it back where the tree already says it should be, so
-                // a window on a displayed workspace is left alone and this cannot
-                // fight a reveal.
+                // Asking for a layout pass rather than concealing it here, because
+                // this is also what a taskbar click looks like on its way in: the
+                // shell brings the window back and then gives it the foreground. Both
+                // events are in this drain, so by the time the pass runs the
+                // foreground has been followed and the workspace switched - and the
+                // pass then finds the window displayed and leaves it alone. Deciding
+                // here would race the two and lose the click.
                 if (_windows.TryGet(handle, out WindowNode? reappeared))
                 {
-                    if (!reappeared.IsOnADisplayedWorkspace) _committer.Conceal(handle);
+                    if (!reappeared.IsOnADisplayedWorkspace) _layoutDirty = true;
                     break;
                 }
 
@@ -1072,7 +1076,7 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Foreground:
                 if (_windows.TryGet(handle, out WindowNode? focused))
                 {
-                    if (ShouldFollowForeground(focused) &&
+                    if (ShouldFollowForeground(focused, WindowCommitter.IsConcealed(handle)) &&
                         !ReferenceEquals(_wm.FocusedWindow, focused))
                     {
                         Publish(_wm.FocusWindow(focused));
@@ -2578,36 +2582,49 @@ public sealed class WmDaemon : IDisposable
     /// <summary>
     /// Whether the system's choice of foreground window should become Shubbak's.
     /// </summary>
+    /// <param name="window">The managed window that took the foreground.</param>
+    /// <param name="concealed">
+    /// Whether that window is, at this instant, actually off screen. Kept in the
+    /// signature because it is the obvious discriminator and it does not work; see
+    /// below, so that the next reader does not spend an afternoon rediscovering it.
+    /// </param>
     /// <remarks>
     /// <para>
-    /// Normally yes: the user clicked something, or alt-tabbed to it, and the window
-    /// manager follows.
+    /// Yes, always, for any window Shubbak manages. Clicking a window's taskbar
+    /// button is how you go to a window when you cannot remember which workspace it
+    /// is on, and a concealed window keeps its taskbar button precisely so that it
+    /// can be. Following the foreground is what makes that work: focusing a window on
+    /// a hidden workspace activates that workspace, and the window is revealed as
+    /// part of the switch.
     /// </para>
     /// <para>
-    /// Not when the window is on a workspace that is not displayed. Such a window is
-    /// cloaked, which also keeps it out of alt-tab, so the user cannot have picked
-    /// it - this is Windows choosing a fallback after we concealed whatever had the
-    /// foreground. Following it is actively destructive, because focusing a window on
-    /// a hidden workspace activates that workspace, which silently undoes the switch
-    /// that caused the concealment in the first place.
+    /// This was briefly restricted to windows already on a displayed workspace, to
+    /// fix a real bug: switching to an empty workspace and launching something put it
+    /// on the workspace just left. An empty workspace has nothing to hold the
+    /// foreground, so it stays on the window Shubbak just concealed, and the launcher
+    /// handing it back reads as "go to that window" - which activates its workspace
+    /// and unwinds the switch.
     /// </para>
     /// <para>
-    /// Reported as: switch to an empty workspace, launch something, and it opens on
-    /// the workspace you just left. An empty workspace cannot hold the foreground, so
-    /// the launcher taking it and giving it back put it on the old window, and from
-    /// there the whole switch unwound - active workspace included. Measured on a live
-    /// session, the reversion landed about four seconds after the keypress, which is
-    /// exactly long enough to have started typing.
+    /// The restriction fixed that and broke the taskbar, which is the more valuable
+    /// of the two. Both were tried against the concealment state and it does not
+    /// separate them: <c>SwitchToThisWindow</c> on a concealed window raises the
+    /// foreground event without uncloaking, so at the moment the event arrives a
+    /// taskbar activation and a fallback are indistinguishable. Measured, not assumed.
     /// </para>
     /// <para>
-    /// komorebi has the same bug (issue #1676) and closed it as a fault in the
-    /// launcher that triggered it. It is not: any launcher will do, because the
-    /// foreground has to go somewhere while the launcher is up and there is nothing
-    /// on an empty workspace to give it back to.
+    /// The empty-workspace bug is therefore still open, and the fix for it is not
+    /// here. It is to stop leaving the system's foreground on a window that has just
+    /// been concealed with nothing to replace it - make the desktop agree that
+    /// nothing is focused, so there is no stale foreground for Windows to return to.
     /// </para>
     /// </remarks>
-    internal static bool ShouldFollowForeground(WindowNode? window) =>
-        window is not null && window.IsOnADisplayedWorkspace;
+    internal static bool ShouldFollowForeground(WindowNode? window, bool concealed)
+    {
+        _ = concealed;
+
+        return window is not null;
+    }
 
     /// <summary>
     /// Decides whether one window is animated to its new rectangle or simply placed

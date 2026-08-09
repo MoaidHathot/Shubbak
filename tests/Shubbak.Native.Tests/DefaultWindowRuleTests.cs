@@ -79,6 +79,28 @@ public sealed class DefaultWindowRuleTests
     }
 
     [Fact]
+    public void TaskManagerIsAnApplicationAndIsTiled()
+    {
+        // It used to sit in the excluded-class list among the shell plumbing - IME
+        // hosts, OLE marshalling windows, taskbar thumbnails - which is the wrong
+        // company. Those are surfaces nobody arranges. Task Manager is a window
+        // someone opens, reads, and wants beside something else, and excluding it
+        // meant it floated over a tiled workspace and had to be placed by hand.
+        Assert.False(WindowFilter.IsExcludedClassName("TaskManagerWindow"));
+    }
+
+    [Fact]
+    public void TheShellSurfacesAroundItAreStillExcluded()
+    {
+        // The neighbours it was removed from, asserted so that removing one entry
+        // cannot quietly take the list with it.
+        Assert.True(WindowFilter.IsExcludedClassName("IME"));
+        Assert.True(WindowFilter.IsExcludedClassName("MSCTFIME UI"));
+        Assert.True(WindowFilter.IsExcludedClassName("OleMainThreadWndClass"));
+        Assert.True(WindowFilter.IsExcludedClassName("TaskListThumbnailWnd"));
+    }
+
+    [Fact]
     public void TheLanguageSwitcherIsExcludedByClass()
     {
         // The only thing that identifies it. It is hosted by explorer, so process
