@@ -104,3 +104,104 @@ public sealed class DeferredConcealTests
         Assert.True(WmDaemon.ShouldStillConceal(window));
     }
 }
+
+/// <summary>
+/// Whether the system's choice of foreground window becomes Shubbak's.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Switch to an empty workspace, launch something, and it opened on the workspace you
+/// just left - taking the active workspace back with it. An empty workspace has
+/// nothing to hold the foreground, so a launcher taking it and handing it back put it
+/// on the old window; Shubbak followed, and because focusing a window on a hidden
+/// workspace activates that workspace, the entire switch unwound.
+/// </para>
+/// <para>
+/// Measured on a live session, the reversion arrived about four seconds after the
+/// keypress. Long enough to have started typing, and far enough from the cause that it
+/// reads as the window manager acting on its own.
+/// </para>
+/// <para>
+/// komorebi carries the same bug as issue #1676, closed as a fault in the launcher
+/// that happened to trigger it. Any launcher will do.
+/// </para>
+/// </remarks>
+public sealed class ForegroundFollowTests
+{
+    private static WindowNode WindowOn(WorkspaceNode workspace)
+    {
+        WindowNode window = new(
+            handle: 1,
+            new WindowIdentity { ProcessName = "process", ClassName = "Class", Title = "a" });
+
+        workspace.Add(window);
+        return window;
+    }
+
+    private static (WorkspaceNode Shown, WorkspaceNode Hidden) Setup()
+    {
+        var bounds = new Rect(0, 0, 1920, 1080);
+        var monitor = new MonitorNode("\\\\.\\DISPLAY1", bounds, bounds);
+
+        var shown = new WorkspaceNode("1");
+        var hidden = new WorkspaceNode("2");
+
+        monitor.AddWorkspace(shown);
+        monitor.AddWorkspace(hidden);
+        monitor.ActiveWorkspace = shown;
+
+        return (shown, hidden);
+    }
+
+    [Fact]
+    public void AWindowTheUserCanSeeIsFollowed()
+    {
+        (WorkspaceNode shown, _) = Setup();
+
+        Assert.True(WmDaemon.ShouldFollowForeground(WindowOn(shown)));
+    }
+
+    [Fact]
+    public void AWindowOnAHiddenWorkspaceIsNotFollowed()
+    {
+        // The whole fix. Such a window is cloaked, which also keeps it out of
+        // alt-tab, so the user cannot have chosen it - this is Windows picking a
+        // fallback after we concealed whatever had the foreground.
+        (_, WorkspaceNode hidden) = Setup();
+
+        Assert.False(WmDaemon.ShouldFollowForeground(WindowOn(hidden)));
+    }
+
+    [Fact]
+    public void AWindowOnNoWorkspaceIsNotFollowed()
+    {
+        // Mid-move between workspaces, or already detached. Nothing to activate and
+        // nothing the user could have clicked.
+        WindowNode window = new(
+            handle: 1,
+            new WindowIdentity { ProcessName = "process", ClassName = "Class", Title = "a" });
+
+        Assert.False(WmDaemon.ShouldFollowForeground(window));
+    }
+
+    [Fact]
+    public void TheTwoRulesAreExactOpposites()
+    {
+        // Worth pinning, because they read as though they might drift apart: a window
+        // is followed exactly when it is displayed, and concealed exactly when it is
+        // not. Any future change that makes both true, or both false, has broken one
+        // of them.
+        (WorkspaceNode shown, WorkspaceNode hidden) = Setup();
+
+        WindowNode visible = WindowOn(shown);
+        WindowNode invisible = WindowOn(hidden);
+
+        Assert.NotEqual(
+            WmDaemon.ShouldFollowForeground(visible),
+            WmDaemon.ShouldStillConceal(visible));
+
+        Assert.NotEqual(
+            WmDaemon.ShouldFollowForeground(invisible),
+            WmDaemon.ShouldStillConceal(invisible));
+    }
+}

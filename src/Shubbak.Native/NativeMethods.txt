@@ -149,6 +149,8 @@ GetCurrentProcess
 SystemParametersInfo
 SYSTEM_PARAMETERS_INFO_ACTION
 GetSystemMetrics
+SHQueryUserNotificationState
+QUERY_USER_NOTIFICATION_STATE
 SYSTEM_METRICS_INDEX
 EnumDisplaySettings
 DEVMODEW
