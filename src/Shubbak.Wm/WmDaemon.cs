@@ -618,6 +618,15 @@ public sealed class WmDaemon : IDisposable
                 _frameAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeFrame);
             }
 
+            // Anything held back is due as soon as nothing is moving, which is
+            // deliberately not the same as "a motion just ended". A pass can defer a
+            // conceal and then take the last animating track away in the same pass -
+            // there is then no motion left to end, the edge below never fires, and
+            // the windows sit visible on a workspace that is not displayed until
+            // something unrelated hides them. Asking the simpler question costs a
+            // bool compare per tick and cannot strand anything.
+            if (!_animation.IsAnimating) FlushDeferredConceal();
+
             // Reported once per motion, not once per frame - an instrument that logs
             // at frame rate becomes the thing it is measuring.
             //
@@ -627,10 +636,6 @@ public sealed class WmDaemon : IDisposable
             // next motion reported.
             if ((wasAnimating || started) && !_animation.IsAnimating)
             {
-                // The windows the motion was travelling to cover go now, one frame
-                // after it landed rather than one frame before it set off.
-                FlushDeferredConceal();
-
                 // Cleared so the next motion's first frame is emitted immediately
                 // rather than waiting out a frame interval measured from the previous
                 // motion, which could have ended minutes ago.
@@ -989,6 +994,23 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Created:
             case WinEventKind.Shown:
             case WinEventKind.Uncloaked:
+                // A window Shubbak already manages coming back on screen without
+                // being asked. Applications do this - a Teams meeting window was the
+                // reported case - and nothing else notices, because a layout pass
+                // only runs when something changes and this changed nothing Shubbak
+                // knows about. Until it is put back it sits over whichever workspace
+                // is displayed, which reads as the window belonging to that workspace
+                // and the bar reporting it wrongly.
+                //
+                // Only ever puts it back where the tree already says it should be, so
+                // a window on a displayed workspace is left alone and this cannot
+                // fight a reveal.
+                if (_windows.TryGet(handle, out WindowNode? reappeared))
+                {
+                    if (!reappeared.IsOnADisplayedWorkspace) _committer.Conceal(handle);
+                    break;
+                }
+
                 // Coming out of the tray is the evidence that was missing at startup,
                 // so a window set aside then gets another look now.
                 _windows.NoLongerSetAside(handle);
@@ -2466,6 +2488,15 @@ public sealed class WmDaemon : IDisposable
     {
         _deferredConceal.Clear();
 
+        // Outgoing windows stop travelling first, and only then is it asked whether
+        // anything is still moving. The other order is a trap: removing the last
+        // animating track after deciding to defer leaves a deferral waiting for a
+        // motion that has already ended, and no motion ever "ends" to release it.
+        // That stranded a window visible on a hidden workspace until something
+        // unrelated concealed it.
+        foreach (Placement placement in placements)
+            if (!placement.Visible) _animation.Remove(placement.Window.Handle);
+
         bool animating = _animation.IsAnimating;
         int outgoing = 0;
 
@@ -2474,10 +2505,6 @@ public sealed class WmDaemon : IDisposable
             if (placement.Visible) continue;
 
             outgoing++;
-
-            // Leaving, so it stops travelling wherever it was going: a window sliding
-            // towards a rectangle nobody will see is wasted work.
-            _animation.Remove(placement.Window.Handle);
 
             if (animating)
                 _deferredConceal.Add(placement);

@@ -153,6 +153,52 @@ public sealed class WindowCommitterConcealmentTests
     /// making that decision, so they are driven the way the daemon drives them: a
     /// placement with <c>Visible: false</c>.
     /// </remarks>
+    [Fact]
+    public void AWindowThatUncloaksItselfCanBeConcealedAgain()
+    {
+        // Reported as a window stuck on screen through every workspace switch: it
+        // belonged to a hidden workspace, the tree agreed it was hidden, and it was
+        // visible anyway. Since it covered whichever workspace was displayed, it also
+        // looked as though it lived on that workspace and the bar was lying about it.
+        //
+        // The committer kept a record of what it had concealed and returned early
+        // when the handle was in it. That is right for the ordinary repeat, and wrong
+        // the moment anything else puts the window back: the record still said
+        // concealed, so nothing ever looked at the window again and it could not be
+        // concealed for the life of the process. A Teams meeting window was the one
+        // that did it.
+        using var window = new TestWindow();
+        var committer = new WindowCommitter();
+
+        Conceal(committer, window.Handle);
+        TestWindow.PumpUntil(
+            () => Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None);
+
+        Assert.NotEqual(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+
+        // What an application does when it decides it should be on screen: undoes the
+        // cloak without telling anyone. Shubbak's record still says concealed.
+        Win32ApplicationView.Uncloak(window.Handle);
+        Win32Window.Uncloak(window.Handle);
+        TestWindow.PumpUntil(
+            () => Win32Window.GetCloakState(window.Handle) == Win32Window.CloakState.None);
+
+        Assert.Equal(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+
+        // Asserted, not assumed: if the window were off screen for some other reason
+        // the check below would pass without the fix and prove nothing.
+        Assert.True(Win32Window.IsVisible(window.Handle), "the window was not on screen to begin with");
+
+        Conceal(committer, window.Handle);
+        TestWindow.PumpUntil(
+            () => Win32Window.GetCloakState(window.Handle) != Win32Window.CloakState.None);
+
+        Assert.NotEqual(Win32Window.CloakState.None, Win32Window.GetCloakState(window.Handle));
+
+        committer.RestoreAll();
+        TestWindow.PumpOnce();
+    }
+
     private static void Conceal(WindowCommitter committer, nint handle)
     {
         committer.Commit(
