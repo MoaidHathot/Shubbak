@@ -2768,11 +2768,62 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void FocusIfDisplayed()
     {
-        if (_wm.FocusedWindow is not { } focused) return;
+        if (_wm.FocusedWindow is not { } focused)
+        {
+            ReleaseStaleForeground();
+            return;
+        }
+
         if (!focused.IsOnADisplayedWorkspace) return;
         if (Win32Window.GetForeground() == (nint)focused.Handle) return;
 
         WindowActions.Focus((nint)focused.Handle);
+    }
+
+    /// <summary>
+    /// Takes the foreground off a window that is no longer on screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Displaying an empty workspace leaves nothing to focus, and Shubbak used to
+    /// stop there. The system's foreground stayed on whatever had it - a window just
+    /// concealed - and Windows hands that back the instant anything else releases the
+    /// foreground. A launcher opening and closing is enough, and a launcher is
+    /// precisely what someone does next on an empty workspace.
+    /// </para>
+    /// <para>
+    /// It arrives as an ordinary foreground event for a window Shubbak manages, which
+    /// is indistinguishable from clicking that window's taskbar button - measured, on
+    /// a live desktop, by activating a concealed window and watching it raise the
+    /// event without uncloaking. So it cannot be filtered out at the far end, and an
+    /// attempt to do that broke the taskbar instead.
+    /// </para>
+    /// <para>
+    /// Removing the cause works where filtering the symptom did not: with the
+    /// foreground parked on the desktop there is nothing stale for Windows to return
+    /// to. GlazeWM does this when its last window closes and not when a workspace is
+    /// switched to, which is why the switching half is still an open bug there and
+    /// the closing half is not.
+    /// </para>
+    /// <para>
+    /// Narrow on purpose. Only a window Shubbak manages that is not on a displayed
+    /// workspace counts as stale; the desktop already holding it, an unmanaged window,
+    /// or anything the user has just clicked is left alone.
+    /// </para>
+    /// </remarks>
+    private void ReleaseStaleForeground()
+    {
+        nint foreground = Win32Window.GetForeground();
+        if (foreground == 0) return;
+
+        if (!_windows.TryGet(foreground, out WindowNode? stale)) return;
+        if (stale.IsOnADisplayedWorkspace) return;
+
+        if (WindowActions.FocusDesktop() && Log.IsEnabled(LogLevel.Debug))
+        {
+            Log.Debug(LogCategory.Window,
+                $"foreground released from concealed 0x{foreground:X} to the desktop");
+        }
     }
 
     /// <summary>

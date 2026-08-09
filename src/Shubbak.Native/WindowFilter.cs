@@ -146,15 +146,13 @@ public static class WindowFilter
         "MSCTFIME UI",
         "Default IME",
 
-        // Task Manager is deliberately absent from this list. It sat here among the
-        // shell plumbing, which is the wrong company: the rest of these are surfaces
-        // the user never arranges - IME hosts, OLE marshalling windows, taskbar
-        // thumbnails - whereas Task Manager is an ordinary application window that
-        // someone opens, reads, and wants beside something else. Excluding it meant
-        // it floated over a tiled workspace and had to be moved by hand.
-        //
-        // It still passes the structural gates on its own merits: it has a caption,
-        // it accepts activation, and it is not an owned popup.
+        // Task Manager is deliberately absent from this list, and its absence is the
+        // point. It was excluded here by name, which looked like a decision about
+        // Task Manager and was really a workaround for a rule that had never been
+        // wired up: an unelevated Shubbak cannot position an elevated window at all.
+        // That rule now exists in Evaluate, so Task Manager is excluded for the
+        // reason it was always being excluded for - and it is managed normally when
+        // Shubbak is started elevated, which the name-based version could never do.
         "OleMainThreadWndClass",
         "CicMarshalWndClass",
         "TaskListThumbnailWnd",
@@ -297,8 +295,35 @@ public static class WindowFilter
 
         // Checked after the cheap style and class tests, because it costs a process
         // handle - but before the Alt+Tab test, which some of these windows pass.
-        if (IsExcludedProcess(handle))
-            return ManageDecision.No(ExclusionReason.ExcludedProcess);
+        //
+        // One process id answers two questions, so they are asked together.
+        uint processId = Win32Window.GetProcessId(handle);
+        if (processId != 0)
+        {
+            // An unelevated Shubbak cannot position an elevated window at all: UIPI
+            // refuses the call. Measured, not inferred - SetWindowPos on Task Manager
+            // returns false with ERROR_ACCESS_DENIED while the same call on Firefox
+            // succeeds.
+            //
+            // Passing such a window over is better than managing it. Managing it
+            // reserves a tile and shrinks its neighbours to make room, and the window
+            // never arrives - it stays wherever Windows put it, which can be another
+            // monitor entirely, while a gap waits for it on this one. That is exactly
+            // how it was reported.
+            //
+            // Overridable, because the answer changes if Shubbak is started elevated:
+            // the process opens, this gate stops firing, and the window is managed
+            // like any other. That is also why it is not a list of application names.
+            if (Win32Window.IsElevated(processId))
+                return ManageDecision.No(ExclusionReason.Elevated);
+
+            if (Win32Window.GetProcessPath(processId) is { } path &&
+                IsExcludedProcessName(Path.GetFileNameWithoutExtension(path)))
+            {
+                return ManageDecision.No(ExclusionReason.ExcludedProcess);
+            }
+        }
+
 
         // Cloaking has to be read three ways, not as a boolean.
         //
@@ -391,17 +416,6 @@ public static class WindowFilter
     };
 
     /// <summary>Whether the owning executable is one Shubbak never manages.</summary>
-    private static bool IsExcludedProcess(nint handle)
-    {
-        uint processId = Win32Window.GetProcessId(handle);
-        if (processId == 0) return false;
-
-        string? path = Win32Window.GetProcessPath(processId);
-        if (path is null) return false;
-
-        return IsExcludedProcessName(Path.GetFileNameWithoutExtension(path));
-    }
-
     /// <summary>
     /// The standard test for "would this window appear in Alt+Tab?".
     /// </summary>

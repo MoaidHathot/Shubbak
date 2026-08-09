@@ -79,14 +79,40 @@ public sealed class DefaultWindowRuleTests
     }
 
     [Fact]
-    public void TaskManagerIsAnApplicationAndIsTiled()
+    public void TaskManagerIsNotExcludedByName()
     {
-        // It used to sit in the excluded-class list among the shell plumbing - IME
-        // hosts, OLE marshalling windows, taskbar thumbnails - which is the wrong
-        // company. Those are surfaces nobody arranges. Task Manager is a window
-        // someone opens, reads, and wants beside something else, and excluding it
-        // meant it floated over a tiled workspace and had to be placed by hand.
+        // It used to be, which read as a decision about Task Manager and was really a
+        // workaround for a rule nobody had written: an unelevated Shubbak cannot
+        // position an elevated window, and Task Manager is elevated.
+        //
+        // Measured, not assumed - SetWindowPos on it returns ERROR_ACCESS_DENIED
+        // while the same call on Firefox succeeds. Managing it anyway reserved a tile
+        // and shrank its neighbours to make room for a window that never arrived.
+        //
+        // Excluding by name got the outcome right for one application and the reason
+        // wrong for all of them, and it could never be undone by running elevated.
+        // The rule lives in Evaluate now; this only pins that the name is gone.
         Assert.False(WindowFilter.IsExcludedClassName("TaskManagerWindow"));
+    }
+
+    [Fact]
+    public void AnElevatedWindowSaysWhyItCannotBeManaged()
+    {
+        // The message a user sees from `shubbak inspect` when a window will not tile
+        // and there is nothing wrong with the window. Without it the symptom is a gap
+        // in the layout with no explanation anywhere.
+        Assert.Contains(
+            "elevated",
+            ManageDecision.No(ExclusionReason.Elevated).Explain(),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AnElevatedWindowCanBeOverridden()
+    {
+        // A rule may still say `manage`. Shubbak will fail to move it, but that is
+        // the user's call to make and the alternative is silently refusing.
+        Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.Elevated));
     }
 
     [Fact]
