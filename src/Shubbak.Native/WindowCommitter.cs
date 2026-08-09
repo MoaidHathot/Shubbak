@@ -828,12 +828,45 @@ public sealed class WindowCommitter
     /// window off screen, which is the failure this whole path exists to prevent.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Whether a window this committer concealed is still concealed.
+    /// </summary>
+    /// <remarks>
+    /// Asked per method rather than in general, because the three are undone
+    /// differently and only one of them is reversible by the application. A cloak can
+    /// be lifted by the window itself; a minimised window can be restored from the
+    /// taskbar; an <c>SW_HIDE</c> window practically cannot come back on its own.
+    /// </remarks>
+    private static bool StillConcealed(nint handle, ConcealMethod method) => method switch
+    {
+        ConcealMethod.Cloaked => Win32Window.GetCloakState(handle)
+            is Win32Window.CloakState.App or Win32Window.CloakState.Shell,
+        ConcealMethod.Minimised => Win32Window.IsMinimised(handle),
+        ConcealMethod.Hidden => !Win32Window.IsVisible(handle),
+        _ => false,
+    };
+
     private void Hide(nint handle)
     {
+        ConcealMethod? already;
+
         lock (_lastCommitted)
         {
-            if (_concealed.ContainsKey(handle)) return;
+            already = _concealed.TryGetValue(handle, out ConcealMethod recorded)
+                ? recorded
+                : null;
         }
+
+        // The record alone is not enough. It used to be the whole test, and a window
+        // that came back on screen without Shubbak asking - which applications do -
+        // left the record saying "concealed" while the window sat visible. Every
+        // later attempt returned here without looking, so it could never be concealed
+        // again: it stayed on screen through every workspace switch for the life of
+        // the process. Seen with a Teams meeting window, which uncloaks itself.
+        //
+        // Checked outside the lock: it is a system call, and the record it is
+        // checking has already been read.
+        if (already is { } method && StillConcealed(handle, method)) return;
 
         if (HideMethod == WindowHideMethod.Cloak && Win32ApplicationView.Cloak(handle))
         {
