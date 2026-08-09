@@ -1090,6 +1090,16 @@ public sealed class WmDaemon : IDisposable
                 {
                     TryManage(handle);
                 }
+
+                // Something else has the foreground now, which deactivates the window
+                // that had it - and a window that repaints on deactivation clears the
+                // border Shubbak put on it. Putting it back here rather than waiting
+                // for the heal timer is the difference between a border that flickers
+                // whenever a launcher opens over it and one that does not.
+                //
+                // Does nothing when focus genuinely moved: that case is two windows'
+                // worth of work and is handled above.
+                if (_config.Effects.Enabled) ReassertFocusBorder();
                 break;
 
             case WinEventKind.MinimiseStart:
@@ -1319,6 +1329,25 @@ public sealed class WmDaemon : IDisposable
         // as it happens rather than reconstructed afterwards. The class is included
         // because it is what a rule has to match on, and transient windows - shell
         // flyouts especially - are gone long before anything can be pointed at them.
+        // Said out loud, once, and only for this reason. Every other exclusion is
+        // either obviously right or something a rule can express, and belongs at trace
+        // with the rest. This one is a window the user can see, that looks exactly
+        // like something Shubbak should be tiling, and the remedy is not a rule - it
+        // is starting Shubbak the same way the application was started. Left at trace
+        // it was invisible, and the question came back as "why does GlazeWM manage
+        // Task Manager and Shubbak does not". It does not either, unless elevated:
+        // moving a window across an integrity boundary is refused by the system, not
+        // by the window manager.
+        if (decision.Reason == ExclusionReason.Elevated && _elevatedSkipsReported < 1)
+        {
+            _elevatedSkipsReported++;
+
+            Log.Info(LogCategory.Window,
+                $"not managing \"{Win32Window.GetTitle(handle).Truncate(40)}\": it runs elevated " +
+                "and Shubbak does not, so Windows refuses to move it. Start Shubbak elevated " +
+                "to tile windows like this one. Reported once per run.");
+        }
+
         if (Log.IsEnabled(LogLevel.Trace))
         {
             Log.Trace(LogCategory.Window,
@@ -1328,6 +1357,14 @@ public sealed class WmDaemon : IDisposable
 
         return false;
     }
+
+    /// <summary>How many elevated windows have been reported at info level.</summary>
+    /// <remarks>
+    /// One is enough to answer the question. Every window of an elevated application
+    /// hits this, and several of them are transient - saying it per window would turn
+    /// an explanation into noise.
+    /// </remarks>
+    private int _elevatedSkipsReported;
 
     /// <summary>Builds the tree node for a window about to be adopted.</summary>
     private WindowNode BuildNode(nint handle)
@@ -3158,16 +3195,38 @@ public sealed class WmDaemon : IDisposable
     /// <para>
     /// Setting it once when focus changes is therefore not enough: the border would
     /// vanish partway through using a window and not return until focus moved away
-    /// and back. Reasserting on a slow timer costs one DWM call a second and makes
-    /// the border heal itself no matter what the application does.
+    /// and back. Reasserting on a timer makes it heal itself no matter what the
+    /// application does.
+    /// </para>
+    /// <para>
+    /// A fifth of a second rather than a whole one. Deactivating such a window makes
+    /// it repaint, so opening any transient thing over it - a launcher, a command
+    /// palette - cleared the border and left it cleared for up to a second, which
+    /// reads as the border flickering every time. The cost is one compositor call on
+    /// one window five times a second, which is not a cost.
     /// </para>
     /// </remarks>
     private void MaybeRefreshFocusBorder(long now)
     {
         if (!_config.Effects.Enabled) return;
-        if (!DueEvery(1_000, now, ref _lastBorderRefreshTicks)) return;
+        if (!DueEvery(200, now, ref _lastBorderRefreshTicks)) return;
 
+        ReassertFocusBorder();
+    }
+
+    /// <summary>
+    /// Puts the focused window's border back, whatever the window did to it.
+    /// </summary>
+    /// <remarks>
+    /// Only when Shubbak's idea of focus has not moved. A genuine focus change is
+    /// two windows' worth of work and belongs to <see cref="ApplyFocusBorder"/>;
+    /// this is for the case where nothing changed as far as the tree is concerned
+    /// and the window cleared its own border anyway.
+    /// </remarks>
+    private void ReassertFocusBorder()
+    {
         if (_borderedWindow is not { } window) return;
+        if (!ReferenceEquals(_wm.FocusedWindow, window)) return;
         if (!Win32Window.Exists((nint)window.Handle)) return;
 
         ApplyBorder(window, ColourFor(window, focused: true));
