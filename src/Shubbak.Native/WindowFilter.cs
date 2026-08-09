@@ -56,7 +56,9 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
         ExclusionReason.NoTitle => "window has no title",
         ExclusionReason.ExcludedClass => "window class is excluded by default",
         ExclusionReason.ExcludedProcess => "window belongs to a shell process that is excluded by default",
-        ExclusionReason.Elevated => "window belongs to an elevated process and Shubbak is not elevated",
+        ExclusionReason.Elevated =>
+            "window runs at a higher integrity level than Shubbak, so Windows refuses to move it - " +
+            "start Shubbak elevated, or use a signed build installed under Program Files with uiAccess",
         _ => "unknown",
     };
 }
@@ -311,9 +313,14 @@ public static class WindowFilter
             // monitor entirely, while a gap waits for it on this one. That is exactly
             // how it was reported.
             //
-            // Overridable, because the answer changes if Shubbak is started elevated:
-            // the process opens, this gate stops firing, and the window is managed
-            // like any other. That is also why it is not a list of application names.
+            // Overridable, and there are two ways the answer changes. Starting
+            // Shubbak elevated puts it at the same integrity level, so the gate stops
+            // firing. So does a manifest with uiAccess="true" - the privilege a
+            // screen reader uses to drive windows it does not own - which Windows
+            // honours only for a binary that is Authenticode signed and installed
+            // under %ProgramFiles%. GlazeWM does exactly that, which is why it tiles
+            // Task Manager without elevating and a build running from a source tree
+            // cannot. Neither is a list of application names, which is the point.
             if (Win32Window.IsElevated(processId))
                 return ManageDecision.No(ExclusionReason.Elevated);
 

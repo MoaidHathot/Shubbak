@@ -1332,20 +1332,28 @@ public sealed class WmDaemon : IDisposable
         // Said out loud, once, and only for this reason. Every other exclusion is
         // either obviously right or something a rule can express, and belongs at trace
         // with the rest. This one is a window the user can see, that looks exactly
-        // like something Shubbak should be tiling, and the remedy is not a rule - it
-        // is starting Shubbak the same way the application was started. Left at trace
-        // it was invisible, and the question came back as "why does GlazeWM manage
-        // Task Manager and Shubbak does not". It does not either, unless elevated:
-        // moving a window across an integrity boundary is refused by the system, not
-        // by the window manager.
+        // like something Shubbak should be tiling, and no rule can fix it: the refusal
+        // comes from the system, not from the window manager.
+        //
+        // Two ways past it, and the second is why "GlazeWM manages Task Manager and
+        // Shubbak does not" is a fair complaint rather than a misunderstanding.
+        // GlazeWM ships a manifest with uiAccess="true", which grants the right to
+        // drive higher-integrity windows while still running as the user - the same
+        // privilege a screen reader uses. Windows only honours it for a binary that is
+        // Authenticode signed and installed under %ProgramFiles%, both of which
+        // GlazeWM satisfies and neither of which a build running out of a source tree
+        // does. Until Shubbak is signed and installed the same way, elevation is the
+        // only route.
         if (decision.Reason == ExclusionReason.Elevated && _elevatedSkipsReported < 1)
         {
             _elevatedSkipsReported++;
 
             Log.Info(LogCategory.Window,
-                $"not managing \"{Win32Window.GetTitle(handle).Truncate(40)}\": it runs elevated " +
-                "and Shubbak does not, so Windows refuses to move it. Start Shubbak elevated " +
-                "to tile windows like this one. Reported once per run.");
+                $"not managing \"{Win32Window.GetTitle(handle).Truncate(40)}\": it runs at a " +
+                "higher integrity level than Shubbak, so Windows refuses to move its windows. " +
+                "Start Shubbak elevated to tile them. The alternative is a signed build " +
+                "installed under Program Files with uiAccess in its manifest, which is how " +
+                "GlazeWM does it without elevating. Reported once per run.");
         }
 
         if (Log.IsEnabled(LogLevel.Trace))
