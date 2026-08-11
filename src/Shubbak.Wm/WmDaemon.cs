@@ -2665,10 +2665,11 @@ public sealed class WmDaemon : IDisposable
     /// taskbar activation and a fallback are indistinguishable. Measured, not assumed.
     /// </para>
     /// <para>
-    /// The empty-workspace bug is therefore still open, and the fix for it is not
-    /// here. It is to stop leaving the system's foreground on a window that has just
-    /// been concealed with nothing to replace it - make the desktop agree that
-    /// nothing is focused, so there is no stale foreground for Windows to return to.
+    /// The empty-workspace bug is therefore not fixed here, and must not be. It is
+    /// fixed at the cause instead, by <see cref="ReleaseStaleForeground"/>: stop
+    /// leaving the system's foreground on a window when the tree has nothing focused,
+    /// so there is no stale foreground for Windows to return to and no ambiguous
+    /// event to have to judge.
     /// </para>
     /// </remarks>
     internal static bool ShouldFollowForeground(WindowNode? window, bool concealed)
@@ -2677,6 +2678,28 @@ public sealed class WmDaemon : IDisposable
 
         return window is not null;
     }
+
+    /// <summary>
+    /// Whether a window Shubbak manages is holding the system foreground it should
+    /// no longer have.
+    /// </summary>
+    /// <param name="foreground">The managed window the system reports as foreground.</param>
+    /// <param name="focused">The window the tree believes is focused, if any.</param>
+    /// <remarks>
+    /// <para>
+    /// Asked only after the tick's events have been drained, which is what makes the
+    /// answer safe. Had the user genuinely chosen this window, its foreground event
+    /// would already have been followed and it would be the focused one; that it is
+    /// not means nothing put it there on purpose.
+    /// </para>
+    /// <para>
+    /// Deliberately says nothing about whether the window is on screen. That test was
+    /// the first version of this rule and it is the wrong one - see
+    /// <see cref="ReleaseStaleForeground"/>.
+    /// </para>
+    /// </remarks>
+    internal static bool IsStaleForeground(WindowNode? foreground, WindowNode? focused) =>
+        foreground is not null && !ReferenceEquals(foreground, focused);
 
     /// <summary>
     /// Decides whether one window is animated to its new rectangle or simply placed
@@ -2833,15 +2856,16 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>
-    /// Takes the foreground off a window that is no longer on screen.
+    /// Takes the foreground off a window Shubbak manages when the tree says nothing
+    /// is focused.
     /// </summary>
     /// <remarks>
     /// <para>
     /// Displaying an empty workspace leaves nothing to focus, and Shubbak used to
-    /// stop there. The system's foreground stayed on whatever had it - a window just
-    /// concealed - and Windows hands that back the instant anything else releases the
-    /// foreground. A launcher opening and closing is enough, and a launcher is
-    /// precisely what someone does next on an empty workspace.
+    /// stop there. The system's foreground stayed on whatever had it, and Windows
+    /// hands that back the instant anything else releases the foreground. A launcher
+    /// opening and closing is enough, and a launcher is precisely what someone does
+    /// next on an empty workspace.
     /// </para>
     /// <para>
     /// It arrives as an ordinary foreground event for a window Shubbak manages, which
@@ -2858,9 +2882,21 @@ public sealed class WmDaemon : IDisposable
     /// the closing half is not.
     /// </para>
     /// <para>
-    /// Narrow on purpose. Only a window Shubbak manages that is not on a displayed
-    /// workspace counts as stale; the desktop already holding it, an unmanaged window,
-    /// or anything the user has just clicked is left alone.
+    /// This first released only a window that was off screen, and that narrowing let
+    /// the bug straight back in on a second monitor. Every monitor displays a
+    /// workspace at all times, so a window on the other display is on a displayed
+    /// workspace and was exempted - while being the likeliest thing Windows hands the
+    /// foreground to, precisely because it is genuinely visible. Reported as:
+    /// switching to an empty workspace on one monitor, launching an application, and
+    /// finding it on the other monitor's workspace. No concealed window is involved
+    /// anywhere in that, which is why the earlier fix never touched it.
+    /// </para>
+    /// <para>
+    /// So the rule is about the tree, not about the screen: when Shubbak has no
+    /// focused window, no window Shubbak manages may hold the system foreground. It
+    /// is still narrow where narrowness earns something - the desktop already holding
+    /// it, and any window Shubbak does not manage, are left alone, which is what
+    /// keeps a dialog or a launcher the user is actually working in out of it.
     /// </para>
     /// </remarks>
     private void ReleaseStaleForeground()
@@ -2869,12 +2905,12 @@ public sealed class WmDaemon : IDisposable
         if (foreground == 0) return;
 
         if (!_windows.TryGet(foreground, out WindowNode? stale)) return;
-        if (stale.IsOnADisplayedWorkspace) return;
+        if (!IsStaleForeground(stale, _wm.FocusedWindow)) return;
 
         if (WindowActions.FocusDesktop() && Log.IsEnabled(LogLevel.Debug))
         {
             Log.Debug(LogCategory.Window,
-                $"foreground released from concealed 0x{foreground:X} to the desktop");
+                $"foreground released from unfocused 0x{foreground:X} to the desktop");
         }
     }
 

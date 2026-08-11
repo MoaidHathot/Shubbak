@@ -31,6 +31,18 @@ public sealed class IpcServer : IAsyncDisposable
     private bool _disposed;
 
     /// <summary>
+    /// Which pipe to bind.
+    /// </summary>
+    /// <remarks>
+    /// Internal, and only ever set by tests. The name is fixed per account, so a test
+    /// server binding it would either collide with a running window manager or, worse,
+    /// have its clients quietly connect to that one instead - which presents as every
+    /// assertion timing out for no visible reason. An isolated name lets the IPC tests
+    /// run on a desktop that is using Shubbak at the time.
+    /// </remarks>
+    internal string PipeName { get; init; } = IpcProtocol.PipeName;
+
+    /// <summary>
     /// Reports something worth knowing, without this assembly knowing how to log.
     /// </summary>
     /// <remarks>
@@ -114,7 +126,7 @@ public sealed class IpcServer : IAsyncDisposable
             try
             {
                 pipe = new NamedPipeServerStream(
-                    IpcProtocol.PipeName,
+                    PipeName,
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,
                     PipeTransmissionMode.Byte,

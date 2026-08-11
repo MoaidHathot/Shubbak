@@ -69,11 +69,12 @@ public static class WindowActions
     /// <remarks>
     /// <para>
     /// For when the window manager has nothing to focus - an empty workspace being
-    /// displayed. Doing nothing leaves the system's foreground on whatever had it,
-    /// which is a window that has just been concealed; Windows then hands it back the
-    /// moment anything else releases the foreground, and a launcher opening and
-    /// closing is enough. That arrives as "go to that window", activates its
-    /// workspace, and silently undoes the switch to the empty one.
+    /// displayed. Doing nothing leaves the system's foreground on whatever had it:
+    /// a window just concealed, or one still perfectly visible on another monitor.
+    /// Windows then hands it back the moment anything else releases the foreground,
+    /// and a launcher opening and closing is enough. That arrives as "go to that
+    /// window", moves the point of action to its workspace, and silently undoes the
+    /// switch to the empty one.
     /// </para>
     /// <para>
     /// The desktop is the one window that is always present, always visible, and
