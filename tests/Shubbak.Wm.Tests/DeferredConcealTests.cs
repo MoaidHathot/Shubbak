@@ -197,3 +197,129 @@ public sealed class ForegroundFollowTests
         Assert.False(WmDaemon.ShouldFollowForeground(null, concealed: true));
     }
 }
+
+/// <summary>
+/// Who is allowed to hold the system foreground while the tree has nothing focused.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The empty-workspace bug, fixed at the cause rather than by judging the ambiguous
+/// event it produces. Switch to an empty workspace and there is nothing to focus, so
+/// the system's foreground stays where it was; a launcher opening and closing hands it
+/// straight back, which reads as "go to that window" and undoes the switch.
+/// </para>
+/// <para>
+/// The first version of this rule released the foreground only from a window that was
+/// off screen, and a second monitor makes that exemption swallow the bug whole: every
+/// monitor displays a workspace at all times, so the window on the other display is on
+/// a displayed workspace, is genuinely visible, and is the likeliest thing for Windows
+/// to fall back to. Reported as an application launched from an empty workspace on one
+/// monitor opening on the other monitor's workspace.
+/// </para>
+/// </remarks>
+public sealed class StaleForegroundTests
+{
+    private static WindowNode Window(WorkspaceNode workspace, nint handle)
+    {
+        WindowNode window = new(
+            handle,
+            new WindowIdentity { ProcessName = "process", ClassName = "Class", Title = "a" });
+
+        workspace.Add(window);
+        return window;
+    }
+
+    /// <summary>Two monitors, each displaying a workspace, as a desktop always is.</summary>
+    private static (WorkspaceNode Empty, WorkspaceNode Other, WorkspaceNode Hidden) Setup()
+    {
+        var first = new Rect(0, 0, 1920, 1080);
+        var second = new Rect(1920, 0, 1920, 1080);
+
+        var left = new MonitorNode("\\\\.\\DISPLAY1", first, first);
+        var right = new MonitorNode("\\\\.\\DISPLAY2", second, second);
+
+        // The workspace the user just switched to, with nothing on it to focus.
+        var empty = new WorkspaceNode("'");
+        var hidden = new WorkspaceNode("2");
+        left.AddWorkspace(empty);
+        left.AddWorkspace(hidden);
+        left.ActiveWorkspace = empty;
+
+        // The other monitor, displaying its workspace as it always is.
+        var other = new WorkspaceNode("/");
+        right.AddWorkspace(other);
+        right.ActiveWorkspace = other;
+
+        return (empty, other, hidden);
+    }
+
+    [Fact]
+    public void AVisibleWindowOnTheOtherMonitorIsStale()
+    {
+        // The reported bug. The window is on a displayed workspace and entirely
+        // visible, which is exactly why the off-screen test missed it - and exactly
+        // why Windows picks it to hand the foreground back to.
+        (_, WorkspaceNode other, _) = Setup();
+
+        Assert.True(WmDaemon.IsStaleForeground(Window(other, 1), focused: null));
+    }
+
+    [Fact]
+    public void AConcealedWindowIsStale()
+    {
+        // The single-monitor case the first version of the rule did cover. Still does.
+        (_, _, WorkspaceNode hidden) = Setup();
+
+        Assert.True(WmDaemon.IsStaleForeground(Window(hidden, 1), focused: null));
+    }
+
+    [Fact]
+    public void BeingOnScreenDoesNotDecideIt()
+    {
+        // Pinned, because being on screen is the plausible-sounding test that let the
+        // bug back in. The rule is about the tree: nothing focused means no managed
+        // window may hold the foreground, wherever it happens to be drawn.
+        (_, WorkspaceNode other, WorkspaceNode hidden) = Setup();
+
+        WindowNode visible = Window(other, 1);
+        WindowNode offScreen = Window(hidden, 2);
+
+        Assert.True(visible.IsOnADisplayedWorkspace);
+        Assert.False(offScreen.IsOnADisplayedWorkspace);
+
+        Assert.Equal(
+            WmDaemon.IsStaleForeground(visible, focused: null),
+            WmDaemon.IsStaleForeground(offScreen, focused: null));
+    }
+
+    [Fact]
+    public void TheFocusedWindowIsNeverStale()
+    {
+        // The window the tree focused is the one that should hold the foreground.
+        // Releasing it would be Shubbak taking focus off the user mid-sentence.
+        (_, WorkspaceNode other, _) = Setup();
+
+        WindowNode window = Window(other, 1);
+
+        Assert.False(WmDaemon.IsStaleForeground(window, focused: window));
+    }
+
+    [Fact]
+    public void AnotherWindowIsStaleEvenWhenSomethingIsFocused()
+    {
+        // Asked after the tick's events are drained: had the user chosen this window,
+        // its foreground event would have been followed and it would be the focused
+        // one. That it is not is the evidence that nothing put it there on purpose.
+        (WorkspaceNode empty, WorkspaceNode other, _) = Setup();
+
+        Assert.True(WmDaemon.IsStaleForeground(Window(other, 1), focused: Window(empty, 2)));
+    }
+
+    [Fact]
+    public void NothingIsStaleWhenNoManagedWindowHasIt()
+    {
+        // An unmanaged window or the desktop holding the foreground is not Shubbak's
+        // to take away - that is a launcher or a dialog the user is working in.
+        Assert.False(WmDaemon.IsStaleForeground(null, focused: null));
+    }
+}

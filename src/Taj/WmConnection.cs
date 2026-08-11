@@ -97,20 +97,38 @@ public sealed class WmConnection : IAsyncDisposable
     public void Start() => _pump = Task.Run(PumpAsync);
 
     /// <summary>Sends a command, for widget clicks.</summary>
+    /// <remarks>
+    /// Runs on the message-loop thread while the pump runs on its own, so both may be
+    /// using the connection at once. The client serialises them; this method only has
+    /// to avoid reading the field twice, because the pump nulls it on every reconnect
+    /// and the gap between the guard and the use was long enough to lose the race.
+    /// </remarks>
     public async Task SendCommandAsync(string command)
     {
-        if (_client is null) return;
+        // Read once. It was read twice - a null check and then a use - so a reconnect
+        // landing between them turned a click into a NullReferenceException on a
+        // fire-and-forget task, which is to say into nothing at all.
+        if (_client is not { } client)
+        {
+            // Said out loud. A click that does nothing because the bar is not connected
+            // is the same to the user as a click that does nothing because the bar is
+            // broken, and only one of them is worth reporting.
+            Log.Warn(LogCategory.Ipc, $"not connected; dropped '{command}'");
+            return;
+        }
 
         try
         {
-            IpcResponse response = await _client.SendAsync("command", command).ConfigureAwait(false);
+            IpcResponse response = await client.SendAsync("command", command).ConfigureAwait(false);
 
             if (!response.Ok)
                 Log.Warn(LogCategory.Ipc, $"command '{command}' rejected: {response.Error}");
         }
-        catch (IOException ex)
+        catch (Exception ex)
         {
-            Log.Warn(LogCategory.Ipc, $"could not send '{command}': {ex.Message}");
+            // As broad as the pump's, and for the same reason: this is a
+            // fire-and-forget task, so anything not caught here is lost entirely.
+            Log.Warn(LogCategory.Ipc, $"could not send '{command}': {ex.GetType().Name}: {ex.Message}");
         }
     }
 
@@ -170,9 +188,23 @@ public sealed class WmConnection : IAsyncDisposable
             {
                 return;
             }
-            catch (Exception ex) when (ex is IOException or TimeoutException)
+            catch (Exception ex)
             {
-                Log.Warn(LogCategory.Ipc, $"disconnected: {ex.Message}");
+                // Everything, not the two that were expected.
+                //
+                // This loop is the bar's only source of workspaces, layout and title,
+                // and it was started with a bare Task.Run - nothing awaits it, so a
+                // fault nobody caught was a fault nobody saw. An unexpected exception
+                // left the task dead, _client null for good, and the bar drawing a
+                // workspace list frozen at whatever it last read, while the clock and
+                // the keyboard language carried on because they are local timers that
+                // never touch this pipe. Every later click was a silent no-op, and
+                // nothing was written to the log to say why.
+                //
+                // Measured against the alternative: a bar that reconnects a second
+                // later having logged what happened is strictly better than one that
+                // looks alive and is not.
+                Log.Warn(LogCategory.Ipc, $"disconnected: {ex.GetType().Name}: {ex.Message}");
             }
             finally
             {
@@ -340,8 +372,15 @@ public sealed class WmConnection : IAsyncDisposable
 
             if (active.Length > 0) ActiveWorkspaceChanged?.Invoke(active);
         }
-        catch (Exception ex) when (ex is JsonException or IOException)
+        catch (JsonException ex)
         {
+            // A payload that will not parse is this one message's problem, so the
+            // connection carries on.
+            //
+            // Nothing else is caught here on purpose. A refresh that fails because the
+            // connection failed has to reach the pump, which reconnects; absorbing it
+            // would leave the bar streaming events it can no longer act on, refreshing
+            // nothing, and looking exactly as alive as it did before.
             Log.Warn(LogCategory.Ipc, $"could not refresh state: {ex.Message}");
         }
     }

@@ -22,49 +22,36 @@ namespace Shubbak.Wm.Tests;
 /// server and its client connections and a test that stubbed the connection would be
 /// testing the stub. It is also the first test this assembly has had.
 /// </para>
+/// <para>
+/// Each one binds a pipe of its own. The real name is fixed per account, so a test
+/// server binding it would collide with a running window manager - or, worse, its
+/// clients would connect to that one instead and every assertion would time out for
+/// no visible reason. These used to refuse to run at all while Shubbak was running,
+/// which on a developer's own desktop is most of the time.
+/// </para>
 /// </remarks>
-[Collection(SharedIpcServer.Name)]
 public sealed class IpcSubscriberGateTests
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
-    /// <summary>
-    /// Refuses to run while the real daemon holds the pipe.
-    /// </summary>
-    /// <remarks>
-    /// The pipe name is fixed, so a running window manager already owns it. The client
-    /// then connects to <i>that</i> server, subscribes to it, and the server under
-    /// test never sees anything - which presents as every assertion timing out for no
-    /// visible reason. Worth five seconds of confusion once; not worth it twice.
-    /// </remarks>
-    private static void FailIfAWindowManagerIsRunning()
+    private static string IsolatedPipe() => $"shubbak-test-{Guid.NewGuid():N}";
+
+    private static IpcServer StartServer(string pipe)
     {
-        if (System.Diagnostics.Process.GetProcessesByName("shubbak-wm").Length == 0) return;
+        var server = new IpcServer { PipeName = pipe };
 
-        throw new InvalidOperationException(
-            "shubbak-wm is running and already owns the IPC pipe. A client would " +
-            "connect to it rather than to the server under test, so every " +
-            "subscription would be registered somewhere these tests cannot see it. " +
-            "Stop it and run them again.");
-    }
-
-    private static IpcServer StartServer()
-    {
-        FailIfAWindowManagerIsRunning();
-
-        var server = new IpcServer();
-
-        // Nothing under test sends requests; the handler exists because Start demands
-        // one.
+        // Nothing under test sends requests beyond the subscription handshake; the
+        // handler exists because Start demands one.
         server.Start(request => Task.FromResult(new IpcResponse(request.Id, Ok: true)));
 
         return server;
     }
 
-    private static async Task<IpcClient> ConnectAsync()
+    private static async Task<IpcClient> ConnectAsync(string pipe)
     {
-        var client = new IpcClient();
+        var client = new IpcClient { PipeName = pipe };
         await client.ConnectAsync(Timeout);
+
         return client;
     }
 
@@ -117,7 +104,9 @@ public sealed class IpcSubscriberGateTests
     {
         // The case that costs the most and gains the least: a desktop running without
         // a bar was serialising every event for nobody at all.
-        await using IpcServer server = StartServer();
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe);
 
         foreach (string topic in IpcProtocol.Topics)
             Assert.False(server.HasSubscribers(topic), $"'{topic}' had a subscriber with no clients");
@@ -128,8 +117,10 @@ public sealed class IpcSubscriberGateTests
     {
         // Connecting is not subscribing. The CLI connects to send one request and
         // never subscribes, and it must not switch the payload back on for everybody.
-        await using IpcServer server = StartServer();
-        await using IpcClient client = await ConnectAsync();
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe);
+        await using IpcClient client = await ConnectAsync(pipe);
 
         Assert.All(
             IpcProtocol.Topics,
@@ -139,8 +130,10 @@ public sealed class IpcSubscriberGateTests
     [Fact]
     public async Task OnlyTheTopicsAskedForCount()
     {
-        await using IpcServer server = StartServer();
-        await using IpcClient client = await ConnectAsync();
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe);
+        await using IpcClient client = await ConnectAsync(pipe);
 
         string wanted = IpcProtocol.Topics.First();
 
@@ -155,8 +148,10 @@ public sealed class IpcSubscriberGateTests
     [Fact]
     public async Task SubscribingToEverythingCountsForEveryTopic()
     {
-        await using IpcServer server = StartServer();
-        await using IpcClient client = await ConnectAsync();
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe);
+        await using IpcClient client = await ConnectAsync(pipe);
 
         using CancellationTokenSource stop = await SubscribeAsync(client, server, "*", probe: IpcProtocol.Topics.First());
 
@@ -168,11 +163,13 @@ public sealed class IpcSubscriberGateTests
     {
         // The leak that would quietly undo the whole saving: a bar closed hours ago
         // and the payload still being built for it.
-        await using IpcServer server = StartServer();
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe);
 
         string topic = IpcProtocol.Topics.First();
 
-        IpcClient client = await ConnectAsync();
+        IpcClient client = await ConnectAsync(pipe);
         using CancellationTokenSource stop = await SubscribeAsync(client, server, topic, probe: topic);
 
         await stop.CancelAsync();
@@ -189,14 +186,16 @@ public sealed class IpcSubscriberGateTests
         // Why the server counts rather than keeping a set. Taj holds one connection
         // per monitor, so on a two-monitor desktop closing one bar window would
         // otherwise switch the other one's events off.
-        await using IpcServer server = StartServer();
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe);
 
         string topic = IpcProtocol.Topics.First();
 
-        IpcClient first = await ConnectAsync();
+        IpcClient first = await ConnectAsync(pipe);
         using CancellationTokenSource stopFirst = await SubscribeAsync(first, server, topic, probe: topic);
 
-        await using IpcClient second = await ConnectAsync();
+        await using IpcClient second = await ConnectAsync(pipe);
         using CancellationTokenSource stopSecond = await SubscribeAsync(second, server, topic, probe: topic);
 
         await stopFirst.CancelAsync();
@@ -209,17 +208,4 @@ public sealed class IpcSubscriberGateTests
             server.HasSubscribers(topic),
             "the second client was still subscribed when the first one left");
     }
-}
-
-/// <summary>
-/// Serialises tests that bind the window manager's named pipe.
-/// </summary>
-/// <remarks>
-/// The pipe name is fixed, so two servers cannot be listening at once and xUnit runs
-/// test classes in parallel unless told otherwise.
-/// </remarks>
-[CollectionDefinition(Name)]
-public sealed class SharedIpcServer
-{
-    public const string Name = "ipc server";
 }
