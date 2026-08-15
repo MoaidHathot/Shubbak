@@ -143,11 +143,42 @@ public sealed class WindowCommitter
     /// The engine decides, because it is the only thing that knows what the previous
     /// frame said, and it never sets the flag on the frame a window comes to rest on.
     /// </para>
+    /// <para>
+    /// <b><c>SWP_NOCOPYBITS</c> on the settling frame only.</b> The flag discards the
+    /// window's client area and asks the application to repaint all of it. That is the
+    /// right trade for a single placement and the wrong one twenty times in a hundred
+    /// and forty milliseconds: an animated move was ordering a full repaint on every
+    /// frame, so an application that could not paint that fast showed bare or stale
+    /// content for the whole motion rather than at the end of it. Reported against
+    /// Elgato Control Center, a <c>WS_EX_LAYERED</c> WPF window - layered windows are
+    /// composited from a bitmap the application maintains, and WPF renders them in
+    /// software, so a full repaint is about the most expensive thing that can be asked
+    /// of one.
+    /// </para>
+    /// <para>
+    /// Without the flag Windows blits the still-valid bits into the new frame and
+    /// invalidates only the newly exposed region, so an intermediate frame costs the
+    /// application a strip instead of a surface. The interior can be a frame stale
+    /// while it moves, which is what the flag existed to prevent - but the frame the
+    /// window comes to rest on keeps it, and that is the one anybody looks at.
+    /// <c>ideas/analysis3.md</c> listed this as the open question left by
+    /// <c>SWP_ASYNCWINDOWPOS</c>; this is the answer.
+    /// </para>
+    /// <para>
+    /// One-shot placement in <see cref="DefaultFlags"/> is untouched. There is one
+    /// repaint there and nothing to amortise it over.
+    /// </para>
     /// </remarks>
-    private static uint FlagsFor(AnimationFrame frame) =>
-        frame.SizeUnchanged
-            ? FrameFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_NOSIZE
-            : FrameFlags;
+    private static uint FlagsFor(AnimationFrame frame)
+    {
+        uint flags = frame.IsFinal
+            ? FrameFlags
+            : FrameFlags & ~(uint)SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS;
+
+        return frame.SizeUnchanged
+            ? flags | (uint)SET_WINDOW_POS_FLAGS.SWP_NOSIZE
+            : flags;
+    }
 
     private readonly Dictionary<nint, Rect> _lastCommitted = [];
 

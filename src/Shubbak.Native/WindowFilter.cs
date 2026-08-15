@@ -18,6 +18,7 @@ public enum ExclusionReason
     NotInAltTabList,
     CannotActivate,
     OwnedPopup,
+    Chromeless,
     ZeroSized,
     ShellWindow,
     NoTitle,
@@ -51,6 +52,9 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
             "window has WS_EX_NOACTIVATE, so clicking it can never give it focus",
         ExclusionReason.OwnedPopup =>
             "window is owned by another window and has no title bar, so it is a menu or popup rather than a window",
+        ExclusionReason.Chromeless =>
+            "window has neither a title bar nor a resizable frame, so it has one fixed size and nothing to drag - " +
+            "a tray flyout or panel rather than a window",
         ExclusionReason.ZeroSized => "window has no area",
         ExclusionReason.ShellWindow => "window belongs to the shell (desktop or Progman)",
         ExclusionReason.NoTitle => "window has no title",
@@ -295,6 +299,43 @@ public static class WindowFilter
         if (s_excludedClasses.Contains(className))
             return ManageDecision.No(ExclusionReason.ExcludedClass);
 
+        // The same shape, unowned.
+        //
+        // A window with neither a title bar nor a resizable frame has declared that it
+        // has exactly one size and no frame for the user to drag. Choosing the size is
+        // the whole of what a tiling window manager does, so tiling one is a category
+        // error: the window is stretched into a tile it was never laid out for, and
+        // the tile is taken from windows that would have used it.
+        //
+        // Reported against Elgato Control Center, whose entire UI is a tray flyout -
+        // WPF, no owner, style 0x06080000, WS_EX_LAYERED, title "Elgato Control
+        // Center". Every other gate passed it: not a tool window, not WS_EX_NOACTIVATE,
+        // unowned so the check above never looked at its missing caption, and a class
+        // name of HwndWrapper[ControlCenter.exe;;<guid>] with a fresh guid per
+        // instance, so no list of class names could ever have caught it.
+        //
+        // Deliberately two bits rather than one. Requiring WS_CAPTION alone is what
+        // komorebi does, and it rejects every application that draws its own chrome -
+        // which is why komorebi then needs a database of two hundred applications to
+        // walk the false positives back. Requiring that WS_THICKFRAME also be absent
+        // spares them: a window that draws its own title bar still leaves the sizing
+        // border on, because it still wants to be resized. Windows Terminal is the
+        // case to keep checking, and it survives for exactly that reason. What is left
+        // after both bits are missing is the flyout, the HUD and the splash screen.
+        //
+        // After the class list and before the process id, which is not arbitrary. This
+        // rule subsumes most of the shell surfaces the class list names, and placing it
+        // first meant Settings and the emoji panel started answering "no title bar"
+        // where they had answered "excluded by default" - a true statement and a worse
+        // one, since `shubbak inspect` exists to give the most specific reason it can.
+        // A class name is a cheap string; the process id below costs a handle, so this
+        // still runs before anything expensive.
+        if ((style & WINDOW_STYLE.WS_CAPTION) == 0 &&
+            (style & WINDOW_STYLE.WS_THICKFRAME) == 0)
+        {
+            return ManageDecision.No(ExclusionReason.Chromeless);
+        }
+
         // Checked after the cheap style and class tests, because it costs a process
         // handle - but before the Alt+Tab test, which some of these windows pass.
         //
@@ -412,6 +453,11 @@ public static class WindowFilter
         // otherwise knows more than the shape of the window does.
         ExclusionReason.CannotActivate => true,
         ExclusionReason.OwnedPopup => true,
+
+        // The same caveat, and one more reason to keep it overridable: a borderless
+        // fullscreen game has the shape of a flyout and is not one. Someone who wants
+        // theirs on a workspace says so, and gets it.
+        ExclusionReason.Chromeless => true,
 
         ExclusionReason.NoTitle => true,
         ExclusionReason.ExcludedClass => true,
