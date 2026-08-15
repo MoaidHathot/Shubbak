@@ -228,6 +228,49 @@ public sealed class DefaultWindowRuleTests
     }
 
     [Fact]
+    public void AnUnownedWindowWithNoTitleBarAndNoSizingBorderIsAFlyout()
+    {
+        // Elgato Control Center, whose whole UI is a tray flyout. It passed every gate:
+        // not a tool window, not WS_EX_NOACTIVATE, and unowned - so the owned-popup
+        // rule never looked at its missing caption. Its class name carries a fresh guid
+        // per instance, so no list of class names could have caught it either.
+        //
+        // Tiling it stretched a 847x196 panel across a tile and took the tile from
+        // windows that would have used it.
+        using var flyout = new TestWindow(
+            "flyout",
+            style: Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP |
+                   Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_SYSMENU);
+
+        ManageDecision decision = WindowFilter.Evaluate(flyout.Handle);
+
+        Assert.False(decision.Manageable);
+        Assert.Equal(ExclusionReason.Chromeless, decision.Reason);
+    }
+
+    [Fact]
+    public void AWindowThatDrawsItsOwnTitleBarIsStillManageable()
+    {
+        // The guard on the rule above, and the reason it tests two style bits instead
+        // of one. Requiring WS_CAPTION alone would reject every application that draws
+        // its own chrome - a large and growing set - which is why komorebi needs a
+        // database of two hundred applications to walk its false positives back.
+        //
+        // An application that hides the title bar and stays resizable keeps
+        // WS_THICKFRAME, because it still wants to be resized. That is the signal.
+        using var window = new TestWindow(
+            "custom chrome",
+            style: Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_POPUP |
+                   Windows.Win32.UI.WindowsAndMessaging.WINDOW_STYLE.WS_THICKFRAME);
+
+        ManageDecision decision = WindowFilter.Evaluate(window.Handle);
+
+        Assert.True(
+            decision.Manageable,
+            $"a chromeless but resizable window was rejected: {decision.Explain()}");
+    }
+
+    [Fact]
     public void BothStructuralRulesCanBeOverruledByAConfiguredRule()
     {
         // Structural does not mean certain. An application may set WS_EX_NOACTIVATE
@@ -236,6 +279,10 @@ public sealed class DefaultWindowRuleTests
         // than the shape of the window does.
         Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.CannotActivate));
         Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.OwnedPopup));
+
+        // And a borderless fullscreen game has the shape of a flyout without being
+        // one, so somebody will want theirs back.
+        Assert.True(WindowFilter.CanBeOverridden(ExclusionReason.Chromeless));
     }
 
     [Fact]

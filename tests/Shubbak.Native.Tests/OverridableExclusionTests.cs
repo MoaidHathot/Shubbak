@@ -17,6 +17,7 @@ public sealed class OverridableExclusionTests
     [InlineData(ExclusionReason.NoTitle)]
     [InlineData(ExclusionReason.ExcludedClass)]
     [InlineData(ExclusionReason.ExcludedProcess)]
+    [InlineData(ExclusionReason.Chromeless)]
     public void AHeuristicCanBeOverruled(ExclusionReason reason)
     {
         Assert.True(WindowFilter.CanBeOverridden(reason));
