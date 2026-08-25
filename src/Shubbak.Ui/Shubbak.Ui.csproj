@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The renderer-agnostic half of the user interface: a visual tree, a flex layout
+    and the drawing interface, with no reference to any drawing technology and no
+    reference to Win32.
+
+    It was extracted from Taj.Core when a second client - the Dalil palette - needed
+    the same primitives. Leaving it in the bar would have meant a palette that
+    depends on a bar, and a user who prefers a different bar losing the palette with
+    it. IRenderer was written as a swap seam (as ITajRenderer); this is the seam being used.
+
+    Shubbak.Core is the only reference, and only for Rect and Colour.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Shubbak.Ui</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,42 @@
+// CsWin32 manifest for the GDI renderer.
+//
+// Drawing only: this project owns no window and pumps no messages, so nothing about
+// window creation, the message loop, monitors or DPI belongs here. Those stay with
+// whichever host creates the window - the bar, or the palette.
+//
+// CreateFontW and FillRect are not listed. Both are declared as hand-written
+// DllImports inside GdiRenderer, because the generated signatures did not suit.
+
+// --- device contexts and the back buffer ----------------------------------------
+GetDC
+ReleaseDC
+CreateCompatibleDC
+CreateCompatibleBitmap
+SelectObject
+DeleteObject
+DeleteDC
+BitBlt
+ROP_CODE
+
+// --- shapes -----------------------------------------------------------------------
+CreateSolidBrush
+RoundRect
+Rectangle
+CreatePen
+PEN_STYLE
+GetStockObject
+GET_STOCK_OBJECT_FLAGS
+
+// --- text -------------------------------------------------------------------------
+DrawText
+DRAW_TEXT_FORMAT
+SetBkMode
+BACKGROUND_MODE
+SetTextColor
+GetTextExtentPoint32W
+HFONT
+FONT_CHARSET
+FONT_OUTPUT_PRECISION
+FONT_CLIP_PRECISION
+FONT_QUALITY
+FONT_WEIGHT

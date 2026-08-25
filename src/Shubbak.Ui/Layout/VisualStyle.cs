@@ -1,6 +1,6 @@
 using Shubbak.Core.Rendering;
 
-namespace Taj.Core.Layout;
+namespace Shubbak.Ui.Layout;
 
 /// <summary>How text is drawn.</summary>
 /// <param name="Family">Font family name.</param>

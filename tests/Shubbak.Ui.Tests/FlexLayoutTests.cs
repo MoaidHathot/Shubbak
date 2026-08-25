@@ -1,7 +1,7 @@
 using Shubbak.Core.Geometry;
-using Taj.Core.Layout;
+using Shubbak.Ui.Layout;
 
-namespace Taj.Core.Tests;
+namespace Shubbak.Ui.Tests;
 
 /// <summary>
 /// A predictable text measurer.

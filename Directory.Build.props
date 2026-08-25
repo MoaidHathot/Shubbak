@@ -12,4 +12,26 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 
+  <!--
+    Task Manager's Processes tab shows the Win32 FileDescription resource, which
+    comes from AssemblyTitle - not from the file name. Left unset, the SDK derives
+    the whole version resource from AssemblyName, so the bar listed itself as "taj"
+    and the daemon as "shubbak-wm", sorted pages apart, and CompanyName came out as
+    the assembly name too. Titling all three "Shubbak ..." groups them without
+    renaming a binary, which matters because a rename would break the
+    `process = "taj"` window rule and every script that launches the bar by name.
+
+    AssemblyTitle is set per executable, next to its AssemblyName. Only the shared
+    identity lives here. Nothing in Shubbak reads assembly metadata to decide
+    anything, so this is display only - with one exception: the Version below is
+    what `shubbak diagnose` reports, which was previously the SDK's placeholder
+    1.0.0.0 and therefore said nothing about which build a report came from.
+  -->
+  <PropertyGroup>
+    <Product>Shubbak</Product>
+    <Company>Moaid Hathot</Company>
+    <Copyright>Copyright (c) 2026 Moaid Hathot</Copyright>
+    <Version>0.9.0</Version>
+  </PropertyGroup>
+
 </Project>

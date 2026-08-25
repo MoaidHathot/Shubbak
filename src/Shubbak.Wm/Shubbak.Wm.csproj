@@ -4,6 +4,8 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <AssemblyName>shubbak-wm</AssemblyName>
+    <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
+    <AssemblyTitle>Shubbak Window Manager</AssemblyTitle>
     <RootNamespace>Shubbak.Wm</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

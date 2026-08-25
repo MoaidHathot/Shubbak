@@ -1,6 +1,6 @@
 using Shubbak.Core.Geometry;
 
-namespace Taj.Core.Layout;
+namespace Shubbak.Ui.Layout;
 
 /// <summary>
 /// Measures text so layout can size nodes to their content.

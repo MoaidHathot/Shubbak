@@ -1,8 +1,8 @@
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
-using Taj.Core.Layout;
+using Shubbak.Ui.Layout;
 
-namespace Taj.Core.Rendering;
+namespace Shubbak.Ui.Rendering;
 
 /// <summary>
 /// Draws a visual tree.
@@ -21,7 +21,7 @@ namespace Taj.Core.Rendering;
 /// one API's capabilities and defeat the purpose.
 /// </para>
 /// </remarks>
-public interface ITajRenderer : ITextMeasurer, IDisposable
+public interface IRenderer : ITextMeasurer, IDisposable
 {
     /// <summary>Begins a frame, clearing to <paramref name="background"/>.</summary>
     void BeginFrame(Rect bounds, Colour background);
@@ -63,7 +63,7 @@ public static class VisualPainter
     /// changes, and pointer movement is not data.
     /// </remarks>
     public static void Paint(
-        ITajRenderer renderer,
+        IRenderer renderer,
         VisualNode root,
         Rect bounds,
         Colour background,
@@ -86,7 +86,7 @@ public static class VisualPainter
         }
     }
 
-    private static void PaintNode(ITajRenderer renderer, VisualNode node, VisualNode? hovered)
+    private static void PaintNode(IRenderer renderer, VisualNode node, VisualNode? hovered)
     {
         if (!node.Visible || node.Rect.IsEmpty) return;
 

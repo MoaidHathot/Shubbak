@@ -1,24 +1,23 @@
 using System.Runtime.InteropServices;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
-using Taj.Core.Layout;
-using Taj.Core.Rendering;
+using Shubbak.Ui.Layout;
+using Shubbak.Ui.Rendering;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
-using Windows.Win32.UI.WindowsAndMessaging;
 
-namespace Taj.Rendering;
+namespace Shubbak.Ui.Gdi;
 
 /// <summary>
-/// A GDI implementation of <see cref="ITajRenderer"/>.
+/// A GDI implementation of <see cref="IRenderer"/>.
 /// </summary>
 /// <remarks>
 /// <para>
 /// GDI rather than Direct2D. A bar draws filled rectangles, borders and text; GDI
 /// does all three with no COM interop, no device-lost handling and no swap chain,
 /// and the whole renderer fits in one file. Direct2D would give better text
-/// rendering and cheap effects - and the <see cref="ITajRenderer"/> seam exists so
+/// rendering and cheap effects - and the <see cref="IRenderer"/> seam exists so
 /// it can replace this without touching the sources, widgets or layout engine.
 /// </para>
 /// <para>
@@ -33,7 +32,7 @@ namespace Taj.Rendering;
 /// time any value changes.
 /// </para>
 /// </remarks>
-public sealed class GdiRenderer : ITajRenderer
+public sealed class GdiRenderer : IRenderer
 {
     private readonly HWND _window;
 
