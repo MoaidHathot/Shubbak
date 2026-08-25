@@ -43,6 +43,21 @@ public sealed class PaletteWindow : IDisposable
     private readonly PaletteModel _model = new();
     private DalilConfig _config;
 
+    /// <summary>
+    /// The configuration with the monitor's scaling applied.
+    /// </summary>
+    /// <remarks>
+    /// Everything drawn uses this; <see cref="_config"/> keeps what the user actually
+    /// wrote. Without it the palette is laid out in raw pixels, which on a 3840x2160
+    /// display at 150% renders a 720-pixel window a third smaller than intended and a
+    /// 15-point font at ten. It looked like a design decision rather than a bug, which
+    /// is how it survived being looked at.
+    /// </remarks>
+    private DalilConfig _scaled;
+
+    /// <summary>The scale factor of the monitor the palette is on: 1.0 at 96 DPI.</summary>
+    private double _scale = 1.0;
+
     private HWND _handle;
     private GdiRenderer? _renderer;
     private Rect _bounds;
@@ -78,7 +93,11 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>Raised when the process should stop.</summary>
     public static event Action? RequestShutdown;
 
-    public PaletteWindow(DalilConfig config) => _config = config;
+    public PaletteWindow(DalilConfig config)
+    {
+        _config = config;
+        _scaled = config;
+    }
 
     /// <summary>Whether the palette is currently on screen.</summary>
     public bool IsOpen => _open;
@@ -126,6 +145,8 @@ public sealed class PaletteWindow : IDisposable
     public void Reconfigure(DalilConfig config)
     {
         _config = config;
+        _scaled = config;
+
         if (_open) Repaint();
     }
 
@@ -228,11 +249,11 @@ public sealed class PaletteWindow : IDisposable
                 return true;
 
             case VIRTUAL_KEY.VK_PRIOR:
-                Move(-_config.VisibleRows);
+                Move(-_scaled.VisibleRows);
                 return true;
 
             case VIRTUAL_KEY.VK_NEXT:
-                Move(_config.VisibleRows);
+                Move(_scaled.VisibleRows);
                 return true;
 
             case VIRTUAL_KEY.VK_HOME when control:
@@ -370,15 +391,27 @@ public sealed class PaletteWindow : IDisposable
     /// finds.
     /// </remarks>
     private int RequiredHeight() =>
-        (_config.RowHeight * (_config.VisibleRows + 1)) + PaletteRenderer.HintBarHeight + 18;
+        (_scaled.RowHeight * (_scaled.VisibleRows + 1))
+        + PaletteRenderer.HintBarHeight(_scale)
+        + (int)Math.Round(18 * _scale);
 
     /// <summary>
-    /// Puts the palette on the monitor the user is looking at.
+    /// Puts the palette on the monitor the user is looking at, at that monitor's scale.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A palette that always opens on the primary monitor is one that appears on a
     /// different screen from the window the user was just using, which is a strange
     /// thing to do to somebody who has asked to find something.
+    /// </para>
+    /// <para>
+    /// Positioned, then measured, then sized. The scale factor belongs to the monitor
+    /// the window is on, and there is no way to ask which that is until it is there -
+    /// so the window is moved first with whatever size it currently has, the DPI is
+    /// read from it, and only then is the real size worked out. Two SetWindowPos calls
+    /// on a hidden window, which nobody sees and which cost nothing next to the first
+    /// paint.
+    /// </para>
     /// </remarks>
     private unsafe void PositionOnTargetMonitor()
     {
@@ -388,7 +421,23 @@ public sealed class PaletteWindow : IDisposable
         if (!PInvoke.GetMonitorInfo(monitor, &info)) return;
 
         RECT work = info.rcWork;
-        int width = Math.Min(_config.Width, work.right - work.left - 32);
+
+        // Onto the monitor first, so the DPI read below is that monitor's.
+        PInvoke.SetWindowPos(
+            _handle, HWND.Null, work.left + 32, work.top + 32, _scaled.Width, RequiredHeight(),
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
+
+        uint dpi = PInvoke.GetDpiForWindow(_handle);
+        _scale = dpi == 0 ? 1.0 : dpi / 96.0;
+
+        _scaled = _config with
+        {
+            Width = (int)Math.Round(_config.Width * _scale),
+            RowHeight = (int)Math.Round(_config.RowHeight * _scale),
+            FontSize = (int)Math.Round(_config.FontSize * _scale),
+        };
+
+        int width = Math.Min(_scaled.Width, work.right - work.left - 64);
         int height = RequiredHeight();
 
         // A third of the way down rather than centred: the eye goes there first, and
@@ -461,11 +510,11 @@ public sealed class PaletteWindow : IDisposable
 
         var canvas = new Rect(0, 0, _bounds.Width, _bounds.Height);
 
-        _renderer.BeginFrame(canvas, _config.Background);
+        _renderer.BeginFrame(canvas, _scaled.Background);
 
         try
         {
-            PaletteRenderer.Draw(_renderer, _model, _config, canvas);
+            PaletteRenderer.Draw(_renderer, _model, _scaled, _scale, canvas);
         }
         finally
         {
@@ -494,6 +543,12 @@ public sealed class PaletteWindow : IDisposable
                 lpfnWndProc = &WindowProc,
                 hInstance = HINSTANCE.Null,
                 lpszClassName = className,
+
+                // A shadow, which is most of what separates a window that floats
+                // above the desktop from one painted onto it. The compositor draws
+                // it, so it costs this process nothing at all - no layered window, no
+                // second surface, no per-frame work.
+                style = WNDCLASS_STYLES.CS_DROPSHADOW,
 
                 // Every pixel comes from the off-screen buffer. Letting Windows erase
                 // first is a visible flash on a window that opens and closes as often
