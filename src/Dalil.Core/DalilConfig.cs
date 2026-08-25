@@ -26,7 +26,7 @@ public sealed record DalilConfig
     public int Width { get; init; } = 720;
 
     /// <summary>Height of one result row, in pixels at 96 DPI.</summary>
-    public int RowHeight { get; init; } = 34;
+    public int RowHeight { get; init; } = 38;
 
     /// <summary>
     /// How many rows are visible at once.
@@ -52,19 +52,29 @@ public sealed record DalilConfig
     /// <summary>Where the palette appears.</summary>
     public PalettePlacement Placement { get; init; } = PalettePlacement.FocusedMonitor;
 
-    public Colour Background { get; init; } = new(28, 28, 32);
+    /// <summary>
+    /// The palette's own colours.
+    /// </summary>
+    /// <remarks>
+    /// Five, not nine. The chip behind the mode name, the pill behind a badge, the
+    /// accent down the selected row and the hairlines between sections are all
+    /// derived from these by blending towards the background, so changing
+    /// <c>background</c> and <c>match</c> moves the whole palette together. Asking
+    /// for nine colours would be a good way to have nobody set any of them.
+    /// </remarks>
+    public Colour Background { get; init; } = new(0x16, 0x16, 0x1C);
 
-    public Colour Foreground { get; init; } = new(228, 228, 232);
+    public Colour Foreground { get; init; } = new(0xE8, 0xE8, 0xEE);
 
     /// <summary>Colour of the characters that matched what was typed.</summary>
-    public Colour Match { get; init; } = new(120, 190, 255);
+    public Colour Match { get; init; } = new(0x7D, 0xD3, 0xFC);
 
     /// <summary>Dimmer text: the process name, the command summary.</summary>
-    public Colour Secondary { get; init; } = new(140, 140, 150);
+    public Colour Secondary { get; init; } = new(0x87, 0x87, 0x96);
 
-    public Colour SelectionBackground { get; init; } = new(48, 82, 128);
+    public Colour SelectionBackground { get; init; } = new(0x24, 0x2C, 0x3E);
 
-    public Colour Border { get; init; } = new(70, 70, 80);
+    public Colour Border { get; init; } = new(0x39, 0x39, 0x48);
 
     public string FontFamily { get; init; } = "Segoe UI";
 

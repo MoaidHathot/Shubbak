@@ -9,6 +9,7 @@
 // --- window ---------------------------------------------------------------------
 RegisterClassEx
 WNDCLASSEXW
+WNDCLASS_STYLES
 CreateWindowEx
 DestroyWindow
 DefWindowProc

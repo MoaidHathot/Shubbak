@@ -553,8 +553,10 @@ dalil {
     // The signal that opens it. Must match what your keybinding raises.
     open-on-signal "palette"
 
+    // Sizes and the font are written at 96 DPI and scaled to whichever monitor
+    // the palette opens on, so these do not need changing per display.
     width         720
-    row-height    34
+    row-height    38
 
     // A cap on drawing, not on searching. Everything is still matched and
     // ranked; only this many rows are measured and painted, because measuring
@@ -571,12 +573,16 @@ dalil {
     // focused-monitor | cursor-monitor | primary
     placement "focused-monitor"
 
-    background           "#1C1C20"
-    foreground           "#E4E4E8"
-    match                "#78BEFF"
-    secondary            "#8C8C96"
-    selection-background "#305280"
-    border               "#464650"
+    // Five colours, not nine. The chip behind the mode name, the pill behind a
+    // badge, the accent down the selected row and the hairlines between sections
+    // are all derived from these, so changing background and match moves the
+    // whole palette together.
+    background           "#16161C"
+    foreground           "#E8E8EE"
+    match                "#7DD3FC"
+    secondary            "#878796"
+    selection-background "#242C3E"
+    border               "#393948"
 
     font      "Segoe UI"
     font-size 15

@@ -268,9 +268,29 @@ internal sealed partial class WmDaemonIpc
         .. CommandCatalogue.Commands.Select(c => new CommandInfo(
             c.Verb,
             c.Summary,
-            [.. c.Arguments.Select(a => a.ToString().ToLowerInvariant())],
+            [.. c.Arguments.Select(Spell)],
             c.Aliases)),
     ];
+
+    /// <summary>Spells an argument kind the way a person would write it.</summary>
+    /// <remarks>
+    /// The enum name lower-cased reads as <c>windowhandle</c>, which a client shows
+    /// verbatim beside the verb. Kebab-case is what the rest of the configuration
+    /// language uses and what anybody would type.
+    /// </remarks>
+    private static string Spell(CommandArgument argument)
+    {
+        string name = argument.ToString();
+        var spelled = new System.Text.StringBuilder(name.Length + 4);
+
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(name[i])) spelled.Append('-');
+            spelled.Append(char.ToLowerInvariant(name[i]));
+        }
+
+        return spelled.ToString();
+    }
 
     /// <summary>
     /// Describes a window and explains how Shubbak sees it.
