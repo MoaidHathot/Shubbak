@@ -28,8 +28,13 @@ IDC_ARROW
 
 // --- taking and losing the keyboard ------------------------------------------------
 SetForegroundWindow
+SetActiveWindow
 SetFocus
 GetForegroundWindow
+BringWindowToTop
+AttachThreadInput
+GetWindowThreadProcessId
+IsWindow
 WM_ACTIVATE
 WM_KILLFOCUS
 WM_CHAR

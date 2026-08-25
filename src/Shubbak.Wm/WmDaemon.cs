@@ -2513,12 +2513,19 @@ public sealed class WmDaemon : IDisposable
     /// command for each program that might implement it.
     /// </para>
     /// <para>
-    /// Foreground rights are handed over before the announcement, not after. A client
+    /// Foreground rights are offered before the announcement, not after. A client
     /// raising a window in response is not the foreground process and has not received
-    /// the keystroke - the daemon swallowed it - so Windows would refuse its
-    /// SetForegroundWindow and silently demote it to a taskbar flash. The user pressed
-    /// a key and a window is expected; passing on the right the keystroke earned is
-    /// what makes that happen.
+    /// the keystroke - this daemon swallowed it - so Windows would otherwise refuse its
+    /// SetForegroundWindow and silently demote it to a taskbar flash.
+    /// </para>
+    /// <para>
+    /// Offered, and not more than that. A process may only give away a right it holds,
+    /// and a background daemon that never owns the foreground usually holds nothing to
+    /// give, so this call frequently fails - and fails silently, because the client's
+    /// SetForegroundWindow still returns TRUE while doing nothing. Clients must
+    /// therefore not depend on it: Dalil attaches input queues itself, the same way
+    /// <see cref="WindowActions.Focus"/> has always done here. This stays because it
+    /// costs one call and does work in the cases where the daemon does hold the right.
     /// </para>
     /// <para>
     /// Said out loud when nobody is listening. A signal with no subscriber is a
