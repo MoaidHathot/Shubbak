@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Dalil (دليل, "guide" - and also "evidence") is the searchable index over
+    everything Shubbak can see: windows, commands, workspaces, layouts.
+
+    This half is pure. Matching, ranking, the mode grammar and the selection model
+    have no window, no renderer and no pipe, so all of it is testable in
+    milliseconds. Everything that touches Win32 lives in the Dalil executable.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Dalil.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+  </ItemGroup>
+
+</Project>
