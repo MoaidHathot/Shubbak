@@ -52,11 +52,18 @@ internal static class WindowCatalogue
 
         foreach (nint handle in handles)
         {
-            // Concealed windows are eligible, because a concealed window is the
-            // single most likely thing to be looking for. Asking the filter its
-            // ordinary question would reject every window on an inactive workspace -
-            // the ones Shubbak itself has hidden.
-            ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: true);
+            // Evaluated exactly as the daemon evaluates anything else.
+            //
+            // concealedAreEligible looks tempting here - Shubbak conceals inactive
+            // workspaces by cloaking, so its own managed windows read as cloaked -
+            // and it is the wrong tool. It exists for startup recovery and says so:
+            // it relaxes the visibility test as well as the cloak test, which let
+            // every hidden helper window on the desktop through as "manageable". On
+            // one ordinary session that was 104 invisible rows out of 119.
+            //
+            // The tree is the authority on what is managed, and Join applies it
+            // afterwards, so nothing is lost by asking the ordinary question here.
+            ManageDecision decision = WindowFilter.Evaluate(handle);
 
             if (decision.Reason is ExclusionReason.NotAWindow) continue;
 
@@ -100,6 +107,17 @@ internal static class WindowCatalogue
         {
             registry.TryGet(window.Handle, out WindowNode? node);
 
+            // A hidden window nobody manages is an application's own business - a
+            // console the process detached from, a helper parked out of sight. There
+            // are a hundred of them on an ordinary desktop and none of them is what
+            // anybody has lost.
+            //
+            // Dropped here rather than during discovery because a hidden window that
+            // Shubbak *does* manage is the opposite case: it is concealed by
+            // hide-method "hide", it cannot be found any other way, and it is exactly
+            // what this query exists for. Only the tree can tell the two apart.
+            if (node is null && window.Concealment is "hidden") continue;
+
             WorkspaceNode? workspace = node?.Workspace;
 
             candidates.Add(new WindowCandidate(
@@ -110,7 +128,7 @@ internal static class WindowCatalogue
                 (int)window.ProcessId,
                 window.Elevated,
                 node is not null,
-                node is not null ? null : window.Decision.Explain(),
+                node is not null ? null : Explain(window, registry),
                 node?.State.ToString().ToLowerInvariant(),
                 window.Concealment,
                 workspace?.Name,
@@ -122,6 +140,27 @@ internal static class WindowCatalogue
         }
 
         return candidates;
+    }
+
+    /// <summary>
+    /// Why a window is not managed, in terms a person can act on.
+    /// </summary>
+    /// <remarks>
+    /// The filter's verdict alone is not always the answer, and saying so plainly
+    /// matters more here than anywhere else - this query exists to explain a window's
+    /// absence. A window that passes every test and is still not in the tree was
+    /// refused by a rule or released by hand, and reporting the filter's cheerful
+    /// "manageable" for it is worse than saying nothing.
+    /// </remarks>
+    private static string Explain(Discovered window, WindowRegistry registry)
+    {
+        if (registry.IsExcluded(window.Handle))
+            return "a rule excluded it, or it was released by hand - toggle-managed takes it back";
+
+        if (window.Decision.Manageable)
+            return "Shubbak has not adopted it yet";
+
+        return window.Decision.Explain();
     }
 
     /// <summary>

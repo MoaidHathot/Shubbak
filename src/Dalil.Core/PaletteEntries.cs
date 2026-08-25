@@ -95,6 +95,73 @@ public static class PaletteEntries
     }
 
     /// <summary>
+    /// Describes the palette's own keys and prefixes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Prefixes are the fastest way to change mode and the least findable thing in the
+    /// interface: nobody guesses that <c>~</c> means layouts. Tab makes every mode
+    /// reachable without knowing any of them, the hint bar names them permanently, and
+    /// this is where the whole set is written down.
+    /// </para>
+    /// <para>
+    /// The mode rows are chooseable rather than being text about choosing. Somebody
+    /// reading a list of keys will press Enter on the line they want; a help screen
+    /// that ignores that has taught them the key and then refused to use it.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForHelp()
+    {
+        List<PaletteEntry> entries = [];
+
+        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        {
+            char prefix = PaletteModel.PrefixFor(mode);
+
+            entries.Add(new PaletteEntry(
+                PaletteModel.NameOf(mode),
+                mode switch
+                {
+                    PaletteMode.Windows => "every window on the desktop, managed or not",
+                    PaletteMode.Commands => "every command the window manager accepts",
+                    PaletteMode.Workspaces => "go to a workspace",
+                    PaletteMode.Layouts => "change the layout of this container",
+                    _ => "these keys",
+                },
+                prefix == '\0' ? ["no prefix", "Tab"] : [$"{prefix}", "Tab"],
+                string.Empty,
+                Rank: 100,
+                SwitchesTo: mode));
+        }
+
+        foreach ((string keys, string does) in Keys)
+            entries.Add(new PaletteEntry(keys, does, [], string.Empty));
+
+        return entries;
+    }
+
+    /// <summary>Every key the palette itself handles.</summary>
+    /// <remarks>
+    /// Written here rather than in the window that implements them, so the list a
+    /// user reads and the keys that actually work are the same text - and so a test
+    /// can hold the two together.
+    /// </remarks>
+    public static IReadOnlyList<(string Keys, string Does)> Keys { get; } =
+    [
+        ("Tab / Shift+Tab", "next or previous mode"),
+        ("Enter", "act on the selected row"),
+        ("Escape", "dismiss the palette"),
+        ("Up / Down", "move the selection"),
+        ("Ctrl+P / Ctrl+N", "move the selection"),
+        ("Ctrl+K / Ctrl+J", "move the selection"),
+        ("PageUp / PageDown", "move a screenful"),
+        ("Ctrl+Home / Ctrl+End", "first or last row"),
+        ("Backspace", "delete a character"),
+        ("Ctrl+Backspace", "delete a word"),
+        ("Ctrl+U", "clear what you typed"),
+    ];
+
+    /// <summary>
     /// What to call a window in the list.
     /// </summary>
     /// <remarks>

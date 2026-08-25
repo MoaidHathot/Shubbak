@@ -26,6 +26,9 @@ internal static class PaletteRenderer
     private const int Padding = 8;
     private const int TextInset = 12;
 
+    /// <summary>Height reserved along the bottom for the mode hints.</summary>
+    public const int HintBarHeight = 24;
+
     public static void Draw(IRenderer renderer, PaletteModel model, DalilConfig config, Rect canvas)
     {
         var font = new FontStyle(config.FontFamily, config.FontSize, Bold: false, Italic: false);
@@ -45,18 +48,17 @@ internal static class PaletteRenderer
                 new Rect(canvas.X + TextInset, y + Padding, canvas.Width - (TextInset * 2), config.RowHeight),
                 config.Secondary,
                 small);
-
-            return;
         }
-
-        for (int i = 0; i < count; i++)
+        else
         {
-            int index = first + i;
-            DrawRow(renderer, model, config, canvas, font, small, index, y);
-            y += config.RowHeight;
+            for (int i = 0; i < count; i++)
+            {
+                DrawRow(renderer, model, config, canvas, font, small, first + i, y);
+                y += config.RowHeight;
+            }
         }
 
-        DrawScrollHint(renderer, model, config, canvas, small, first, count);
+        DrawHintBar(renderer, model, config, canvas, small, first, count);
     }
 
     private static int DrawSearchBox(
@@ -67,13 +69,7 @@ internal static class PaletteRenderer
         // The mode is shown as a word rather than left as the punctuation that
         // selected it. A bare ">" tells someone who has just pressed Tab nothing at
         // all about what they are now searching.
-        string label = model.Mode switch
-        {
-            PaletteMode.Commands => "commands",
-            PaletteMode.Workspaces => "workspaces",
-            PaletteMode.Layouts => "layouts",
-            _ => "windows",
-        };
+        string label = PaletteModel.NameOf(model.Mode);
 
         renderer.DrawText(
             label,
@@ -212,27 +208,82 @@ internal static class PaletteRenderer
         }
     }
 
-    /// <summary>Says how much of the list is not being shown.</summary>
+    /// <summary>
+    /// The permanent hint bar: every mode, its prefix, and how far down the list we are.
+    /// </summary>
     /// <remarks>
-    /// A count rather than a scrollbar. The palette is driven by the keyboard, so a
-    /// bar that cannot be dragged would be decoration; "12 of 213" is the fact the
-    /// user actually wants, which is whether the thing they are looking for might be
-    /// further down.
+    /// <para>
+    /// The answer to prefixes being fast and unfindable. Nobody guesses that <c>~</c>
+    /// means layouts, and a shortcut nobody discovers is a shortcut nobody has. So all
+    /// of them are on screen all of the time, the current one is highlighted so the
+    /// mapping is learned by use rather than by reading, and <c>?</c> is listed
+    /// alongside the rest as the way to the full key reference.
+    /// </para>
+    /// <para>
+    /// Costs one text measurement per mode per repaint - five - which is nothing
+    /// beside the twelve rows above it.
+    /// </para>
     /// </remarks>
-    private static void DrawScrollHint(
+    private static void DrawHintBar(
         IRenderer renderer, PaletteModel model, DalilConfig config, Rect canvas, FontStyle small,
         int first, int count)
     {
+        int y = canvas.Bottom - HintBarHeight;
+
+        renderer.FillRectangle(
+            new Rect(canvas.X + Padding, y, canvas.Width - (Padding * 2), 1), config.Border);
+
+        int textY = y + 4;
+        int x = canvas.X + TextInset;
+
+        // Tab first, because it is the one that needs no memory at all: a user who
+        // reads nothing else can still reach every mode by pressing it.
+        x = DrawHint(renderer, config, small, "Tab", "modes", x, textY, active: false);
+
+        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        {
+            char prefix = PaletteModel.PrefixFor(mode);
+            if (prefix == '\0') continue;
+
+            x = DrawHint(
+                renderer, config, small,
+                prefix.ToString(), PaletteModel.NameOf(mode),
+                x, textY, active: model.Mode == mode);
+        }
+
         if (model.Rows.Count <= count) return;
 
-        string hint = $"{first + 1}-{first + count} of {model.Rows.Count}";
-        Size size = renderer.Measure(hint, small);
+        string position = $"{first + 1}-{first + count} of {model.Rows.Count}";
+        Size size = renderer.Measure(position, small);
 
+        // A count rather than a scrollbar. The palette is driven by the keyboard, so a
+        // bar that cannot be dragged would be decoration; whether the thing being
+        // looked for might be further down is the fact actually wanted.
         renderer.DrawText(
-            hint,
-            new Rect(canvas.Right - size.Width - TextInset, canvas.Bottom - size.Height - 6,
-                     size.Width + 2, size.Height + 4),
+            position,
+            new Rect(canvas.Right - size.Width - TextInset, textY, size.Width + 2, size.Height + 4),
             config.Secondary,
             small);
+    }
+
+    private static int DrawHint(
+        IRenderer renderer, DalilConfig config, FontStyle small,
+        string key, string label, int x, int y, bool active)
+    {
+        Size keySize = renderer.Measure(key, small);
+
+        renderer.DrawText(
+            key, new Rect(x, y, keySize.Width + 2, keySize.Height + 4),
+            active ? config.Match : config.Foreground, small);
+
+        x += keySize.Width + 4;
+
+        Size labelSize = renderer.Measure(label, small);
+
+        renderer.DrawText(
+            label, new Rect(x, y, labelSize.Width + 2, labelSize.Height + 4),
+            active ? config.Foreground : config.Secondary, small);
+
+        return x + labelSize.Width + 14;
     }
 }

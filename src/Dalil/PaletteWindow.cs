@@ -64,6 +64,17 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>Raised with a command string when a row is chosen.</summary>
     public event Action<string>? CommandRequested;
 
+    /// <summary>
+    /// Raised when the palette starts showing a different kind of thing.
+    /// </summary>
+    /// <remarks>
+    /// Fired for every route into a mode, not only for Tab. Typing <c>&gt;</c> changes
+    /// mode as surely as pressing Tab does, and so does backspacing over it - and a
+    /// mode change that did not refill the list would leave the user searching windows
+    /// while the box said "commands".
+    /// </remarks>
+    public event Action<PaletteMode>? ModeChanged;
+
     /// <summary>Raised when the process should stop.</summary>
     public static event Action? RequestShutdown;
 
@@ -164,8 +175,26 @@ public sealed class PaletteWindow : IDisposable
         // WM_CHAR - and every one of them is handled as a key rather than as text.
         if (char.IsControl(value)) return;
 
-        _query += value;
+        ApplyQuery(_query + value);
+    }
+
+    /// <summary>
+    /// Replaces the query, announcing a mode change if one fell out of it.
+    /// </summary>
+    /// <remarks>
+    /// The single place the query changes, so no route into a mode can forget to
+    /// refill the list. There are four: Tab, typing a prefix, deleting one, and
+    /// choosing a row in the help list.
+    /// </remarks>
+    private void ApplyQuery(string query)
+    {
+        PaletteMode before = _model.Mode;
+
+        _query = query;
         _model.SetQuery(_query);
+
+        if (_model.Mode != before) ModeChanged?.Invoke(_model.Mode);
+
         Repaint();
     }
 
@@ -233,9 +262,7 @@ public sealed class PaletteWindow : IDisposable
                 return true;
 
             case VIRTUAL_KEY.VK_U when control:
-                _query = string.Empty;
-                _model.SetQuery(_query);
-                Repaint();
+                ApplyQuery(string.Empty);
                 return true;
 
             default:
@@ -264,15 +291,11 @@ public sealed class PaletteWindow : IDisposable
         if (wholeWord)
         {
             int cut = _query.TrimEnd().LastIndexOf(' ');
-            _query = cut <= 0 ? string.Empty : _query[..(cut + 1)];
-        }
-        else
-        {
-            _query = _query[..^1];
+            ApplyQuery(cut <= 0 ? string.Empty : _query[..(cut + 1)]);
+            return;
         }
 
-        _model.SetQuery(_query);
-        Repaint();
+        ApplyQuery(_query[..^1]);
     }
 
     private void CycleMode(bool forward)
@@ -281,10 +304,7 @@ public sealed class PaletteWindow : IDisposable
         int at = Array.IndexOf(modes, _model.Mode);
         int next = ((at + (forward ? 1 : -1)) % modes.Length + modes.Length) % modes.Length;
 
-        _model.SetMode(modes[next]);
-        _query = _model.Query;
-
-        Repaint();
+        SwitchTo(modes[next]);
     }
 
     /// <summary>
@@ -299,13 +319,26 @@ public sealed class PaletteWindow : IDisposable
     {
         if (_model.Selected is not { } row) return;
 
+        // A row that names a mode changes mode. This is what makes the help list
+        // usable: somebody reading a list of keys will press Enter on the line they
+        // want, and a help screen that ignores that has taught them the key and then
+        // refused to honour it.
+        if (row.Entry.SwitchesTo is { } mode)
+        {
+            SwitchTo(mode);
+            return;
+        }
+
         string command = row.Entry.Command;
 
         // A verb that needs arguments is offered as text to complete rather than run.
         // Running it bare would be rejected by the parser and read as a broken
-        // palette.
+        // palette. A help row that is only a key reference has nothing to run either,
+        // and simply does nothing.
         if (command.Length == 0)
         {
+            if (_model.Mode is PaletteMode.Help) return;
+
             _query = ">" + row.Entry.Primary + " ";
             _model.SetQuery(_query);
             Repaint();
@@ -316,9 +349,28 @@ public sealed class PaletteWindow : IDisposable
         CommandRequested?.Invoke(command);
     }
 
+    /// <summary>Changes mode and tells the host to refill the list.</summary>
+    private void SwitchTo(PaletteMode mode)
+    {
+        _model.SetMode(mode);
+        _query = _model.Query;
+
+        ModeChanged?.Invoke(mode);
+        Repaint();
+    }
+
     // ---- placement -------------------------------------------------------------
 
-    private int RequiredHeight() => (_config.RowHeight * (_config.VisibleRows + 1)) + 16;
+    /// <summary>
+    /// How tall the palette needs to be.
+    /// </summary>
+    /// <remarks>
+    /// A search row, the results, and a hint bar. The hint bar is not optional: mode
+    /// prefixes are punctuation, and punctuation nobody is shown is punctuation nobody
+    /// finds.
+    /// </remarks>
+    private int RequiredHeight() =>
+        (_config.RowHeight * (_config.VisibleRows + 1)) + PaletteRenderer.HintBarHeight + 18;
 
     /// <summary>
     /// Puts the palette on the monitor the user is looking at.
@@ -424,7 +476,7 @@ public sealed class PaletteWindow : IDisposable
     // ---- window plumbing --------------------------------------------------------
 
     private static string PrefixFor(PaletteMode mode) =>
-        PaletteModel.Prefixes.FirstOrDefault(p => p.Value == mode).Key is var prefix && prefix != '\0'
+        PaletteModel.PrefixFor(mode) is var prefix && prefix != '\0'
             ? prefix.ToString()
             : string.Empty;
 

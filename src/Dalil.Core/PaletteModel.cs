@@ -23,23 +23,42 @@ public enum PaletteMode
 
     /// <summary>Every layout.</summary>
     Layouts,
+
+    /// <summary>
+    /// The keys and prefixes themselves.
+    /// </summary>
+    /// <remarks>
+    /// A mode rather than a separate window, so it is reachable by the same Tab that
+    /// reaches everything else - and so someone who lands in it by accident can Tab
+    /// straight back out.
+    /// </remarks>
+    Help,
 }
 
 /// <summary>One thing the palette can offer.</summary>
 /// <param name="Primary">The text searched and shown first.</param>
 /// <param name="Secondary">Context shown beside it: a process, a summary.</param>
 /// <param name="Badges">Short state markers, shown at the end of the row.</param>
-/// <param name="Command">What to send to the window manager when chosen.</param>
+/// <param name="Command">
+/// What to send to the window manager when chosen. Empty means the row cannot be run
+/// as it stands, and is offered as text to finish typing instead.
+/// </param>
 /// <param name="Rank">
 /// Higher sorts first among equal matches. Focus recency for windows, so the list is
 /// useful before anything is typed.
+/// </param>
+/// <param name="SwitchesTo">
+/// When set, choosing this row changes mode rather than running anything. It is what
+/// makes the help list do something when a reader presses Enter on it, instead of
+/// being a wall of text that ignores the only key they have tried.
 /// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
     IReadOnlyList<string> Badges,
     string Command,
-    long Rank = 0);
+    long Rank = 0,
+    PaletteMode? SwitchesTo = null);
 
 /// <summary>An entry that survived filtering, with where it matched.</summary>
 /// <param name="Entry">The underlying entry.</param>
@@ -72,6 +91,12 @@ public sealed class PaletteModel
     /// <remarks>
     /// Punctuation rather than words because it is typed constantly and must never
     /// collide with what is being searched for. No window title begins with <c>&gt;</c>.
+    /// <para>
+    /// Being fast is not the same as being findable, and punctuation is the least
+    /// discoverable thing a user interface can have. So these are never only
+    /// punctuation: the palette shows them along its bottom edge at all times, Tab
+    /// reaches every one of them without knowing any, and <c>?</c> lists the lot.
+    /// </para>
     /// </remarks>
     public static IReadOnlyDictionary<char, PaletteMode> Prefixes { get; } =
         new Dictionary<char, PaletteMode>
@@ -79,7 +104,28 @@ public sealed class PaletteModel
             ['>'] = PaletteMode.Commands,
             ['#'] = PaletteMode.Workspaces,
             ['~'] = PaletteMode.Layouts,
+            ['?'] = PaletteMode.Help,
         };
+
+    /// <summary>The prefix that selects a mode, or nothing for the default.</summary>
+    public static char PrefixFor(PaletteMode mode)
+    {
+        foreach ((char prefix, PaletteMode candidate) in Prefixes)
+            if (candidate == mode)
+                return prefix;
+
+        return '\0';
+    }
+
+    /// <summary>A short human name for a mode, for the hint bar and the search box.</summary>
+    public static string NameOf(PaletteMode mode) => mode switch
+    {
+        PaletteMode.Commands => "commands",
+        PaletteMode.Workspaces => "workspaces",
+        PaletteMode.Layouts => "layouts",
+        PaletteMode.Help => "help",
+        _ => "windows",
+    };
 
     /// <summary>What the user typed, prefix included.</summary>
     public string Query => _query;
@@ -133,7 +179,7 @@ public sealed class PaletteModel
     /// <summary>Switches mode, keeping whatever has been typed.</summary>
     public void SetMode(PaletteMode mode)
     {
-        char prefix = Prefixes.FirstOrDefault(p => p.Value == mode).Key;
+        char prefix = PrefixFor(mode);
         SetQuery(prefix == '\0' ? Term : prefix + Term);
     }
 
