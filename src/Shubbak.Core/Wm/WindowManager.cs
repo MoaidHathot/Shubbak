@@ -79,6 +79,16 @@ public sealed class WindowManager
     private readonly List<WmEvent> _pending = [];
     private readonly LayoutEngine _engine = new();
 
+    /// <summary>
+    /// Counts focus changes, so windows can be ordered by how recently they had it.
+    /// </summary>
+    /// <remarks>
+    /// Stamped onto <see cref="WindowNode.FocusSequence"/> by <c>SetFocus</c>. A
+    /// <c>long</c> at one increment per focus change will not wrap in any number of
+    /// human lifetimes, so nothing needs to handle it doing so.
+    /// </remarks>
+    private long _focusClock;
+
     public WindowManager(WmOptions? options = null)
     {
         Options = options ?? WmOptions.Default;
@@ -403,6 +413,76 @@ public sealed class WindowManager
             return Reject("focus-recent-workspace", "No previous workspace on this monitor.");
 
         return ActivateWorkspace(previous);
+    }
+
+    /// <summary>
+    /// Focuses the window that most recently had focus before this one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The window-level counterpart of <see cref="FocusRecentWorkspace"/>, and the
+    /// behaviour Alt+Tab is usually wanted for: pressing it twice returns you to
+    /// where you started, because the window being left becomes the most recent one
+    /// the moment focus moves off it.
+    /// </para>
+    /// <para>
+    /// Global rather than per-workspace. A window is most easily lost when it is not
+    /// where you are looking, so restricting the search to the current workspace
+    /// would exclude exactly the cases worth having this for. Focusing a window on a
+    /// hidden workspace shows that workspace, which <see cref="FocusWindow"/> already
+    /// handles.
+    /// </para>
+    /// <para>
+    /// Minimised windows are skipped. They have a focus history like anything else,
+    /// but "return me to what I was just using" should not mean restoring something
+    /// the user deliberately put away - and a minimised window that is focused
+    /// without being restored is focus on something invisible.
+    /// </para>
+    /// </remarks>
+    public WmResult FocusRecentWindow()
+    {
+        WindowNode? best = null;
+
+        foreach (WindowNode candidate in Root.DescendantWindows())
+        {
+            if (ReferenceEquals(candidate, FocusedWindow)) continue;
+            if (candidate.State is WindowState.Minimised) continue;
+            if (candidate.FocusSequence == 0) continue;
+
+            if (best is null || candidate.FocusSequence > best.FocusSequence) best = candidate;
+        }
+
+        if (best is null)
+            return Reject("focus-recent-window", "No other window has been focused yet.");
+
+        return FocusWindow(best);
+    }
+
+    /// <summary>
+    /// Focuses a window by its native handle, wherever it is.
+    /// </summary>
+    /// <remarks>
+    /// For callers that already know which window they mean - a palette, a script,
+    /// anything holding a handle rather than a direction. Returns a rejection when
+    /// the handle names nothing in the tree, which lets the host decide whether to
+    /// try harder: an unmanaged or orphaned window is not in the tree at all and
+    /// needs reviving before it can be focused.
+    /// </remarks>
+    public WmResult FocusWindowByHandle(long handle)
+    {
+        if (Root.FindWindow(handle) is not { } window)
+            return Reject("focus-window", $"No managed window with handle {handle}.");
+
+        // A minimised window cannot usefully take focus: it is not on screen, so the
+        // foreground would go to something the user cannot see. Restoring first is
+        // what "focus this" has to mean for it.
+        //
+        // Core, because FocusWindow completes the operation and both changes must be
+        // reported together.
+        if (window.State is WindowState.Minimised)
+            SetWindowStateCore(window, WindowState.Tiling);
+
+        return FocusWindow(window);
     }
 
     /// <summary>Moves the focused workspace to the monitor in a given direction.</summary>
@@ -1341,8 +1421,23 @@ public sealed class WindowManager
     {
         ArgumentNullException.ThrowIfNull(window);
 
+        SetWindowStateCore(window, state);
+        return Complete();
+    }
+
+    /// <summary>
+    /// Sets a window's state without completing the operation.
+    /// </summary>
+    /// <remarks>
+    /// For callers that continue afterwards. <see cref="Complete"/> drains the
+    /// pending events, so an operation that calls the public entry point and then
+    /// does more work reports only the second half - the state change would be
+    /// applied to the tree and never announced to the bar or the layout pass.
+    /// </remarks>
+    private void SetWindowStateCore(WindowNode window, WindowState state)
+    {
         WindowState previous = window.State;
-        if (previous == state) return Complete();
+        if (previous == state) return;
 
         // Leaving the tiling flow: remember where focus should land if this window
         // is about to become invisible.
@@ -1357,8 +1452,6 @@ public sealed class WindowManager
         Emit(new WindowStateChanged(window, previous, state));
 
         if (successor is not null) SetFocus(successor);
-
-        return Complete();
     }
 
     /// <summary>Toggles the focused window between tiling and floating.</summary>
@@ -1490,7 +1583,11 @@ public sealed class WindowManager
     /// <summary>Suspends or resumes window management.</summary>
     public WmResult SetPaused(bool paused)
     {
+        if (IsPaused == paused) return Complete();
+
         IsPaused = paused;
+        Emit(new PauseChanged(paused));
+
         return Complete();
     }
 
@@ -1508,6 +1605,11 @@ public sealed class WindowManager
 
         WindowNode? previous = FocusedWindow;
         FocusedWindow = window;
+
+        // Stamped here rather than at each call site, because this is the one place
+        // focus actually changes. An increment and a field write; the counter is
+        // never read on the hot path, only when something asks for recency.
+        if (window is not null) window.FocusSequence = ++_focusClock;
 
         if (window?.Workspace is { } workspace)
         {

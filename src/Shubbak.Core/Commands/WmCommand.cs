@@ -96,6 +96,12 @@ public abstract record WmCommand
         ReloadConfigCommand or
         RedrawCommand or
 
+        // A signal asks another process to do something, most often to put a window
+        // on screen. Repeating it at the hardware repeat rate asks again dozens of
+        // times a second, and the client has no way to tell a held key from a user
+        // who genuinely pressed it repeatedly.
+        SignalCommand or
+
         // Commands that take the focused window off this workspace, which is the same
         // trap as close and was missed because the consequence is recoverable rather
         // than final. Once the window is gone, focus falls to whatever was next to it,
@@ -139,6 +145,36 @@ public sealed record FocusWorkspaceCommand(string Workspace) : WmCommand
 public sealed record FocusRecentWorkspaceCommand : WmCommand
 {
     public override string Name => "focus-recent-workspace";
+}
+
+/// <summary><c>focus-recent-window</c></summary>
+/// <remarks>
+/// The window-level Alt+Tab. Pressing it twice returns you to where you started,
+/// because the window being left becomes the most recent one as focus moves off it.
+/// </remarks>
+public sealed record FocusRecentWindowCommand : WmCommand
+{
+    public override string Name => "focus-recent-window";
+}
+
+/// <summary><c>focus-window 0x1D0076</c></summary>
+/// <remarks>
+/// <para>
+/// Focus by native handle, for a caller that already knows which window it means -
+/// a palette, a script, anything that has enumerated windows rather than navigated
+/// to them. Every other focus command is relative to where focus already is, which
+/// is no use for reaching a window you cannot see.
+/// </para>
+/// <para>
+/// Does not target the focused window in the sense
+/// <see cref="WmCommand.TargetsFocusedWindow"/> means: it names its own target, so
+/// the host must not refuse it merely because something unmanaged is in front.
+/// Refusing on that basis would break the one case it exists for.
+/// </para>
+/// </remarks>
+public sealed record FocusWindowCommand(long Handle) : WmCommand
+{
+    public override string Name => "focus-window";
 }
 
 /// <summary><c>focus --next</c> / <c>focus --prev</c></summary>
@@ -372,6 +408,34 @@ public sealed record ExitCommand : WmCommand
 public sealed record ShellExecCommand(string CommandLine) : WmCommand
 {
     public override string Name => "shell-exec";
+}
+
+/// <summary>
+/// <c>signal palette</c> - announces a named user gesture to connected clients.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The extension point for user interface that is not Shubbak's. A client subscribed
+/// to the <c>signal</c> topic decides what a name means; the window manager only
+/// carries it, and deliberately knows nothing about what is on the other end.
+/// </para>
+/// <para>
+/// This exists because the alternative couples the window manager to one program.
+/// The obvious way to add a window palette is a <c>palette</c> command that opens
+/// it - which makes the palette a feature of whichever process implements it, so
+/// anyone preferring a different bar loses the palette with it. A signal keeps the
+/// keybinding in the user's config, where every other key already lives, and keeps
+/// the daemon ignorant of what the key is for.
+/// </para>
+/// <para>
+/// Far weaker than <see cref="ShellExecCommand"/> and not gated the way it is. This
+/// starts nothing, elevates nothing, and reaches only processes already connected to
+/// a pipe scoped to the user's own account. It is a string on a topic.
+/// </para>
+/// </remarks>
+public sealed record SignalCommand(string Signal, IReadOnlyList<string> Arguments) : WmCommand
+{
+    public override string Name => "signal";
 }
 
 /// <summary>

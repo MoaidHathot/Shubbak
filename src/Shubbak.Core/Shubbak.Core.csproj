@@ -12,6 +12,12 @@
       to reset the logger, but tests must, because Log is process-wide state.
     -->
     <InternalsVisibleTo Include="Shubbak.Core.Tests" />
+
+    <!--
+      CommandCatalogue.ResetForTests, for the same reason. The test that needs it
+      lives with the parser it holds to account, which is in Shubbak.Config.
+    -->
+    <InternalsVisibleTo Include="Shubbak.Config.Tests" />
   </ItemGroup>
 
 </Project>

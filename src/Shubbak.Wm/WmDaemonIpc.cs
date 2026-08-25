@@ -77,58 +77,145 @@ internal sealed partial class WmDaemonIpc
     }
 
     /// <summary>Parses and runs a command string, exactly as a keybinding would.</summary>
+    /// <remarks>
+    /// Accepts several commands separated by newlines, so a client can express "focus
+    /// that window, then un-minimise it" without two round trips and without the
+    /// window able to change underneath it in between. The sequence stops at the first
+    /// failure, matching what a keybinding bound to a list of commands does.
+    /// </remarks>
     private Task<IpcResponse> RunCommandAsync(IpcRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.Payload))
             return Task.FromResult(new IpcResponse(request.Id, false, null, "no command given"));
 
-        var span = new TextSpan(new TextPosition(1, 1, 0), request.Payload.Length);
-
-        if (!CommandParser.TryParse(request.Payload, span, out WmCommand? command, out Diagnostic? error))
+        // One command is the overwhelmingly common case and must not pay for the rare
+        // one: a vectorised scan of a short string, and then no list, no split and no
+        // array.
+        //
+        // Newlines rather than semicolons as the separator, because shell-exec takes
+        // the rest of its line verbatim - a semicolon inside a quoted command line
+        // would be split in a way no amount of escaping makes obvious.
+        if (!request.Payload.AsSpan().Contains('\n'))
         {
-            string message = error!.Hint is null
-                ? error.Message
-                : $"{error.Message} {error.Hint}";
+            if (!TryAccept(request.Payload, out WmCommand? only, out string? refusal))
+                return Task.FromResult(new IpcResponse(request.Id, false, null, refusal));
 
-            return Task.FromResult(new IpcResponse(request.Id, false, null, message));
+            return _daemon.InvokeAsync(() => RunAll(only!, null, request.Id));
         }
 
-        // A window manager is not an execution service.
-        //
-        // shell-exec exists so a keybinding or a startup command can launch a
-        // terminal, which is a decision the user made in their config. Nothing about
-        // that requires it to be reachable at runtime by any process that can open the
-        // pipe - and the pipe is scoped to the account, not to the integrity level, so
-        // an ordinary process can reach the pipe of an elevated daemon and have it
-        // start something elevated. Shubbak tells users to run elevated to manage
-        // elevated windows, which makes that a realistic path rather than a
-        // theoretical one.
-        //
-        // Off by default, and a config key rather than a rebuild for anyone who wants
-        // to drive Shubbak as a launcher deliberately.
+        List<WmCommand> commands = [];
+
+        foreach (string line in request.Payload.Split('\n'))
+        {
+            if (line.AsSpan().Trim().Length == 0) continue;
+
+            if (!TryAccept(line.Trim(), out WmCommand? parsed, out string? failure))
+                return Task.FromResult(new IpcResponse(request.Id, false, null, failure));
+
+            commands.Add(parsed!);
+        }
+
+        if (commands.Count == 0)
+            return Task.FromResult(new IpcResponse(request.Id, false, null, "no command given"));
+
+        return _daemon.InvokeAsync(() => RunAll(null, commands, request.Id));
+    }
+
+    /// <summary>Runs one command, or a sequence, on the message loop.</summary>
+    private IpcResponse RunAll(WmCommand? single, List<WmCommand>? sequence, int id)
+    {
+        if (single is not null) return Report(_daemon.RunCommand(single), id);
+
+        foreach (WmCommand command in sequence!)
+        {
+            IpcResponse response = Report(_daemon.RunCommand(command), id);
+            if (!response.Ok) return response;
+        }
+
+        return new IpcResponse(id, true);
+    }
+
+    private static IpcResponse Report(CommandOutcome outcome, int id) =>
+        outcome.Succeeded
+            ? new IpcResponse(id, true)
+            : new IpcResponse(id, false, null,
+                outcome.Result.RejectionReason ?? "command was rejected");
+
+    /// <summary>
+    /// Parses one command and decides whether the pipe may run it.
+    /// </summary>
+    /// <remarks>
+    /// A window manager is not an execution service.
+    /// <para>
+    /// shell-exec exists so a keybinding or a startup command can launch a terminal,
+    /// which is a decision the user made in their config. Nothing about that requires
+    /// it to be reachable at runtime by any process that can open the pipe - and the
+    /// pipe is scoped to the account, not to the integrity level, so an ordinary
+    /// process can reach the pipe of an elevated daemon and have it start something
+    /// elevated. Shubbak tells users to run elevated to manage elevated windows, which
+    /// makes that a realistic path rather than a theoretical one.
+    /// </para>
+    /// <para>
+    /// Off by default, and a config key rather than a rebuild for anyone who wants to
+    /// drive Shubbak as a launcher deliberately.
+    /// </para>
+    /// <para>
+    /// <c>signal</c> is deliberately not gated the same way. It starts nothing and
+    /// reaches only clients already connected to the same per-user pipe, so the worst
+    /// a caller can do is ask a bar to open a window the user could have opened with a
+    /// keystroke.
+    /// </para>
+    /// </remarks>
+    private bool TryAccept(string text, out WmCommand? command, out string? refusal)
+    {
+        var span = new TextSpan(new TextPosition(1, 1, 0), text.Length);
+
+        if (!CommandParser.TryParse(text, span, out command, out Diagnostic? error))
+        {
+            refusal = error!.Hint is null ? error.Message : $"{error.Message} {error.Hint}";
+            return false;
+        }
+
         if (command is ShellExecCommand && !_daemon.AllowShellExecOverIpc)
         {
-            return Task.FromResult(new IpcResponse(
-                request.Id, false, null,
+            refusal =
                 "shell-exec is not accepted over the pipe. It stays available to " +
                 "keybindings, rules and startup commands. Set " +
-                "general { allow-shell-exec-over-ipc #true } to permit it here."));
+                "general { allow-shell-exec-over-ipc #true } to permit it here.";
+            return false;
         }
 
-        return _daemon.InvokeAsync(() =>
-        {
-            CommandOutcome outcome = _daemon.RunCommand(command!);
-
-            return outcome.Succeeded
-                ? new IpcResponse(request.Id, true)
-                : new IpcResponse(request.Id, false, null,
-                    outcome.Result.RejectionReason ?? "command was rejected");
-        });
+        refusal = null;
+        return true;
     }
 
     private Task<IpcResponse> QueryAsync(IpcRequest request)
     {
         string what = request.Payload ?? "state";
+
+        // Answered before the message loop is involved at all.
+        //
+        // Enumerating the desktop is several hundred windows of Win32 reads, and none
+        // of it touches the tree. Marshalling it onto the tick would put that work in
+        // front of the layout pass for no reason, and the tick is the one thread that
+        // must not wait for anything. Only the join needs to be there.
+        if (what is "all-windows")
+        {
+            List<WindowCatalogue.Discovered> discovered = WindowCatalogue.Discover();
+
+            return _daemon.InvokeAsync(() => new IpcResponse(request.Id, true,
+                JsonSerializer.Serialize(
+                    WindowCatalogue.Join(discovered, _daemon.Manager, _daemon.Windows),
+                    IpcJsonContext.Default.IReadOnlyListWindowCandidate)));
+        }
+
+        // Neither of these reads mutable state either: the catalogue is immutable and
+        // the binding list belongs to the loaded configuration.
+        if (what is "commands")
+        {
+            return Task.FromResult(new IpcResponse(request.Id, true,
+                JsonSerializer.Serialize(Describe(), IpcJsonContext.Default.IReadOnlyListCommandInfo)));
+        }
 
         return _daemon.InvokeAsync<IpcResponse>(() =>
         {
@@ -161,15 +248,29 @@ internal sealed partial class WmDaemonIpc
                     (IReadOnlyList<string>)[.. Core.Layouts.LayoutRegistry.CanonicalNames],
                     IpcJsonContext.Default.IReadOnlyListString),
 
+                "bindings" => JsonSerializer.Serialize(
+                    _daemon.DescribeBindings(), IpcJsonContext.Default.IReadOnlyListBindingInfo),
+
                 _ => string.Empty,
             };
 
             return json.Length == 0
                 ? new IpcResponse(request.Id, false, null,
-                    $"unknown query '{what}'. Try: state, windows, workspaces, monitors, focused, layouts")
+                    $"unknown query '{what}'. Try: state, windows, all-windows, workspaces, " +
+                    "monitors, focused, layouts, commands, bindings")
                 : new IpcResponse(request.Id, true, json);
         });
     }
+
+    /// <summary>The command set, so a client need not hard-code it.</summary>
+    private static IReadOnlyList<CommandInfo> Describe() =>
+    [
+        .. CommandCatalogue.Commands.Select(c => new CommandInfo(
+            c.Verb,
+            c.Summary,
+            [.. c.Arguments.Select(a => a.ToString().ToLowerInvariant())],
+            c.Aliases)),
+    ];
 
     /// <summary>
     /// Describes a window and explains how Shubbak sees it.

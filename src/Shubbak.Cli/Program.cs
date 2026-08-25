@@ -714,9 +714,14 @@ internal static class Program
 
         QUERIES
           query [what]         Print state as JSON.
-                               what: state (default), windows, workspaces,
-                                     monitors, focused, layouts
+                               what: state (default), windows, all-windows,
+                                     workspaces, monitors, focused, layouts,
+                                     commands, bindings
           layouts              List the available layouts.
+
+          all-windows lists every window on the desktop, not only the managed
+          ones, with the reason each unmanaged window was passed over. It is the
+          place to look for a window that has gone missing.
 
         EVENTS
           sub [topics]         Tail the event stream. Comma-separated topics, or

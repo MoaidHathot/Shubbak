@@ -87,6 +87,31 @@ public sealed class WindowNode : Node
     public bool IsAlwaysOnTop { get; set; }
 
     /// <summary>
+    /// When this window last had focus, as a counter rather than a clock.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Zero means never focused. Higher is more recent, and the values are only ever
+    /// compared with one another - there is no unit and no epoch.
+    /// </para>
+    /// <para>
+    /// A counter rather than a timestamp on purpose. The question asked of it is
+    /// always "which of these was focused more recently", never "how long ago", and
+    /// a monotonic counter answers that without a clock that can be adjusted,
+    /// without daylight saving, and without two windows focused inside the same
+    /// timer tick comparing equal - which on a 15.6 ms system clock is most of a
+    /// quick pair of focus changes.
+    /// </para>
+    /// <para>
+    /// <see cref="WorkspaceNode.LastFocused"/> answers a narrower question - the
+    /// window to return to within one workspace - and cannot be used for this. It is
+    /// a single reference per workspace, so it cannot order windows against each
+    /// other at all, let alone across workspaces or monitors.
+    /// </para>
+    /// </remarks>
+    public long FocusSequence { get; internal set; }
+
+    /// <summary>
     /// Workspaces this window belongs to, beyond the one it currently sits in.
     /// </summary>
     /// <remarks>
