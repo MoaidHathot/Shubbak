@@ -110,8 +110,7 @@ public sealed class WmConnection : IAsyncDisposable
                 PaletteEntries.ForWindows(windows, includeUnmanaged),
                 PaletteEntries.ForCommands(commands),
                 PaletteEntries.ForWorkspaces(workspaces),
-                PaletteEntries.ForLayouts(layouts));
-        }
+                PaletteEntries.ForLayouts(layouts));        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not read the window list: {ex.Message}");
@@ -306,11 +305,18 @@ public sealed record PaletteSources(
     public static PaletteSources Empty { get; } = new([], [], [], []);
 
     /// <summary>The rows for one mode.</summary>
+    /// <remarks>
+    /// Help is built rather than fetched. It describes the palette, not the window
+    /// manager, so it is available before the first query lands and stays available
+    /// when the window manager is not running at all - which is exactly when somebody
+    /// might be looking for an explanation.
+    /// </remarks>
     public IReadOnlyList<PaletteEntry> For(PaletteMode mode) => mode switch
     {
         PaletteMode.Commands => Commands,
         PaletteMode.Workspaces => Workspaces,
         PaletteMode.Layouts => Layouts,
+        PaletteMode.Help => PaletteEntries.ForHelp(),
         _ => Windows,
     };
 }

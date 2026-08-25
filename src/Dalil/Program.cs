@@ -48,7 +48,7 @@ internal static class Program
         s_threadId = PInvoke.GetCurrentThreadId();
         s_configPath = PathFrom(args);
 
-        Log.Level = LogLevel.Information;
+        ConfigureLogging(args);
         s_config = LoadConfig();
 
         s_palette = new PaletteWindow(s_config);
@@ -60,6 +60,12 @@ internal static class Program
         }
 
         s_palette.CommandRequested += command => _ = s_connection!.SendAsync(command);
+
+        // Every route into a mode refills the list: Tab, typing a prefix, deleting
+        // one, or choosing a mode from the help list. Without this, typing ">" left
+        // the box saying "commands" while the rows underneath were still windows.
+        s_palette.ModeChanged += mode => s_palette!.SetEntries(s_sources.For(mode));
+
         PaletteWindow.RequestShutdown += () => s_running = false;
 
         s_connection = new WmConnection();
@@ -162,9 +168,20 @@ internal static class Program
     private static void OnSignal(SignalRaised signal)
     {
         if (!string.Equals(signal.Signal, s_config.OpenOnSignal, StringComparison.OrdinalIgnoreCase))
+        {
+            // Said out loud at debug, because "the key does nothing" is the whole
+            // failure mode of a signal that does not match. Without this the trail
+            // ends at the window manager, which correctly reports having published
+            // something nobody acted on.
+            Log.Debug(LogCategory.Ipc,
+                $"signal \"{signal.Signal}\" is not mine (waiting for \"{s_config.OpenOnSignal}\")");
+
             return;
+        }
 
         PaletteMode mode = ModeFrom(signal.Arguments);
+        Log.Debug(LogCategory.Wm, $"opening in {PaletteModel.NameOf(mode)} mode");
+
         Post(() => Open(mode));
     }
 
@@ -279,5 +296,67 @@ internal static class Program
                 return args[i + 1];
 
         return null;
+    }
+
+    /// <summary>
+    /// Opens a log file beside the window manager's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not optional, and its absence was found the hard way. Dalil is started
+    /// detached from the window manager's <c>startup-command</c>, so it has no
+    /// console and anything written to standard error goes nowhere at all. The first
+    /// time the palette failed to appear there was simply nothing to read - the
+    /// window manager's log showed the signal being published and then the trail
+    /// stopped.
+    /// </para>
+    /// <para>
+    /// Beside the window manager's log rather than into it. Two processes cannot
+    /// share one file: the second to open it truncates the first, which is worse than
+    /// not logging at all. Taj does the same thing for the same reason.
+    /// </para>
+    /// </remarks>
+    private static void ConfigureLogging(string[] args)
+    {
+        string file = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "Shubbak",
+            "dalil.log");
+
+        try
+        {
+            if (ConfigPathResolver.Resolve(s_configPath).Path is { } path && File.Exists(path))
+            {
+                ShubbakConfig shared = ConfigLoader.LoadFile(path).Config;
+                Log.Level = shared.LogLevel;
+
+                if (shared.LogFile is { Length: > 0 } configured)
+                    file = Path.Combine(Path.GetDirectoryName(configured) ?? string.Empty, "dalil.log");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A palette that cannot read the config still has defaults to draw.
+        }
+
+        // The command line wins, so a one-off investigation needs no config edit.
+        if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
+            Log.Level = parsed;
+
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+            Log.OpenFile(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Losing the log is not worth losing the palette over.
+        }
+    }
+
+    private static string? Value(string[] args, string name)
+    {
+        int index = Array.IndexOf(args, name);
+        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
 }

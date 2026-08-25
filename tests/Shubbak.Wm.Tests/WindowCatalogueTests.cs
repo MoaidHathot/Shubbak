@@ -105,17 +105,93 @@ public sealed class WindowCatalogueTests
             [
                 Seen(0x1, concealment: "none"),
                 Seen(0x2, concealment: "cloaked"),
-                Seen(0x3, concealment: "hidden"),
                 Seen(0x4, concealment: "minimised"),
             ],
             wm,
             registry);
 
-        // Three ways of being off screen that are not interchangeable. Minimised is
-        // the user's own doing and the taskbar shows it; cloaked is recoverable and
-        // usually Shubbak's doing; hidden is what a crashed window manager leaves
-        // behind and is the one the user cannot undo without help.
-        Assert.Equal(["none", "cloaked", "hidden", "minimised"], described.Select(w => w.Concealment));
+        // Ways of being off screen that are not interchangeable. Minimised is the
+        // user's own doing and the taskbar shows it; cloaked is recoverable and
+        // usually Shubbak's or the shell's doing.
+        Assert.Equal(["none", "cloaked", "minimised"], described.Select(w => w.Concealment));
+    }
+
+    [Fact]
+    public void AHiddenWindowNobodyManagesIsNotWorthListing()
+    {
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        IReadOnlyList<WindowCandidate> described =
+            WindowCatalogue.Join([Seen(0x1, concealment: "hidden")], wm, registry);
+
+        // An application's own business: a console the process detached from, a
+        // helper parked out of sight. There are around a hundred of these on an
+        // ordinary desktop, and burying the list under them makes the query useless
+        // for the thing it exists to do.
+        Assert.Empty(described);
+    }
+
+    [Fact]
+    public void AHiddenWindowShubbakManagesIsTheWholePoint()
+    {
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        var node = new WindowNode(0x500, new WindowIdentity
+        {
+            Title = "hidden by hide-method", ProcessName = "test", ClassName = "TestClass",
+        });
+
+        wm.ManageWindow(node);
+        registry.Adopt(0x500, node);
+
+        IReadOnlyList<WindowCandidate> described =
+            WindowCatalogue.Join([Seen(0x500, concealment: "hidden")], wm, registry);
+
+        // The opposite case, and only the tree can tell them apart. Concealed by
+        // hide-method "hide", this window cannot be found any other way - not by
+        // Alt+Tab, not from the taskbar. It is exactly what the query is for.
+        WindowCandidate only = Assert.Single(described);
+        Assert.True(only.Managed);
+        Assert.Equal("hidden", only.Concealment);
+    }
+
+    [Fact]
+    public void AWindowThatPassesTheFilterAndIsStillNotManagedSaysSomethingUseful()
+    {
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        IReadOnlyList<WindowCandidate> described =
+            WindowCatalogue.Join([Seen(0x600, decision: ManageDecision.Yes)], wm, registry);
+
+        WindowCandidate only = Assert.Single(described);
+
+        // The filter's own word for this is "manageable", which reported alongside
+        // "unmanaged" is a contradiction the user cannot act on. It said exactly that
+        // for 57 of 119 windows on a real desktop.
+        Assert.False(only.Managed);
+        Assert.NotNull(only.ExclusionReason);
+        Assert.DoesNotContain("manageable", only.ExclusionReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWindowExcludedByARuleSaysHowToGetItBack()
+    {
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        registry.Exclude(0x700);
+
+        IReadOnlyList<WindowCandidate> described =
+            WindowCatalogue.Join([Seen(0x700, decision: ManageDecision.Yes)], wm, registry);
+
+        WindowCandidate only = Assert.Single(described);
+
+        // The registry knows what the filter cannot: this window passes every test
+        // and is absent because somebody said so.
+        Assert.Contains("toggle-managed", only.ExclusionReason!, StringComparison.Ordinal);
     }
 
     [Fact]
