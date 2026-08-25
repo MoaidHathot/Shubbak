@@ -210,7 +210,8 @@ internal static class Program
         if (s_palette is not { } palette || s_connection is not { } connection) return;
 
         palette.SetEntries(s_sources.For(mode));
-        palette.Open(mode);
+
+        if (!palette.Open(mode)) ScheduleForegroundRepair(palette);
 
         _ = Task.Run(async () =>
         {
@@ -223,6 +224,41 @@ internal static class Program
                 // Same reasoning as MarkStale: the user may have pressed Tab while
                 // this was in flight.
                 if (palette.IsOpen) palette.SetEntries(read.For(palette.Mode));
+            });
+        });
+    }
+
+    /// <summary>
+    /// Tries once more, shortly, to get the keyboard - and gives up rather than
+    /// leaving a window nobody can reach.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Taking the foreground fails for reasons that pass: a menu still closing, a drag
+    /// still finishing, an application still starting. A second attempt a few frames
+    /// later usually succeeds, and doing it after a delay rather than immediately is
+    /// the entire point - an immediate retry hits the same lock.
+    /// </para>
+    /// <para>
+    /// If it still fails the palette is hidden. That is the unobvious half: a window
+    /// that never activated will never be told it has been deactivated, so
+    /// close-on-blur cannot dismiss it, Escape never reaches it, and it sits on top of
+    /// everything looking perfectly normal and answering nothing. Vanishing is a
+    /// worse outcome than working and a much better one than that.
+    /// </para>
+    /// </remarks>
+    private static void ScheduleForegroundRepair(PaletteWindow palette)
+    {
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(140)).ConfigureAwait(false);
+
+            Post(() =>
+            {
+                if (!palette.IsOpen || palette.EnsureForeground()) return;
+
+                Log.Warn(LogCategory.Wm, "giving up on the keyboard; putting the palette away");
+                palette.Close();
             });
         });
     }

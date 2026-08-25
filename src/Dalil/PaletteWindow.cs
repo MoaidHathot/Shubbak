@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Dalil.Core;
+using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
 using Shubbak.Ui.Gdi;
@@ -154,27 +155,88 @@ public sealed class PaletteWindow : IDisposable
     /// Shows the palette on the right monitor and takes the keyboard.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The query is cleared on every open. A palette that remembers what was typed
     /// last time is one that shows a filtered list to someone who has just asked to
     /// see everything.
+    /// </para>
+    /// <para>
+    /// Safe to call on an already-open palette, and deliberately so: pressing the key
+    /// again is how a user says "you are not listening to me". Taking the foreground
+    /// can fail for reasons this process cannot see or prevent, and when it does the
+    /// window is on screen looking perfectly normal while every key goes somewhere
+    /// else - so the same gesture that opens it has to be able to repair it.
+    /// </para>
+    /// <para>
+    /// An open palette is not moved. Re-running the placement would make the window
+    /// jump between monitors as the foreground changes underneath it, which is a
+    /// strange answer to someone asking for the keyboard back.
+    /// </para>
     /// </remarks>
-    public void Open(PaletteMode mode = PaletteMode.Windows)
+    public bool Open(PaletteMode mode = PaletteMode.Windows)
     {
-        if (_handle.IsNull) return;
+        if (_handle.IsNull) return false;
+
+        bool wasOpen = _open;
 
         _query = PrefixFor(mode);
         _model.SetQuery(_query);
         _closing = false;
 
-        PositionOnTargetMonitor();
-
-        PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOW);
-        PInvoke.SetForegroundWindow(_handle);
-        PInvoke.SetFocus(_handle);
+        if (!wasOpen)
+        {
+            PositionOnTargetMonitor();
+            PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOW);
+        }
 
         _open = true;
         Repaint();
+
+        return EnsureForeground();
     }
+
+    /// <summary>
+    /// Re-asserts that the palette has the keyboard.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separate from <see cref="Open"/> so the host can try again a moment later.
+    /// Taking the foreground fails for transient reasons - a menu still closing, a
+    /// drag still finishing, an application still starting - and a second attempt a
+    /// few frames later usually succeeds where the first did not.
+    /// </para>
+    /// <para>
+    /// One case is not transient and no amount of retrying will fix it: the window
+    /// being left behind belongs to a process at a higher integrity level.
+    /// <c>AttachThreadInput</c> across that boundary is refused by UIPI, which is the
+    /// same wall that stops the window manager tiling elevated windows. The message
+    /// says so rather than leaving the user to conclude the palette is broken.
+    /// </para>
+    /// </remarks>
+    public bool EnsureForeground()
+    {
+        if (_handle.IsNull || !_open) return false;
+
+        if (Foreground.Take(_handle)) return true;
+
+        Log.Warn(LogCategory.Wm,
+            "the palette is on screen but could not take the keyboard. " +
+            "Something is holding the foreground: a menu or a drag still finishing, " +
+            "or a window belonging to a process running higher than Dalil, which " +
+            "Windows will not let it take focus from.");
+
+        return false;
+    }
+
+    /// <summary>Whether the palette is showing but not actually receiving keys.</summary>
+    /// <remarks>
+    /// A palette that failed to activate never became active, so it will never be
+    /// told it has been deactivated - which means close-on-blur cannot dismiss it and
+    /// it sits there looking normal and answering nothing. The host uses this to
+    /// notice and put it away rather than leave a window nobody can reach.
+    /// </remarks>
+    public unsafe bool IsStranded =>
+        _open && !_handle.IsNull && PInvoke.GetForegroundWindow() != _handle;
 
     /// <summary>Hides the palette.</summary>
     public void Close()
