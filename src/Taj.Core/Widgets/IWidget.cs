@@ -1,5 +1,5 @@
 using Shubbak.Core.Geometry;
-using Taj.Core.Layout;
+using Shubbak.Ui.Layout;
 using Taj.Core.Sources;
 
 namespace Taj.Core.Widgets;

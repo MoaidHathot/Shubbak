@@ -8,6 +8,8 @@
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
     <Project Path="src/Shubbak.Ipc/Shubbak.Ipc.csproj" />
     <Project Path="src/Shubbak.Native/Shubbak.Native.csproj" />
+    <Project Path="src/Shubbak.Ui/Shubbak.Ui.csproj" />
+    <Project Path="src/Shubbak.Ui.Gdi/Shubbak.Ui.Gdi.csproj" />
     <Project Path="src/Shubbak.Wm/Shubbak.Wm.csproj" />
     <Project Path="src/Taj.Core/Taj.Core.csproj" />
     <Project Path="src/Taj/Taj.csproj" />
@@ -16,6 +18,7 @@
     <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />
     <Project Path="tests/Shubbak.Native.Tests/Shubbak.Native.Tests.csproj" />
+    <Project Path="tests/Shubbak.Ui.Tests/Shubbak.Ui.Tests.csproj" />
     <Project Path="tests/Shubbak.Wm.Tests/Shubbak.Wm.Tests.csproj" />
     <Project Path="tests/Taj.Core.Tests/Taj.Core.Tests.csproj" />
   </Folder>

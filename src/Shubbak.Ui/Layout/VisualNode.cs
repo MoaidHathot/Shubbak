@@ -1,6 +1,6 @@
 using Shubbak.Core.Geometry;
 
-namespace Taj.Core.Layout;
+namespace Shubbak.Ui.Layout;
 
 /// <summary>How a container arranges its children.</summary>
 public enum FlexDirection

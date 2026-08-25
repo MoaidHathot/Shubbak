@@ -1,7 +1,7 @@
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
-using Taj.Core.Layout;
+using Shubbak.Ui.Layout;
 using Taj.Core.Sources;
 using Taj.Core.Widgets;
 

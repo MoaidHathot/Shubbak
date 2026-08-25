@@ -1,7 +1,7 @@
 using Shubbak.Config;
 using Shubbak.Core.Geometry;
 using Taj.Core;
-using Taj.Core.Layout;
+using Shubbak.Ui.Layout;
 
 namespace Taj.Core.Tests;
 
