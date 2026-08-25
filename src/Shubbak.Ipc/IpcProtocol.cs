@@ -103,6 +103,9 @@ public sealed record MonitorInfoDto(
 /// <param name="Sticky">Whether the window follows the user to every workspace.</param>
 /// <param name="Focused">Whether this is the focused window.</param>
 /// <param name="FocusSequence">Higher is more recently focused; zero means never.</param>
+/// <param name="Scratchpad">
+/// The scratchpad slot holding this window, when one is. Null for everything else.
+/// </param>
 public sealed record WindowCandidate(
     long Handle,
     string Title,
@@ -119,7 +122,13 @@ public sealed record WindowCandidate(
     string? Monitor,
     bool Sticky,
     bool Focused,
-    long FocusSequence);
+    long FocusSequence,
+
+    // Added after the fact, and optional, so the protocol version stays where it is -
+    // an older client simply never sees it. A window in a scratchpad is retrieved by
+    // naming its slot, so without this a client can tell that something is stashed
+    // and not how to get it back.
+    string? Scratchpad = null);
 
 /// <summary>A command verb, as described to clients.</summary>
 /// <remarks>

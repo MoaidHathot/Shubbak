@@ -545,8 +545,10 @@ bar {
 //     bind "alt+shift+space" { signal "palette" "commands" }
 //
 // Inside the palette: type to filter, up/down or ctrl+n/ctrl+p to move, Tab to
-// change mode, Enter to act, Escape to dismiss. The prefixes >, # and ~ jump
-// straight to commands, workspaces and layouts.
+// change mode, Enter to act, Escape to dismiss. Ctrl+Enter shows what else can be
+// done to the selected window. The prefixes >, #, ~ and $ jump straight to
+// commands, workspaces, layouts and the scratchpad; "?" lists every key, including
+// the ones you have bound yourself. The mouse works too.
 // ---------------------------------------------------------------------------
 
 dalil {
@@ -569,6 +571,11 @@ dalil {
     // passed over each one. Those are the ones most likely to be lost: nothing
     // is arranging them, so nothing put them anywhere findable.
     show-unmanaged #true
+
+    // Acting on a window goes through Ctrl+Enter and a named list, so a mistyped
+    // chord cannot close something. Set this to #false and every action gains a
+    // direct chord - closing included - which is faster and has no undo.
+    action-guard   #true
 
     // focused-monitor | cursor-monitor | primary
     placement "focused-monitor"

@@ -106,11 +106,25 @@ public sealed class WmConnection : IAsyncDisposable
             IReadOnlyList<string> layouts = await QueryAsync(
                 client, "layouts", IpcJsonContext.Default.IReadOnlyListString) ?? [];
 
+            IReadOnlyList<BindingInfo> bindings = await QueryAsync(
+                client, "bindings", IpcJsonContext.Default.IReadOnlyListBindingInfo) ?? [];
+
+            // The focused workspace is what "bring it here" means, and only the
+            // workspace list knows which it is.
+            string? here = workspaces.FirstOrDefault(w => w.Focused)?.Name;
+
             return new PaletteSources(
-                PaletteEntries.ForWindows(windows, includeUnmanaged),
+                PaletteEntries.ForWindows(windows, includeUnmanaged, here),
                 PaletteEntries.ForCommands(commands),
                 PaletteEntries.ForWorkspaces(workspaces),
-                PaletteEntries.ForLayouts(layouts));        }
+                PaletteEntries.ForLayouts(layouts),
+                PaletteEntries.ForScratchpad(windows, here),
+                PaletteEntries.ForHelp(bindings),
+                new CompletionSources(
+                    [.. workspaces.Select(w => w.Name)],
+                    layouts,
+                    [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
+                    [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]));        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not read the window list: {ex.Message}");
@@ -300,23 +314,30 @@ public sealed record PaletteSources(
     IReadOnlyList<PaletteEntry> Windows,
     IReadOnlyList<PaletteEntry> Commands,
     IReadOnlyList<PaletteEntry> Workspaces,
-    IReadOnlyList<PaletteEntry> Layouts)
+    IReadOnlyList<PaletteEntry> Layouts,
+    IReadOnlyList<PaletteEntry> Scratchpad,
+    IReadOnlyList<PaletteEntry> Help,
+    CompletionSources Completions)
 {
-    public static PaletteSources Empty { get; } = new([], [], [], []);
+    /// <summary>
+    /// Before anything has been read.
+    /// </summary>
+    /// <remarks>
+    /// Help is built rather than fetched even here, so the one mode that explains the
+    /// palette works before the first query lands and keeps working when the window
+    /// manager is not running at all - which is exactly when somebody wants an
+    /// explanation.
+    /// </remarks>
+    public static PaletteSources Empty { get; } = new([], [], [], [], [], PaletteEntries.ForHelp(), CompletionSources.None);
 
     /// <summary>The rows for one mode.</summary>
-    /// <remarks>
-    /// Help is built rather than fetched. It describes the palette, not the window
-    /// manager, so it is available before the first query lands and stays available
-    /// when the window manager is not running at all - which is exactly when somebody
-    /// might be looking for an explanation.
-    /// </remarks>
     public IReadOnlyList<PaletteEntry> For(PaletteMode mode) => mode switch
     {
         PaletteMode.Commands => Commands,
         PaletteMode.Workspaces => Workspaces,
         PaletteMode.Layouts => Layouts,
-        PaletteMode.Help => PaletteEntries.ForHelp(),
+        PaletteMode.Scratchpad => Scratchpad,
+        PaletteMode.Help => Help,
         _ => Windows,
     };
 }

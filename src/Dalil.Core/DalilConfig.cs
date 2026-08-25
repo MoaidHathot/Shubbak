@@ -49,6 +49,22 @@ public sealed record DalilConfig
     /// </remarks>
     public bool ShowUnmanaged { get; init; } = true;
 
+    /// <summary>
+    /// Whether acting on a window requires opening the action list first.
+    /// </summary>
+    /// <remarks>
+    /// On by default. Closing a window cannot be undone, and the palette is reached
+    /// when somebody is already unsure where things are - which is the worst moment
+    /// for a mistyped chord to act on the wrong row. Ctrl+Enter opens a named list and
+    /// nothing happens until a line in it is chosen.
+    /// <para>
+    /// Turn it off and every action gains a direct chord, closing included. That is a
+    /// deliberate trade of a safety net for speed, which is why it is one switch
+    /// rather than a per-action table nobody would finish filling in.
+    /// </para>
+    /// </remarks>
+    public bool ActionGuard { get; init; } = true;
+
     /// <summary>Where the palette appears.</summary>
     public PalettePlacement Placement { get; init; } = PalettePlacement.FocusedMonitor;
 

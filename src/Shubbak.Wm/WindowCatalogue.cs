@@ -136,7 +136,8 @@ internal static class WindowCatalogue
                 workspace?.Monitor?.DeviceId,
                 node?.IsSticky ?? false,
                 node is not null && ReferenceEquals(node, focused),
-                node?.FocusSequence ?? 0));
+                node?.FocusSequence ?? 0,
+                node?.ScratchpadName));
         }
 
         return candidates;

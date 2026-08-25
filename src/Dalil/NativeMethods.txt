@@ -59,6 +59,13 @@ WM_PAINT
 WM_DESTROY
 WM_CLOSE
 WM_APP
+WM_MOUSEMOVE
+WM_LBUTTONDOWN
+WM_MOUSEWHEEL
+WM_MOUSELEAVE
+TrackMouseEvent
+TRACKMOUSEEVENT
+TRACKMOUSEEVENT_FLAGS
 
 // --- painting brackets ----------------------------------------------------------------
 BeginPaint

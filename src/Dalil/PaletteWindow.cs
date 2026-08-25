@@ -77,6 +77,17 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     private bool _closing;
 
+    /// <summary>The row whose actions are being shown, when any are.</summary>
+    private PaletteEntry? _actionsFor;
+
+    /// <summary>What was typed before the action list took over the box.</summary>
+    private string _savedQuery = string.Empty;
+
+    /// <summary>Where the pointer was last seen, so a resting cursor is ignored.</summary>
+    private (int X, int Y) _lastMouse = (int.MinValue, int.MinValue);
+
+    private bool _trackingMouse;
+
     /// <summary>Raised with a command string when a row is chosen.</summary>
     public event Action<string>? CommandRequested;
 
@@ -135,9 +146,25 @@ public sealed class PaletteWindow : IDisposable
         return true;
     }
 
+    /// <summary>Supplies rows derived from the query itself.</summary>
+    /// <remarks>
+    /// Applied only in commands mode; every other mode offers what it was given.
+    /// </remarks>
+    public void Augment(Func<string, IReadOnlyList<PaletteEntry>> compose) =>
+        _model.Augmenter = (mode, term) =>
+            mode is PaletteMode.Commands ? compose(term) : [];
+
     /// <summary>Replaces the rows on offer.</summary>
+    /// <remarks>
+    /// Ignored while the action list is showing. Window events keep arriving whether
+    /// or not the palette is busy, and a refresh landing mid-decision would replace
+    /// "close it / float it / bring it here" with the window list underneath the
+    /// user's finger - and Enter would then act on whatever had taken that row.
+    /// </remarks>
     public void SetEntries(IEnumerable<PaletteEntry> entries)
     {
+        if (_actionsFor is not null) return;
+
         _model.SetEntries(entries);
         if (_open) Repaint();
     }
@@ -178,6 +205,10 @@ public sealed class PaletteWindow : IDisposable
         if (_handle.IsNull) return false;
 
         bool wasOpen = _open;
+
+        // A fresh open is a fresh question, so any action list from last time goes.
+        _actionsFor = null;
+        _savedQuery = string.Empty;
 
         _query = PrefixFor(mode);
         _model.SetQuery(_query);
@@ -243,6 +274,11 @@ public sealed class PaletteWindow : IDisposable
     {
         if (!_open || _handle.IsNull) return;
 
+        // Forgotten on the way out, so the next open starts from the list rather than
+        // from whatever action list happened to be showing when it was dismissed.
+        _actionsFor = null;
+        _savedQuery = string.Empty;
+
         _closing = true;
         _open = false;
 
@@ -291,7 +327,17 @@ public sealed class PaletteWindow : IDisposable
         switch (key)
         {
             case VIRTUAL_KEY.VK_ESCAPE:
-                Close();
+                // Backs out of the action list rather than dismissing. Escape means
+                // "not that" one level at a time; throwing the whole palette away
+                // because somebody changed their mind about an action would mean
+                // starting the search again.
+                if (_actionsFor is not null) LeaveActions();
+                else Close();
+
+                return true;
+
+            case VIRTUAL_KEY.VK_RETURN when control:
+                EnterActions();
                 return true;
 
             case VIRTUAL_KEY.VK_RETURN:
@@ -349,14 +395,152 @@ public sealed class PaletteWindow : IDisposable
                 return true;
 
             default:
-                return false;
+                return TryChord(key, control, shift);
         }
+    }
+
+    /// <summary>
+    /// Runs an action directly, when the guard is off.
+    /// </summary>
+    /// <remarks>
+    /// Chords are the whole point of turning the guard off, so closing is chorded too
+    /// rather than being kept back - a switch that says "direct chords" and then makes
+    /// an exception is a switch nobody can predict. The list stays available either
+    /// way, because it is also where the chords are written down.
+    /// </remarks>
+    private bool TryChord(VIRTUAL_KEY key, bool control, bool shift)
+    {
+        if (_config.ActionGuard || _actionsFor is not null) return false;
+        if (_model.Selected?.Entry.Actions is not { Count: > 0 } actions) return false;
+
+        string? wanted = (key, control, shift) switch
+        {
+            (VIRTUAL_KEY.VK_RETURN, false, _) => null,
+            (VIRTUAL_KEY.VK_F, true, true) => "Ctrl+Shift+F",
+            (VIRTUAL_KEY.VK_S, true, true) => "Ctrl+Shift+S",
+            (VIRTUAL_KEY.VK_M, true, true) => "Ctrl+Shift+M",
+            (VIRTUAL_KEY.VK_A, true, true) => "Ctrl+Shift+A",
+            (VIRTUAL_KEY.VK_W, true, true) => "Ctrl+Shift+W",
+            _ => null,
+        };
+
+        if (wanted is null) return false;
+
+        PaletteAction? action = actions.FirstOrDefault(a => a.Chord == wanted);
+        if (action is null) return false;
+
+        Close();
+        CommandRequested?.Invoke(action.Command);
+
+        return true;
+    }
+
+    /// <summary>Shows what can be done to the selected row.</summary>
+    private void EnterActions()    {
+        if (_actionsFor is not null) return;
+        if (_model.Selected?.Entry is not { Actions.Count: > 0 } entry) return;
+
+        _actionsFor = entry;
+        _savedQuery = _query;
+
+        _query = string.Empty;
+        _model.SetQuery(_query);
+        _model.SetEntries(PaletteActions.AsEntries(entry.Actions!));
+
+        Repaint();
+    }
+
+    /// <summary>Returns to the list the action was opened from.</summary>
+    private void LeaveActions()
+    {
+        if (_actionsFor is null) return;
+
+        _actionsFor = null;
+        _query = _savedQuery;
+        _savedQuery = string.Empty;
+
+        // The host owns the source lists, so it restores them - the window never kept
+        // a copy to go stale.
+        ModeChanged?.Invoke(_model.Mode);
+
+        _model.SetQuery(_query);
+        Repaint();
     }
 
     private void Move(int delta)
     {
         _model.MoveSelection(delta);
         Repaint();
+    }
+
+    // ---- mouse -----------------------------------------------------------------
+
+    /// <summary>
+    /// Selects the row under the pointer.
+    /// </summary>
+    /// <remarks>
+    /// Only when the pointer has actually moved. Windows sends <c>WM_MOUSEMOVE</c>
+    /// whenever the window moves or is shown beneath a resting cursor, and acting on
+    /// those would let a pointer that happens to be sitting over the list take the
+    /// selection away from the keyboard the moment the palette appears - which is the
+    /// one thing it must never do, since it opened to receive typing.
+    /// </remarks>
+    private void OnMouseMove(int x, int y)
+    {
+        if (x == _lastMouse.X && y == _lastMouse.Y) return;
+        _lastMouse = (x, y);
+
+        TrackMouseLeaving();
+
+        (int first, int count) = _model.VisibleWindow(_scaled.VisibleRows);
+        int slot = Layout().SlotAt(x, y);
+
+        if (slot < 0 || slot >= count) return;
+        if (_model.SelectedIndex == first + slot) return;
+
+        _model.SelectAt(first + slot);
+        Repaint();
+    }
+
+    private void OnClick(int x, int y)
+    {
+        (int first, int count) = _model.VisibleWindow(_scaled.VisibleRows);
+        int slot = Layout().SlotAt(x, y);
+
+        // A click on the chrome selects nothing rather than acting on whatever row is
+        // nearest, which is what clamping would do.
+        if (slot < 0 || slot >= count) return;
+
+        _model.SelectAt(first + slot);
+        Choose();
+    }
+
+    /// <summary>
+    /// Scrolls the list.
+    /// </summary>
+    /// <remarks>
+    /// Moves the selection rather than a separate scroll offset, because there is no
+    /// separate scroll offset - the visible window is computed from the selection, so
+    /// the two can never disagree.
+    /// </remarks>
+    private void OnWheel(int delta)
+    {
+        Move(delta > 0 ? -3 : 3);
+    }
+
+    /// <summary>Asks to be told when the pointer leaves, once.</summary>
+    private unsafe void TrackMouseLeaving()
+    {
+        if (_trackingMouse || _handle.IsNull) return;
+
+        var track = new TRACKMOUSEEVENT
+        {
+            cbSize = (uint)sizeof(TRACKMOUSEEVENT),
+            dwFlags = TRACKMOUSEEVENT_FLAGS.TME_LEAVE,
+            hwndTrack = _handle,
+        };
+
+        _trackingMouse = PInvoke.TrackMouseEvent(ref track);
     }
 
     /// <summary>
@@ -452,10 +636,18 @@ public sealed class PaletteWindow : IDisposable
     /// prefixes are punctuation, and punctuation nobody is shown is punctuation nobody
     /// finds.
     /// </remarks>
-    private int RequiredHeight() =>
-        (_scaled.RowHeight * (_scaled.VisibleRows + 1))
-        + PaletteRenderer.HintBarHeight(_scale)
-        + (int)Math.Round(18 * _scale);
+    private int RequiredHeight()
+    {
+        // Asked of a layout rather than assembled here, so the height the window is
+        // given and the positions drawn inside it come from the same arithmetic.
+        var probe = new PaletteLayout(_scaled, _scale, new Rect(0, 0, _scaled.Width, 0));
+
+        return probe.ListTop + (_scaled.RowHeight * _scaled.VisibleRows) + probe.HintBar;
+    }
+
+    /// <summary>The layout for the window as it currently stands.</summary>
+    private PaletteLayout Layout() =>
+        new(_scaled, _scale, new Rect(0, 0, _bounds.Width, _bounds.Height));
 
     /// <summary>
     /// Puts the palette on the monitor the user is looking at, at that monitor's scale.
@@ -576,7 +768,7 @@ public sealed class PaletteWindow : IDisposable
 
         try
         {
-            PaletteRenderer.Draw(_renderer, _model, _scaled, _scale, canvas);
+            PaletteRenderer.Draw(_renderer, _model, _scaled, Layout(), _actionsFor?.Primary);
         }
         finally
         {
@@ -639,6 +831,22 @@ public sealed class PaletteWindow : IDisposable
                         PInvoke.BeginPaint(hwnd, out PAINTSTRUCT ps);
                         window.Paint();
                         PInvoke.EndPaint(hwnd, in ps);
+                        return new LRESULT(0);
+
+                    case PInvoke.WM_MOUSEMOVE:
+                        window.OnMouseMove((short)(lParam.Value & 0xFFFF), (short)((lParam.Value >> 16) & 0xFFFF));
+                        return new LRESULT(0);
+
+                    case PInvoke.WM_LBUTTONDOWN:
+                        window.OnClick((short)(lParam.Value & 0xFFFF), (short)((lParam.Value >> 16) & 0xFFFF));
+                        return new LRESULT(0);
+
+                    case PInvoke.WM_MOUSEWHEEL:
+                        window.OnWheel((short)((wParam.Value >> 16) & 0xFFFF));
+                        return new LRESULT(0);
+
+                    case PInvoke.WM_MOUSELEAVE:
+                        window._trackingMouse = false;
                         return new LRESULT(0);
 
                     case PInvoke.WM_CHAR:

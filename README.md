@@ -20,7 +20,7 @@ Feature complete and working. Not yet battle-tested — see
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1099 test methods**, ~700 ms. Everything except the platform layer and the renderer runs
+**1143 test methods**, ~700 ms. Everything except the platform layer and the renderer runs
 headless.
 
 ## Why .NET
@@ -199,7 +199,7 @@ src/
   Taj/              bar host
   Dalil.Core/       fuzzy matching, palette model                 - no Win32
   Dalil/            the palette
-tests/              1099 test methods
+tests/              1143 test methods
 ```
 
 `Shubbak.Core` contains no Win32 at all. That is the highest-leverage decision in the

@@ -28,7 +28,7 @@ public static class DalilConfigLoader
     public static IReadOnlyList<string> KnownKeys { get; } =
     [
         "open-on-signal", "width", "row-height", "visible-rows", "close-on-blur",
-        "show-unmanaged", "placement", "background", "foreground", "match",
+        "show-unmanaged", "action-guard", "placement", "background", "foreground", "match",
         "secondary", "selection-background", "border", "font", "font-size",
     ];
 
@@ -67,6 +67,7 @@ public static class DalilConfigLoader
 
             CloseOnBlur = Boolean(node, "close-on-blur") ?? defaults.CloseOnBlur,
             ShowUnmanaged = Boolean(node, "show-unmanaged") ?? defaults.ShowUnmanaged,
+            ActionGuard = Boolean(node, "action-guard") ?? defaults.ActionGuard,
             Placement = ParsePlacement(Text(node, "placement")) ?? defaults.Placement,
 
             Background = Colour(node, "background") ?? defaults.Background,
