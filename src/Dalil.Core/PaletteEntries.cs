@@ -16,8 +16,14 @@ public static class PaletteEntries
     /// <summary>Describes every window as a row.</summary>
     /// <param name="windows">What <c>query all-windows</c> returned.</param>
     /// <param name="includeUnmanaged">Whether to offer windows Shubbak does not manage.</param>
+    /// <param name="focusedWorkspace">
+    /// Where "bring it here" means, for the row's actions. Null leaves that action out
+    /// rather than offering one that cannot work.
+    /// </param>
     public static IReadOnlyList<PaletteEntry> ForWindows(
-        IEnumerable<WindowCandidate> windows, bool includeUnmanaged = true)
+        IEnumerable<WindowCandidate> windows,
+        bool includeUnmanaged = true,
+        string? focusedWorkspace = null)
     {
         ArgumentNullException.ThrowIfNull(windows);
 
@@ -42,7 +48,15 @@ public static class PaletteEntries
                 // that have never been focused sort last among themselves rather than
                 // being scattered, which puts anything genuinely lost at the bottom
                 // where it is looked for.
-                window.FocusSequence));
+                window.FocusSequence,
+
+                SwitchesTo: null,
+
+                // Built here, where the handle and the state are both to hand. Working
+                // them out later would mean parsing a handle back out of a command
+                // string, which is the kind of thing that breaks quietly the day the
+                // command format changes.
+                Actions: PaletteActions.For(window, focusedWorkspace)));
         }
 
         return entries;
@@ -86,6 +100,45 @@ public static class PaletteEntries
         ];
     }
 
+    /// <summary>
+    /// Describes the windows put away in a scratchpad.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Retrieved by naming the slot, not by focusing the window. Focusing it would
+    /// reveal it and leave it stashed, so it would vanish again at the next layout
+    /// pass - which reads as the palette having failed.
+    /// </para>
+    /// <para>
+    /// The slot is the title of the row and the window is the subtitle, because the
+    /// slot is the thing a user chose and will half-remember. Somebody who put a
+    /// terminal in <c>notes</c> is looking for <c>notes</c>.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForScratchpad(
+        IEnumerable<WindowCandidate> windows, string? focusedWorkspace = null)
+    {
+        ArgumentNullException.ThrowIfNull(windows);
+
+        List<PaletteEntry> entries = [];
+
+        foreach (WindowCandidate window in windows)
+        {
+            if (window.Scratchpad is not { Length: > 0 } slot) continue;
+
+            entries.Add(new PaletteEntry(
+                slot,
+                Title(window),
+                [.. Badges(window), "stashed"],
+                $"scratchpad {slot}",
+                window.FocusSequence,
+                SwitchesTo: null,
+                Actions: PaletteActions.For(window, focusedWorkspace)));
+        }
+
+        return entries;
+    }
+
     /// <summary>Describes every layout as a row.</summary>
     public static IReadOnlyList<PaletteEntry> ForLayouts(IEnumerable<string> layouts)
     {
@@ -110,7 +163,7 @@ public static class PaletteEntries
     /// that ignores that has taught them the key and then refused to use it.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<PaletteEntry> ForHelp()
+    public static IReadOnlyList<PaletteEntry> ForHelp(IEnumerable<BindingInfo>? bindings = null)
     {
         List<PaletteEntry> entries = [];
 
@@ -126,16 +179,40 @@ public static class PaletteEntries
                     PaletteMode.Commands => "every command the window manager accepts",
                     PaletteMode.Workspaces => "go to a workspace",
                     PaletteMode.Layouts => "change the layout of this container",
+                    PaletteMode.Scratchpad => "windows you have put away",
                     _ => "these keys",
                 },
                 prefix == '\0' ? ["no prefix", "Tab"] : [$"{prefix}", "Tab"],
                 string.Empty,
-                Rank: 100,
+                Rank: 300,
                 SwitchesTo: mode));
         }
 
         foreach ((string keys, string does) in Keys)
-            entries.Add(new PaletteEntry(keys, does, [], string.Empty));
+            entries.Add(new PaletteEntry(keys, does, [], string.Empty, Rank: 200));
+
+        // The user's own keybindings, which nothing else can show them. Reading the
+        // config file back means applying every for-each expansion by hand, and the
+        // expansions are exactly where a binding goes missing.
+        //
+        // Searchable from either side: typing "palette" finds the key that raises it,
+        // and typing "alt" finds everything on the Alt key.
+        foreach (BindingInfo binding in bindings ?? [])
+        {
+            List<string> badges = [];
+            if (binding.Mode is { Length: > 0 } mode) badges.Add(mode);
+            if (!binding.RepeatsOnHold) badges.Add("no repeat");
+
+            entries.Add(new PaletteEntry(
+                binding.Key,
+                string.Join(", ", binding.Commands),
+                badges,
+
+                // Shown, not run. A keybinding is a name for something; pressing Enter
+                // on the line that describes Alt+Q should not close a window.
+                string.Empty,
+                Rank: 100));
+        }
 
         return entries;
     }

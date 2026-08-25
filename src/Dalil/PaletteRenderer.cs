@@ -26,35 +26,21 @@ namespace Dalil;
 /// </remarks>
 internal static class PaletteRenderer
 {
-    private const int Padding = 10;
-    private const int TextInset = 14;
-    private const int AccentWidth = 3;
-    private const int PillPadding = 7;
-    private const int ChipPadding = 9;
-    private const int HintBar = 40;
-
-    /// <summary>
-    /// Height reserved along the bottom for the mode hints, at a given scale.
-    /// </summary>
-    /// <remarks>
-    /// Every measurement in this file is written at 96 DPI and multiplied on the way
-    /// out. Writing them scaled would mean a second set of numbers to keep in step
-    /// with the first, and getting one wrong shows up as a single misaligned element
-    /// on one machine.
-    /// </remarks>
-    public static int HintBarHeight(double scale) => (int)Math.Round(HintBar * scale);
-
     /// <summary>
     /// Widths of text that never changes, measured once.
     /// </summary>
     /// <remarks>
-    /// The hint bar names five modes and their prefixes on every repaint, and a
-    /// repaint happens on every keystroke. Measured each time that is ten
+    /// The hint bar names the modes and their prefixes on every repaint, and a repaint
+    /// happens on every keystroke. Measured each time that is a dozen
     /// <c>DT_CALCRECT</c> round trips to draw a caption that has never once been
     /// different. Keyed by text and font size so a move to a display at a different
     /// scale simply misses and re-measures.
     /// </remarks>
     private static readonly Dictionary<(string Text, double Size), Size> s_measured = [];
+
+    /// <summary>Trims a title to fit a chip without a mid-word cut.</summary>
+    private static string Shorten(string text, int limit) =>
+        text.Length <= limit ? text : text[..(limit - 1)] + "\u2026";
 
     private static Size Measure(IRenderer renderer, string text, FontStyle font)
     {
@@ -67,86 +53,50 @@ internal static class PaletteRenderer
     }
 
     public static void Draw(
-        IRenderer renderer, PaletteModel model, DalilConfig config, double scale, Rect canvas)
+        IRenderer renderer, PaletteModel model, DalilConfig config, PaletteLayout layout,
+        string? actionsFor = null)
     {
-        var metrics = new Metrics(scale);
+        Rect canvas = layout.Canvas;
 
         var font = new FontStyle(config.FontFamily, config.FontSize, Bold: false, Italic: false);
 
         var small = new FontStyle(
             config.FontFamily,
-            Math.Max(8, config.FontSize - (int)Math.Round(3 * scale)),
+            Math.Max(8, config.FontSize - (int)Math.Round(3 * layout.Scale)),
             Bold: false,
             Italic: false);
 
         PaletteTheme theme = PaletteTheme.From(new DalilConfigView(
             config.Background, config.Foreground, config.Match, config.Secondary, config.Border));
 
-        renderer.DrawRectangle(canvas, config.Border, 1, cornerRadius: metrics.Corner);
+        renderer.DrawRectangle(canvas, config.Border, 1, cornerRadius: layout.Corner);
 
-        int y = canvas.Y + metrics.Padding;
-        y = DrawSearchBox(renderer, model, config, theme, metrics, canvas, font, small, y);
+        DrawSearchBox(renderer, model, config, theme, layout, canvas, font, small, layout.SearchBox.Y, actionsFor);
 
-        (int first, int count) = model.VisibleWindow(config.VisibleRows);
+        (int first, int count) = model.VisibleWindow(layout.VisibleRows);
 
         if (count == 0)
         {
-            DrawEmptyState(renderer, model, config, metrics, canvas, font, small, y);
+            DrawEmptyState(renderer, model, config, layout, canvas, font, small, layout.ListTop);
         }
         else
         {
-            for (int i = 0; i < count; i++)
-            {
-                DrawRow(renderer, model, config, theme, metrics, canvas, font, small, first + i, y);
-                y += config.RowHeight;
-            }
+            // Positions come from the layout rather than from a running total, so the
+            // rows drawn are exactly the rows the mouse will hit.
+            for (int slot = 0; slot < count; slot++)
+                DrawRow(renderer, model, config, theme, layout, canvas, font, small,
+                        first + slot, layout.RowBounds(slot).Y);
         }
 
-        DrawHintBar(renderer, model, config, theme, metrics, canvas, small, first, count);
+        DrawHintBar(renderer, model, config, theme, layout, canvas, small, first, count, actionsFor);
     }
 
-    /// <summary>Spacing for one scale factor, worked out once per frame.</summary>
-    private readonly record struct Metrics
-    {
-        public Metrics(double scale)
-        {
-            Scale = scale;
-            Padding = At(PaletteRenderer.Padding, scale);
-            TextInset = At(PaletteRenderer.TextInset, scale);
-            AccentWidth = Math.Max(2, At(PaletteRenderer.AccentWidth, scale));
-            PillPadding = At(PaletteRenderer.PillPadding, scale);
-            ChipPadding = At(PaletteRenderer.ChipPadding, scale);
-            HintBar = At(PaletteRenderer.HintBar, scale);
-            Corner = At(10, scale);
-        }
 
-        public double Scale { get; }
-
-        public int Padding { get; }
-
-        public int TextInset { get; }
-
-        public int AccentWidth { get; }
-
-        public int PillPadding { get; }
-
-        public int ChipPadding { get; }
-
-        public int HintBar { get; }
-
-        public int Corner { get; }
-
-        /// <summary>Scales a measurement written at 96 DPI.</summary>
-        public int this[int value] => At(value, Scale);
-
-        private static int At(int value, double scale) => (int)Math.Round(value * scale);
-    }
-
-    private static int DrawSearchBox(
+    private static void DrawSearchBox(
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteTheme theme,
-        Metrics metrics, Rect canvas, FontStyle font, FontStyle small, int y)
+        PaletteLayout layout, Rect canvas, FontStyle font, FontStyle small, int y, string? actionsFor)
     {
-        var box = new Rect(canvas.X + metrics.Padding, y, canvas.Width - (metrics.Padding * 2), config.RowHeight);
+        var box = new Rect(canvas.X + layout.Padding, y, canvas.Width - (layout.Padding * 2), config.RowHeight);
 
         // The mode is shown as a word rather than left as the punctuation that
         // selected it. A bare ">" tells someone who has just pressed Tab nothing at
@@ -154,25 +104,30 @@ internal static class PaletteRenderer
         //
         // As a chip rather than as loose text, so the eye reads it as a label on the
         // field instead of as the first word of what was typed.
-        string label = PaletteModel.NameOf(model.Mode);
+        // In the action list the chip names the window being acted on, not the mode.
+        // The mode has not changed and saying "windows" over a list of verbs would be
+        // actively misleading about what Enter is going to do.
+        string label = actionsFor is { Length: > 0 } subject
+            ? Shorten(subject, 28)
+            : PaletteModel.NameOf(model.Mode);
         Size labelSize = Measure(renderer, label, small);
 
-        int chipHeight = labelSize.Height + metrics[8];
+        int chipHeight = labelSize.Height + layout[8];
         var chip = new Rect(
-            box.X + metrics[6],
+            box.X + layout[6],
             box.Y + ((box.Height - chipHeight) / 2),
-            labelSize.Width + (metrics.ChipPadding * 2),
+            labelSize.Width + (layout.ChipPadding * 2),
             chipHeight);
 
         renderer.FillRectangle(chip, theme.Chip, cornerRadius: chipHeight / 2);
 
         renderer.DrawText(
             label,
-            new Rect(chip.X + metrics.ChipPadding, chip.Y + metrics[4], labelSize.Width + 2, labelSize.Height + 2),
+            new Rect(chip.X + layout.ChipPadding, chip.Y + layout[4], labelSize.Width + 2, labelSize.Height + 2),
             theme.ChipText,
             small);
 
-        int x = chip.Right + metrics[12];
+        int x = chip.Right + layout[12];
 
         // A prompt, so the field looks like something you type into even when it is
         // empty. A chevron rather than a magnifier: it is in every UI font on the
@@ -185,7 +140,7 @@ internal static class PaletteRenderer
             theme.Prompt,
             font);
 
-        x += promptSize.Width + metrics[10];
+        x += promptSize.Width + layout[10];
 
         string typed = model.Term;
 
@@ -194,15 +149,14 @@ internal static class PaletteRenderer
             // focus rule, for a field that is never not focused - and a timer is the
             // one thing that would stop a closed palette costing nothing.
             typed.Length == 0 ? "\u258F" : typed + "\u258F",
-            new Rect(x, TextTop(box, config), box.Right - x - metrics[4], config.FontSize + metrics[8]),
+            new Rect(x, TextTop(box, config), box.Right - x - layout[4], config.FontSize + layout[8]),
             typed.Length == 0 ? theme.Prompt : config.Foreground,
             font);
 
         renderer.FillRectangle(
-            new Rect(canvas.X + metrics.Padding, box.Bottom + metrics[3], canvas.Width - (metrics.Padding * 2), 1),
+            new Rect(canvas.X + layout.Padding, box.Bottom + layout[3], canvas.Width - (layout.Padding * 2), 1),
             theme.Rule);
 
-        return box.Bottom + metrics[8];
     }
 
     private static void DrawRow(
@@ -210,7 +164,7 @@ internal static class PaletteRenderer
         PaletteModel model,
         DalilConfig config,
         PaletteTheme theme,
-        Metrics metrics,
+        PaletteLayout layout,
         Rect canvas,
         FontStyle font,
         FontStyle small,
@@ -220,33 +174,33 @@ internal static class PaletteRenderer
         PaletteRow row = model.Rows[index];
         bool selected = index == model.SelectedIndex;
 
-        var bounds = new Rect(canvas.X + metrics.Padding, y, canvas.Width - (metrics.Padding * 2), config.RowHeight);
+        var bounds = new Rect(canvas.X + layout.Padding, y, canvas.Width - (layout.Padding * 2), config.RowHeight);
 
         if (selected)
         {
-            renderer.FillRectangle(bounds, config.SelectionBackground, cornerRadius: metrics[6]);
+            renderer.FillRectangle(bounds, config.SelectionBackground, cornerRadius: layout[6]);
 
             // A bar down the left edge as well as a fill. The fill alone is easy to
             // lose against a dark background at a glance, and this is a list read at
             // a glance by definition - the accent is what the eye finds before it has
             // read anything.
             renderer.FillRectangle(
-                new Rect(bounds.X + metrics[2], bounds.Y + metrics[5], metrics.AccentWidth, bounds.Height - metrics[10]),
+                new Rect(bounds.X + layout[2], bounds.Y + layout[5], layout.AccentWidth, bounds.Height - layout[10]),
                 theme.Accent,
-                cornerRadius: metrics.AccentWidth);
+                cornerRadius: layout.AccentWidth);
         }
 
         int textY = TextTop(bounds, config);
-        int right = DrawBadges(renderer, config, theme, metrics, small, row, bounds, textY);
-        int x = bounds.X + metrics.TextInset;
+        int right = DrawBadges(renderer, config, theme, layout, small, row, bounds, textY);
+        int x = bounds.X + layout.TextInset;
 
-        x = DrawHighlighted(renderer, config, font, row, x, textY, right - metrics[12]);
+        x = DrawHighlighted(renderer, config, font, row, x, textY, right - layout[12]);
 
-        if (row.Entry.Secondary.Length > 0 && x < right - metrics[60])
+        if (row.Entry.Secondary.Length > 0 && x < right - layout[60])
         {
             renderer.DrawText(
                 row.Entry.Secondary,
-                new Rect(x + metrics[10], textY + metrics[1], right - x - metrics[22], config.FontSize + metrics[6]),
+                new Rect(x + layout[10], textY + layout[1], right - x - layout[22], config.FontSize + layout[6]),
                 config.Secondary,
                 small);
         }
@@ -328,10 +282,10 @@ internal static class PaletteRenderer
     /// </para>
     /// </remarks>
     private static int DrawBadges(
-        IRenderer renderer, DalilConfig config, PaletteTheme theme, Metrics metrics, FontStyle small,
+        IRenderer renderer, DalilConfig config, PaletteTheme theme, PaletteLayout layout, FontStyle small,
         PaletteRow row, Rect bounds, int textY)
     {
-        int right = bounds.Right - metrics.TextInset;
+        int right = bounds.Right - layout.TextInset;
         if (row.Entry.Badges.Count == 0) return right;
 
         for (int i = row.Entry.Badges.Count - 1; i >= 0; i--)
@@ -339,13 +293,13 @@ internal static class PaletteRenderer
             string badge = row.Entry.Badges[i];
             Size size = Measure(renderer, badge, small);
 
-            int width = size.Width + (metrics.PillPadding * 2);
-            int height = size.Height + metrics[6];
+            int width = size.Width + (layout.PillPadding * 2);
+            int height = size.Height + layout[6];
             int x = right - width;
 
             // Never at the cost of the title. A row that is all state and no name is
             // not identifiable, which is the one thing a row has to be.
-            if (x < bounds.X + metrics[160]) return right;
+            if (x < bounds.X + layout[160]) return right;
 
             var pill = new Rect(x, bounds.Y + ((bounds.Height - height) / 2), width, height);
 
@@ -353,11 +307,11 @@ internal static class PaletteRenderer
 
             renderer.DrawText(
                 badge,
-                new Rect(pill.X + metrics.PillPadding, pill.Y + metrics[3], size.Width + 2, size.Height + 2),
+                new Rect(pill.X + layout.PillPadding, pill.Y + layout[3], size.Width + 2, size.Height + 2),
                 theme.PillText,
                 small);
 
-            right = x - metrics[6];
+            right = x - layout[6];
         }
 
         return right;
@@ -365,7 +319,7 @@ internal static class PaletteRenderer
 
     /// <summary>Says why the list is empty, and what to do about it.</summary>
     private static void DrawEmptyState(
-        IRenderer renderer, PaletteModel model, DalilConfig config, Metrics metrics,
+        IRenderer renderer, PaletteModel model, DalilConfig config, PaletteLayout layout,
         Rect canvas, FontStyle font, FontStyle small, int y)
     {
         bool searched = model.Term.Length > 0;
@@ -376,18 +330,18 @@ internal static class PaletteRenderer
             ? "Backspace to widen the search, or Tab to look somewhere else"
             : "The window manager may still be starting up";
 
-        int x = canvas.X + metrics.TextInset + metrics[4];
+        int x = canvas.X + layout.TextInset + layout[4];
 
         renderer.DrawText(
             headline,
-            new Rect(x, y + metrics[14], canvas.Width - (metrics.TextInset * 2), config.FontSize + metrics[8]),
+            new Rect(x, y + layout[14], canvas.Width - (layout.TextInset * 2), config.FontSize + layout[8]),
             config.Foreground,
             font);
 
         renderer.DrawText(
             hint,
-            new Rect(x, y + metrics[14] + config.FontSize + metrics[8],
-                     canvas.Width - (metrics.TextInset * 2), config.FontSize + metrics[6]),
+            new Rect(x, y + layout[14] + config.FontSize + layout[8],
+                     canvas.Width - (layout.TextInset * 2), config.FontSize + layout[6]),
             config.Secondary,
             small);
     }
@@ -410,25 +364,35 @@ internal static class PaletteRenderer
     /// </remarks>
     private static void DrawHintBar(
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteTheme theme,
-        Metrics metrics, Rect canvas, FontStyle small, int first, int count)
+        PaletteLayout layout, Rect canvas, FontStyle small, int first, int count, string? actionsFor)
     {
-        int y = canvas.Bottom - metrics.HintBar;
+        int y = canvas.Bottom - layout.HintBar;
 
         // The rule sits a little below the last row rather than flush against it, so
         // the bar reads as a separate strip instead of as a thirteenth result.
         renderer.FillRectangle(
-            new Rect(canvas.X + metrics.Padding, y + metrics[5], canvas.Width - (metrics.Padding * 2), 1),
+            new Rect(canvas.X + layout.Padding, y + layout[5], canvas.Width - (layout.Padding * 2), 1),
             theme.Rule);
 
         // Well clear of the bottom edge. The window has rounded corners, so anything
         // drawn in the last few pixels is clipped by the compositor rather than by
         // anything in this file - which looks like a font problem and is not one.
-        int textY = y + metrics[13];
-        int x = canvas.X + metrics.TextInset;
+        int textY = y + layout[13];
+        int x = canvas.X + layout.TextInset;
+
+        // In the action list the modes are not what matters and Escape is, because a
+        // list of verbs with no visible way back is the one place somebody will press
+        // it hoping to undo and expect the whole palette to vanish.
+        if (actionsFor is { Length: > 0 })
+        {
+            x = DrawHint(renderer, config, theme, layout, small, "\u21B5", "do it", x, textY, active: true);
+            _ = DrawHint(renderer, config, theme, layout, small, "Esc", "back", x, textY, active: false);
+            return;
+        }
 
         // Tab first, because it is the one that needs no memory at all: a user who
         // reads nothing else can still reach every mode by pressing it.
-        x = DrawHint(renderer, config, theme, metrics, small, "Tab", "modes", x, textY, active: false);
+        x = DrawHint(renderer, config, theme, layout, small, "Tab", "modes", x, textY, active: false);
 
         foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
         {
@@ -436,10 +400,15 @@ internal static class PaletteRenderer
             if (prefix == '\0') continue;
 
             x = DrawHint(
-                renderer, config, theme, metrics, small,
+                renderer, config, theme, layout, small,
                 prefix.ToString(), PaletteModel.NameOf(mode),
                 x, textY, active: model.Mode == mode);
         }
+
+        // Only when the selected row has any. Advertising an action key on a list of
+        // layouts would be a promise the palette does not keep.
+        if (model.Selected?.Entry.Actions is { Count: > 0 })
+            x = DrawHint(renderer, config, theme, layout, small, "\u2303\u21B5", "actions", x, textY, active: false);
 
         if (model.Rows.Count <= count) return;
 
@@ -451,34 +420,34 @@ internal static class PaletteRenderer
 
         renderer.DrawText(
             position,
-            new Rect(canvas.Right - size.Width - metrics.TextInset, textY, size.Width + 2, size.Height + 4),
+            new Rect(canvas.Right - size.Width - layout.TextInset, textY, size.Width + 2, size.Height + 4),
             config.Secondary,
             small);
     }
 
     private static int DrawHint(
-        IRenderer renderer, DalilConfig config, PaletteTheme theme, Metrics metrics, FontStyle small,
+        IRenderer renderer, DalilConfig config, PaletteTheme theme, PaletteLayout layout, FontStyle small,
         string key, string label, int x, int y, bool active)
     {
         Size keySize = Measure(renderer, key, small);
 
-        int width = keySize.Width + (metrics[6] * 2);
-        int height = keySize.Height + metrics[4];
+        int width = keySize.Width + (layout[6] * 2);
+        int height = keySize.Height + layout[4];
 
-        var cap = new Rect(x, y - metrics[1], width, height);
+        var cap = new Rect(x, y - layout[1], width, height);
 
         // The prefix is drawn as a key cap. It is the part worth remembering, and a
         // shape around it is what makes it read as something to press rather than as
         // punctuation in a sentence.
-        renderer.FillRectangle(cap, active ? theme.Chip : theme.Pill, cornerRadius: metrics[4]);
+        renderer.FillRectangle(cap, active ? theme.Chip : theme.Pill, cornerRadius: layout[4]);
 
         renderer.DrawText(
             key,
-            new Rect(cap.X + metrics[6], cap.Y + metrics[2], keySize.Width + 2, keySize.Height + 2),
+            new Rect(cap.X + layout[6], cap.Y + layout[2], keySize.Width + 2, keySize.Height + 2),
             active ? theme.ChipText : config.Secondary,
             small);
 
-        x = cap.Right + metrics[5];
+        x = cap.Right + layout[5];
 
         Size labelSize = Measure(renderer, label, small);
 
@@ -486,6 +455,6 @@ internal static class PaletteRenderer
             label, new Rect(x, y, labelSize.Width + 2, labelSize.Height + 4),
             active ? config.Foreground : config.Secondary, small);
 
-        return x + labelSize.Width + metrics[16];
+        return x + labelSize.Width + layout[16];
     }
 }

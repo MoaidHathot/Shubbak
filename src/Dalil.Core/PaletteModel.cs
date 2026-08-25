@@ -25,6 +25,17 @@ public enum PaletteMode
     Layouts,
 
     /// <summary>
+    /// Windows put away in a scratchpad.
+    /// </summary>
+    /// <remarks>
+    /// Its own mode rather than a filter on the window list, because a scratchpad
+    /// window is retrieved by naming its slot rather than by being focused - and
+    /// because deliberately stashed windows are the ones most likely to be forgotten
+    /// about entirely.
+    /// </remarks>
+    Scratchpad,
+
+    /// <summary>
     /// The keys and prefixes themselves.
     /// </summary>
     /// <remarks>
@@ -52,19 +63,36 @@ public enum PaletteMode
 /// makes the help list do something when a reader presses Enter on it, instead of
 /// being a wall of text that ignores the only key they have tried.
 /// </param>
+/// <param name="Actions">
+/// What else can be done to this row besides choosing it. Empty for rows that are
+/// only ever chosen - a command, a layout, a line of help.
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
     IReadOnlyList<string> Badges,
     string Command,
     long Rank = 0,
-    PaletteMode? SwitchesTo = null);
+    PaletteMode? SwitchesTo = null,
+    IReadOnlyList<PaletteAction>? Actions = null);
 
 /// <summary>An entry that survived filtering, with where it matched.</summary>
 /// <param name="Entry">The underlying entry.</param>
 /// <param name="Score">How well it matched.</param>
 /// <param name="Positions">Indices in <c>Entry.Primary</c> to highlight.</param>
 public sealed record PaletteRow(PaletteEntry Entry, int Score, IReadOnlyList<int> Positions);
+
+/// <summary>
+/// Supplies rows derived from the query itself rather than filtered from a list.
+/// </summary>
+/// <remarks>
+/// The typed text in commands mode is not something to search for - it is the thing
+/// to run. Rows from here are not matched or scored, because they already are the
+/// query, and they sort above everything.
+/// </remarks>
+/// <param name="mode">Which mode the palette is in.</param>
+/// <param name="term">What has been typed, with the mode prefix removed.</param>
+public delegate IReadOnlyList<PaletteEntry> QueryAugmenter(PaletteMode mode, string term);
 
 /// <summary>
 /// The palette's state: what was typed, what matched, and what is selected.
@@ -87,6 +115,15 @@ public sealed class PaletteModel
     private readonly List<PaletteRow> _rows = [];
     private string _query = string.Empty;
 
+    /// <summary>
+    /// Supplies rows derived from the query, shown above the filtered list.
+    /// </summary>
+    /// <remarks>
+    /// Set once by the host. Null means the palette only ever offers things from its
+    /// entry list, which is what every mode but commands wants.
+    /// </remarks>
+    public QueryAugmenter? Augmenter { get; set; }
+
     /// <summary>The mode prefixes, and what they mean.</summary>
     /// <remarks>
     /// Punctuation rather than words because it is typed constantly and must never
@@ -104,6 +141,7 @@ public sealed class PaletteModel
             ['>'] = PaletteMode.Commands,
             ['#'] = PaletteMode.Workspaces,
             ['~'] = PaletteMode.Layouts,
+            ['$'] = PaletteMode.Scratchpad,
             ['?'] = PaletteMode.Help,
         };
 
@@ -123,6 +161,7 @@ public sealed class PaletteModel
         PaletteMode.Commands => "commands",
         PaletteMode.Workspaces => "workspaces",
         PaletteMode.Layouts => "layouts",
+        PaletteMode.Scratchpad => "scratchpad",
         PaletteMode.Help => "help",
         _ => "windows",
     };
@@ -205,6 +244,17 @@ public sealed class PaletteModel
         SelectedIndex = next;
     }
 
+    /// <summary>Selects one row by index, ignoring anything out of range.</summary>
+    /// <remarks>
+    /// For the mouse, which names a row directly rather than moving by steps. Out of
+    /// range is ignored rather than clamped: a click that misses should do nothing,
+    /// not act on whichever row happens to be nearest.
+    /// </remarks>
+    public void SelectAt(int index)
+    {
+        if (index >= 0 && index < _rows.Count) SelectedIndex = index;
+    }
+
     /// <summary>Selects the first or last row outright.</summary>
     public void SelectEdge(bool last) =>
         SelectedIndex = _rows.Count == 0 ? -1 : last ? _rows.Count - 1 : 0;
@@ -270,6 +320,12 @@ public sealed class PaletteModel
         }
 
         _rows.Sort(Compare);
+
+        // Prepended after sorting rather than sorted in. These rows are not matches
+        // and have no score to compare; giving them an enormous one and hoping would
+        // work until something else legitimately scored higher.
+        if (Augmenter?.Invoke(Mode, term) is { Count: > 0 } derived)
+            _rows.InsertRange(0, derived.Select(e => new PaletteRow(e, int.MaxValue, [])));
 
         SelectedIndex = _rows.Count == 0 ? -1 : IndexOf(keep);
     }

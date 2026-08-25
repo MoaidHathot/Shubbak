@@ -32,6 +32,7 @@ internal static class Program
     private static WmConnection? s_connection;
     private static DalilConfig s_config = new();
     private static PaletteSources s_sources = PaletteSources.Empty;
+    private static CompletionSources s_completions = CompletionSources.None;
     private static uint s_threadId;
     private static bool s_running = true;
     private static string? s_configPath;
@@ -60,6 +61,12 @@ internal static class Program
         }
 
         s_palette.CommandRequested += command => _ = s_connection!.SendAsync(command);
+
+        // Typed commands become a row of their own, parsed by the same parser the
+        // config file uses. Without this, every verb that takes an argument was a
+        // dead end: the term outgrew the verb it named, matched nothing, and Enter
+        // had no row to act on.
+        s_palette.Augment(term => CommandComposer.Compose(term, s_completions));
 
         // Every route into a mode refills the list: Tab, typing a prefix, deleting
         // one, or choosing a mode from the help list. Without this, typing ">" left
@@ -220,6 +227,7 @@ internal static class Program
             Post(() =>
             {
                 s_sources = read;
+                s_completions = read.Completions;
 
                 // Same reasoning as MarkStale: the user may have pressed Tab while
                 // this was in flight.
@@ -282,6 +290,7 @@ internal static class Program
             Post(() =>
             {
                 s_sources = read;
+                s_completions = read.Completions;
 
                 // The mode is read here rather than captured, because the user may
                 // have changed it while the query was in flight. Capturing it would

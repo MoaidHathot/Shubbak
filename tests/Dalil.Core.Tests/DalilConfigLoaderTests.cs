@@ -147,6 +147,7 @@ public sealed class DalilConfigLoaderTests
         "visible-rows" => "visible-rows 10",
         "close-on-blur" => "close-on-blur #true",
         "show-unmanaged" => "show-unmanaged #true",
+        "action-guard" => "action-guard #true",
         "placement" => """placement "primary" """,
         "font" => """font "Segoe UI" """,
         "font-size" => "font-size 15",
