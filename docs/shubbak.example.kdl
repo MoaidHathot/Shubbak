@@ -281,6 +281,20 @@ keybindings {
     bind "alt+l" { focus --direction right }
     bind "alt+y" { focus --recent-workspace }
 
+    // Back to the window you were just in. Press it twice and you are where you
+    // started, because leaving a window makes it the most recent one.
+    bind "alt+tab" { focus-recent-window }
+
+    // Ask a connected client to do something. Shubbak does not interpret the name;
+    // whichever program is subscribed decides what it means, which is how a window
+    // palette or a launcher can live outside the window manager without Shubbak
+    // needing to know it exists.
+    //
+    // Nothing happens if no client is listening - the log says so, at info.
+    //
+    //   bind "alt+space" { signal "palette" }
+    //   bind "alt+shift+space" { signal "palette" "commands" }
+
     // Move the focused window.
     bind "alt+shift+h" { move --direction left }
     bind "alt+shift+l" { move --direction right }

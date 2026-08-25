@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text.Json;
 using Shubbak.Config;
 using Shubbak.Core.Animation;
 using Shubbak.Core.Diagnostics;
@@ -245,6 +247,17 @@ public sealed class WmDaemon : IDisposable
     }
 
     public WindowManager Manager => _wm;
+
+    /// <summary>
+    /// Which windows the daemon has taken on, for queries that describe the desktop
+    /// rather than the tree.
+    /// </summary>
+    /// <remarks>
+    /// Read only from the message loop. The registry is not synchronised, and the
+    /// enumeration half of <c>query all-windows</c> deliberately does not touch it -
+    /// that is why the join is marshalled here rather than done on the pipe thread.
+    /// </remarks>
+    internal WindowRegistry Windows => _windows;
 
     /// <summary>Starts the daemon and pumps messages until <see cref="Stop"/>.</summary>
     public void Run(string? configPath)
@@ -2181,6 +2194,34 @@ public sealed class WmDaemon : IDisposable
     /// <summary>Whether the pipe may be used to launch processes.</summary>
     internal bool AllowShellExecOverIpc => _config.AllowShellExecOverIpc;
 
+    /// <summary>
+    /// Every keybinding the loaded configuration declares, default and modal alike.
+    /// </summary>
+    /// <remarks>
+    /// Answers "what did I actually bind?", which is otherwise only answerable by
+    /// reading the config file and mentally applying every <c>for-each</c> expansion -
+    /// and the expansions are exactly where a binding goes missing.
+    /// </remarks>
+    internal IReadOnlyList<BindingInfo> DescribeBindings()
+    {
+        List<BindingInfo> bindings = [];
+
+        foreach (Keybinding binding in _config.Keybindings)
+            bindings.Add(Describe(binding, mode: null));
+
+        foreach (Config.BindingMode mode in _config.BindingModes)
+            foreach (Keybinding binding in mode.Keybindings)
+                bindings.Add(Describe(binding, mode.Name));
+
+        return bindings;
+
+        static BindingInfo Describe(Keybinding binding, string? mode) => new(
+            binding.Key.Display,
+            mode,
+            [.. binding.Commands.Select(c => c.Name)],
+            binding.RepeatsOnHold);
+    }
+
     internal CommandOutcome RunCommand(WmCommand command)
     {
         if (!ResolveTarget(command))
@@ -2383,10 +2424,138 @@ public sealed class WmDaemon : IDisposable
                 Stop();
                 break;
 
+            case HostAction.RevealWindow:
+                if (outcome.Payload is { } target) RevealWindow(target);
+                break;
+
+            case HostAction.Signal:
+                if (outcome.Payload is { } signal) RaiseSignal(signal);
+                break;
+
             case HostAction.None:
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// Brings a window the tree does not know about back into view.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The recovery path for a genuinely lost window: one excluded by a rule, one
+    /// cloaked by the shell on another virtual desktop, or one left cloaked by a
+    /// daemon that was killed before it could undo the concealment. None of them are
+    /// in the tree, so no ordinary focus command can reach them.
+    /// </para>
+    /// <para>
+    /// Undoing the concealment first and asking questions second. A cloaked window can
+    /// be given the foreground and stay invisible, which looks exactly like the
+    /// command having done nothing.
+    /// </para>
+    /// <para>
+    /// <b>Adoption is deliberately not attempted here.</b> Uncloaking raises
+    /// <c>EVENT_OBJECT_UNCLOAKED</c> and taking the foreground raises
+    /// <c>EVENT_SYSTEM_FOREGROUND</c>; both already route to <see cref="TryManage"/>
+    /// on a later tick, through the same path every other window arrives by. Calling
+    /// it again from here would be redundant, and worse, it would be racing: the
+    /// shell's uncloak is a cross-process call, so <c>DWMWA_CLOAKED</c> can still
+    /// report the old value on the very next instruction, and the filter would reject
+    /// the window as cloaked immediately after uncloaking it. Letting the event carry
+    /// it means the question is asked once the state has settled.
+    /// </para>
+    /// <para>
+    /// The set-aside mark is cleared, which is the one thing the event path cannot do
+    /// for itself in time. A window set aside at startup is
+    /// <see cref="WindowRegistry.AlreadyDecided"/>, so <see cref="TryManage"/> would
+    /// return before looking at anything - and the window would be revealed, focused,
+    /// and still never managed. Showing itself is exactly the evidence that was
+    /// missing when it was set aside.
+    /// </para>
+    /// <para>
+    /// An exclusion is left in place. A window kept out by the user's own rule should
+    /// not quietly start being tiled because they went looking for it; toggle-managed
+    /// is the deliberate way to overrule that.
+    /// </para>
+    /// </remarks>
+    private void RevealWindow(string payload)
+    {
+        if (!long.TryParse(payload, CultureInfo.InvariantCulture, out long raw)) return;
+
+        var handle = (nint)raw;
+
+        if (!Win32Window.Exists(handle))
+        {
+            Log.Info(LogCategory.Wm, $"reveal: 0x{handle:X} is no longer a window");
+            return;
+        }
+
+        WindowCommitter.Revive(handle);
+
+        if (Win32Window.IsMinimised(handle)) WindowActions.Restore(handle);
+
+        _windows.NoLongerSetAside(handle);
+
+        WindowActions.Focus(handle);
+
+        Log.Info(LogCategory.Wm,
+            $"revealed 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" " +
+            $"[{Win32Window.GetClassName(handle)}]");
+    }
+
+    /// <summary>
+    /// Announces a named gesture to whichever clients are listening.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The daemon does not know or care what the name means. That is the point: it is
+    /// how user interface lives outside this process without this process growing a
+    /// command for each program that might implement it.
+    /// </para>
+    /// <para>
+    /// Foreground rights are handed over before the announcement, not after. A client
+    /// raising a window in response is not the foreground process and has not received
+    /// the keystroke - the daemon swallowed it - so Windows would refuse its
+    /// SetForegroundWindow and silently demote it to a taskbar flash. The user pressed
+    /// a key and a window is expected; passing on the right the keystroke earned is
+    /// what makes that happen.
+    /// </para>
+    /// <para>
+    /// Said out loud when nobody is listening. A signal with no subscriber is a
+    /// keybinding that does nothing, which is indistinguishable from a broken one -
+    /// and the usual cause is simply that the program meant to handle it is not
+    /// running.
+    /// </para>
+    /// </remarks>
+    private void RaiseSignal(string payload)
+    {
+        string[] parts = payload.Split('\t');
+        string name = parts[0];
+
+        if (_ipc is not { } ipc || !ipc.HasSubscribers(IpcProtocol.SignalTopic))
+        {
+            Log.Info(LogCategory.Ipc,
+                $"signal \"{name}\" raised, but no client is subscribed to '{IpcProtocol.SignalTopic}'. " +
+                "Nothing will happen until one connects.");
+            return;
+        }
+
+        foreach (nint pipe in ipc.SubscriberPipeHandles(IpcProtocol.SignalTopic))
+            Win32Foreground.AllowForeground(Win32Foreground.ProcessIdOfPipeClient(pipe));
+
+        Log.Debug(LogCategory.Ipc, $"signal \"{name}\" -> {ipc.ClientCount} client(s)");
+
+        ipc.Publish(IpcProtocol.SignalTopic, SignalPayload(name, parts));
+    }
+
+    private static string SignalPayload(string name, string[] parts)
+    {
+        string arguments = parts.Length > 1
+            ? string.Join(',', parts.Skip(1).Select(a => JsonSerializer.Serialize(a, IpcJsonContext.Default.String)))
+            : string.Empty;
+
+        return $"{{\"name\":{JsonSerializer.Serialize(name, IpcJsonContext.Default.String)}," +
+               $"\"arguments\":[{arguments}]}}";
     }
 
     /// <summary>Runs a command, detached.</summary>
@@ -2750,10 +2919,13 @@ public sealed class WmDaemon : IDisposable
         // very obvious.
         //
         // When it is wanted, it uses the window-open profile rather than window-move,
-        // so the two can be tuned apart.
+        // so the two can be tuned apart - and even then only when the window opened
+        // somewhere the motion can honestly be said to start from. See
+        // OpeningIsWorthAnimating.
         if (_windows.TakeArriving(handle))
         {
-            if (!_config.Animation.AnimateNewWindows)
+            if (!_config.Animation.AnimateNewWindows ||
+                !OpeningIsWorthAnimating(current, placement.Window.Monitor?.Bounds))
             {
                 _animation.Remove(placement.Window.Handle);
                 _commitScratch.Add(placement);
@@ -2783,6 +2955,56 @@ public sealed class WmDaemon : IDisposable
         }
 
         _commitScratch.Add(placement);
+    }
+
+    /// <summary>
+    /// Whether a window joining the layout has anywhere honest to travel from, so
+    /// that <c>animate-new-windows</c> shows an opening rather than a journey.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reasoning above - that the rectangle a new window would travel from was
+    /// never part of the arrangement - does not stop being true when the animation is
+    /// asked for. It only becomes acceptable, because over a short distance the motion
+    /// reads as the window arriving in its tile rather than as a claim about where it
+    /// used to be.
+    /// </para>
+    /// <para>
+    /// Over a long one it does not. The reported case: Firefox was killed with two
+    /// windows on two monitors and restarted. It reopened both at its own remembered
+    /// positions, one per monitor, and Shubbak adopted them 485 ms apart onto the same
+    /// workspace - so the second was animated from full-screen on one display into
+    /// half of the other. What the user saw was a tile sitting empty beside a
+    /// half-width window, then a window flying in from the next monitor to fill it.
+    /// Two symptoms, one motion, and neither of them describes anything that happened.
+    /// </para>
+    /// <para>
+    /// So the animation is kept for a window that opened on the display it is being
+    /// tiled onto, which is the case it was added for - Win+E on the monitor you are
+    /// working on - and withheld otherwise, falling back to the placement that is the
+    /// default anyway. Judged on the origin's centre rather than on containment,
+    /// because a window straddling a monitor edge still opened on the display it is
+    /// mostly on.
+    /// </para>
+    /// <para>
+    /// An empty origin is not a position. It is a window with no rectangle yet, and
+    /// animating from it means starting at the top-left of the virtual desktop, which
+    /// is the same long flight by another route.
+    /// </para>
+    /// <para>
+    /// A null monitor means the question cannot be answered - the node is not under
+    /// one, which the tree should not permit. Nothing is withheld on the strength of a
+    /// fact we do not have, so this keeps the configured behaviour.
+    /// </para>
+    /// </remarks>
+    /// <param name="origin">Where the window is now, as a visible frame.</param>
+    /// <param name="destinationMonitor">Bounds of the monitor it is being placed on.</param>
+    internal static bool OpeningIsWorthAnimating(Rect origin, Rect? destinationMonitor)
+    {
+        if (origin.IsEmpty) return false;
+        if (destinationMonitor is not { } monitor || monitor.IsEmpty) return true;
+
+        return monitor.Contains(origin.CenterX, origin.CenterY);
     }
 
     /// <summary>Moves every window that is not being animated, in one transaction.</summary>
@@ -3506,6 +3728,13 @@ public sealed class WmDaemon : IDisposable
             // of a reload, and toggle-managed is one key away for anything that should
             // go back.
             int forgotten = _windows.ForgetVerdicts();
+
+            // The remembered process paths go with them. A reload can change which
+            // executables are excluded, and every open window is about to be
+            // re-examined against the new list anyway - so this costs one repeat
+            // lookup per live process and removes any question of a stale path
+            // surviving a reload.
+            Win32Window.ForgetProcessIdentities();
 
             ReconsiderOpenWindows();
 

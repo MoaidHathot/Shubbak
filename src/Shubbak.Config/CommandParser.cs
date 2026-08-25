@@ -246,6 +246,49 @@ public static class CommandParser
                 command = new ExitCommand();
                 return true;
 
+            case "focus-recent-window":
+                command = new FocusRecentWindowCommand();
+                return true;
+
+            case "focus-window":
+            {
+                if (rest.Length != 1)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0305", "focus-window takes one window handle.", span)
+                        with
+                    { Hint = "For example: focus-window 0x1D0076" };
+                    return false;
+                }
+
+                if (!TryHandle(rest[0], out long handle))
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0306", $"'{rest[0]}' is not a window handle.", span)
+                        with
+                    { Hint = "Handles are decimal, or hexadecimal with an 0x prefix." };
+                    return false;
+                }
+
+                command = new FocusWindowCommand(handle);
+                return true;
+            }
+
+            case "signal":
+            {
+                if (rest.Length == 0)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0307", "signal has no name to announce.", span)
+                        with
+                    { Hint = "For example: signal \"palette\"" };
+                    return false;
+                }
+
+                command = new SignalCommand(rest[0], [.. rest[1..]]);
+                return true;
+            }
+
             case "shell-exec":
             {
                 // Everything after the verb is the command line, rejoined verbatim
@@ -490,23 +533,46 @@ public static class CommandParser
         return [.. tokens];
     }
 
-    /// <summary>Suggests a correction for a misspelled command.</summary>
-    private static string? Suggest(string verb)
+    /// <summary>
+    /// Reads a window handle, decimal or hexadecimal.
+    /// </summary>
+    /// <remarks>
+    /// Hexadecimal is accepted because that is how every tool that shows a window
+    /// handle prints it - Spy++, <c>shubbak inspect</c>, and Shubbak's own log lines
+    /// all say <c>0x1D0076</c>. Requiring the decimal form would mean the user
+    /// converting a number by hand to paste it back into the program that printed it.
+    /// </remarks>
+    private static bool TryHandle(string value, out long handle)
     {
-        string[] known =
-        [
-            "focus", "move", "move-workspace", "resize", "split", "layout", "close",
-            "tag", "sticky", "scratchpad",
-            "toggle-tiling-direction", "toggle-floating", "toggle-fullscreen",
-            "toggle-minimized", "toggle-managed", "float", "tile",
-            "equalise", "ignore", "manage", "shell-exec",
-            "wm-enable-binding-mode", "wm-disable-binding-mode", "wm-toggle-pause",
-            "wm-reload-config", "wm-redraw", "wm-exit",
-        ];
+        ReadOnlySpan<char> text = value.AsSpan();
 
-        // Only suggests when the guess is close enough to be plausible; a wild guess
-        // is worse than no guess, because it sends the user down the wrong path.
-        return Suggestion.Closest(verb, known) is { } best ? $"Did you mean '{best}'?" : null;
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            return long.TryParse(
+                text[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out handle);
+        }
+
+        return long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out handle);
     }
 
+    /// <summary>Suggests a correction for a misspelled command.</summary>
+    /// <remarks>
+    /// The verb list comes from <see cref="CommandCatalogue"/>, which is the single
+    /// description of the command set. It used to be a second, hand-maintained array
+    /// here, and it had fallen behind - which is invisible, because a missing entry
+    /// only means one command never gets suggested.
+    /// <para>
+    /// This is also the only place on the parsing path that touches the catalogue,
+    /// and it runs after a command has already failed to parse. A configuration with
+    /// no mistakes in it never builds the table at all.
+    /// </para>
+    /// </remarks>
+    private static string? Suggest(string verb)
+    {
+        // Only suggests when the guess is close enough to be plausible; a wild guess
+        // is worse than no guess, because it sends the user down the wrong path.
+        return Suggestion.Closest(verb, CommandCatalogue.Verbs) is { } best
+            ? $"Did you mean '{best}'?"
+            : null;
+    }
 }

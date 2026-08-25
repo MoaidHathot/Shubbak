@@ -170,6 +170,29 @@ public sealed record BindingModeChanged(string? Mode) : WmEvent
 }
 
 /// <summary>
+/// Tiling was suspended or resumed.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Pausing used to change <see cref="WindowManager.IsPaused"/> and announce nothing,
+/// which left every other process unable to notice. A bar could only learn about it
+/// by polling <c>query state</c>, so the indicator either lagged by a whole poll
+/// interval or did not exist - and a window manager that has silently stopped
+/// arranging windows is precisely the state a user most needs told about, because
+/// the symptom is indistinguishable from it having crashed.
+/// </para>
+/// <para>
+/// Inert for geometry. Resuming does mark the layout dirty, but the pause path does
+/// that itself, having kept the flag set for exactly this purpose - the pass is
+/// deferred, not cancelled.
+/// </para>
+/// </remarks>
+public sealed record PauseChanged(bool Paused) : WmEvent
+{
+    public override string Topic => "wm.paused";
+}
+
+/// <summary>
 /// The configuration was re-read from disk.
 /// </summary>
 /// <remarks>

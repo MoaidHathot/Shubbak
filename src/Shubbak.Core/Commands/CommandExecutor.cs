@@ -1,3 +1,4 @@
+using System.Globalization;
 using Shubbak.Core.Layouts;
 using Shubbak.Core.Wm;
 
@@ -40,6 +41,20 @@ public enum HostAction
 
     /// <summary>Shut the window manager down cleanly.</summary>
     Exit,
+
+    /// <summary>
+    /// Bring a window the tree does not know about back into view.
+    /// </summary>
+    /// <remarks>
+    /// A host action because it is entirely outside the state machine's world. The
+    /// handle names a window that is not in the tree - unmanaged, or left cloaked by
+    /// a daemon that died - so there is no node to operate on and the work is
+    /// uncloaking, restoring and foregrounding, all of which are Win32.
+    /// </remarks>
+    RevealWindow,
+
+    /// <summary>Announce <see cref="SignalCommand.Signal"/> to subscribed clients.</summary>
+    Signal,
 }
 
 /// <summary>The outcome of executing one command.</summary>
@@ -104,7 +119,15 @@ public sealed class CommandExecutor
             FocusDirectionCommand c => new(_wm.FocusDirection(c.Direction)),
             FocusWorkspaceCommand c => new(_wm.FocusWorkspace(c.Workspace)),
             FocusRecentWorkspaceCommand => new(_wm.FocusRecentWorkspace()),
+            FocusRecentWindowCommand => new(_wm.FocusRecentWindow()),
             CycleFocusCommand c => new(_wm.CycleFocus(c.Forward)),
+
+            // Falls through to the host when the tree has never heard of the handle.
+            // That is not a failure: a window nobody manages is exactly the kind most
+            // likely to have been lost, and revealing it is the whole point.
+            FocusWindowCommand c => _wm.Root.FindWindow(c.Handle) is not null
+                ? new(_wm.FocusWindowByHandle(c.Handle))
+                : Host(HostAction.RevealWindow, c.Handle.ToString(CultureInfo.InvariantCulture)),
 
             MoveDirectionCommand c => new(_wm.MoveDirection(c.Direction)),
             MoveToWorkspaceCommand c => new(_wm.MoveToWorkspace(c.Workspace)),
@@ -137,6 +160,7 @@ public sealed class CommandExecutor
             // one carrying no events.
             CloseWindowCommand => Host(HostAction.CloseFocusedWindow),
             ShellExecCommand c => Host(HostAction.ShellExecute, c.CommandLine),
+            SignalCommand c => Host(HostAction.Signal, Encode(c)),
             ReloadConfigCommand => Host(HostAction.ReloadConfig),
             RedrawCommand => Host(HostAction.Redraw),
             ExitCommand => Host(HostAction.Exit),
@@ -168,6 +192,21 @@ public sealed class CommandExecutor
 
     private static CommandOutcome Host(HostAction action, string? payload = null) =>
         new(new WmResult(true, []), action, payload);
+
+    /// <summary>
+    /// Flattens a signal and its arguments into the single string a host action
+    /// carries.
+    /// </summary>
+    /// <remarks>
+    /// Tab-separated because <see cref="CommandOutcome.Payload"/> is one string and a
+    /// signal may take arguments. A tab cannot appear in a name or an argument: the
+    /// command parser splits its input on whitespace before either reaches here, so
+    /// there is nothing to escape and nothing that can be mis-split on the way back.
+    /// </remarks>
+    private static string Encode(SignalCommand command) =>
+        command.Arguments.Count == 0
+            ? command.Signal
+            : command.Signal + '\t' + string.Join('\t', command.Arguments);
 
     private static CommandOutcome Rejected(WmCommand command, string reason) =>
         new(new WmResult(false, [new CommandRejected(command.Name, reason)]));

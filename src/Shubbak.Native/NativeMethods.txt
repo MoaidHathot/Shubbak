@@ -48,12 +48,23 @@ DwmSetWindowAttribute
 // NativeAOT-safe. Those interfaces are therefore hand-rolled as raw vtable calls in
 // Win32ApplicationView and Win32Taskbar, which also keeps them allocation-free.
 
+// Foreground rights handed to a client that must raise a window in response to a
+// keystroke this process swallowed. See Win32Foreground.
+AllowSetForegroundWindow
+GetNamedPipeClientProcessId
+
 // Process identity, for rules and for the inspector.
 OpenProcess
 PROCESS_ACCESS_RIGHTS
 QueryFullProcessImageName
 PROCESS_NAME_FORMAT
 CloseHandle
+
+// ProcessIdentityCache keeps a process handle open so the id cannot be reused while
+// it is remembered. A zero-length wait on that handle is how it notices the process
+// has since exited and the entry may be collected.
+WaitForSingleObject
+WAIT_EVENT
 
 // --- window manipulation -------------------------------------------------------
 SetWindowPos

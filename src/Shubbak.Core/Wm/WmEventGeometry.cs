@@ -50,6 +50,12 @@ public static class WmEventGeometry
         // Routed to the binding table and the log; the tree is untouched.
         BindingModeChanged => false,
 
+        // A flag, and an announcement that it moved. Pausing must not trigger a pass
+        // - that is the entire point of it - and resuming is handled by the daemon,
+        // which keeps the dirty flag set while paused and applies everything in one
+        // pass on the way out.
+        PauseChanged => false,
+
         // Carries a path. Reloading may well change the gaps, but the reload path
         // marks the layout dirty itself, having already applied the new options -
         // this event is the announcement to other processes, sent afterwards.

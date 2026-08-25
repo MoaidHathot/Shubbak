@@ -285,29 +285,21 @@ public static class Win32Window
     /// The full path of the owning executable, or null when it cannot be read.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Returns null rather than throwing for elevated processes: an unelevated
     /// Shubbak cannot open them, and that is an expected condition rather than an
     /// error. <see cref="BuildIdentity"/> records it as
     /// <see cref="WindowIdentity.IsElevated"/> so the user is told why a window
     /// cannot be managed instead of watching it silently misbehave.
+    /// </para>
+    /// <para>
+    /// Answered from <see cref="ProcessIdentityCache"/>, which holds a handle to the
+    /// process so the id cannot be reused underneath the entry. A repeat call for a
+    /// process already seen costs no system call - which matters because the filter
+    /// asks this of every window, and a process with twenty windows is one process.
+    /// </para>
     /// </remarks>
-    public static unsafe string? GetProcessPath(uint processId)
-    {
-        if (processId == 0) return null;
-
-        using SafeFileHandle process = PInvoke.OpenProcess_SafeHandle(
-            PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
-
-        if (process.IsInvalid) return null;
-
-        Span<char> buffer = stackalloc char[512];
-        uint size = (uint)buffer.Length;
-
-        if (!PInvoke.QueryFullProcessImageName(process, PROCESS_NAME_FORMAT.PROCESS_NAME_WIN32, buffer, ref size))
-            return null;
-
-        return new string(buffer[..(int)size]);
-    }
+    public static string? GetProcessPath(uint processId) => ProcessIdentityCache.PathOf(processId);
 
     /// <summary>
     /// Whether a process runs at a higher integrity level than this one.
@@ -337,16 +329,24 @@ public static class Win32Window
     /// is exiting - is also one whose windows cannot be positioned, so treating the
     /// refusal as "not ours to manage" is right whatever caused it.
     /// </para>
+    /// <para>
+    /// Cached per process alongside the path; see <see cref="GetProcessPath"/>.
+    /// </para>
     /// </remarks>
-    public static bool IsElevated(uint processId)
-    {
-        if (processId == 0) return false;
+    public static bool IsElevated(uint processId) => ProcessIdentityCache.IsElevated(processId);
 
-        using SafeFileHandle process = PInvoke.OpenProcess_SafeHandle(
-            PROCESS_ACCESS_RIGHTS.PROCESS_QUERY_INFORMATION, false, processId);
+    /// <summary>
+    /// Forgets every remembered process, releasing the handles that pin their ids.
+    /// </summary>
+    /// <remarks>
+    /// Needed by tests, which must not inherit one case's processes in another, and
+    /// by configuration reload, where the excluded-process list may have changed and
+    /// every open window is reconsidered from scratch regardless.
+    /// </remarks>
+    public static void ForgetProcessIdentities() => ProcessIdentityCache.Clear();
 
-        return process.IsInvalid;
-    }
+    /// <summary>How many processes the identity cache is currently holding open.</summary>
+    public static int RememberedProcessCount => ProcessIdentityCache.Count;
 
     // Win32 style enums are generated as internal and are deliberately not exposed:
     // Shubbak.Core must never see a Win32 type. Callers outside this assembly get

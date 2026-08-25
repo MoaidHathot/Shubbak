@@ -200,6 +200,33 @@ public sealed class IpcServer : IAsyncDisposable
         lock (_gate) return _subscribedToAll > 0 || _topicSubscribers.ContainsKey(topic);
     }
 
+    /// <summary>
+    /// The pipe handles of every client subscribed to a topic.
+    /// </summary>
+    /// <remarks>
+    /// Handles rather than process ids, because resolving one to the other is a Win32
+    /// call and this assembly has no Win32 in it - the protocol and its transport are
+    /// deliberately portable. The caller resolves them; see
+    /// <c>Win32Foreground.ProcessIdOfPipeClient</c>.
+    /// </remarks>
+    public IReadOnlyList<nint> SubscriberPipeHandles(string topic)
+    {
+        ClientConnection[] clients;
+        lock (_gate) clients = [.. _clients];
+
+        List<nint> handles = [];
+
+        foreach (ClientConnection client in clients)
+        {
+            if (!client.IsSubscribed(topic)) continue;
+
+            nint handle = client.PipeHandle;
+            if (handle != 0) handles.Add(handle);
+        }
+
+        return handles;
+    }
+
     /// <summary>How many clients asked for every topic.</summary>
     private int _subscribedToAll;
 
@@ -335,6 +362,28 @@ public sealed class IpcServer : IAsyncDisposable
         public bool IsSubscribed(string topic)
         {
             lock (_gate) return _subscribedToAll || _subscriptions.Contains(topic);
+        }
+
+        /// <summary>The handle of this client's end of the pipe, or zero.</summary>
+        /// <remarks>
+        /// Exposed so the daemon can ask Windows which process is on the other side.
+        /// The server itself has no use for it and deliberately does not interpret it.
+        /// </remarks>
+        public nint PipeHandle
+        {
+            get
+            {
+                try
+                {
+                    return _pipe.IsConnected ? _pipe.SafePipeHandle.DangerousGetHandle() : 0;
+                }
+                catch (ObjectDisposedException)
+                {
+                    // Disconnected between the check and the read. Nothing to grant
+                    // rights to, and nothing worth reporting.
+                    return 0;
+                }
+            }
         }
 
         /// <summary>

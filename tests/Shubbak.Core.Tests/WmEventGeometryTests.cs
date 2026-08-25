@@ -211,6 +211,7 @@ public sealed class WmEventGeometryTests
                 nameof(MonitorAdded),
                 nameof(MonitorChanged),
                 nameof(MonitorRemoved),
+                nameof(PauseChanged),
                 nameof(WindowFocused),
                 nameof(WindowManaged),
                 nameof(WindowMoved),

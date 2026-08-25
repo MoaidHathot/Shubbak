@@ -70,6 +70,79 @@ public sealed record MonitorInfoDto(
     int Height,
     string? ActiveWorkspace);
 
+/// <summary>
+/// A window on the desktop, managed or not.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Wider than <see cref="WindowInfo"/> because it answers a different question.
+/// <c>WindowInfo</c> describes a node in the tree; this describes anything with a
+/// top-level window, including the ones Shubbak has decided not to manage and the
+/// ones it has never seen. Those are the interesting cases: a window is most likely
+/// to be lost precisely when the window manager is not arranging it.
+/// </para>
+/// <para>
+/// The tree-derived fields are null or false for a window that is not in the tree.
+/// That is not missing data - there genuinely is no workspace for a window nobody
+/// manages - and a client should read <see cref="Managed"/> before the rest.
+/// </para>
+/// </remarks>
+/// <param name="Handle">Native window handle.</param>
+/// <param name="Title">Window title at the time of the query.</param>
+/// <param name="ClassName">Win32 window class.</param>
+/// <param name="ProcessName">Owning executable, without extension.</param>
+/// <param name="ProcessId">Owning process id.</param>
+/// <param name="Elevated">Whether the owner runs above Shubbak's integrity level.</param>
+/// <param name="Managed">Whether Shubbak has this window in its tree.</param>
+/// <param name="ExclusionReason">Why it is not managed; null when it is.</param>
+/// <param name="State">Tree state, when managed.</param>
+/// <param name="Concealment">How the window is currently hidden: none, cloaked, hidden or minimised.</param>
+/// <param name="Workspace">Owning workspace name, when managed.</param>
+/// <param name="WorkspaceDisplayed">Whether that workspace is the one its monitor is showing.</param>
+/// <param name="Monitor">Device id of the owning monitor, when managed.</param>
+/// <param name="Sticky">Whether the window follows the user to every workspace.</param>
+/// <param name="Focused">Whether this is the focused window.</param>
+/// <param name="FocusSequence">Higher is more recently focused; zero means never.</param>
+public sealed record WindowCandidate(
+    long Handle,
+    string Title,
+    string ClassName,
+    string ProcessName,
+    int ProcessId,
+    bool Elevated,
+    bool Managed,
+    string? ExclusionReason,
+    string? State,
+    string Concealment,
+    string? Workspace,
+    bool WorkspaceDisplayed,
+    string? Monitor,
+    bool Sticky,
+    bool Focused,
+    long FocusSequence);
+
+/// <summary>A command verb, as described to clients.</summary>
+/// <remarks>
+/// Lets a client offer the command set without hard-coding it, which is what stops a
+/// palette or a completion script drifting out of step every time a verb is added.
+/// </remarks>
+public sealed record CommandInfo(
+    string Verb,
+    string Summary,
+    IReadOnlyList<string> Arguments,
+    IReadOnlyList<string> Aliases);
+
+/// <summary>A keybinding, as described to clients.</summary>
+/// <param name="Key">The chord, as written in the config.</param>
+/// <param name="Mode">The binding mode it belongs to; null for the default bindings.</param>
+/// <param name="Commands">The commands it runs, in order.</param>
+/// <param name="RepeatsOnHold">Whether holding the key repeats the commands.</param>
+public sealed record BindingInfo(
+    string Key,
+    string? Mode,
+    IReadOnlyList<string> Commands,
+    bool RepeatsOnHold);
+
 /// <summary>The whole state, for a bar that has just connected.</summary>
 public sealed record StateSnapshot(
     IReadOnlyList<MonitorInfoDto> Monitors,
@@ -98,10 +171,16 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(WindowInfo))]
 [JsonSerializable(typeof(WorkspaceInfo))]
 [JsonSerializable(typeof(MonitorInfoDto))]
+[JsonSerializable(typeof(WindowCandidate))]
+[JsonSerializable(typeof(CommandInfo))]
+[JsonSerializable(typeof(BindingInfo))]
 [JsonSerializable(typeof(StateSnapshot))]
 [JsonSerializable(typeof(IReadOnlyList<WindowInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<WorkspaceInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<MonitorInfoDto>))]
+[JsonSerializable(typeof(IReadOnlyList<WindowCandidate>))]
+[JsonSerializable(typeof(IReadOnlyList<CommandInfo>))]
+[JsonSerializable(typeof(IReadOnlyList<BindingInfo>))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(IReadOnlyList<string>))]
 public sealed partial class IpcJsonContext : JsonSerializerContext;
@@ -201,6 +280,18 @@ public static class IpcProtocol
     public const string ShutdownTopic = "wm.shutdown";
 
     /// <summary>
+    /// A named gesture the user asked for, which the window manager does not
+    /// interpret.
+    /// </summary>
+    /// <remarks>
+    /// Raised by the <c>signal</c> command. The window manager carries the name and
+    /// nothing else; whichever client is subscribed decides what it means. That is
+    /// what lets user interface live outside the daemon without the daemon growing a
+    /// command per program that might be listening.
+    /// </remarks>
+    public const string SignalTopic = "signal";
+
+    /// <summary>
     /// Every topic the window manager publishes.
     /// </summary>
     /// <remarks>
@@ -230,6 +321,8 @@ public static class IpcProtocol
         "binding_mode.changed",
         "command.rejected",
         "config.reloaded",
+        "wm.paused",
+        SignalTopic,
         ShutdownTopic,
         ResyncTopic,
     };
