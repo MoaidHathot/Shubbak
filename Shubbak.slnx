@@ -4,6 +4,7 @@
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/Dalil.Core/Dalil.Core.csproj" />
+    <Project Path="src/Dalil/Dalil.csproj" />
     <Project Path="src/Shubbak.Cli/Shubbak.Cli.csproj" />
     <Project Path="src/Shubbak.Config/Shubbak.Config.csproj" />
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
