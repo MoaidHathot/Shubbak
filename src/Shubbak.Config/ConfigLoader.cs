@@ -161,7 +161,7 @@ public sealed class ConfigLoader
     private static readonly string[] KnownSections =
     [
         "general", "gaps", "window-effects", "animation", "logging",
-        "workspaces", "keybindings", "binding-modes", "rules", "app", "bar",
+        "workspaces", "keybindings", "binding-modes", "rules", "app", "bar", "dalil",
     ];
 
     private static readonly string[] KnownGeneralKeys =

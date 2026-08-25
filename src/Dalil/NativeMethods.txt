@@ -1,0 +1,73 @@
+// CsWin32 manifest for the Dalil palette.
+//
+// Unlike the bar, this window takes the keyboard. That is the whole difference
+// between the two manifests: WM_CHAR and WM_KEYDOWN to read it, SetForegroundWindow
+// and SetFocus to get it, and WM_ACTIVATE to notice it has gone.
+//
+// The drawing imports are not here. They live in Shubbak.Ui.Gdi with the renderer.
+
+// --- window ---------------------------------------------------------------------
+RegisterClassEx
+WNDCLASSEXW
+CreateWindowEx
+DestroyWindow
+DefWindowProc
+ShowWindow
+SHOW_WINDOW_CMD
+SetWindowPos
+SET_WINDOW_POS_FLAGS
+WINDOW_STYLE
+WINDOW_EX_STYLE
+GetClientRect
+InvalidateRect
+UpdateWindow
+PostQuitMessage
+LoadCursor
+IDC_ARROW
+
+// --- taking and losing the keyboard ------------------------------------------------
+SetForegroundWindow
+SetFocus
+GetForegroundWindow
+WM_ACTIVATE
+WM_KILLFOCUS
+WM_CHAR
+WM_KEYDOWN
+WM_SYSKEYDOWN
+GetKeyState
+VIRTUAL_KEY
+
+// --- message loop --------------------------------------------------------------------
+PeekMessage
+PEEK_MESSAGE_REMOVE_TYPE
+TranslateMessage
+DispatchMessage
+PostMessage
+PostThreadMessage
+MsgWaitForMultipleObjectsEx
+QUEUE_STATUS_FLAGS
+MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS
+GetCurrentThreadId
+WM_QUIT
+WM_PAINT
+WM_DESTROY
+WM_CLOSE
+WM_APP
+
+// --- painting brackets ----------------------------------------------------------------
+BeginPaint
+EndPaint
+PAINTSTRUCT
+
+// --- placement and appearance ------------------------------------------------------------
+MonitorFromPoint
+MonitorFromWindow
+MONITOR_FROM_FLAGS
+GetMonitorInfo
+MONITORINFO
+GetCursorPos
+SetProcessDpiAwarenessContext
+DPI_AWARENESS_CONTEXT
+GetDpiForWindow
+DwmSetWindowAttribute
+DWMWINDOWATTRIBUTE

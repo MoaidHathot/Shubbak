@@ -529,3 +529,55 @@ bar {
     rule use="presentation" workspace="\\"
     rule use="presentation" workspace=";"
 }
+
+// ---------------------------------------------------------------------------
+// Dalil - the palette
+// ---------------------------------------------------------------------------
+// A searchable index of every window on the desktop, managed or not, plus the
+// commands, workspaces and layouts. Its own process: run dalil alongside the
+// bar, from startup-commands or however you start things.
+//
+// Shubbak does not know Dalil exists. The keybinding raises a named signal and
+// whichever client is listening decides what it means - which is why the palette
+// survives you preferring a different bar, and why anyone can write their own.
+//
+//     bind "alt+space"       { signal "palette" }
+//     bind "alt+shift+space" { signal "palette" "commands" }
+//
+// Inside the palette: type to filter, up/down or ctrl+n/ctrl+p to move, Tab to
+// change mode, Enter to act, Escape to dismiss. The prefixes >, # and ~ jump
+// straight to commands, workspaces and layouts.
+// ---------------------------------------------------------------------------
+
+dalil {
+    // The signal that opens it. Must match what your keybinding raises.
+    open-on-signal "palette"
+
+    width         720
+    row-height    34
+
+    // A cap on drawing, not on searching. Everything is still matched and
+    // ranked; only this many rows are measured and painted, because measuring
+    // text is a round trip into GDI per row.
+    visible-rows  12
+
+    close-on-blur  #true
+
+    // Windows Shubbak does not manage are listed by default, with the reason it
+    // passed over each one. Those are the ones most likely to be lost: nothing
+    // is arranging them, so nothing put them anywhere findable.
+    show-unmanaged #true
+
+    // focused-monitor | cursor-monitor | primary
+    placement "focused-monitor"
+
+    background           "#1C1C20"
+    foreground           "#E4E4E8"
+    match                "#78BEFF"
+    secondary            "#8C8C96"
+    selection-background "#305280"
+    border               "#464650"
+
+    font      "Segoe UI"
+    font-size 15
+}
