@@ -1142,6 +1142,33 @@ public sealed class WindowManager
             if (window.ScratchpadName is { } name) yield return (name, window);
     }
 
+    /// <summary>Whether a window is stashed under this slot name.</summary>
+    /// <remarks>
+    /// <para>
+    /// Asked before a command runs, to tell a summon from a stash. The two halves of
+    /// <see cref="ToggleScratchpad"/> have opposite requirements: stashing needs a
+    /// focused window to send away, and summoning needs only somewhere to put one.
+    /// </para>
+    /// <para>
+    /// Without this the daemon refused the summon. Every command that declares
+    /// <c>TargetsFocusedWindow</c> is checked against the foreground window first, and
+    /// stashing the last window on a workspace leaves nothing focused - so the key
+    /// that put a window away was refused when pressed again to fetch it back, and the
+    /// scratchpad became one-way. Reported as "it vanishes, and pressing it again does
+    /// nothing".
+    /// </para>
+    /// </remarks>
+    /// <param name="name">The slot name.</param>
+    public bool IsScratchpadOccupied(string name)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        // Case-insensitive, to agree with the lookup in ToggleScratchpad. Disagreeing
+        // would refuse exactly the summons that would have succeeded.
+        return ScratchpadContents()
+            .Any(entry => string.Equals(entry.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
     // ---- dragging ----------------------------------------------------------
 
     /// <summary>

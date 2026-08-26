@@ -265,6 +265,88 @@ public sealed class TagAndScratchpadTests
         Assert.Equal(WindowState.Floating, notes.State);
     }
 
+    /// <summary>
+    /// The scratchpad has to work when the window it stashed was the only one.
+    /// </summary>
+    /// <remarks>
+    /// This is the shape of the bug that made it one-way in practice. Stashing the
+    /// last window on a workspace leaves nothing focused; if summoning needed a
+    /// focused window, the key that put a window away could never fetch it back - and
+    /// the single-window case is the common one, because a scratchpad is what you
+    /// reach for when you want the screen to yourself.
+    /// </remarks>
+    [Fact]
+    public void SummoningWorksWhenStashingLeftNothingFocused()
+    {
+        WindowManager wm = WmFixture.Create(workspaceNames: "1");
+        WindowNode notes = wm.Open("notes");
+
+        wm.FocusWindow(notes);
+        wm.ToggleScratchpad("notes");
+
+        // Nothing left to focus, but the monitor still has an active workspace.
+        Assert.Null(wm.FocusedWindow);
+        Assert.NotNull(wm.FocusedWorkspace);
+
+        WmResult summoned = wm.ToggleScratchpad("notes");
+
+        Assert.True(summoned.Succeeded);
+        Assert.Equal("1", notes.Workspace!.Name);
+        Assert.Same(notes, wm.FocusedWindow);
+    }
+
+    /// <summary>
+    /// An occupied slot is what tells a summon from a stash before the command runs.
+    /// </summary>
+    /// <remarks>
+    /// The daemon checks every command that targets the focused window against the
+    /// foreground window, and refuses when that window is not one it manages.
+    /// Summoning targets no window at all, so it asks this first. A wrong answer here
+    /// puts the one-way bug straight back.
+    /// </remarks>
+    [Fact]
+    public void AnOccupiedSlotIsReported()
+    {
+        WindowManager wm = WmFixture.Create(workspaceNames: "1");
+        WindowNode notes = wm.Open("notes");
+
+        Assert.False(wm.IsScratchpadOccupied("notes"));
+
+        wm.FocusWindow(notes);
+        wm.ToggleScratchpad("notes");
+
+        Assert.True(wm.IsScratchpadOccupied("notes"));
+        Assert.False(wm.IsScratchpadOccupied("something-else"));
+
+        wm.ToggleScratchpad("notes");
+
+        Assert.False(wm.IsScratchpadOccupied("notes"));
+    }
+
+    /// <summary>
+    /// Slot names match without regard to case, in both directions.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="WindowManager.ToggleScratchpad"/> looks slots up case-insensitively.
+    /// If the occupancy check disagreed, the daemon would refuse exactly the summons
+    /// that were about to succeed - so the two are pinned together here.
+    /// </remarks>
+    [Fact]
+    public void SlotNamesAreCaseInsensitive()
+    {
+        WindowManager wm = WmFixture.Create(workspaceNames: "1");
+        WindowNode notes = wm.Open("notes");
+
+        wm.FocusWindow(notes);
+        wm.ToggleScratchpad("Notes");
+
+        Assert.True(wm.IsScratchpadOccupied("notes"));
+        Assert.True(wm.IsScratchpadOccupied("NOTES"));
+
+        Assert.True(wm.ToggleScratchpad("nOtEs").Succeeded);
+        Assert.Equal("1", notes.Workspace!.Name);
+    }
+
     [Fact]
     public void ScratchpadSlotsAreIndependent()
     {
