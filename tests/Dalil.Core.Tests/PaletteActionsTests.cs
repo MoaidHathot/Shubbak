@@ -352,6 +352,83 @@ public sealed class PaletteActionsTests
 
         Assert.Contains(entry.Actions!, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
     }
+
+    /// <summary>
+    /// Nothing offered for a stashed window may reach it by focusing it.
+    /// </summary>
+    /// <remarks>
+    /// A stashed window is cloaked. Focusing a cloaked window reveals it without
+    /// taking it out of the scratchpad, so it conceals itself again at the next layout
+    /// pass - which looks like the palette having done nothing. Summoning by slot is
+    /// the only way in, and it focuses the window itself, so it replaces the focus
+    /// prefix rather than preceding it.
+    ///
+    /// Every action is built on that prefix, so this was never only about "Go to it":
+    /// closing, tagging and un-managing a stashed window were all aimed at a window
+    /// about to vanish.
+    /// </remarks>
+    [Fact]
+    public void NoActionOnAStashedWindowFocusesIt()
+    {
+        WindowCandidate stashed = new(0x901, "a window", "TestClass", "test", 42, false, true,
+            null, "tiling", "cloaked", "__scratchpad", false, "\\\\.\\DISPLAY1", false, false, 0, "notes", null);
+
+        IReadOnlyList<PaletteAction> actions = PaletteActions.For(stashed, "1", Spaces);
+
+        Assert.NotEmpty(actions);
+
+        foreach (PaletteAction action in Flatten(actions))
+        {
+            Assert.DoesNotContain("focus-window", action.Command, StringComparison.Ordinal);
+
+            if (action.Command.Length > 0)
+                Assert.StartsWith("scratchpad notes", action.Command, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>An ordinary window is still reached by focusing it.</summary>
+    [Fact]
+    public void AnOrdinaryWindowIsStillFocused()
+    {
+        WindowCandidate ordinary = new(0x902, "a window", "TestClass", "test", 42, false, true,
+            null, "tiling", "none", "3", true, "\\\\.\\DISPLAY1", false, false, 0, null, null);
+
+        IReadOnlyList<PaletteAction> actions = PaletteActions.For(ordinary, "1", Spaces);
+
+        Assert.Contains(actions, a => a.Name == "Go to it");
+        Assert.DoesNotContain(actions, a => a.Name == "Summon it");
+        Assert.Contains(Flatten(actions), a => a.Command.Contains("focus-window", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Summoning already lands the window where you are, so "Bring it here" would be
+    /// the same action twice - the second time as a move that cannot move anything.
+    /// </summary>
+    [Fact]
+    public void AStashedWindowIsNotAlsoOfferedBringItHere()
+    {
+        WindowCandidate stashed = new(0x901, "a window", "TestClass", "test", 42, false, true,
+            null, "tiling", "cloaked", "__scratchpad", false, "\\\\.\\DISPLAY1", false, false, 0, "notes", null);
+
+        IReadOnlyList<PaletteAction> actions = PaletteActions.For(stashed, "1", Spaces);
+
+        Assert.Contains(actions, a => a.Name == "Summon it");
+        Assert.DoesNotContain(actions, a => a.Name == "Bring it here");
+    }
+
+    /// <summary>Actions and their children, as one sequence.</summary>
+    private static IEnumerable<PaletteAction> Flatten(IEnumerable<PaletteAction> actions)
+    {
+        foreach (PaletteAction action in actions)
+        {
+            yield return action;
+
+            if (action.Children is { Count: > 0 } children)
+                foreach (PaletteAction child in Flatten(children))
+                    yield return child;
+        }
+    }
+
     [Fact]
     public void EveryWindowCanBeExplained()
     {

@@ -2110,6 +2110,19 @@ public sealed class WmDaemon : IDisposable
         // entire purpose of it, and it reads the foreground window itself.
         if (command is ToggleManagedCommand) return true;
 
+        // A scratchpad command whose slot is already occupied is a summon, not a
+        // stash, and a summon needs somewhere to put a window rather than a window to
+        // send away.
+        //
+        // Without this the scratchpad was one-way. Stashing the last window on a
+        // workspace leaves nothing focused, so the foreground becomes the desktop or
+        // some shell window Shubbak does not manage - and the very next press of the
+        // same key was refused here, before ToggleScratchpad could run. The window was
+        // not lost, and nothing said anything: it read as "it vanishes, and pressing
+        // it again does nothing".
+        if (command is ScratchpadCommand scratchpad && _wm.IsScratchpadOccupied(scratchpad.Slot))
+            return true;
+
         // Evaluated once. It is about ten Win32 calls including an OpenProcess, and it
         // was being run twice on the same handle for every refused command - once to
         // decide, and again to explain.

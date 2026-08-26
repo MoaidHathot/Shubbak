@@ -67,15 +67,47 @@ public static class PaletteActions
     {
         ArgumentNullException.ThrowIfNull(window);
 
-        string focus = $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}";
+        // A stashed window is cloaked, and focusing a cloaked window reveals it
+        // without unstashing it - so it vanishes again at the next layout pass, which
+        // reads as the palette having failed. Summoning by slot is the only way to
+        // reach one, and it focuses the window itself, so it substitutes for the focus
+        // prefix rather than being an extra step.
+        //
+        // Every action below is built on this prefix, so getting it wrong here was not
+        // limited to "Go to it": closing, tagging and un-managing a stashed window
+        // were all aimed at a window that was about to conceal itself again.
+        bool stashed = window.Scratchpad is { Length: > 0 };
+
+        string focus = stashed
+            ? $"scratchpad {window.Scratchpad}"
+            : $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}";
+
         List<PaletteAction> actions = [];
 
-        actions.Add(new PaletteAction(
-            "Go to it",
-            "Switch to its workspace and raise it",
-            focus));
+        // "Go to it" is what focusing means for an ordinary window. For a stashed one
+        // the same words would describe summoning, which is what the row already does
+        // when chosen - so offering it here would be a second copy of the row's own
+        // action, worded as though it were something else.
+        if (!stashed)
+        {
+            actions.Add(new PaletteAction(
+                "Go to it",
+                "Switch to its workspace and raise it",
+                focus));
+        }
+        else
+        {
+            actions.Add(new PaletteAction(
+                "Summon it",
+                $"Bring it back from the {window.Scratchpad} slot",
+                focus));
+        }
 
-        if (focusedWorkspace is { Length: > 0 } here &&
+        // Not offered for a stashed window: summoning already lands it on whichever
+        // workspace is focused, which is what "here" means. Offering it would be the
+        // same action twice, the second time as a move that cannot move anything.
+        if (!stashed &&
+            focusedWorkspace is { Length: > 0 } here &&
             !string.Equals(window.Workspace, here, StringComparison.Ordinal))
         {
             actions.Add(new PaletteAction(

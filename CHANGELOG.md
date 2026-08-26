@@ -15,6 +15,40 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Fixed
+
+- **The scratchpad was one-way.** Stashing worked; pressing the same key again did
+  nothing at all, silently.
+
+  Every command that declares `TargetsFocusedWindow` is checked against the foreground
+  window before it runs, and refused if that window is not one Shubbak manages.
+  Stashing the last window on a workspace leaves nothing focused, so the foreground
+  became the desktop — and the next press was refused before `ToggleScratchpad` could
+  run. Summoning needs somewhere to *put* a window, not a window to act on, so an
+  occupied slot is now exempt from that check.
+
+  The single-window case is the common one, because a scratchpad is what you reach for
+  when you want the screen to yourself — which is exactly the case that could never be
+  undone.
+
+- **`scratchpad` could not fail to parse.** Its case in the parser ended in an
+  unconditional `return true`: an unrecognised option was skipped, no positional
+  remained, and the slot silently became `default`. So `scratchpad --hide notes`
+  stashed into `default` and summoned from `default`, appearing to work until somebody
+  used two slots and found one had swallowed the other.
+
+  `--show`, `--hide`, `--toggle` and friends are now `SHB0312`, and the message says
+  the command is already a toggle rather than only listing what is allowed. A trailing
+  `--name` with nothing after it is `SHB0313` instead of quietly meaning `default`.
+
+- **Dalil aimed every action on a stashed window at a window about to vanish.** All of
+  them were built on a `focus-window` prefix, and focusing a cloaked window reveals it
+  without unstashing it, so it concealed itself again at the next layout pass — which
+  reads as the palette having done nothing. `PaletteEntries` documented why the row
+  itself must summon by slot; `PaletteActions` did not follow suit. It now does, so
+  closing, tagging and un-managing a stashed window reach it. "Go to it" becomes
+  "Summon it", and "Bring it here" is dropped as a duplicate of it.
+
 ## [0.9.0] - 2026-08-26
 
 The first public release. Everything below already worked; what changed is that it

@@ -121,6 +121,35 @@ public static class CommandParser
 
             case "scratchpad":
             {
+                // --name is the only flag there is. Anything else was a guess at one
+                // that does not exist - most likely --show, --hide or --toggle, none
+                // of which are real, because the command is already a toggle.
+                //
+                // These used to be accepted in silence: the unknown flag was skipped,
+                // no positional remained, and the slot quietly became "default". So a
+                // key bound to `scratchpad --hide notes` stashed into the wrong slot
+                // and summoned from it, and nothing anywhere said why the named slot
+                // appeared to be empty.
+                if (UnknownFlag(rest, "--name") is { } unknown)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0312", $"'{text}' has an option scratchpad does not take: {unknown}.", span,
+                        "The only option is --name. scratchpad is already a toggle, so it needs " +
+                        "no --show, --hide or --toggle: write scratchpad --name notes.");
+                    return false;
+                }
+
+                // A --name with nothing after it. Value() needs a following token and
+                // returns null without one, which fell through to "default" - so a
+                // typo silently used a slot the user never named.
+                if (Flag(rest, "--name") && Value(rest, "--name") is null)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0313", $"'{text}' does not say which slot to use.", span,
+                        "Write scratchpad --name notes, or scratchpad on its own for the default slot.");
+                    return false;
+                }
+
                 // Named slots default to "default" so the common single-scratchpad
                 // case needs no argument.
                 string slot = Value(rest, "--name") ?? Positional(rest) ?? "default";
@@ -466,6 +495,50 @@ public static class CommandParser
         for (int i = 0; i < tokens.Length - 1; i++)
             if (string.Equals(tokens[i], flag, StringComparison.OrdinalIgnoreCase))
                 return tokens[i + 1];
+
+        return null;
+    }
+
+    /// <summary>
+    /// The first token that looks like an option but is not one this command takes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A token counts as an option if it opens with two dashes. A single dash is left
+    /// alone deliberately: <c>-</c> is a perfectly good workspace name, and one of the
+    /// shipped examples uses it.
+    /// </para>
+    /// <para>
+    /// The value of a recognised flag is skipped, so <c>--name --hide</c> reports
+    /// nothing - the user asked for a slot literally called <c>--hide</c>, which is
+    /// odd but is what they wrote, and inventing an error for it would be guessing.
+    /// </para>
+    /// </remarks>
+    /// <param name="tokens">The tokens after the verb.</param>
+    /// <param name="known">The options this command accepts, each taking one value.</param>
+    private static string? UnknownFlag(ReadOnlySpan<string> tokens, params string[] known)
+    {
+        for (int i = 0; i < tokens.Length; i++)
+        {
+            string token = tokens[i];
+
+            if (!token.StartsWith("--", StringComparison.Ordinal)) continue;
+
+            bool recognised = false;
+
+            foreach (string flag in known)
+            {
+                if (!string.Equals(token, flag, StringComparison.OrdinalIgnoreCase)) continue;
+
+                recognised = true;
+
+                // Its value is an argument, not an option, whatever it looks like.
+                i++;
+                break;
+            }
+
+            if (!recognised) return token;
+        }
 
         return null;
     }
