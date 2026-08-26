@@ -20,10 +20,12 @@ public static class PaletteEntries
     /// Where "bring it here" means, for the row's actions. Null leaves that action out
     /// rather than offering one that cannot work.
     /// </param>
+    /// <param name="workspaces">Every workspace, for the row's tag picker.</param>
     public static IReadOnlyList<PaletteEntry> ForWindows(
         IEnumerable<WindowCandidate> windows,
         bool includeUnmanaged = true,
-        string? focusedWorkspace = null)
+        string? focusedWorkspace = null,
+        IReadOnlyList<string>? workspaces = null)
     {
         ArgumentNullException.ThrowIfNull(windows);
 
@@ -56,7 +58,7 @@ public static class PaletteEntries
                 // them out later would mean parsing a handle back out of a command
                 // string, which is the kind of thing that breaks quietly the day the
                 // command format changes.
-                Actions: PaletteActions.For(window, focusedWorkspace)));
+                Actions: PaletteActions.For(window, focusedWorkspace, workspaces)));
         }
 
         return entries;
@@ -116,7 +118,9 @@ public static class PaletteEntries
     /// </para>
     /// </remarks>
     public static IReadOnlyList<PaletteEntry> ForScratchpad(
-        IEnumerable<WindowCandidate> windows, string? focusedWorkspace = null)
+        IEnumerable<WindowCandidate> windows,
+        string? focusedWorkspace = null,
+        IReadOnlyList<string>? workspaces = null)
     {
         ArgumentNullException.ThrowIfNull(windows);
 
@@ -133,7 +137,7 @@ public static class PaletteEntries
                 $"scratchpad {slot}",
                 window.FocusSequence,
                 SwitchesTo: null,
-                Actions: PaletteActions.For(window, focusedWorkspace)));
+                Actions: PaletteActions.For(window, focusedWorkspace, workspaces)));
         }
 
         return entries;

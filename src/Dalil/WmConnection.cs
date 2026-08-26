@@ -112,16 +112,17 @@ public sealed class WmConnection : IAsyncDisposable
             // The focused workspace is what "bring it here" means, and only the
             // workspace list knows which it is.
             string? here = workspaces.FirstOrDefault(w => w.Focused)?.Name;
+            IReadOnlyList<string> names = [.. workspaces.Select(w => w.Name)];
 
             return new PaletteSources(
-                PaletteEntries.ForWindows(windows, includeUnmanaged, here),
+                PaletteEntries.ForWindows(windows, includeUnmanaged, here, names),
                 PaletteEntries.ForCommands(commands),
                 PaletteEntries.ForWorkspaces(workspaces),
                 PaletteEntries.ForLayouts(layouts),
-                PaletteEntries.ForScratchpad(windows, here),
+                PaletteEntries.ForScratchpad(windows, here, names),
                 PaletteEntries.ForHelp(bindings),
                 new CompletionSources(
-                    [.. workspaces.Select(w => w.Name)],
+                    names,
                     layouts,
                     [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
                     [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]));        }
