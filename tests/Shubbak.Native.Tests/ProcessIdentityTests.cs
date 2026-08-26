@@ -106,13 +106,27 @@ public sealed class ProcessIdentityTests
     {
         Win32Window.ForgetProcessIdentities();
 
-        // Process 4 is System. It is protected, so PROCESS_QUERY_LIMITED_INFORMATION
-        // is refused and there is no handle to pin the id with - which means the
-        // answer must not be cached, because an uncacheable answer is the one case
-        // where a later id reuse could not be ruled out.
-        _ = Win32Window.GetProcessPath(4);
+        // An id that is not a process at all, rather than one that merely refuses to
+        // open. The first version of this used process 4 - System - on the reasoning
+        // that a protected process cannot be opened. That is true of an ordinary
+        // desktop session and false on a build agent, which runs elevated: System
+        // opened, the identity was cached, and the count was one. The test was
+        // asserting something about the machine rather than about the code, and it
+        // failed on the first run in CI.
+        //
+        // OpenProcess on an id this large fails everywhere and for everyone, which is
+        // the only thing this test actually needs.
+        _ = Win32Window.GetProcessPath(uint.MaxValue);
 
+        // No handle means no pin, and an unpinnable answer is the one case where a
+        // later id reuse could not be ruled out - so it must not be remembered.
         Assert.Equal(0, Win32Window.RememberedProcessCount);
+    }
+
+    [Fact]
+    public void AProcessThatCannotBeOpenedHasNoPath()
+    {
+        Assert.Null(Win32Window.GetProcessPath(uint.MaxValue));
     }
 
     [Fact]

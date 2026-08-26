@@ -40,17 +40,27 @@ public sealed class UserActivityTests
     }
 
     [Fact]
-    public void AnOrdinaryDesktopIsReportedAsOrdinary()
+    public void NothingAbsurdIsReported()
     {
-        // The test host is a console process on a normal desktop. If this starts
-        // failing, either the mapping is wrong or the machine really is running a game
-        // - and the assertion message should say which is being claimed.
+        // This asserted Ordinary or Presenting, on the reasoning that the test host is
+        // a console process on a normal desktop. That holds on a desktop and does not
+        // hold on a build agent, which has no interactive session for the shell to
+        // describe - it reports a busy or quiet state instead, and the test failed on
+        // the first run in CI for a reason that had nothing to do with the mapping.
+        //
+        // PrivilegeTests already declines to assert elevation for the same kind of
+        // reason: a legitimate way of running the suite must not fail a test that
+        // insisted the machine look a particular way.
+        //
+        // What is portable is that the mapping produces a state it has actually
+        // established, and that it never claims a game. QUNS_RUNNING_D3D_FULL_SCREEN
+        // is the one value no build agent and no console session can produce, so a
+        // mapping that collapsed everything onto it would still be caught here.
         UserActivity activity = DisplayPreferences.CurrentActivity();
 
-        Assert.True(
-            activity is UserActivity.Ordinary or UserActivity.Presenting,
-            $"the shell reports {activity} on what should be an ordinary desktop; " +
-            "either the QUNS mapping is wrong or something full-screen is running");
+        Assert.NotEqual(UserActivity.Unknown, activity);
+
+        Assert.NotEqual(UserActivity.FullScreenGame, activity);
     }
 
     [Fact]
