@@ -79,6 +79,42 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Asks the window manager to describe a window.
+    /// </summary>
+    /// <remarks>
+    /// The one request the palette makes whose answer it shows rather than acts on.
+    /// The window manager already assembles this report - styles, cloak state, tags,
+    /// and which rules matched - and until now only the command line could ask for it,
+    /// which is the wrong place: by the time you are asking why a window is behaving
+    /// oddly, you are looking at it, not at a shell.
+    /// </remarks>
+    /// <returns>The report split into lines, or an explanation of why there is none.</returns>
+    public async Task<IReadOnlyList<string>> InspectAsync(long handle)
+    {
+        try
+        {
+            await using IpcClient client = new();
+            await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
+
+            IpcResponse response = await client
+                .SendAsync("inspect", handle.ToString(System.Globalization.CultureInfo.InvariantCulture), _stopping.Token)
+                .ConfigureAwait(false);
+
+            if (!response.Ok)
+                return [response.Error ?? "The window manager would not describe it."];
+
+            return [.. (response.Data ?? string.Empty)
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))];
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(LogCategory.Ipc, $"could not inspect {handle:X}: {ex.Message}");
+            return [$"Could not ask: {ex.Message}"];
+        }
+    }
+
     /// <summary>Reads everything the palette can offer.</summary>
     /// <remarks>
     /// Four queries rather than one. They are asked together and only when the palette
@@ -109,23 +145,36 @@ public sealed class WmConnection : IAsyncDisposable
             IReadOnlyList<BindingInfo> bindings = await QueryAsync(
                 client, "bindings", IpcJsonContext.Default.IReadOnlyListBindingInfo) ?? [];
 
+            IReadOnlyList<MonitorInfoDto> monitors = await QueryAsync(
+                client, "monitors", IpcJsonContext.Default.IReadOnlyListMonitorInfoDto) ?? [];
+
+            // Not for a list of its own: this is how the palette learns that tiling is
+            // paused or a binding mode is swallowing keys. Both make the window manager
+            // look broken, and both were invisible here.
+            StateSnapshot? state = await QueryAsync(
+                client, "state", IpcJsonContext.Default.StateSnapshot);
+
             // The focused workspace is what "bring it here" means, and only the
             // workspace list knows which it is.
-            string? here = workspaces.FirstOrDefault(w => w.Focused)?.Name;
+            WorkspaceInfo? focused = workspaces.FirstOrDefault(w => w.Focused);
+            string? here = focused?.Name;
             IReadOnlyList<string> names = [.. workspaces.Select(w => w.Name)];
+            bool several = monitors.Count > 1;
 
             return new PaletteSources(
-                PaletteEntries.ForWindows(windows, includeUnmanaged, here, names),
+                PaletteEntries.ForWindows(windows, includeUnmanaged, here, names, several),
                 PaletteEntries.ForCommands(commands),
-                PaletteEntries.ForWorkspaces(workspaces),
-                PaletteEntries.ForLayouts(layouts),
+                PaletteEntries.ForWorkspaces(workspaces, several),
+                PaletteEntries.ForLayouts(layouts, focused?.Layout),
+                PaletteEntries.ForMonitors(monitors),
                 PaletteEntries.ForScratchpad(windows, here, names),
                 PaletteEntries.ForHelp(bindings),
                 new CompletionSources(
                     names,
                     layouts,
                     [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
-                    [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]));        }
+                    [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]),
+                new WmStatus(state?.Paused ?? false, state?.BindingMode));        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not read the window list: {ex.Message}");
@@ -316,9 +365,11 @@ public sealed record PaletteSources(
     IReadOnlyList<PaletteEntry> Commands,
     IReadOnlyList<PaletteEntry> Workspaces,
     IReadOnlyList<PaletteEntry> Layouts,
+    IReadOnlyList<PaletteEntry> Monitors,
     IReadOnlyList<PaletteEntry> Scratchpad,
     IReadOnlyList<PaletteEntry> Help,
-    CompletionSources Completions)
+    CompletionSources Completions,
+    WmStatus Status)
 {
     /// <summary>
     /// Before anything has been read.
@@ -329,7 +380,7 @@ public sealed record PaletteSources(
     /// manager is not running at all - which is exactly when somebody wants an
     /// explanation.
     /// </remarks>
-    public static PaletteSources Empty { get; } = new([], [], [], [], [], PaletteEntries.ForHelp(), CompletionSources.None);
+    public static PaletteSources Empty { get; } = new([], [], [], [], [], [], PaletteEntries.ForHelp(), CompletionSources.None, WmStatus.Unknown);
 
     /// <summary>The rows for one mode.</summary>
     public IReadOnlyList<PaletteEntry> For(PaletteMode mode) => mode switch
@@ -337,6 +388,7 @@ public sealed record PaletteSources(
         PaletteMode.Commands => Commands,
         PaletteMode.Workspaces => Workspaces,
         PaletteMode.Layouts => Layouts,
+        PaletteMode.Monitors => Monitors,
         PaletteMode.Scratchpad => Scratchpad,
         PaletteMode.Help => Help,
         _ => Windows,

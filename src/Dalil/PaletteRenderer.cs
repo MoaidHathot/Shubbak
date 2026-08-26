@@ -142,6 +142,10 @@ internal static class PaletteRenderer
 
         x += promptSize.Width + layout[10];
 
+        // The right end of the field, taken before the typed text is placed so the
+        // text stops short of it rather than running underneath.
+        int typedRight = DrawStatus(renderer, model, theme, layout, small, box);
+
         string typed = model.Term;
 
         renderer.DrawText(
@@ -149,7 +153,7 @@ internal static class PaletteRenderer
             // focus rule, for a field that is never not focused - and a timer is the
             // one thing that would stop a closed palette costing nothing.
             typed.Length == 0 ? "\u258F" : typed + "\u258F",
-            new Rect(x, TextTop(box, config), box.Right - x - layout[4], config.FontSize + layout[8]),
+            new Rect(x, TextTop(box, config), typedRight - x - layout[4], config.FontSize + layout[8]),
             typed.Length == 0 ? theme.Prompt : config.Foreground,
             font);
 
@@ -157,6 +161,56 @@ internal static class PaletteRenderer
             new Rect(canvas.X + layout.Padding, box.Bottom + layout[3], canvas.Width - (layout.Padding * 2), 1),
             theme.Rule);
 
+    }
+
+    /// <summary>
+    /// Says so when the window manager is not behaving normally.
+    /// </summary>
+    /// <remarks>
+    /// Paused tiling and a swallowing binding mode both look exactly like a crash:
+    /// windows stop being arranged, or the keyboard stops responding. The palette is
+    /// where somebody goes to find out what is wrong, which makes it the last place
+    /// that should stay silent about the two causes it already knows.
+    /// <para>
+    /// In the search box rather than the hint bar, because the hint bar is a list of
+    /// things that are always true and this is a thing that is usually not - and
+    /// because the eye is already at the box, reading what it typed.
+    /// </para>
+    /// </remarks>
+    /// <returns>The x the typed text must stop at.</returns>
+    private static int DrawStatus(
+        IRenderer renderer, PaletteModel model, PaletteTheme theme,
+        PaletteLayout layout, FontStyle small, Rect box)
+    {
+        string? label = model.Status.Paused
+            ? "paused"
+            : model.Status.BindingMode is { Length: > 0 } mode ? mode : null;
+
+        if (label is null) return box.Right;
+
+        Size size = Measure(renderer, label, small);
+
+        int height = size.Height + layout[8];
+        int width = size.Width + (layout.ChipPadding * 2);
+        int x = box.Right - width - layout[6];
+
+        // Never at the cost of the field. A search box you cannot see what you typed
+        // into is worse than an unexplained pause.
+        if (x < box.X + layout[160]) return box.Right;
+
+        var pill = new Rect(x, box.Y + ((box.Height - height) / 2), width, height);
+
+        // The accent, not the pill grey the badges use. This is the one thing on the
+        // window that is meant to be noticed without being looked for.
+        renderer.FillRectangle(pill, theme.Accent, cornerRadius: height / 2);
+
+        renderer.DrawText(
+            label,
+            new Rect(pill.X + layout.ChipPadding, pill.Y + layout[4], size.Width + 2, size.Height + 2),
+            theme.ChipText,
+            small);
+
+        return x - layout[6];
     }
 
     private static void DrawRow(
@@ -380,19 +434,49 @@ internal static class PaletteRenderer
         int textY = y + layout[13];
         int x = canvas.X + layout.TextInset;
 
+        // The position is measured and placed first, so the hints know where they have
+        // to stop. Drawn last and the two collided: enough modes to fill the bar and
+        // "actions" was printed straight through "1-12 of 17", which is the sort of
+        // thing that looks like a font problem and is really an arithmetic one.
+        int limit = canvas.Right - layout.TextInset;
+
+        if (model.Rows.Count > count)
+        {
+            // A count rather than a scrollbar. The palette is driven by the keyboard,
+            // so a bar that cannot be dragged would be decoration; whether the thing
+            // being looked for might be further down is the fact actually wanted.
+            string position = $"{first + 1}\u2013{first + count} of {model.Rows.Count}";
+            Size size = renderer.Measure(position, small);
+
+            renderer.DrawText(
+                position,
+                new Rect(canvas.Right - size.Width - layout.TextInset, textY, size.Width + 2, size.Height + 4),
+                config.Secondary,
+                small);
+
+            limit = canvas.Right - size.Width - layout.TextInset - layout[10];
+        }
+
         // In the action list the modes are not what matters and Escape is, because a
         // list of verbs with no visible way back is the one place somebody will press
         // it hoping to undo and expect the whole palette to vanish.
         if (actionsFor is { Length: > 0 })
         {
-            x = DrawHint(renderer, config, theme, layout, small, "\u21B5", "do it", x, textY, active: true);
-            _ = DrawHint(renderer, config, theme, layout, small, "Esc", "back", x, textY, active: false);
+            x = DrawHint(renderer, config, theme, layout, small, "\u21B5", "do it", x, textY, limit, active: true);
+            _ = DrawHint(renderer, config, theme, layout, small, "Esc", "back", x, textY, limit, active: false);
             return;
         }
 
         // Tab first, because it is the one that needs no memory at all: a user who
         // reads nothing else can still reach every mode by pressing it.
-        x = DrawHint(renderer, config, theme, layout, small, "Tab", "modes", x, textY, active: false);
+        x = DrawHint(renderer, config, theme, layout, small, "Tab", "modes", x, textY, limit, active: false);
+
+        // Before the modes, not after. Space runs out on a narrow window or a long
+        // scroll position, and whatever comes last is what goes - so the thing that
+        // goes should be a mode, which Tab still reaches, rather than the only
+        // advertisement this key has anywhere.
+        if (model.Selected?.Entry.Actions is { Count: > 0 })
+            x = DrawHint(renderer, config, theme, layout, small, "\u2303\u21B5", "actions", x, textY, limit, active: false);
 
         foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
         {
@@ -402,37 +486,37 @@ internal static class PaletteRenderer
             x = DrawHint(
                 renderer, config, theme, layout, small,
                 prefix.ToString(), PaletteModel.NameOf(mode),
-                x, textY, active: model.Mode == mode);
+                x, textY, limit, active: model.Mode == mode);
         }
-
-        // Only when the selected row has any. Advertising an action key on a list of
-        // layouts would be a promise the palette does not keep.
-        if (model.Selected?.Entry.Actions is { Count: > 0 })
-            x = DrawHint(renderer, config, theme, layout, small, "\u2303\u21B5", "actions", x, textY, active: false);
-
-        if (model.Rows.Count <= count) return;
-
-        // A count rather than a scrollbar. The palette is driven by the keyboard, so a
-        // bar that cannot be dragged would be decoration; whether the thing being
-        // looked for might be further down is the fact actually wanted.
-        string position = $"{first + 1}\u2013{first + count} of {model.Rows.Count}";
-        Size size = renderer.Measure(position, small);
-
-        renderer.DrawText(
-            position,
-            new Rect(canvas.Right - size.Width - layout.TextInset, textY, size.Width + 2, size.Height + 4),
-            config.Secondary,
-            small);
     }
 
+    /// <summary>
+    /// Draws one key cap and its label, if it fits, and says where the next would go.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is drawn past <c>limit</c>. A hint printed beyond it would land on top
+    /// of whatever is already there, which is worse than a hint that is simply
+    /// absent - overlapping text is unreadable for both of them at once, and the modes
+    /// are reachable with Tab regardless.
+    /// <para>
+    /// Measured whole before anything is drawn, so a hint is never half-printed with
+    /// its label clipped away. A lone key cap explains nothing.
+    /// </para>
+    /// </remarks>
     private static int DrawHint(
         IRenderer renderer, DalilConfig config, PaletteTheme theme, PaletteLayout layout, FontStyle small,
-        string key, string label, int x, int y, bool active)
+        string key, string label, int x, int y, int limit, bool active)
     {
         Size keySize = Measure(renderer, key, small);
+        Size labelSize = Measure(renderer, label, small);
 
         int width = keySize.Width + (layout[6] * 2);
         int height = keySize.Height + layout[4];
+
+        // Measured whole before anything is drawn, so a hint is never half-printed
+        // with its label clipped off - a lone key cap explains nothing.
+        int end = x + width + layout[5] + labelSize.Width;
+        if (end > limit) return x;
 
         var cap = new Rect(x, y - layout[1], width, height);
 
@@ -448,8 +532,6 @@ internal static class PaletteRenderer
             small);
 
         x = cap.Right + layout[5];
-
-        Size labelSize = Measure(renderer, label, small);
 
         renderer.DrawText(
             label, new Rect(x, y, labelSize.Width + 2, labelSize.Height + 4),

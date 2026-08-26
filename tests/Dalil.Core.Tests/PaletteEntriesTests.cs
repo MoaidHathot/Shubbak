@@ -266,4 +266,185 @@ public sealed class PaletteEntriesTests
             PaletteActions.For(Window(), "1"),
             a => a.Name.StartsWith("Stop it", StringComparison.Ordinal));
     }
+    private static WorkspaceInfo Workspace(
+        string name = "1",
+        string layout = "splith",
+        string monitor = "\\\\.\\DISPLAY1",
+        int windows = 2,
+        bool focused = true) =>
+        new(1, name, name, true, windows > 0, monitor, layout, windows, 0, 0, focused);
+
+    private static MonitorInfoDto Monitor(
+        string deviceId = "\\\\.\\DISPLAY1",
+        bool primary = true,
+        uint dpi = 96,
+        int width = 2560,
+        int height = 1440,
+        string? showing = "3") =>
+        new(1, deviceId, primary, dpi, 0, 0, width, height, showing);
+
+    [Fact]
+    public void AWorkspaceSaysWhichLayoutItIsUsing()
+    {
+        // Already fetched and, until now, thrown away. "Which workspace is the one on
+        // fibonacci" was a question the list could answer and did not.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWorkspaces([Workspace(layout: "fibonacci")]));
+
+        Assert.Contains("fibonacci", entry.Secondary, StringComparison.Ordinal);
+        Assert.Contains("2 windows", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWorkspaceNamesItsScreenOnlyWhenThereIsMoreThanOne()
+    {
+        // On a single display the answer is the same on every row, which is noise
+        // dressed as information.
+        Assert.DoesNotContain(
+            "DISPLAY1",
+            Assert.Single(PaletteEntries.ForWorkspaces([Workspace()])).Secondary,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "DISPLAY1",
+            Assert.Single(PaletteEntries.ForWorkspaces([Workspace()], severalMonitors: true)).Secondary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWindowNamesItsScreenOnlyWhenThereIsMoreThanOne()
+    {
+        Assert.DoesNotContain(
+            "DISPLAY1",
+            Assert.Single(PaletteEntries.ForWindows([Window()])).Secondary,
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            "DISPLAY1",
+            Assert.Single(PaletteEntries.ForWindows([Window()], severalMonitors: true)).Secondary,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ADeviceIdIsShortenedToThePartAPersonReads()
+    {
+        // The rest is punctuation Windows insists on.
+        Assert.Equal("DISPLAY2", PaletteEntries.ShortMonitor(@"\\.\DISPLAY2"));
+        Assert.Equal(string.Empty, PaletteEntries.ShortMonitor(null));
+    }
+
+    [Fact]
+    public void TheLayoutInUseIsMarked()
+    {
+        // So the list says where you are as well as where you could go.
+        IReadOnlyList<PaletteEntry> entries =
+            PaletteEntries.ForLayouts(["splith", "fibonacci"], current: "fibonacci");
+
+        Assert.Empty(entries[0].Badges);
+        Assert.Contains("in use", entries[1].Badges);
+    }
+
+    [Fact]
+    public void ChoosingAMonitorGoesToTheWorkspaceItIsShowing()
+    {
+        // The window manager has no command that names a display, and activating what
+        // is on it amounts to the same thing.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForMonitors([Monitor(showing: "7")]));
+
+        Assert.Equal("DISPLAY1", entry.Primary);
+        Assert.Equal("focus --workspace 7", entry.Command);
+        Assert.Contains("primary", entry.Badges);
+    }
+
+    [Fact]
+    public void AMonitorAtAnUnusualScaleSaysSo()
+    {
+        // 96 is the ordinary case and earns no badge; anything else is worth knowing,
+        // because scaling is behind most "why is it the wrong size" questions.
+        Assert.DoesNotContain("96 dpi", Assert.Single(PaletteEntries.ForMonitors([Monitor()])).Badges);
+
+        Assert.Contains(
+            "144 dpi",
+            Assert.Single(PaletteEntries.ForMonitors([Monitor(dpi: 144)])).Badges);
+    }
+
+    [Fact]
+    public void AReportBecomesRowsOfLabelAndValue()
+    {
+        // The real shape the window manager emits: columns padded with spaces, not
+        // colons. Written against the wrong shape this produced one very wide row per
+        // line with the padding left in, which is the report as text rather than as
+        // something you can search.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(
+        [
+            "handle       0x3047A",
+            "class        Chrome_WidgetWin_1",
+            string.Empty,
+            "manageable   yes - manageable",
+            "  tags       1, 3",
+        ]);
+
+        Assert.Equal(4, entries.Count);
+
+        Assert.Equal("0x3047A", entries[0].Primary);
+        Assert.Equal("handle", entries[0].Secondary);
+
+        // The value keeps its own spacing and punctuation - only the padding goes.
+        Assert.Equal("yes - manageable", entries[2].Primary);
+        Assert.Equal("manageable", entries[2].Secondary);
+
+        // Indented sub-keys read as ordinary labels once the indent is trimmed.
+        Assert.Equal("1, 3", entries[3].Primary);
+        Assert.Equal("tags", entries[3].Secondary);
+    }
+
+    [Fact]
+    public void AReportLineWithNoColumnsStaysWhole()
+    {
+        // A sentence is not a label, and splitting one at its first double space would
+        // turn it into a row titled with half of itself.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForReport(["no such window"]));
+
+        Assert.Equal("no such window", entry.Primary);
+        Assert.Equal(string.Empty, entry.Secondary);
+    }
+
+    [Fact]
+    public void AReportValueKeepsAColonThatIsPartOfIt()
+    {
+        // A path is not a label and a colon inside one separates nothing.
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForReport([@"path         C:\Program Files\msedge.exe"]));
+
+        Assert.Equal(@"C:\Program Files\msedge.exe", entry.Primary);
+        Assert.Equal("path", entry.Secondary);
+    }
+
+    [Fact]
+    public void ReportRowsKeepTheirOrder()
+    {
+        // A report is an argument read top to bottom. Sorting it by rank the way the
+        // other lists are sorted would shuffle the reasoning.
+        IReadOnlyList<PaletteEntry> entries =
+            PaletteEntries.ForReport(["first: a", "second: b", "third: c"]);
+
+        Assert.True(entries[0].Rank > entries[1].Rank);
+        Assert.True(entries[1].Rank > entries[2].Rank);
+    }
+
+    [Fact]
+    public void AReportRowDoesNothingWhenChosen()
+    {
+        // It is something to read, not something to run.
+        Assert.All(
+            PaletteEntries.ForReport(["Cloaked: yes"]),
+            e => Assert.Equal(string.Empty, e.Command));
+    }
+
+    [Fact]
+    public void AnEmptyReportStillSaysSomething()
+    {
+        // An empty list would read as "the palette is broken" rather than "there was
+        // nothing to say".
+        Assert.Equal("Nothing to report", Assert.Single(PaletteEntries.ForReport([])).Primary);
+    }
 }

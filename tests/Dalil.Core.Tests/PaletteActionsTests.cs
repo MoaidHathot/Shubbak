@@ -28,15 +28,29 @@ public sealed class PaletteActionsTests
         actions.First(a => a.Name.StartsWith(startsWith, StringComparison.OrdinalIgnoreCase));
 
     [Fact]
-    public void EveryActionFocusesTheWindowFirst()
+    public void EveryActionThatActsFocusesTheWindowFirst()
     {
         IReadOnlyList<PaletteAction> actions = PaletteActions.For(Window(handle: 0x1D0076), "2");
 
         // Sent as one newline-separated message so nothing can move focus between the
         // two halves. "Focus it, then close it" as two round trips is a race that
         // closes whatever happened to be focused instead.
-        foreach (PaletteAction action in actions)
+        //
+        // Actions that act, which is not all of them: explaining a window asks about
+        // it and touches nothing, and focusing it first would be a side effect nobody
+        // asked for - moving you to another workspace merely to read a report.
+        foreach (PaletteAction action in actions.Where(a => a.Command.Length > 0))
             Assert.StartsWith("focus-window 1900662", action.Command, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OnlyExplainingLeavesTheWindowAlone()
+    {
+        // Guards the exemption above: if some future action quietly arrived with no
+        // command, the loop would stop checking it and nobody would notice.
+        Assert.All(
+            PaletteActions.For(Window(), "2").Where(a => a.Command.Length == 0),
+            a => Assert.NotNull(a.Explains));
     }
 
     [Fact]
@@ -337,5 +351,42 @@ public sealed class PaletteActionsTests
             PaletteEntries.ForScratchpad([stashed], "1", Spaces));
 
         Assert.Contains(entry.Actions!, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+    }
+    [Fact]
+    public void EveryWindowCanBeExplained()
+    {
+        // The one action that does nothing to the window. Until now this report was
+        // reachable only from a shell, which is the wrong place: by the time you are
+        // asking why a window behaves oddly, you are looking at it.
+        PaletteAction explain = Assert.Single(
+            PaletteActions.For(Window(handle: 0x1D0076), "1"),
+            a => a.Explains is not null);
+
+        Assert.Equal(0x1D0076, explain.Explains);
+        Assert.Equal(string.Empty, explain.Command);
+    }
+
+    [Fact]
+    public void ExplainingIsOfferedLastAndIsNotDestructive()
+    {
+        // Last because it is the one thing in the list that changes nothing, and not
+        // destructive because there is nothing to warn about.
+        IReadOnlyList<PaletteAction> actions = PaletteActions.For(Window(), "1");
+
+        Assert.Equal(actions.Count - 1, actions.ToList().FindIndex(a => a.Explains is not null));
+        Assert.False(actions[^1].Destructive);
+    }
+
+    [Fact]
+    public void AnExplainActionSurvivesBecomingARow()
+    {
+        // The handle has to reach the window, which is what actually sends the
+        // request. Dropping it in the conversion would leave a row that looks right
+        // and explains nothing.
+        PaletteEntry row = Assert.Single(
+            PaletteActions.AsEntries(PaletteActions.For(Window(handle: 0x2A), "1")),
+            e => e.Explains is not null);
+
+        Assert.Equal(0x2A, row.Explains);
     }
 }

@@ -78,10 +78,17 @@ public sealed class PaletteWindow : IDisposable
     private bool _closing;
 
     /// <summary>One level of list opened from a row.</summary>
-    /// <param name="Subject">The row it was opened from.</param>
     /// <param name="Title">What the search box calls it.</param>
     /// <param name="SavedQuery">What was typed before it took over the box.</param>
-    private readonly record struct Overlay(PaletteEntry Subject, string Title, string SavedQuery);
+    /// <param name="Entries">The rows it shows.</param>
+    /// <remarks>
+    /// The rows are held here rather than reached back through the row the frame was
+    /// opened from. Most frames are a row's own children, but not all: an explanation
+    /// is fetched from the window manager and belongs to no row, and going back to it
+    /// has to work the same way as going back to anything else.
+    /// </remarks>
+    private readonly record struct Overlay(
+        string Title, string SavedQuery, IReadOnlyList<PaletteEntry> Entries);
 
     /// <summary>Lists opened from a row, innermost last.</summary>
     private readonly Stack<Overlay> _overlays = new();
@@ -104,6 +111,17 @@ public sealed class PaletteWindow : IDisposable
     /// while the box said "commands".
     /// </remarks>
     public event Action<PaletteMode>? ModeChanged;
+
+    /// <summary>
+    /// Raised with a window handle and a title when a row asks for an explanation.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="CommandRequested"/> because the answer comes back.
+    /// Everything else the palette does is told to the window manager and forgotten;
+    /// this has to be asked, waited for, and shown, so the palette stays open and the
+    /// host calls <see cref="ShowReport"/> when the report arrives.
+    /// </remarks>
+    public event Action<long, string>? ExplainRequested;
 
     /// <summary>Raised when the process should stop.</summary>
     public static event Action? RequestShutdown;
@@ -164,6 +182,13 @@ public sealed class PaletteWindow : IDisposable
     /// "close it / float it / bring it here" with the window list underneath the
     /// user's finger - and Enter would then act on whatever had taken that row.
     /// </remarks>
+    /// <summary>Records what the window manager last said about itself.</summary>
+    public void SetStatus(WmStatus status)
+    {
+        _model.SetStatus(status);
+        if (_open) Repaint();
+    }
+
     public void SetEntries(IEnumerable<PaletteEntry> entries)
     {
         if (_overlays.Count > 0) return;
@@ -437,7 +462,7 @@ public sealed class PaletteWindow : IDisposable
     }
 
     /// <summary>
-    /// Opens a list belonging to the selected row.
+    /// Opens a list on top of whatever is showing.
     /// </summary>
     /// <remarks>
     /// Pushed rather than assigned, because a row inside a list can have a list of its
@@ -445,17 +470,32 @@ public sealed class PaletteWindow : IDisposable
     /// from within the actions. A single slot could only ever hold one of the two, and
     /// Escape from the deeper one would have thrown the whole palette away.
     /// </remarks>
-    private void Push(PaletteEntry subject, string title)
+    public void Push(string title, IReadOnlyList<PaletteEntry> entries)
     {
-        if (subject.Actions is not { Count: > 0 } children) return;
+        if (entries.Count == 0) return;
 
-        _overlays.Push(new Overlay(subject, title, _query));
+        _overlays.Push(new Overlay(title, _query, entries));
 
         _query = string.Empty;
         _model.SetQuery(_query);
-        _model.SetEntries(PaletteActions.AsEntries(children));
+        _model.SetEntries(entries);
 
         Repaint();
+    }
+
+    /// <summary>
+    /// Shows a fetched report as a level of its own.
+    /// </summary>
+    /// <remarks>
+    /// Called from the host once the window manager has answered. It arrives after the
+    /// row that asked for it was chosen, which is why the palette does not close on
+    /// that choice - there would be nothing left to show it in.
+    /// </remarks>
+    public void ShowReport(string title, IReadOnlyList<string> lines)
+    {
+        if (!_open) return;
+
+        Push(title, PaletteEntries.ForReport(lines));
     }
 
     /// <summary>Shows what can be done to the selected row.</summary>
@@ -463,8 +503,12 @@ public sealed class PaletteWindow : IDisposable
     {
         if (_model.Selected?.Entry is not { Actions.Count: > 0 } entry) return;
 
-        Push(entry, entry.Primary);
+        Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.Actions));
     }
+
+    /// <summary>The title for a list opened from a row, in context.</summary>
+    private string Breadcrumb(string leaf) =>
+        _overlays.Count == 0 ? leaf : $"{_overlays.Peek().Title} \u203A {leaf}";
 
     /// <summary>
     /// Goes back one level, or closes when there is nowhere left to go.
@@ -484,9 +528,7 @@ public sealed class PaletteWindow : IDisposable
 
         if (_overlays.Count > 0)
         {
-            // Back to the list above, which the window still has - its rows are the
-            // children of the frame beneath.
-            _model.SetEntries(PaletteActions.AsEntries(_overlays.Peek().Subject.Actions!));
+            _model.SetEntries(_overlays.Peek().Entries);
         }
         else
         {
@@ -630,12 +672,20 @@ public sealed class PaletteWindow : IDisposable
 
         string command = row.Entry.Command;
 
+        // Some rows explain rather than do. The report has to be fetched, so the
+        // palette stays open and the host pushes it when it arrives.
+        if (row.Entry.Explains is { } handle)
+        {
+            ExplainRequested?.Invoke(handle, Breadcrumb(row.Entry.Primary));
+            return;
+        }
+
         // A row carrying its own list opens it instead of running. Only inside an
         // overlay: at the top level a row's list is what Ctrl+Enter is for, and Enter
         // has to keep meaning "go to this window".
         if (command.Length == 0 && _overlays.Count > 0 && row.Entry.Actions is { Count: > 0 })
         {
-            Push(row.Entry, $"{_overlays.Peek().Title} \u203A {row.Entry.Primary}");
+            Push(Breadcrumb(row.Entry.Primary), PaletteActions.AsEntries(row.Entry.Actions));
             return;
         }
 
