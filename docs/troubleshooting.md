@@ -190,8 +190,13 @@ shubbak diagnose -o report.md
 For a problem that occurs during startup, tracing has to be on from the start:
 
 ```
-shubbak-wm --log-level trace --log-file
+shubbak-wm --foreground --log-level trace --log-file
 ```
+
+`--foreground` is what attaches it to your terminal. Without it the daemon has no
+console at all — it is a GUI-subsystem binary so that starting it at logon does not
+leave a window on the desktop — and the trace would go only to the file. That is
+often what you want; add `--foreground` when you want to watch it happen.
 
 ## Reading a trace
 

@@ -1,0 +1,78 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: MoaidHathot.Shubbak
+PackageVersion: 0.9.0
+PackageLocale: en-US
+
+Publisher: Moaid Hathot
+PublisherUrl: https://github.com/MoaidHathot
+PublisherSupportUrl: https://github.com/MoaidHathot/Shubbak/issues
+
+PackageName: Shubbak
+PackageUrl: https://github.com/MoaidHathot/Shubbak
+
+License: MIT
+LicenseUrl: https://github.com/MoaidHathot/Shubbak/blob/main/LICENSE
+Copyright: Copyright (c) 2026 Moaid Hathot
+
+ShortDescription: A tiling window manager for Windows, with an animation engine, a status bar and a configuration language that tells you when you have made a mistake.
+
+Description: |-
+  Shubbak tiles windows on Windows. It is named for شبّاك, "window"; the status bar
+  is Taj (تاج, crown) and the command palette is Dalil (دليل, guide).
+
+  Layouts are a property of a container rather than of a workspace, so a fibonacci
+  region can sit inside a columns region with no special case. Available layouts are
+  splith, splitv, fibonacci, fibonacci-v, fibonacci-mirrored, master-left,
+  master-right, master-top, master-bottom, grid and monocle.
+
+  Configuration is one KDL file, shared by the window manager and the bar, with
+  diagnostics that point at the problem with a caret rather than reporting a line
+  number. Mistakes that other window managers accept silently - a regex wrapped in
+  slashes that therefore never matched, a duplicate binding, a rule that would match
+  every window - are reported rather than ignored.
+
+  Windows on inactive workspaces are cloaked rather than hidden, so they still report
+  as visible to Win32. If Shubbak exits, crashes or is killed, the next run adopts
+  them and brings them back; hiding them, which is what this originally did, strands
+  them with their process still running.
+
+  `shubbak inspect` prints every matchable attribute of a window, whether Shubbak
+  will tile it and why not if it will not, and which rules matched.
+
+Tags:
+  - tiling
+  - window-manager
+  - tiling-window-manager
+  - workspaces
+  - productivity
+  - keyboard
+  - dotnet
+  - kdl
+
+ReleaseNotesUrl: https://github.com/MoaidHathot/Shubbak/blob/main/CHANGELOG.md
+Documentations:
+  - DocumentLabel: Troubleshooting
+    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/main/docs/troubleshooting.md
+  - DocumentLabel: Example configuration
+    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/main/docs/shubbak.example.kdl
+
+InstallationNotes: |-
+  Nothing is running yet. To start the window manager at logon:
+
+      shubbak autostart enable
+
+  Or run it now, attached to the current terminal:
+
+      shubbak-wm --foreground
+
+  Configuration is searched for at $SHUBBAK_CONFIG, $XDG_CONFIG_HOME/shubbak/shubbak.kdl,
+  %USERPROFILE%\.config\shubbak\shubbak.kdl and %APPDATA%\shubbak\shubbak.kdl, in that
+  order. Run `shubbak config-path` to see which one is in effect.
+
+  This build is not code signed and is installed under %LOCALAPPDATA%, so it cannot
+  move windows belonging to elevated processes. Run shubbak-wm elevated if you need
+  those tiled.
+
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

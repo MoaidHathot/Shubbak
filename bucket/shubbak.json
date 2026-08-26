@@ -1,0 +1,46 @@
+{
+    "version": "0.9.0",
+    "description": "A tiling window manager for Windows, with an animation engine, a status bar, and a configuration language that tells you when you have made a mistake.",
+    "homepage": "https://github.com/MoaidHathot/Shubbak",
+    "license": "MIT",
+    "notes": [
+        "Shubbak is installed but not running yet.",
+        "",
+        "  shubbak autostart enable    start the window manager at logon",
+        "  shubbak-wm --foreground     run it now, attached to this terminal",
+        "",
+        "Configuration is read from $XDG_CONFIG_HOME/shubbak/shubbak.kdl, or",
+        "%USERPROFILE%\\.config\\shubbak\\shubbak.kdl, or %APPDATA%\\shubbak\\shubbak.kdl.",
+        "Run 'shubbak config-path' to see which one is in effect, and start from the",
+        "shubbak.example.kdl in this package.",
+        "",
+        "This build is not code signed, so it cannot move windows belonging to",
+        "elevated processes unless you run shubbak-wm elevated too."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.9.0/shubbak-0.9.0-win-x64.zip",
+            "hash": "e4e12ec12c634c1cb33c39d1c1e04561de730b88c39b9fa85f377c91630a681c"
+        }
+    },
+    "bin": [
+        "shubbak.exe",
+        "shubbak-wm.exe",
+        "taj.exe",
+        "dalil.exe"
+    ],
+    "persist": [],
+    "checkver": {
+        "github": "https://github.com/MoaidHathot/Shubbak"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v$version/shubbak-$version-win-x64.zip"
+            }
+        },
+        "hash": {
+            "url": "$url.sha256"
+        }
+    }
+}

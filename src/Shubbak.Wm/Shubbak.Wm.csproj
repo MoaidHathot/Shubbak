@@ -1,7 +1,23 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!--
+      A GUI-subsystem binary, despite having no window and writing to a console.
+
+      The subsystem is a field in the PE header, read by the loader before any of our
+      code runs. A console-subsystem process launched by something that has no console
+      of its own - Explorer, a shortcut, Task Scheduler, the Run key - has one
+      allocated for it, and it stays for the life of the process. For a daemon started
+      at logon that is a permanent black window on the desktop, and no runtime flag
+      can suppress it because the decision precedes us.
+
+      The cost is that a console has to be asked for when one is genuinely wanted, so
+      the foreground switch and the startup-failure path both go through ConsoleHost.
+      See the remarks there; the trade is deliberate and the alternative was making
+      autostart launch the daemon through a hidden PowerShell, which is both a visible
+      flash and the exact process tree an antivirus heuristic is built to distrust.
+    -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <AssemblyName>shubbak-wm</AssemblyName>
     <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
@@ -9,6 +25,13 @@
     <RootNamespace>Shubbak.Wm</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+    <!--
+      Regenerate with tools/make-icons.ps1. Without one, Task Manager's Startup tab
+      and any shortcut an installer creates show the generic placeholder, which is
+      the first impression a packaged build makes.
+    -->
+    <ApplicationIcon>..\icons\shubbak-wm.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
@@ -45,6 +68,35 @@
     <ApplicationManifest Condition="'$(ShubbakUiAccess)' != 'true'">app.manifest</ApplicationManifest>
     <ApplicationManifest Condition="'$(ShubbakUiAccess)' == 'true'">app.uiaccess.manifest</ApplicationManifest>
   </PropertyGroup>
+
+  <!--
+    The version in a manifest's assemblyIdentity is written by hand and read by
+    nobody: Windows ignores it for an application that is not side-by-side assembled,
+    so nothing breaks when it is wrong. It sat at the SDK's placeholder 1.0.0.0 while
+    the product was 0.9.0, which is a false statement in a file whose whole purpose is
+    to state things about this binary.
+
+    Checked rather than generated. Generating it means rewriting XML through MSBuild
+    string functions during the build, and the failure mode of getting that wrong is a
+    corrupt manifest, which is a far worse outcome than the stale number it would be
+    fixing. Checked rather than remembered, because remembering is what failed.
+
+    Both files are checked, not just the one selected, or bumping the version would
+    keep passing until the day somebody published a uiAccess build.
+  -->
+  <Target Name="VerifyManifestVersions" BeforeTargets="PrepareForBuild" DependsOnTargets="GetAssemblyVersion">
+    <PropertyGroup>
+      <_ExpectedIdentity>version="$(AssemblyVersion)" name="Shubbak.Wm"</_ExpectedIdentity>
+    </PropertyGroup>
+
+    <Error
+      Condition="!$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\app.manifest').Contains('$(_ExpectedIdentity)'))"
+      Text="app.manifest declares a different assemblyIdentity than the build. Expected: $(_ExpectedIdentity). Update it to match &lt;Version&gt; in Directory.Build.props." />
+
+    <Error
+      Condition="!$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)\app.uiaccess.manifest').Contains('$(_ExpectedIdentity)'))"
+      Text="app.uiaccess.manifest declares a different assemblyIdentity than the build. Expected: $(_ExpectedIdentity). Update it to match &lt;Version&gt; in Directory.Build.props." />
+  </Target>
 
   <ItemGroup>
     <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />

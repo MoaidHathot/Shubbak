@@ -10,13 +10,33 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        // Anything that answers and exits comes first, and each one takes a console
+        // before it writes, because this is a GUI-subsystem binary and stdout goes
+        // nowhere until something asks for one. See ConsoleHost.
         if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
         {
+            ConsoleHost.Ensure();
             PrintUsage();
             return 0;
         }
 
-        ConfigureLogging(args);
+        // Answered before the config is touched, so that a build with a broken config
+        // can still be identified in a bug report.
+        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
+        {
+            ConsoleHost.Ensure();
+            Console.WriteLine(ShubbakVersion.Banner);
+            return 0;
+        }
+
+        // --foreground is what a human uses to watch the daemon work. It is the only
+        // reason this binary opens a console on the ordinary path.
+        bool foreground = args.Contains("--foreground", StringComparer.Ordinal)
+            || args.Contains("--console", StringComparer.Ordinal);
+
+        if (foreground) ConsoleHost.Ensure();
+
+        ConfigureLogging(args, foreground);
 
         // A garbage collection suspends every thread in the process, including the
         // one servicing the low-level keyboard hook - and until that thread answers,
@@ -38,8 +58,15 @@ internal static class Program
 
         string? configPath = ResolveConfigPath(args);
 
+        // A terminal-facing operation by definition: it exists to print diagnostics
+        // with carets under them, so it takes a console whether or not one was asked
+        // for. `shubbak check-config` is the fuller check - it validates the bar
+        // section too - and the usage text points there.
         if (args.Contains("--check-config", StringComparer.Ordinal))
+        {
+            ConsoleHost.Ensure();
             return CheckConfig(configPath);
+        }
 
         using var daemon = new WmDaemon();
 
@@ -57,7 +84,8 @@ internal static class Program
             if (e.ExceptionObject is Exception exception)
                 Log.Error(LogCategory.Wm, "unhandled exception", exception);
 
-            TryWriteCrashReport(configPath);
+            if (TryWriteCrashReport(configPath) is { } report)
+                Note($"shubbak-wm: crash report written to {report}");
         };
 
         try
@@ -68,12 +96,63 @@ internal static class Program
         catch (Exception ex)
         {
             Log.Error(LogCategory.Wm, "fatal", ex);
-            TryWriteCrashReport(configPath);
+
+            // Written before the message, so the message can name it. Fail blocks
+            // when it owns the console, and a report the user is told about only
+            // after they dismiss the window would be told about too late.
+            string? report = TryWriteCrashReport(configPath);
+
+            // The whole risk of a GUI-subsystem daemon is that this is silent. A
+            // window manager that fails to start and says nothing is indistinguishable
+            // from one that was never launched, so this takes a console rather than
+            // assuming it has one.
+            Fail(report is null
+                ? $"shubbak-wm: {ex.Message}"
+                : $"shubbak-wm: {ex.Message}{Environment.NewLine}" +
+                  $"shubbak-wm: crash report written to {report}");
+
             return 1;
         }
         finally
         {
             Log.CloseFile();
+        }
+    }
+
+    /// <summary>
+    /// Reports a fatal problem where the user can actually see it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This binary has no console unless it asks for one, so an error written to
+    /// standard error before that point goes nowhere. Every path that ends the process
+    /// unhappily comes through here instead of writing directly.
+    /// </para>
+    /// <para>
+    /// When the console was created by us rather than inherited from a terminal it
+    /// dies with the process, taking the message with it before it can be read. In
+    /// that case, and only that case, the process waits.
+    /// </para>
+    /// </remarks>
+    private static void Fail(string message)
+    {
+        ConsoleHost.EnsureForError();
+
+        try
+        {
+            Console.Error.WriteLine(message);
+
+            if (ConsoleHost.OwnsConsole)
+            {
+                Console.Error.WriteLine();
+                Console.Error.WriteLine("Press any key to close this window.");
+                Console.ReadKey(intercept: true);
+            }
+        }
+        catch (Exception)
+        {
+            // There is no console and no way to make one. The log file and the crash
+            // report are what is left, and both are written by the caller.
         }
     }
 
@@ -84,8 +163,16 @@ internal static class Program
     /// Deliberately done before anything else, so that a failure during config
     /// loading or monitor enumeration is itself captured.
     /// </remarks>
-    private static void ConfigureLogging(string[] args)
+    /// <param name="args">The command line.</param>
+    /// <param name="foreground">
+    /// Whether a console was opened for a human to read. Console logging follows this
+    /// rather than defaulting on: without a console the writes are discarded, and at
+    /// logon there is nobody to read them anyway.
+    /// </param>
+    private static void ConfigureLogging(string[] args, bool foreground)
     {
+        Log.ToConsole = foreground && !args.Contains("--quiet", StringComparer.Ordinal);
+
         if (Value(args, "--log-level") is { } levelText)
         {
             if (Log.TryParseLevel(levelText, out LogLevel level))
@@ -94,13 +181,12 @@ internal static class Program
             }
             else
             {
-                Console.Error.WriteLine(
-                    $"shubbak-wm: unknown log level '{levelText}'. " +
-                    "Use trace, debug, info, warn, error or none.");
+                Log.Warn(LogCategory.Wm, $"unknown log level '{levelText}', keeping {Log.Level}");
+
+                Note($"shubbak-wm: unknown log level '{levelText}'. " +
+                     "Use trace, debug, info, warn, error or none.");
             }
         }
-
-        if (args.Contains("--quiet", StringComparer.Ordinal)) Log.ToConsole = false;
 
         // --log-file with no value means "the standard location", because that is
         // what people want and remembering the path is friction.
@@ -114,20 +200,44 @@ internal static class Program
             try
             {
                 Log.OpenFile(path);
-                Console.Error.WriteLine($"shubbak-wm: logging to {Log.FilePath}");
+                Note($"shubbak-wm: logging to {Log.FilePath}");
             }
             catch (IOException ex)
             {
-                Console.Error.WriteLine($"shubbak-wm: could not open log file: {ex.Message}");
+                Note($"shubbak-wm: could not open log file: {ex.Message}");
             }
             catch (UnauthorizedAccessException ex)
             {
-                Console.Error.WriteLine($"shubbak-wm: could not open log file: {ex.Message}");
+                Note($"shubbak-wm: could not open log file: {ex.Message}");
             }
         }
     }
 
-    private static void TryWriteCrashReport(string? configPath)
+    /// <summary>
+    /// Writes to standard error if - and only if - somebody is there to read it.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart to <see cref="Fail"/>. These messages are worth reading in a
+    /// terminal and not worth conjuring a window for at logon, so unlike
+    /// <see cref="Fail"/> this never creates a console. Everything said here is also
+    /// on its way to the log, which is what a report will be read from.
+    /// </remarks>
+    private static void Note(string message)
+    {
+        if (!ConsoleHost.HasOutput) return;
+
+        try
+        {
+            Console.Error.WriteLine(message);
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    /// <summary>Writes a crash report, and says where it went.</summary>
+    /// <returns>The report's path, or <see langword="null"/> if none could be written.</returns>
+    private static string? TryWriteCrashReport(string? configPath)
     {
         try
         {
@@ -137,18 +247,17 @@ internal static class Program
             if (configPath is not null && File.Exists(configPath))
                 report.AddCodeSection("Config", File.ReadAllText(configPath), "kdl");
 
-            string path = report
+            return report
                 .AddRecentLog()
                 .AddFooter()
                 .WriteTo(Path.Combine(
                     Path.GetDirectoryName(Log.DefaultLogPath)!,
                     $"crash-{DateTime.Now:yyyyMMdd-HHmmss}.md"));
-
-            Console.Error.WriteLine($"shubbak-wm: crash report written to {path}");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Nothing useful left to do; the process is going down regardless.
+            return null;
         }
     }
 
@@ -194,7 +303,10 @@ internal static class Program
     {
         ConfigLocation location = ConfigPathResolver.ResolveAndLog(Value(args, "--config"));
 
-        if (!location.Found) Console.Error.Write(location.DescribeSearch());
+        // Not fatal - the daemon runs on defaults - so this is a Note rather than a
+        // Fail. ResolveAndLog has already put it in the log either way, which is where
+        // a report will read it from when nobody was watching a terminal.
+        if (!location.Found) Note(location.DescribeSearch());
 
         return location.Path;
     }
@@ -224,6 +336,16 @@ internal static class Program
                                  6. %APPDATA%\shubbak\shubbak.kdl
                                Run `shubbak config-path` to see which one won.
           --check-config       Validate the config and exit without managing windows.
+                               `shubbak check-config` checks more - it validates the
+                               bar's section of the same file as well - and is the
+                               one to prefer.
+
+          --foreground         Run attached to a console, for watching it work.
+                               Without this the daemon has no console at all: it is a
+                               GUI-subsystem binary so that starting it at logon does
+                               not leave a black window on the desktop. Errors that
+                               stop it starting will still open one and say so.
+                               --console is accepted as a synonym.
 
           --log-level <level>  trace | debug | info | warn | error | none
                                Default: info.
@@ -231,19 +353,33 @@ internal static class Program
                                but it is what makes a problem reproducible from a log.
           --log-file [path]    Also write to a file. With no path, uses
                                %LOCALAPPDATA%\Shubbak\shubbak.log
-          --quiet              Do not write to the console.
+          --quiet              Do not write to the console, even with --foreground.
 
+          --version            Print the version and exit.
           --help               Show this message.
 
         DIAGNOSING A PROBLEM
           Reproduce it with tracing on, then bundle everything into one file:
 
-            shubbak-wm --log-level trace --log-file
+            shubbak-wm --foreground --log-level trace --log-file
             shubbak diagnose --output report.md
 
           The report includes the environment, the config, the live window tree and
           the recent log. Recent entries are kept in memory even when file logging is
           off, so a report is still useful after an unexpected problem.
+
+          Because the shell does not wait for a GUI-subsystem process, --foreground
+          returns you to the prompt immediately and then writes underneath it. The
+          output is all there; it just shares the screen with your next command.
+          Redirecting is what to do if that matters:
+
+            shubbak-wm --foreground --log-level trace --log-file only.log
+
+        STARTING IT WITH WINDOWS
+          shubbak autostart enable
+
+          Registers this binary to run at logon, from wherever it currently lives.
+          `shubbak autostart status` says whether it is registered and from where.
 
         NOTES
           Run elevated to manage windows belonging to elevated processes;

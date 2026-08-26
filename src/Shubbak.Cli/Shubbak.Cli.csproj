@@ -9,6 +9,8 @@
     <RootNamespace>Shubbak.Cli</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Regenerate with tools/make-icons.ps1. -->
+    <ApplicationIcon>..\icons\shubbak.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
@@ -26,6 +28,14 @@
       nothing but the parser it already needed.
     -->
     <ProjectReference Include="..\Taj.Core\Taj.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Autostart composes and reads back a Windows command line. The quoting is the
+      part worth holding to account and it is not reachable from outside.
+    -->
+    <InternalsVisibleTo Include="Shubbak.Cli.Tests" />
   </ItemGroup>
 
 </Project>
