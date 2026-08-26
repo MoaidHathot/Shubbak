@@ -14,13 +14,18 @@ namespace Dalil.Core;
 /// Mirrors <see cref="PaletteEntry.SwitchesTo"/>, which already means "this row
 /// changes what you are looking at instead of doing something".
 /// </param>
+/// <param name="Explains">
+/// When set, choosing this asks the window manager to describe that window instead of
+/// doing anything to it.
+/// </param>
 public sealed record PaletteAction(
     string Name,
     string Description,
     string Command,
     bool Destructive = false,
     string? Chord = null,
-    IReadOnlyList<PaletteAction>? Children = null);
+    IReadOnlyList<PaletteAction>? Children = null,
+    long? Explains = null);
 
 /// <summary>
 /// What the palette can do to a window, beyond going to it.
@@ -145,6 +150,16 @@ public static class PaletteActions
             Destructive: true,
             Chord: "Ctrl+Shift+W"));
 
+        // Last, because it is the one that does nothing to the window - and first
+        // among the things worth reaching for when a window is behaving oddly, which
+        // is why it exists at all. The window manager already assembles this report;
+        // until now only the command line could ask for it.
+        actions.Add(new PaletteAction(
+            "Explain this window",
+            "Why it is or is not managed, and which rules matched",
+            string.Empty,
+            Explains: window.Handle));
+
         return actions;
     }
 
@@ -233,7 +248,8 @@ public static class PaletteActions
                 // Carried through so the window can push them as the next frame. The
                 // action list is itself a list of rows, so a row's children ride in
                 // the same place a window row's actions do.
-                Actions: action.Children));
+                Actions: action.Children,
+                Explains: action.Explains));
         }
 
         return entries;

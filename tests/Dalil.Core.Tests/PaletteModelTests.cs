@@ -311,4 +311,92 @@ public sealed class PaletteModelTests
 
         Assert.Equal((0, 0), model.VisibleWindow(0));
     }
+    [Fact]
+    public void PercentLooksAtTheMonitors()
+    {
+        PaletteModel model = new();
+        model.SetQuery("%");
+
+        Assert.Equal(PaletteMode.Monitors, model.Mode);
+        Assert.Equal(string.Empty, model.Term);
+    }
+
+    [Fact]
+    public void EveryModeIsReachableByAPrefixOrIsTheDefault()
+    {
+        // A mode with no way in is a mode nobody can use. Adding one to the enum and
+        // forgetting the prefix is the easy mistake, and this is what catches it.
+        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        {
+            if (mode == PaletteMode.Windows) continue;
+
+            Assert.NotEqual('\0', PaletteModel.PrefixFor(mode));
+        }
+    }
+
+    [Fact]
+    public void NoTwoModesShareAPrefix()
+    {
+        // Two modes on one key would make the second unreachable, and silently.
+        char[] prefixes =
+        [
+            .. Enum.GetValues<PaletteMode>()
+                .Select(PaletteModel.PrefixFor)
+                .Where(p => p != '\0'),
+        ];
+
+        Assert.Equal(prefixes.Length, prefixes.Distinct().Count());
+    }
+
+    [Fact]
+    public void TheModelStartsWithNothingToReportAboutTheWindowManager()
+    {
+        // Before the first query has answered, "not paused" is a guess. It is the
+        // safer one: claiming a pause that is not happening would send somebody
+        // looking for a cause that does not exist.
+        PaletteModel model = new();
+
+        Assert.False(model.Status.Paused);
+        Assert.Null(model.Status.BindingMode);
+    }
+
+    [Fact]
+    public void TheModelRemembersWhatTheWindowManagerSaidAboutItself()
+    {
+        PaletteModel model = new();
+        model.SetStatus(new WmStatus(Paused: true, BindingMode: "resize"));
+
+        Assert.True(model.Status.Paused);
+        Assert.Equal("resize", model.Status.BindingMode);
+    }
+    [Fact]
+    public void EveryModeCanBeNamedBySignal()
+    {
+        // A keybinding names the mode it wants to open. The list this replaced was
+        // written by hand and had fallen behind - scratchpad, help and monitors all
+        // existed and all quietly opened the window list instead.
+        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+            Assert.Equal(mode, PaletteModel.ModeNamed(PaletteModel.NameOf(mode)));
+    }
+
+    [Theory]
+    [InlineData("workspace", PaletteMode.Workspaces)]
+    [InlineData("Command", PaletteMode.Commands)]
+    [InlineData("  monitors  ", PaletteMode.Monitors)]
+    public void ModeNamesAreForgivingAboutCaseSpacingAndPlurals(string given, PaletteMode expected)
+    {
+        // Somebody writing `signal "palette" "workspace"` is not in any doubt about
+        // what they meant, and refusing it would be pedantry with no upside.
+        Assert.Equal(expected, PaletteModel.ModeNamed(given));
+    }
+
+    [Fact]
+    public void AnUnknownModeNameIsRefusedRatherThanGuessed()
+    {
+        // The caller decides what to do about it. Guessing here would hide a typo in
+        // a config file behind a palette that opens on the wrong thing.
+        Assert.Null(PaletteModel.ModeNamed("elephants"));
+        Assert.Null(PaletteModel.ModeNamed(""));
+        Assert.Null(PaletteModel.ModeNamed(null));
+    }
 }

@@ -73,6 +73,16 @@ internal static class Program
         // the box saying "commands" while the rows underneath were still windows.
         s_palette.ModeChanged += mode => s_palette!.SetEntries(s_sources.For(mode));
 
+        // Asked on a background thread and shown on the palette's own, because the
+        // window manager has to assemble the report and the message loop cannot wait
+        // for it without freezing the very window that is meant to display it.
+        s_palette.ExplainRequested += (handle, title) => _ = Task.Run(async () =>
+        {
+            IReadOnlyList<string> report = await s_connection!.InspectAsync(handle).ConfigureAwait(false);
+
+            Post(() => s_palette?.ShowReport(title, report));
+        });
+
         PaletteWindow.RequestShutdown += () => s_running = false;
 
         s_connection = new WmConnection();
@@ -192,16 +202,19 @@ internal static class Program
         Post(() => Open(mode));
     }
 
+    /// <summary>
+    /// The mode a signal asked for, defaulting to the window list.
+    /// </summary>
+    /// <remarks>
+    /// The names come from the modes themselves, so a mode cannot exist without being
+    /// addressable. An unrecognised name still opens the window list rather than
+    /// refusing: the signal has already been raised and the key has already been
+    /// pressed, and showing nothing would read as the palette being broken.
+    /// </remarks>
     private static PaletteMode ModeFrom(IReadOnlyList<string> arguments) =>
         arguments.Count == 0
             ? PaletteMode.Windows
-            : arguments[0].ToLowerInvariant() switch
-            {
-                "commands" or "command" => PaletteMode.Commands,
-                "workspaces" or "workspace" => PaletteMode.Workspaces,
-                "layouts" or "layout" => PaletteMode.Layouts,
-                _ => PaletteMode.Windows,
-            };
+            : PaletteModel.ModeNamed(arguments[0]) ?? PaletteMode.Windows;
 
     /// <summary>
     /// Shows the palette, then fills it in.
@@ -228,6 +241,7 @@ internal static class Program
             {
                 s_sources = read;
                 s_completions = read.Completions;
+                palette.SetStatus(read.Status);
 
                 // Same reasoning as MarkStale: the user may have pressed Tab while
                 // this was in flight.
@@ -291,6 +305,7 @@ internal static class Program
             {
                 s_sources = read;
                 s_completions = read.Completions;
+                palette.SetStatus(read.Status);
 
                 // The mode is read here rather than captured, because the user may
                 // have changed it while the query was in flight. Capturing it would

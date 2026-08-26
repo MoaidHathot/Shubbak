@@ -21,11 +21,16 @@ public static class PaletteEntries
     /// rather than offering one that cannot work.
     /// </param>
     /// <param name="workspaces">Every workspace, for the row's tag picker.</param>
+    /// <param name="severalMonitors">
+    /// Whether to say which screen a window is on. Silent on a single display, where
+    /// the answer is always the same and would be noise on every row.
+    /// </param>
     public static IReadOnlyList<PaletteEntry> ForWindows(
         IEnumerable<WindowCandidate> windows,
         bool includeUnmanaged = true,
         string? focusedWorkspace = null,
-        IReadOnlyList<string>? workspaces = null)
+        IReadOnlyList<string>? workspaces = null,
+        bool severalMonitors = false)
     {
         ArgumentNullException.ThrowIfNull(windows);
 
@@ -37,7 +42,7 @@ public static class PaletteEntries
 
             entries.Add(new PaletteEntry(
                 Title(window),
-                Describe(window),
+                Describe(window, severalMonitors),
                 Badges(window),
 
                 // Focus is the answer to "where did it go" in every case: for a
@@ -84,7 +89,14 @@ public static class PaletteEntries
     }
 
     /// <summary>Describes every workspace as a row.</summary>
-    public static IReadOnlyList<PaletteEntry> ForWorkspaces(IEnumerable<WorkspaceInfo> workspaces)
+    /// <remarks>
+    /// The layout and the monitor are shown as well as the window count. Both were
+    /// already being fetched and thrown away, and both answer a question the list is
+    /// otherwise silent about - which workspace is using fibonacci, and which screen
+    /// it is on.
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForWorkspaces(
+        IEnumerable<WorkspaceInfo> workspaces, bool severalMonitors = false)
     {
         ArgumentNullException.ThrowIfNull(workspaces);
 
@@ -92,13 +104,166 @@ public static class PaletteEntries
         [
             .. workspaces.Select(w => new PaletteEntry(
                 string.IsNullOrEmpty(w.DisplayName) ? w.Name : w.DisplayName,
-                w.WindowCount == 1 ? "1 window" : $"{w.WindowCount} windows",
+                DescribeWorkspace(w, severalMonitors),
                 w.Focused ? ["focused"] : w.Active ? ["displayed"] : [],
                 $"focus --workspace {w.Name}",
 
                 // Occupied workspaces first: an empty one is somewhere to go, not
                 // something to find.
                 w.WindowCount)),
+        ];
+    }
+
+    private static string DescribeWorkspace(WorkspaceInfo workspace, bool severalMonitors)
+    {
+        string count = workspace.WindowCount == 1 ? "1 window" : $"{workspace.WindowCount} windows";
+
+        string described = $"{count}  \u00B7  {workspace.Layout}";
+
+        return severalMonitors && ShortMonitor(workspace.Monitor) is { Length: > 0 } screen
+            ? $"{described}  \u00B7  {screen}"
+            : described;
+    }
+
+    /// <summary>
+    /// A device id shortened to something a person recognises.
+    /// </summary>
+    /// <remarks>
+    /// <c>\\.\DISPLAY1</c> is what Windows calls a monitor and is mostly punctuation.
+    /// Only the tail carries meaning, and only when there is more than one.
+    /// </remarks>
+    public static string ShortMonitor(string? deviceId)
+    {
+        if (string.IsNullOrEmpty(deviceId)) return string.Empty;
+
+        int cut = deviceId.LastIndexOf('\\');
+
+        return cut >= 0 && cut < deviceId.Length - 1 ? deviceId[(cut + 1)..] : deviceId;
+    }
+
+    /// <summary>Describes every monitor as a row.</summary>
+    /// <remarks>
+    /// Choosing one goes to the workspace it is showing, which is the only way to
+    /// "focus a monitor" - the window manager has no command that names a display, and
+    /// activating what is on it amounts to the same thing.
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForMonitors(IEnumerable<MonitorInfoDto> monitors)
+    {
+        ArgumentNullException.ThrowIfNull(monitors);
+
+        List<PaletteEntry> entries = [];
+
+        foreach (MonitorInfoDto monitor in monitors)
+        {
+            List<string> badges = [];
+            if (monitor.Primary) badges.Add("primary");
+            if (monitor.Dpi != 96) badges.Add($"{monitor.Dpi} dpi");
+
+            entries.Add(new PaletteEntry(
+                ShortMonitor(monitor.DeviceId),
+                monitor.ActiveWorkspace is { Length: > 0 } showing
+                    ? $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  showing {showing}"
+                    : $"{monitor.Width}\u00D7{monitor.Height}",
+                badges,
+                monitor.ActiveWorkspace is { Length: > 0 } target
+                    ? $"focus --workspace {target}"
+                    : string.Empty,
+                monitor.Primary ? 1 : 0));
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// Turns a window manager report into rows.
+    /// </summary>
+    /// <remarks>
+    /// The report is plain text meant for a terminal, laid out in columns padded with
+    /// spaces - <c>cloaked      None</c>. Split at that padding it reads as label and
+    /// value, which is what the rows want, and as rows it becomes searchable: "cloak"
+    /// finds the line about cloaking in a report too long to read through.
+    /// <para>
+    /// A colon is accepted as a separator too, for the lines that use one. Neither is
+    /// required: a line with no separator at all stays whole rather than being forced
+    /// into a shape it does not have.
+    /// </para>
+    /// <para>
+    /// Blank lines are dropped. They separate paragraphs on a terminal, and in a list
+    /// they would only be empty rows you can select and land on.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForReport(IEnumerable<string> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        List<PaletteEntry> entries = [];
+
+        foreach (string line in lines)
+        {
+            string trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+
+            (string label, string value) = SplitReportLine(trimmed);
+
+            entries.Add(new PaletteEntry(
+                value.Length > 0 ? value : label,
+                value.Length > 0 ? label : string.Empty,
+                [],
+                string.Empty,
+
+                // Negative and descending, so the report keeps the order it was
+                // written in. It is an argument read top to bottom, and sorting it the
+                // way the other lists are sorted would shuffle the reasoning.
+                -entries.Count));
+        }
+
+        return entries.Count > 0
+            ? entries
+            : [new PaletteEntry("Nothing to report", string.Empty, [], string.Empty)];
+    }
+
+    /// <summary>Splits one report line into its label and its value.</summary>
+    private static (string Label, string Value) SplitReportLine(string line)
+    {
+        for (int i = 0; i < line.Length - 1; i++)
+        {
+            if (line[i] == ' ' && line[i + 1] == ' ')
+            {
+                string value = line[i..].TrimStart();
+
+                // A line that is only a label followed by padding has no value, and
+                // pretending otherwise would produce a row with an empty title.
+                return value.Length > 0 ? (line[..i], value) : (line, string.Empty);
+            }
+
+            // Only a colon with something after it separates anything. A line that
+            // merely contains one - a path, a window title - stays whole.
+            if (line[i] == ':' && i > 0 && line[(i + 1)..].Trim() is { Length: > 0 } after)
+                return (line[..i], after);
+        }
+
+        return (line, string.Empty);
+    }
+
+    /// <summary>Describes every layout as a row.</summary>
+    /// <param name="layouts">Names from the layout registry.</param>
+    /// <param name="current">
+    /// The layout the focused container is using, marked so the list says where you
+    /// are as well as where you could go.
+    /// </param>
+    public static IReadOnlyList<PaletteEntry> ForLayouts(
+        IEnumerable<string> layouts, string? current = null)
+    {
+        ArgumentNullException.ThrowIfNull(layouts);
+
+        return
+        [
+            .. layouts.Select(l => new PaletteEntry(
+                l,
+                "layout",
+                string.Equals(l, current, StringComparison.OrdinalIgnoreCase) ? ["in use"] : [],
+                $"layout --set {l}",
+                string.Equals(l, current, StringComparison.OrdinalIgnoreCase) ? 1 : 0)),
         ];
     }
 
@@ -143,13 +308,6 @@ public static class PaletteEntries
         return entries;
     }
 
-    /// <summary>Describes every layout as a row.</summary>
-    public static IReadOnlyList<PaletteEntry> ForLayouts(IEnumerable<string> layouts)
-    {
-        ArgumentNullException.ThrowIfNull(layouts);
-
-        return [.. layouts.Select(l => new PaletteEntry(l, "layout", [], $"layout --set {l}"))];
-    }
 
     /// <summary>
     /// Describes the palette's own keys and prefixes.
@@ -183,6 +341,7 @@ public static class PaletteEntries
                     PaletteMode.Commands => "every command the window manager accepts",
                     PaletteMode.Workspaces => "go to a workspace",
                     PaletteMode.Layouts => "change the layout of this container",
+                    PaletteMode.Monitors => "your displays, and what each is showing",
                     PaletteMode.Scratchpad => "windows you have put away",
                     _ => "these keys",
                 },
@@ -262,13 +421,19 @@ public static class PaletteEntries
     /// Searched as well as shown. Finding a window by its application when the title
     /// says nothing about it - "Untitled document" - is most of what this is for.
     /// </remarks>
-    private static string Describe(WindowCandidate window)
+    private static string Describe(WindowCandidate window, bool severalMonitors)
     {
         string process = string.IsNullOrEmpty(window.ProcessName) ? window.ClassName : window.ProcessName;
 
-        return window.Workspace is { } workspace
+        string described = window.Workspace is { } workspace
             ? $"{process}  ·  {workspace}"
             : process;
+
+        // Only with more than one display. On a single monitor the answer is the same
+        // on every row, which is noise rather than information.
+        return severalMonitors && ShortMonitor(window.Monitor) is { Length: > 0 } screen
+            ? $"{described}  ·  {screen}"
+            : described;
     }
 
     /// <summary>

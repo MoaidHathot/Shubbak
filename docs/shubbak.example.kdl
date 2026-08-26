@@ -546,15 +546,21 @@ bar {
 //
 // Inside the palette: type to filter, up/down or ctrl+n/ctrl+p to move, Tab to
 // change mode, Enter to act, Escape to dismiss. Ctrl+Enter shows what else can be
-// done to the selected window. The prefixes >, #, ~ and $ jump straight to
-// commands, workspaces, layouts and the scratchpad; "?" lists every key, including
-// the ones you have bound yourself. The mouse works too.
+// done to the selected window. The prefixes >, #, ~, % and $ jump straight to
+// commands, workspaces, layouts, monitors and the scratchpad; "?" lists every key,
+// including the ones you have bound yourself. The mouse works too.
+//
+// The search box says so when tiling is paused or a binding mode is swallowing
+// keys. Both look exactly like a crash from the outside, and the palette is where
+// you would go to find out, so it is the last place that should stay quiet.
 //
 // A window tagged onto another workspace is badged "also on <name>", because a
 // window that relocates itself reads as a fault rather than as something that was
-// asked for. `shubbak inspect <handle>` says the same thing, and the log says it at
-// the moment it happens. Ctrl+Enter then "Tags..." picks which workspaces a window
-// follows you to, and Escape goes back one level rather than dismissing.
+// asked for. Ctrl+Enter then "Explain this window" says the same thing the command
+// line's `shubbak inspect <handle>` does - styles, cloak state, tags, and which
+// rules matched - without leaving the window you are asking about. Ctrl+Enter then
+// "Tags..." picks which workspaces a window follows you to, and Escape goes back one
+// level rather than dismissing.
 // ---------------------------------------------------------------------------
 
 dalil {

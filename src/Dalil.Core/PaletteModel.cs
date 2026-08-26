@@ -25,6 +25,16 @@ public enum PaletteMode
     Layouts,
 
     /// <summary>
+    /// The displays, and which workspace each is showing.
+    /// </summary>
+    /// <remarks>
+    /// The window manager has always known this and nothing has ever shown it. On one
+    /// monitor it is uninteresting; on two it answers "which screen is that on", which
+    /// is half of "where did it go".
+    /// </remarks>
+    Monitors,
+
+    /// <summary>
     /// Windows put away in a scratchpad.
     /// </summary>
     /// <remarks>
@@ -67,6 +77,11 @@ public enum PaletteMode
 /// What else can be done to this row besides choosing it. Empty for rows that are
 /// only ever chosen - a command, a layout, a line of help.
 /// </param>
+/// <param name="Explains">
+/// When set, choosing this row asks the window manager to describe that window rather
+/// than doing anything to it. The answer has to be fetched, so the palette stays open
+/// until it arrives.
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -74,7 +89,24 @@ public sealed record PaletteEntry(
     string Command,
     long Rank = 0,
     PaletteMode? SwitchesTo = null,
-    IReadOnlyList<PaletteAction>? Actions = null);
+    IReadOnlyList<PaletteAction>? Actions = null,
+    long? Explains = null);
+
+/// <summary>
+/// What the window manager is currently doing, beyond the lists themselves.
+/// </summary>
+/// <remarks>
+/// Both of these make the window manager look broken when they are set and nothing
+/// says so. A paused one has stopped arranging windows; a swallowing binding mode has
+/// made the keyboard inert. Either way the palette is where somebody goes to find out
+/// what is wrong, so it is the last place that should stay quiet about it.
+/// </remarks>
+/// <param name="Paused">Whether tiling is suspended.</param>
+/// <param name="BindingMode">The active binding mode, or null for the default.</param>
+public readonly record struct WmStatus(bool Paused, string? BindingMode)
+{
+    public static WmStatus Unknown => default;
+}
 
 /// <summary>An entry that survived filtering, with where it matched.</summary>
 /// <param name="Entry">The underlying entry.</param>
@@ -141,6 +173,7 @@ public sealed class PaletteModel
             ['>'] = PaletteMode.Commands,
             ['#'] = PaletteMode.Workspaces,
             ['~'] = PaletteMode.Layouts,
+            ['%'] = PaletteMode.Monitors,
             ['$'] = PaletteMode.Scratchpad,
             ['?'] = PaletteMode.Help,
         };
@@ -161,6 +194,7 @@ public sealed class PaletteModel
         PaletteMode.Commands => "commands",
         PaletteMode.Workspaces => "workspaces",
         PaletteMode.Layouts => "layouts",
+        PaletteMode.Monitors => "monitors",
         PaletteMode.Scratchpad => "scratchpad",
         PaletteMode.Help => "help",
         _ => "windows",
@@ -168,6 +202,42 @@ public sealed class PaletteModel
 
     /// <summary>What the user typed, prefix included.</summary>
     public string Query => _query;
+
+    /// <summary>
+    /// The mode a name refers to, or null when it names none.
+    /// </summary>
+    /// <remarks>
+    /// Derived from <see cref="NameOf"/> rather than written out again, so a mode
+    /// added to the enum is addressable by name the moment it is named. The list this
+    /// replaced was maintained by hand and had already fallen behind: it knew about
+    /// commands, workspaces and layouts, and silently opened the window list for
+    /// anything else - including modes that existed and were simply missing from it.
+    /// <para>
+    /// The singular is accepted alongside the plural because a keybinding that says
+    /// <c>signal "palette" "workspace"</c> is expressing an intention that is not in
+    /// any doubt, and refusing it would be pedantry with no upside.
+    /// </para>
+    /// </remarks>
+    public static PaletteMode? ModeNamed(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        string wanted = name.Trim();
+
+        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        {
+            string proper = NameOf(mode);
+
+            if (string.Equals(proper, wanted, StringComparison.OrdinalIgnoreCase) ||
+                (proper.EndsWith('s') &&
+                 string.Equals(proper[..^1], wanted, StringComparison.OrdinalIgnoreCase)))
+            {
+                return mode;
+            }
+        }
+
+        return null;
+    }
 
     /// <summary>The mode the current query selects.</summary>
     public PaletteMode Mode => ModeOf(_query);
@@ -177,6 +247,19 @@ public sealed class PaletteModel
 
     /// <summary>Matching entries, best first.</summary>
     public IReadOnlyList<PaletteRow> Rows => _rows;
+
+    /// <summary>
+    /// What the window manager is currently doing, for the renderer to report.
+    /// </summary>
+    /// <remarks>
+    /// Held on the model rather than passed to the renderer, because it changes with
+    /// the lists and on the same refresh - a status read at one moment and rows read
+    /// at another would eventually disagree in a way nobody could reproduce.
+    /// </remarks>
+    public WmStatus Status { get; private set; } = WmStatus.Unknown;
+
+    /// <summary>Records what the window manager last said about itself.</summary>
+    public void SetStatus(WmStatus status) => Status = status;
 
     /// <summary>Which row is selected, or -1 when there are none.</summary>
     public int SelectedIndex { get; private set; } = -1;
