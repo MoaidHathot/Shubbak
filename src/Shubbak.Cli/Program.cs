@@ -1,4 +1,5 @@
 using Shubbak.Config;
+using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Wm;
 using Shubbak.Ipc;
 using Shubbak.Native;
@@ -21,6 +22,19 @@ internal static class Program
         {
             PrintUsage();
             return args.Length == 0 ? 1 : 0;
+        }
+
+        // Answered here, before anything can reach the daemon.
+        //
+        // It used to fall through to the switch below, be treated as a window manager
+        // command and sent down the pipe - so asking a stopped Shubbak its version
+        // was answered with "no window manager is running", which is both untrue and
+        // unrelated. A version query is about this binary and must work whether or
+        // not anything else does.
+        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
+        {
+            Console.WriteLine(ShubbakVersion.Banner);
+            return 0;
         }
 
         // Asking for help must never do anything else.
@@ -46,6 +60,8 @@ internal static class Program
                 "sub" or "subscribe" => await SubscribeAsync(args).ConfigureAwait(false),
                 "check-config" => CheckConfig(args),
                 "config-path" => ShowConfigPath(args),
+                "config" => ConfigCommand.Run(args),
+                "autostart" => Autostart.Run(args),
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
@@ -672,6 +688,19 @@ internal static class Program
                                back. Works when no window manager is running,
                                which is the case that most needs it.
 
+          autostart <action>   Whether the window manager starts when you log in.
+                               enable | disable | status
+
+                               enable records the full path of the shubbak-wm.exe
+                               sitting beside this binary, so moving the install
+                               means enabling it again - which status will tell
+                               you, along with whether the registered copy still
+                               exists at all.
+
+                               Arguments after 'enable' are passed to the daemon:
+
+                                 shubbak autostart enable --config D:\dots\shubbak.kdl
+
         DIAGNOSTICS
           diagnose [reason]    Write a self-contained report: environment, config,
                                the live window tree, and the recent log. This is the
@@ -707,10 +736,18 @@ internal static class Program
           check-config [path]  Validate a config file, with carets under any
                                problems. Exits non-zero only for errors.
 
+          config init          Write a starter config, if there is not one already.
+                    --path <p> Write it somewhere specific.
+                    --force    Overwrite an existing file.
+
           config-path          Print which config file is in effect, or list
                                everywhere that was searched if none was found.
 
           status               Report whether a window manager is running.
+
+          --version            Print the version and exit. Answered by this binary
+                               without contacting the window manager, so it works
+                               when nothing is running.
 
         QUERIES
           query [what]         Print state as JSON.

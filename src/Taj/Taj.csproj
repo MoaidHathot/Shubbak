@@ -9,6 +9,8 @@
     <RootNamespace>Taj</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Regenerate with tools/make-icons.ps1. -->
+    <ApplicationIcon>..\icons\taj.ico</ApplicationIcon>
     <!--
       Globalization is on: timezone identifiers need it. On Windows 10 and later
       .NET uses the operating system's ICU rather than embedding its own, so the
@@ -32,6 +34,21 @@
     <ProjectReference Include="..\Shubbak.Ui.Gdi\Shubbak.Ui.Gdi.csproj" />
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
+
+    <!--
+      For ConsoleHost, and nothing else.
+
+      Taj is a GUI-subsystem binary, so it has no console and every Console.Write it
+      makes is discarded - which is why asking it for help printed nothing at all
+      until this was added. ConsoleHost is the one copy of the attach-or-allocate
+      logic; the alternative was a second copy here and a third in Dalil.
+
+      This does not weaken the claim that the bar never inspects windows itself: it
+      still learns everything from the window manager's event stream. Shubbak.Cli
+      already references this project for the same kind of reason, and NativeAOT trims
+      away everything not reached.
+    -->
+    <ProjectReference Include="..\Shubbak.Native\Shubbak.Native.csproj" />
   </ItemGroup>
 
 </Project>

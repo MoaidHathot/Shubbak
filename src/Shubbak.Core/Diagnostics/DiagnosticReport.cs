@@ -46,7 +46,7 @@ public sealed class DiagnosticReport
         Line("Processors", Environment.ProcessorCount.ToString(CultureInfo.InvariantCulture));
         Line("Runtime", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription);
         Line("AOT", (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported).ToString());
-        Line("Version", typeof(DiagnosticReport).Assembly.GetName().Version?.ToString() ?? "unknown");
+        Line("Version", ShubbakVersion.Current);
 
         // Which binary is actually running, and when it was built. A stale executable
         // on PATH produces bug reports that contradict the source, and there is no way

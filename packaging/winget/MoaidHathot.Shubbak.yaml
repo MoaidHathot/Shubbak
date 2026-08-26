@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+
+# The version manifest: the smallest of the three, and the one that names the
+# package. Submit all three together with:
+#
+#   wingetcreate submit packaging/winget
+#
+# or copy them into microsoft/winget-pkgs under
+# manifests/m/MoaidHathot/Shubbak/<version>/.
+
+PackageIdentifier: MoaidHathot.Shubbak
+PackageVersion: 0.9.0
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

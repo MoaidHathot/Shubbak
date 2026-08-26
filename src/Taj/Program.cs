@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
+using Shubbak.Native;
 using Taj.Core;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -43,9 +44,20 @@ internal static class Program
 
     private static int Main(string[] args)
     {
+        // Taj is a GUI-subsystem binary, so it starts with no console and every write
+        // to one is discarded. Both of these printed nothing at all before ConsoleHost
+        // was here to ask for one.
         if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
         {
+            ConsoleHost.Ensure();
             PrintUsage();
+            return 0;
+        }
+
+        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
+        {
+            ConsoleHost.Ensure();
+            Console.WriteLine(ShubbakVersion.Banner);
             return 0;
         }
 
@@ -399,6 +411,12 @@ internal static class Program
         if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
             Log.Level = parsed;
 
+        // Off unless output genuinely leads somewhere - a console, or a redirect. Taj
+        // is normally started from the window manager's startup-command, where these
+        // entries were formatted and then discarded on every single one.
+        Log.ToConsole = ConsoleHost.HasOutput
+            && !args.Contains("--quiet", StringComparer.Ordinal);
+
         int index = Array.IndexOf(args, "--log-file");
 
         if (index >= 0)
@@ -457,6 +475,8 @@ internal static class Program
                                which file is in effect.
           --log-level <level>  trace | debug | info | warn | error | none
           --log-file [path]    Also write to a file.
+          --quiet              Do not write to the console.
+          --version            Print the version and exit.
           --help               Show this message.
 
         NOTES

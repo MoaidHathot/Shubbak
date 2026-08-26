@@ -3,11 +3,12 @@
 A tiling window manager for Windows, with an animation engine, a status bar, and a
 configuration language that tells you when you have made a mistake.
 
-Named for شبّاك — "window". The bar is **Taj** (تاج, crown).
+Named for شبّاك — "window". The bar is **Taj** (تاج, crown), and the command palette
+is **Dalil** (دليل, guide).
 
 ## Status
 
-Feature complete and working. Not yet battle-tested — see
+Released as **0.9.0** — feature complete and working, not yet battle-tested. See
 [Troubleshooting](docs/troubleshooting.md) if something misbehaves, and
 `shubbak diagnose` if you want to report it.
 
@@ -20,7 +21,7 @@ Feature complete and working. Not yet battle-tested — see
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1189 test methods**, ~700 ms. Everything except the platform layer and the renderer runs
+**1207 test methods**, ~700 ms. Everything except the platform layer and the renderer runs
 headless.
 
 ## Why .NET
@@ -35,21 +36,67 @@ Not the obvious choice for a window manager, so it was measured rather than assu
   2.5–5.3% of frame time** and Win32 taking the rest. The unbatched control group
   dropped 33–42% of frames with *identical* managed code, so `DeferWindowPos`
   batching — not language choice — is what determines whether motion looks smooth.
-- **Distribution** — single NativeAOT executables, no runtime prerequisite, zero
-  trim/AOT warnings.
+- **Distribution** — four single-file NativeAOT executables totalling ~19 MB, under
+  9 MB zipped, with no runtime prerequisite and zero trim/AOT warnings. The
+  `net10.0-windows` target drags in ~25 MB of CsWinRT projections that nothing uses;
+  AOT removes them entirely. CI publishes all four on every push, runs each one and
+  checks its subsystem, so this is measured rather than asserted.
 
-## Building and running
+## Installing
+
+```
+winget install MoaidHathot.Shubbak
+```
+
+```
+scoop bucket add shubbak https://github.com/MoaidHathot/Shubbak
+scoop install shubbak
+```
+
+Or take the zip from [Releases](https://github.com/MoaidHathot/Shubbak/releases) and
+unpack it anywhere. It is four self-contained executables — `shubbak-wm`, `shubbak`,
+`taj`, `dalil` — with no runtime to install first.
+
+Then:
+
+```
+shubbak autostart enable     # start the window manager at logon
+shubbak-wm --foreground      # or run it now, attached to this terminal
+```
+
+`shubbak autostart status` says whether it is registered, and warns if it points at a
+copy you have since moved or deleted.
+
+**This build is not signed**, which has one consequence worth knowing before you start:
+windows belonging to elevated processes — Task Manager, anything run as administrator —
+are detected and reported but cannot be moved. Run `shubbak-wm` elevated if you need
+them tiled. Doing it without elevation needs `uiAccess`, and Windows grants that only
+to a signed binary installed under `Program Files`; that is the next release.
+
+## Building
 
 ```
 dotnet build
 dotnet test
+```
+
+Publishing is what CI does on every push, so it is worth knowing it works:
+
+```
 dotnet publish src/Shubbak.Wm -c Release -r win-x64 -p:PublishAot=true
 ```
 
-```
-shubbak-wm --config path/to/shubbak.kdl      # the window manager
-taj                                          # the bar (or launch it from startup-command)
-```
+`shubbak-wm` is a GUI-subsystem binary. That is not because it has a window — it has
+none — but because the loader gives a console-subsystem process a console window when
+it is started by anything that has no console of its own, which at logon means a black
+rectangle on the desktop for ever. `--foreground` is how you get one back when you
+want one. Failures that stop it starting open one regardless, because a daemon that
+dies silently is indistinguishable from one that was never launched.
+
+See [RELEASING.md](RELEASING.md) for how a release is cut, and
+[CHANGELOG.md](CHANGELOG.md) for what changed.
+
+## Configuring
 
 Config is searched for in this order, first match wins:
 
@@ -70,9 +117,6 @@ shubbak config-path      # which file is in effect, or everywhere that was searc
 
 The window manager, the CLI and the bar share one resolver, so they cannot disagree
 about which file is loaded.
-
-Run elevated to manage windows belonging to elevated processes. Without it those
-windows are detected and reported, but cannot be moved.
 
 ## Configuration
 
@@ -188,18 +232,21 @@ focus misses two thirds of title updates.
 ```
 src/
   Shubbak.Core/     tree, layouts, animation, state machine, logging  — zero Win32
-  Shubbak.Native/   Win32: hooks, window control, monitors
+  Shubbak.Native/   Win32: hooks, window control, monitors, consoles
   Shubbak.Config/   KDL parser, schema, diagnostics
   Shubbak.Ipc/      protocol, named-pipe server and client
   Shubbak.Ui/       visual tree, flex layout, IRenderer            — no drawing code
   Shubbak.Ui.Gdi/   the GDI renderer
   Shubbak.Wm/       the daemon
-  Shubbak.Cli/      shubbak
+  Shubbak.Cli/      shubbak, and autostart registration
   Taj.Core/         bar model, widgets, sources
   Taj/              bar host
   Dalil.Core/       fuzzy matching, palette model                 - no Win32
   Dalil/            the palette
-tests/              1189 test methods
+  icons/            generated by tools/make-icons.ps1
+tests/              1207 test methods
+bucket/             the Scoop manifest, where Scoop looks for it
+packaging/winget/   the three winget manifests
 ```
 
 `Shubbak.Core` contains no Win32 at all. That is the highest-leverage decision in the

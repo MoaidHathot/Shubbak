@@ -1,0 +1,50 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+
+PackageIdentifier: MoaidHathot.Shubbak
+PackageVersion: 0.9.0
+
+MinimumOSVersion: 10.0.19041.0
+InstallModes:
+  - silent
+  - silentWithProgress
+
+# A zip containing four standalone NativeAOT executables, each exposed as its own
+# command. winget extracts the archive into its Packages directory and puts a symlink
+# for every NestedInstallerFile into its Links directory, which is already on PATH.
+#
+# That PATH entry matters more than it looks: the window manager runs whatever string
+# is in `startup-command` through the shell, so a bare `taj` in somebody's config is
+# resolved by searching PATH. Without the symlinks it would not be found.
+InstallerType: zip
+NestedInstallerType: portable
+
+# Deliberately not set: winget ignores Scope for portable installers and defaults to
+# user, so declaring `machine` here would be a claim the installer cannot honour.
+#
+# The consequence is that this package installs under %LOCALAPPDATA% and therefore
+# cannot be granted uiAccess - that needs an Authenticode signature and a location
+# under %ProgramFiles%. Windows belonging to elevated processes are detected and
+# reported but cannot be moved unless shubbak-wm is itself run elevated. A signed
+# installer with `Scope: machine` is a separate package, not a flag on this one.
+
+NestedInstallerFiles:
+  # The CLI first: it is the one users type, and the one whose name matches the
+  # package.
+  - RelativeFilePath: shubbak.exe
+    PortableCommandAlias: shubbak
+  - RelativeFilePath: shubbak-wm.exe
+    PortableCommandAlias: shubbak-wm
+  - RelativeFilePath: taj.exe
+    PortableCommandAlias: taj
+  - RelativeFilePath: dalil.exe
+    PortableCommandAlias: dalil
+
+ReleaseDate: 2026-08-26
+
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.9.0/shubbak-0.9.0-win-x64.zip
+    InstallerSha256: E4E12EC12C634C1CB33C39D1C1E04561DE730B88C39B9FA85F377C91630A681C
+
+ManifestType: installer
+ManifestVersion: 1.6.0

@@ -43,6 +43,119 @@ jobs:
       - name: Validate the example config
         run: dotnet run --project src/Shubbak.Cli --configuration Release --no-build -- check-config docs/shubbak.example.kdl
 
+      # Shubbak ships as NativeAOT, and until this step existed nothing here ever
+      # published it. The analysers were on and warnings were errors, which is a strong
+      # signal but not the same thing as a successful publish - the README claimed
+      # "single NativeAOT executables" on the strength of a spike, and the four
+      # binaries that actually ship had never been AOT compiled in CI at all.
+      #
+      # It is here rather than only in release.yml because a release must not be the
+      # build that discovers the problem.
+      #
+      # Separate output directories per project, deliberately: Shubbak.Wm bakes its
+      # manifest into the apphost and MSBuild does not treat ShubbakUiAccess as an
+      # input to it, so sharing one directory is how a stale apphost survives a switch.
+      - name: Publish (NativeAOT)
+        shell: pwsh
+        run: |
+          foreach ($project in 'Shubbak.Wm', 'Shubbak.Cli', 'Taj', 'Dalil') {
+            Write-Output "::group::publish $project"
+            dotnet publish "src/$project" `
+              --configuration Release `
+              --runtime win-x64 `
+              -p:PublishAot=true `
+              --output "artifacts/publish/$project"
+            if ($LASTEXITCODE -ne 0) { throw "publish failed for $project" }
+            Write-Output "::endgroup::"
+          }
+
+      # The four binaries have one version between them, from Directory.Build.props.
+      # Asking each of them is also the cheapest end-to-end proof that what AOT
+      # produced starts and runs - a compiled binary that cannot answer a question is
+      # not evidence of much.
+      #
+      # This exists because --version did not. It fell through the CLI's dispatch, was
+      # sent to the daemon as a window manager command, and answered a version query
+      # with "no window manager is running".
+      - name: Check the binaries run and agree on the version
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content Directory.Build.props)
+          $version = $props.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+
+          if (-not $version) { throw "Directory.Build.props has no <Version>." }
+
+          $expected = "Shubbak $version"
+
+          $binaries = @{
+            'shubbak-wm' = 'artifacts/publish/Shubbak.Wm/shubbak-wm.exe'
+            'shubbak'    = 'artifacts/publish/Shubbak.Cli/shubbak.exe'
+            'taj'        = 'artifacts/publish/Taj/taj.exe'
+            'dalil'      = 'artifacts/publish/Dalil/dalil.exe'
+          }
+
+          foreach ($name in $binaries.Keys) {
+            $exe = $binaries[$name]
+            if (-not (Test-Path $exe)) { throw "$name did not publish to $exe" }
+
+            # Redirected rather than run inline: three of the four are GUI-subsystem
+            # binaries, so the shell does not wait for them and their output would
+            # arrive after this step had already finished.
+            $out = New-TemporaryFile
+            $p = Start-Process -FilePath $exe -ArgumentList '--version' `
+                   -RedirectStandardOutput $out -NoNewWindow -Wait -PassThru
+
+            $reported = (Get-Content $out -Raw).Trim()
+            Remove-Item $out -Force
+
+            if ($p.ExitCode -ne 0) { throw "$name --version exited $($p.ExitCode)" }
+            if ($reported -ne $expected) { throw "$name reports '$reported'; expected '$expected'." }
+
+            Write-Output "$name -> $reported"
+          }
+
+      # The daemon is the one binary that must not open a console when the shell
+      # starts it, because it is the one registered to run at logon. That is decided
+      # by a field in the PE header, which is set by OutputType and is invisible in
+      # every other kind of test - so it is read back out of the built file.
+      - name: Check the subsystem of each binary
+        shell: pwsh
+        run: |
+          # 2 = WINDOWS_GUI, 3 = WINDOWS_CUI.
+          $expected = @{
+            'artifacts/publish/Shubbak.Wm/shubbak-wm.exe' = 2
+            'artifacts/publish/Taj/taj.exe'               = 2
+            'artifacts/publish/Dalil/dalil.exe'           = 2
+            'artifacts/publish/Shubbak.Cli/shubbak.exe'   = 3
+          }
+
+          foreach ($exe in $expected.Keys) {
+            $stream = [System.IO.File]::OpenRead((Resolve-Path $exe))
+            $reader = New-Object System.IO.BinaryReader($stream)
+            try {
+              $stream.Position = 0x3C
+              $peHeader = $reader.ReadInt32()
+              # PE signature (4) + COFF header (20) + subsystem's offset in the
+              # optional header (68).
+              $stream.Position = $peHeader + 4 + 20 + 68
+              $subsystem = $reader.ReadUInt16()
+            }
+            finally {
+              $reader.Dispose()
+              $stream.Dispose()
+            }
+
+            $want = $expected[$exe]
+            $name = Split-Path $exe -Leaf
+
+            if ($subsystem -ne $want) {
+              throw "$name has subsystem $subsystem; expected $want. " +
+                    "A console daemon puts a window on the desktop at every logon."
+            }
+
+            Write-Output "$name -> subsystem $subsystem"
+          }
+
       # The README quotes a test count in two places. It has been corrected by hand
       # four times and was wrong on each of the four occasions somebody looked - the
       # last time within the same commit that added this check, because the count was

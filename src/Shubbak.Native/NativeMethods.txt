@@ -173,3 +173,15 @@ SYSTEM_METRICS_INDEX
 EnumDisplaySettings
 DEVMODEW
 ENUM_DISPLAY_SETTINGS_MODE
+
+// --- consoles ------------------------------------------------------------------------
+// The daemon is a GUI-subsystem binary so that starting it at logon does not put a
+// console window on the desktop. These are how it gets one back when a human asks
+// for it with --foreground, and how it reports a startup failure that would
+// otherwise be silent. See ConsoleHost.
+AllocConsole
+AttachConsole
+GetConsoleWindow
+GetStdHandle
+STD_HANDLE
+

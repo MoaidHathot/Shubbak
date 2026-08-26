@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Dalil.Core;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
+using Shubbak.Native;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.HiDpi;
@@ -40,6 +41,23 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Dalil is a GUI-subsystem binary, so it has no console until one is asked
+        // for. It had no --help at all before this; the palette was the only thing it
+        // could be told to do.
+        if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
+        {
+            ConsoleHost.Ensure();
+            PrintUsage();
+            return 0;
+        }
+
+        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
+        {
+            ConsoleHost.Ensure();
+            Console.WriteLine(ShubbakVersion.Banner);
+            return 0;
+        }
+
         // Before any window is created: without it Windows reports virtualised
         // coordinates on scaled displays and the palette lands in the wrong place.
         // The cast is how the context handles are spelled - they are sentinel values,
@@ -403,6 +421,11 @@ internal static class Program
         if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
             Log.Level = parsed;
 
+        // Off unless output genuinely leads somewhere. Dalil is resident and started
+        // without a console, so this was formatting entries and discarding them.
+        Log.ToConsole = ConsoleHost.HasOutput
+            && !args.Contains("--quiet", StringComparer.Ordinal);
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -419,4 +442,30 @@ internal static class Program
         int index = Array.IndexOf(args, name);
         return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
     }
+
+    private static void PrintUsage() => Console.WriteLine("""
+        Dalil - the command palette for Shubbak
+
+        USAGE
+          dalil [options]
+
+        Dalil is resident. It creates its window hidden at startup and only shows it
+        when signalled, because a palette has to open faster than the eye and starting
+        a process does not. Launch it once, from startup-command or however you start
+        things, and leave it running.
+
+        OPTIONS
+          --config <path>      Config file. Dalil reads the same file Shubbak uses and
+                               resolves it the same way, including $XDG_CONFIG_HOME.
+                               Run `shubbak config-path` to see which file is in
+                               effect.
+          --log-level <level>  trace | debug | info | warn | error | none
+          --quiet              Do not write to the console.
+          --version            Print the version and exit.
+          --help               Show this message.
+
+        NOTES
+          Shubbak does not launch Dalil and does not know it exists. Bind a key to
+          show it in your config, the same way you would any other command.
+        """);
 }
