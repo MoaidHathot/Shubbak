@@ -77,11 +77,14 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     private bool _closing;
 
-    /// <summary>The row whose actions are being shown, when any are.</summary>
-    private PaletteEntry? _actionsFor;
+    /// <summary>One level of list opened from a row.</summary>
+    /// <param name="Subject">The row it was opened from.</param>
+    /// <param name="Title">What the search box calls it.</param>
+    /// <param name="SavedQuery">What was typed before it took over the box.</param>
+    private readonly record struct Overlay(PaletteEntry Subject, string Title, string SavedQuery);
 
-    /// <summary>What was typed before the action list took over the box.</summary>
-    private string _savedQuery = string.Empty;
+    /// <summary>Lists opened from a row, innermost last.</summary>
+    private readonly Stack<Overlay> _overlays = new();
 
     /// <summary>Where the pointer was last seen, so a resting cursor is ignored.</summary>
     private (int X, int Y) _lastMouse = (int.MinValue, int.MinValue);
@@ -163,7 +166,7 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     public void SetEntries(IEnumerable<PaletteEntry> entries)
     {
-        if (_actionsFor is not null) return;
+        if (_overlays.Count > 0) return;
 
         _model.SetEntries(entries);
         if (_open) Repaint();
@@ -206,9 +209,8 @@ public sealed class PaletteWindow : IDisposable
 
         bool wasOpen = _open;
 
-        // A fresh open is a fresh question, so any action list from last time goes.
-        _actionsFor = null;
-        _savedQuery = string.Empty;
+        // A fresh open is a fresh question, so anything opened last time goes.
+        _overlays.Clear();
 
         _query = PrefixFor(mode);
         _model.SetQuery(_query);
@@ -275,9 +277,8 @@ public sealed class PaletteWindow : IDisposable
         if (!_open || _handle.IsNull) return;
 
         // Forgotten on the way out, so the next open starts from the list rather than
-        // from whatever action list happened to be showing when it was dismissed.
-        _actionsFor = null;
-        _savedQuery = string.Empty;
+        // from whatever was showing when it was dismissed.
+        _overlays.Clear();
 
         _closing = true;
         _open = false;
@@ -331,7 +332,7 @@ public sealed class PaletteWindow : IDisposable
                 // "not that" one level at a time; throwing the whole palette away
                 // because somebody changed their mind about an action would mean
                 // starting the search again.
-                if (_actionsFor is not null) LeaveActions();
+                if (_overlays.Count > 0) Pop();
                 else Close();
 
                 return true;
@@ -410,7 +411,7 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     private bool TryChord(VIRTUAL_KEY key, bool control, bool shift)
     {
-        if (_config.ActionGuard || _actionsFor is not null) return false;
+        if (_config.ActionGuard || _overlays.Count > 0) return false;
         if (_model.Selected?.Entry.Actions is not { Count: > 0 } actions) return false;
 
         string? wanted = (key, control, shift) switch
@@ -435,33 +436,64 @@ public sealed class PaletteWindow : IDisposable
         return true;
     }
 
-    /// <summary>Shows what can be done to the selected row.</summary>
-    private void EnterActions()    {
-        if (_actionsFor is not null) return;
-        if (_model.Selected?.Entry is not { Actions.Count: > 0 } entry) return;
+    /// <summary>
+    /// Opens a list belonging to the selected row.
+    /// </summary>
+    /// <remarks>
+    /// Pushed rather than assigned, because a row inside a list can have a list of its
+    /// own - the actions for a window include a tag picker, and the picker is chosen
+    /// from within the actions. A single slot could only ever hold one of the two, and
+    /// Escape from the deeper one would have thrown the whole palette away.
+    /// </remarks>
+    private void Push(PaletteEntry subject, string title)
+    {
+        if (subject.Actions is not { Count: > 0 } children) return;
 
-        _actionsFor = entry;
-        _savedQuery = _query;
+        _overlays.Push(new Overlay(subject, title, _query));
 
         _query = string.Empty;
         _model.SetQuery(_query);
-        _model.SetEntries(PaletteActions.AsEntries(entry.Actions!));
+        _model.SetEntries(PaletteActions.AsEntries(children));
 
         Repaint();
     }
 
-    /// <summary>Returns to the list the action was opened from.</summary>
-    private void LeaveActions()
+    /// <summary>Shows what can be done to the selected row.</summary>
+    private void EnterActions()
     {
-        if (_actionsFor is null) return;
+        if (_model.Selected?.Entry is not { Actions.Count: > 0 } entry) return;
 
-        _actionsFor = null;
-        _query = _savedQuery;
-        _savedQuery = string.Empty;
+        Push(entry, entry.Primary);
+    }
 
-        // The host owns the source lists, so it restores them - the window never kept
-        // a copy to go stale.
-        ModeChanged?.Invoke(_model.Mode);
+    /// <summary>
+    /// Goes back one level, or closes when there is nowhere left to go.
+    /// </summary>
+    /// <remarks>
+    /// One level at a time. Escape means "not that", and somebody who changes their
+    /// mind about which workspace to tag has not changed their mind about the window
+    /// they spent the search finding.
+    /// </remarks>
+    private void Pop()
+    {
+        if (_overlays.Count == 0) return;
+
+        Overlay frame = _overlays.Pop();
+
+        _query = frame.SavedQuery;
+
+        if (_overlays.Count > 0)
+        {
+            // Back to the list above, which the window still has - its rows are the
+            // children of the frame beneath.
+            _model.SetEntries(PaletteActions.AsEntries(_overlays.Peek().Subject.Actions!));
+        }
+        else
+        {
+            // Back to the mode's own list, which the host owns and restores. The
+            // window never kept a copy to go stale.
+            ModeChanged?.Invoke(_model.Mode);
+        }
 
         _model.SetQuery(_query);
         Repaint();
@@ -598,13 +630,23 @@ public sealed class PaletteWindow : IDisposable
 
         string command = row.Entry.Command;
 
+        // A row carrying its own list opens it instead of running. Only inside an
+        // overlay: at the top level a row's list is what Ctrl+Enter is for, and Enter
+        // has to keep meaning "go to this window".
+        if (command.Length == 0 && _overlays.Count > 0 && row.Entry.Actions is { Count: > 0 })
+        {
+            Push(row.Entry, $"{_overlays.Peek().Title} \u203A {row.Entry.Primary}");
+            return;
+        }
+
         // A verb that needs arguments is offered as text to complete rather than run.
         // Running it bare would be rejected by the parser and read as a broken
         // palette. A help row that is only a key reference has nothing to run either,
-        // and simply does nothing.
+        // and so does the workspace a window is already on - and both simply do
+        // nothing rather than pretending.
         if (command.Length == 0)
         {
-            if (_model.Mode is PaletteMode.Help) return;
+            if (_model.Mode is PaletteMode.Help || _overlays.Count > 0) return;
 
             _query = ">" + row.Entry.Primary + " ";
             _model.SetQuery(_query);
@@ -615,6 +657,9 @@ public sealed class PaletteWindow : IDisposable
         Close();
         CommandRequested?.Invoke(command);
     }
+
+    /// <summary>What the search box calls the list currently showing.</summary>
+    private string? OverlayTitle() => _overlays.Count > 0 ? _overlays.Peek().Title : null;
 
     /// <summary>Changes mode and tells the host to refill the list.</summary>
     private void SwitchTo(PaletteMode mode)
@@ -768,7 +813,7 @@ public sealed class PaletteWindow : IDisposable
 
         try
         {
-            PaletteRenderer.Draw(_renderer, _model, _scaled, Layout(), _actionsFor?.Primary);
+            PaletteRenderer.Draw(_renderer, _model, _scaled, Layout(), OverlayTitle());
         }
         finally
         {

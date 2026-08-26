@@ -193,4 +193,149 @@ public sealed class PaletteActionsTests
         // list would advertise a key that then does nothing.
         Assert.True(layout.Actions is null || layout.Actions.Count == 0);
     }
+
+    // ---- the tag picker ----------------------------------------------------
+
+    private static readonly string[] Spaces = ["1", "2", "3", "code"];
+
+    private static IReadOnlyList<PaletteAction> Picker(WindowCandidate window) =>
+        PaletteActions.For(window, "1", Spaces)
+            .First(a => a.Name.StartsWith("Tags", StringComparison.Ordinal))
+            .Children!;
+
+    private static WindowCandidate Tagged(string workspace, params string[] tags) =>
+        new(0x900, "a window", "TestClass", "test", 42, false, true, null, "tiling",
+            "none", workspace, true, "\\\\.\\DISPLAY1", false, false, 0, null, tags);
+
+    [Fact]
+    public void TheTagPickerOpensRatherThanRunning()
+    {
+        PaletteAction tags = PaletteActions.For(Window(), "1", Spaces)
+            .First(a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+
+        Assert.Equal(string.Empty, tags.Command);
+        Assert.NotNull(tags.Children);
+        Assert.Equal(Spaces.Length, tags.Children!.Count);
+    }
+
+    [Fact]
+    public void ItIsNotOfferedWithoutAWorkspaceList()
+    {
+        // A picker with nothing in it is worse than no picker: it advertises a way to
+        // do something and then cannot.
+        Assert.DoesNotContain(
+            PaletteActions.For(Window(), "1"),
+            a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ItIsNotOfferedForAWindowNobodyManages()
+    {
+        // Tags are membership of workspaces, and a window nothing is arranging is not
+        // a member of anything.
+        Assert.DoesNotContain(
+            PaletteActions.For(Window(managed: false, state: null), "1", Spaces),
+            a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnUntaggedWorkspaceOffersToTagIt()
+    {
+        PaletteAction choice = Picker(Tagged("3")).First(c => c.Name == "2");
+
+        Assert.Equal("focus-window 2304\ntag --toggle 2", choice.Command);
+        Assert.Equal("not tagged - Enter adds it", choice.Description);
+    }
+
+    [Fact]
+    public void ATaggedWorkspaceOffersToRemoveIt()
+    {
+        PaletteAction choice = Picker(Tagged("3", "3", "2")).First(c => c.Name == "2");
+
+        // The command is the same toggle either way; only the wording changes, so the
+        // row says what Enter will do rather than leaving it to be worked out.
+        Assert.Equal("focus-window 2304\ntag --toggle 2", choice.Command);
+        Assert.Contains("removes it", choice.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheWorkspaceItIsOnIsShownButCannotBeChosen()
+    {
+        PaletteAction choice = Picker(Tagged("3")).First(c => c.Name == "3");
+
+        // The window manager refuses that tag outright - it would be a membership
+        // relocation could never satisfy - so offering it would be offering something
+        // certain to be rejected.
+        Assert.Equal(string.Empty, choice.Command);
+        Assert.Equal("it is here", choice.Description);
+    }
+
+    [Fact]
+    public void EveryWorkspaceIsListedIncludingTheCurrentOne()
+    {
+        // Leaving it out of an otherwise complete list reads as a bug rather than as
+        // a rule.
+        Assert.Equal(Spaces, Picker(Tagged("3")).Select(c => c.Name));
+    }
+
+    [Fact]
+    public void ChoicesSurviveBeingTurnedIntoRows()
+    {
+        IReadOnlyList<PaletteEntry> rows =
+            PaletteActions.AsEntries(PaletteActions.For(Tagged("3"), "1", Spaces));
+
+        PaletteEntry tags = rows.First(r => r.Primary.StartsWith("Tags", StringComparison.Ordinal));
+
+        // Carried on the row so the window can push them as the next level, and
+        // badged so Enter on it is visibly different from Enter on its neighbours.
+        Assert.NotNull(tags.Actions);
+        Assert.Equal(Spaces.Length, tags.Actions!.Count);
+        Assert.Contains(tags.Badges, b => b.Contains('\u203A'));
+    }
+
+    [Fact]
+    public void ClearingStaysAtTheTopLevel()
+    {
+        IReadOnlyList<PaletteAction> actions = PaletteActions.For(Tagged("3", "3", "2"), "1", Spaces);
+
+        // The emergency exit for a window that is moving on its own. Burying it inside
+        // the picker would undo the point of having it.
+        Assert.Contains(actions, a => a.Name.StartsWith("Stop it", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void TheTagPickerHasNoChord()
+    {
+        PaletteAction tags = PaletteActions.For(Window(), "1", Spaces)
+            .First(a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+
+        // A chord that produces another list to choose from is an odd pairing.
+        Assert.Null(tags.Chord);
+    }
+
+    [Fact]
+    public void TheWorkspaceListReachesTheRowsThroughForWindows()
+    {
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows(
+            [Window()], includeUnmanaged: true, focusedWorkspace: "1", workspaces: Spaces));
+
+        // Tested through the path the palette actually uses rather than by calling
+        // PaletteActions.For directly. It was not, and the wiring was wrong: ForWindows
+        // grew the parameter and went on passing nothing, which compiled without a
+        // murmur because the argument is optional with a null default. Every unit test
+        // passed and the picker was simply absent on screen.
+        Assert.Contains(entry.Actions!, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void TheWorkspaceListReachesScratchpadRowsToo()
+    {
+        WindowCandidate stashed = new(0x901, "a window", "TestClass", "test", 42, false, true,
+            null, "tiling", "cloaked", "3", false, "\\\\.\\DISPLAY1", false, false, 0, "notes", null);
+
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForScratchpad([stashed], "1", Spaces));
+
+        Assert.Contains(entry.Actions!, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+    }
 }

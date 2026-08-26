@@ -9,12 +9,18 @@ namespace Dalil.Core;
 /// <param name="Command">What to send; newline-separated for a sequence.</param>
 /// <param name="Destructive">Whether doing it by accident would cost something.</param>
 /// <param name="Chord">How it is spelled when direct chords are enabled.</param>
+/// <param name="Children">
+/// When present, choosing this opens a list of these rather than running anything.
+/// Mirrors <see cref="PaletteEntry.SwitchesTo"/>, which already means "this row
+/// changes what you are looking at instead of doing something".
+/// </param>
 public sealed record PaletteAction(
     string Name,
     string Description,
     string Command,
     bool Destructive = false,
-    string? Chord = null);
+    string? Chord = null,
+    IReadOnlyList<PaletteAction>? Children = null);
 
 /// <summary>
 /// What the palette can do to a window, beyond going to it.
@@ -45,7 +51,14 @@ public static class PaletteActions
     /// Where "bring it here" means. Null when nothing is focused, in which case the
     /// action is not offered rather than being offered and failing.
     /// </param>
-    public static IReadOnlyList<PaletteAction> For(WindowCandidate window, string? focusedWorkspace)
+    /// <param name="workspaces">
+    /// Every workspace, for the tag picker. Empty leaves the picker out rather than
+    /// offering one with nothing in it.
+    /// </param>
+    public static IReadOnlyList<PaletteAction> For(
+        WindowCandidate window,
+        string? focusedWorkspace,
+        IReadOnlyList<string>? workspaces = null)
     {
         ArgumentNullException.ThrowIfNull(window);
 
@@ -92,12 +105,29 @@ public static class PaletteActions
         // rather than as a feature. A tagged window relocates itself whenever one of
         // its workspaces is activated, which reads as a fault - and until this existed
         // the only way to find the escape hatch was to read your own configuration.
+        //
+        // Kept at this level rather than inside the picker below. It is the emergency
+        // exit for exactly that confusion, and burying it one keystroke deeper would
+        // undo the point of having it.
         if (PaletteEntries.FollowsTo(window) is { Count: > 0 } elsewhere)
         {
             actions.Add(new PaletteAction(
                 "Stop it following me",
                 $"Clear its tags, so it stays put instead of moving to {string.Join(", ", elsewhere)}",
                 $"{focus}\ntag --clear"));
+        }
+
+        if (window.Managed && workspaces is { Count: > 0 })
+        {
+            actions.Add(new PaletteAction(
+                "Tags\u2026",
+                "Choose which workspaces this window follows you to",
+
+                // Opens rather than runs. No chord, even when the guard is off: a
+                // chord that produces another list to choose from is an odd pairing,
+                // and tagging is not done in a hurry.
+                string.Empty,
+                Children: TagChoices(window, focus, workspaces)));
         }
 
         // Adopting a window the user's own rule excluded is a decision, not a
@@ -116,6 +146,57 @@ public static class PaletteActions
             Chord: "Ctrl+Shift+W"));
 
         return actions;
+    }
+
+    /// <summary>
+    /// One row per workspace, showing where the window stands with each.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Add, remove and toggle all fall out of a single surface, which is why this is
+    /// one picker rather than three actions. The command is <c>tag --toggle</c> in
+    /// every case; what changes is only the wording, so the row says what Enter will
+    /// actually do rather than leaving it to be inferred.
+    /// </para>
+    /// <para>
+    /// The workspace the window already sits on is listed and carries no command. The
+    /// window manager refuses that tag outright - it would be a membership that
+    /// relocation could never satisfy - so offering it would be offering something
+    /// certain to be rejected. Leaving it out entirely would be worse: its absence
+    /// from an otherwise complete list reads as a bug rather than as a rule.
+    /// </para>
+    /// </remarks>
+    private static List<PaletteAction> TagChoices(
+        WindowCandidate window, string focus, IReadOnlyList<string> workspaces)
+    {
+        List<PaletteAction> choices = [];
+
+        foreach (string workspace in workspaces)
+        {
+            bool here = string.Equals(workspace, window.Workspace, StringComparison.OrdinalIgnoreCase);
+
+            bool tagged = window.Tags is { } tags &&
+                tags.Any(t => string.Equals(t, workspace, StringComparison.OrdinalIgnoreCase));
+
+            if (here)
+            {
+                choices.Add(new PaletteAction(workspace, "it is here", string.Empty));
+                continue;
+            }
+
+            choices.Add(new PaletteAction(
+                workspace,
+
+                // Symmetric, and stating the current state before what Enter does.
+                // "Enter tags it, so it follows you there" reads as "Enter-tags it"
+                // on the way past, which is a bad way to learn a key.
+                tagged
+                    ? "tagged - Enter removes it"
+                    : "not tagged - Enter adds it",
+                $"{focus}\ntag --toggle {workspace}"));
+        }
+
+        return choices;
     }
 
     /// <summary>Presents actions as rows.</summary>
@@ -137,12 +218,22 @@ public static class PaletteActions
             List<string> badges = [];
             if (action.Chord is { } chord) badges.Add(chord);
 
+            // An action that opens another list says so, because Enter on it does
+            // something visibly different from Enter on every row beside it.
+            if (action.Children is { Count: > 0 }) badges.Add($"{action.Children.Count} \u203A");
+
             entries.Add(new PaletteEntry(
                 action.Name,
                 action.Description,
                 badges,
                 action.Command,
-                Rank: actions.Count - i));
+                Rank: actions.Count - i,
+                SwitchesTo: null,
+
+                // Carried through so the window can push them as the next frame. The
+                // action list is itself a list of rows, so a row's children ride in
+                // the same place a window row's actions do.
+                Actions: action.Children));
         }
 
         return entries;

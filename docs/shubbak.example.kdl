@@ -553,7 +553,8 @@ bar {
 // A window tagged onto another workspace is badged "also on <name>", because a
 // window that relocates itself reads as a fault rather than as something that was
 // asked for. `shubbak inspect <handle>` says the same thing, and the log says it at
-// the moment it happens.
+// the moment it happens. Ctrl+Enter then "Tags..." picks which workspaces a window
+// follows you to, and Escape goes back one level rather than dismissing.
 // ---------------------------------------------------------------------------
 
 dalil {
