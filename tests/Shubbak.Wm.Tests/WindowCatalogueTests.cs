@@ -195,6 +195,53 @@ public sealed class WindowCatalogueTests
     }
 
     [Fact]
+    public void MembershipTravelsWithTheWindow()
+    {
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        var node = new WindowNode(0x800, new WindowIdentity
+        {
+            Title = "tagged", ProcessName = "test", ClassName = "TestClass",
+        });
+
+        wm.ManageWindow(node);
+        registry.Adopt(0x800, node);
+
+        wm.FocusWindow(node);
+        wm.Tag("2", TagMode.Add);
+
+        WindowCandidate only = Assert.Single(WindowCatalogue.Join([Seen(0x800)], wm, registry));
+
+        // A tagged window relocates to whichever of its workspaces was activated last,
+        // so it appears to follow the user around. Nothing could see that it was
+        // tagged: the DTO reported Sticky and stopped, which is a different thing.
+        Assert.NotNull(only.Tags);
+        Assert.Contains("2", only.Tags!);
+    }
+
+    [Fact]
+    public void AnUntaggedWindowCarriesNoTags()
+    {
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        var node = new WindowNode(0x801, new WindowIdentity
+        {
+            Title = "plain", ProcessName = "test", ClassName = "TestClass",
+        });
+
+        wm.ManageWindow(node);
+        registry.Adopt(0x801, node);
+
+        WindowCandidate only = Assert.Single(WindowCatalogue.Join([Seen(0x801)], wm, registry));
+
+        // Null rather than empty, so the field is omitted from the payload entirely
+        // for the overwhelming majority of windows that have no membership at all.
+        Assert.Null(only.Tags);
+    }
+
+    [Fact]
     public void TheFocusedWindowIsMarkedAndCarriesItsRecency()
     {
         WindowManager wm = WithOneWorkspace();

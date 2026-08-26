@@ -291,8 +291,32 @@ public static class PaletteEntries
             badges.Add(window.State);
 
         if (window.Sticky) badges.Add("sticky");
+
+        // The workspaces this window will follow the user to. Worth a badge of its own
+        // because a window that relocates itself reads as a fault rather than as
+        // something that was asked for, and nothing else on screen says otherwise.
+        //
+        // The workspace it is already on is left out. Tagging records complete
+        // membership, so the set always contains where the window currently is, and
+        // listing that alongside where it will go is the noisier half of the answer.
+        if (FollowsTo(window) is { Count: > 0 } elsewhere)
+            badges.Add($"also on {string.Join(", ", elsewhere)}");
+
         if (window.Elevated) badges.Add("elevated");
 
         return badges;
+    }
+
+    /// <summary>The workspaces a window is tagged onto, other than its own.</summary>
+    public static IReadOnlyList<string> FollowsTo(WindowCandidate window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        if (window.Tags is not { Count: > 0 } tags) return [];
+
+        return
+        [
+            .. tags.Where(t => !string.Equals(t, window.Workspace, StringComparison.OrdinalIgnoreCase)),
+        ];
     }
 }

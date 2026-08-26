@@ -137,7 +137,8 @@ internal static class WindowCatalogue
                 node?.IsSticky ?? false,
                 node is not null && ReferenceEquals(node, focused),
                 node?.FocusSequence ?? 0,
-                node?.ScratchpadName));
+                node?.ScratchpadName,
+                node is { } tagged && tagged.Tags.Count > 0 ? [.. tagged.Tags] : null));
         }
 
         return candidates;
