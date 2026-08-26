@@ -199,4 +199,71 @@ public sealed class PaletteEntriesTests
 
         Assert.Equal("layout --set fibonacci", entry.Command);
     }
+
+    // ---- membership --------------------------------------------------------
+
+    private static WindowCandidate Tagged(string workspace, params string[] tags) =>
+        new(0x900, "a window", "TestClass", "test", 42, false, true, null, "tiling",
+            "none", workspace, true, "\\\\.\\DISPLAY1", false, false, 0, null, tags);
+
+    [Fact]
+    public void ATaggedWindowSaysWhereItWillFollowYou()
+    {
+        // Tagging records complete membership, so the set always contains the
+        // workspace the window is already on - see WindowManager.Tag, which explains
+        // why that is needed for it to be able to come back.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Tagged("3", "3", "-")]));
+
+        Assert.Contains("also on -", entry.Badges);
+    }
+
+    [Fact]
+    public void TheWorkspaceItIsAlreadyOnIsNotListed()
+    {
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Tagged("3", "3", "-")]));
+
+        // "also on 3, -" for a window sitting on 3 is the noisier half of the answer.
+        Assert.DoesNotContain(entry.Badges, b => b.Contains('3'));
+    }
+
+    [Fact]
+    public void AWindowTaggedOnlyToItsOwnWorkspaceFollowsNowhere()
+    {
+        Assert.Empty(PaletteEntries.FollowsTo(Tagged("3", "3")));
+
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Tagged("3", "3")]));
+        Assert.DoesNotContain(entry.Badges, b => b.StartsWith("also on", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AnUntaggedWindowSaysNothingAboutFollowing()
+    {
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Window()]));
+
+        Assert.DoesNotContain(entry.Badges, b => b.StartsWith("also on", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ATaggedWindowIsOfferedAWayToStopIt()
+    {
+        IReadOnlyList<PaletteAction> actions = PaletteActions.For(Tagged("3", "3", "-"), "3");
+
+        // The escape hatch was previously discoverable only by reading your own
+        // configuration, which is not where somebody looks when a window is moving on
+        // its own.
+        PaletteAction stop = Assert.Single(actions, a => a.Name.StartsWith("Stop it", StringComparison.Ordinal));
+
+        Assert.EndsWith("tag --clear", stop.Command, StringComparison.Ordinal);
+        Assert.Contains("-", stop.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnUntaggedWindowIsNotOfferedIt()
+    {
+        // Offering to clear tags that do not exist advertises a problem the user does
+        // not have.
+        Assert.DoesNotContain(
+            PaletteActions.For(Window(), "1"),
+            a => a.Name.StartsWith("Stop it", StringComparison.Ordinal));
+    }
 }

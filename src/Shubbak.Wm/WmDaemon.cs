@@ -2222,6 +2222,96 @@ public sealed class WmDaemon : IDisposable
             binding.RepeatsOnHold);
     }
 
+    /// <summary>
+    /// The workspaces a window will follow you to, other than the one it is on.
+    /// </summary>
+    /// <remarks>
+    /// The tag set records complete membership, so it includes the workspace the
+    /// window currently occupies - see <see cref="Core.Wm.WindowManager.Tag"/>, which
+    /// explains why that is necessary for it to be able to come back. Reporting it
+    /// verbatim would list where the window already is alongside where it will go,
+    /// which is the noisier half of the answer.
+    /// </remarks>
+    internal static string DescribeTags(WindowNode window)
+    {
+        string? here = window.Workspace?.Name;
+
+        string[] elsewhere =
+        [
+            .. window.Tags.Where(t => !string.Equals(t, here, StringComparison.OrdinalIgnoreCase)),
+        ];
+
+        if (elsewhere.Length == 0) return "(none)";
+
+        return $"{string.Join(", ", elsewhere)} - it will follow you there";
+    }
+
+    /// <summary>Explains that a window has become a member of other workspaces.</summary>
+    /// <remarks>
+    /// <para>
+    /// At info, and for the same reason the binding mode is: this is a state that
+    /// silently changes how a window behaves for the rest of its life, and nothing
+    /// else anywhere reports it. A window that relocates itself whenever you switch
+    /// workspace reads as a window manager bug, and the only thing that can say
+    /// otherwise is this line.
+    /// </para>
+    /// <para>
+    /// Names the user's own key rather than the command, looked up the same way
+    /// <see cref="ReportBindingMode"/> finds the way out of a swallowing mode. Being
+    /// told to run <c>tag --clear</c> is less use than being told to press the key
+    /// already sitting in the config.
+    /// </para>
+    /// </remarks>
+    private void ReportTags(WindowTagsChanged changed)
+    {
+        WindowNode window = changed.Window;
+        string title = window.Identity.Title.Truncate(40);
+
+        if (!window.HasTags)
+        {
+            Log.Info(LogCategory.Window, $"cleared the tags on 0x{window.Handle:X} \"{title}\"");
+            return;
+        }
+
+        if (window.IsSticky)
+        {
+            Log.Info(LogCategory.Window,
+                $"0x{window.Handle:X} \"{title}\" is sticky; it follows every workspace on its monitor. " +
+                $"{HowToClear()}");
+
+            return;
+        }
+
+        string? here = window.Workspace?.Name;
+
+        string[] elsewhere =
+        [
+            .. window.Tags.Where(t => !string.Equals(t, here, StringComparison.OrdinalIgnoreCase)),
+        ];
+
+        if (elsewhere.Length == 0) return;
+
+        Log.Info(LogCategory.Window,
+            $"tagged 0x{window.Handle:X} \"{title}\" - it is now also on " +
+            $"{string.Join(", ", elsewhere.Select(t => $"\"{t}\""))} and will follow you there. " +
+            $"{HowToClear()}");
+    }
+
+    /// <summary>The key bound to clearing tags, or the command when none is.</summary>
+    private string HowToClear()
+    {
+        string[] keys =
+        [
+            .. _config.Keybindings
+                .Where(b => b.Commands.Any(c => c is ClearTagsCommand))
+                .Select(b => b.Key.Display),
+        ];
+
+        return keys.Length > 0
+            ? $"Clear it with {string.Join(" or ", keys)}."
+            : "Clear it by binding tag --clear, or run: shubbak tag --clear";
+    }
+
     internal CommandOutcome RunCommand(WmCommand command)
     {
         if (!ResolveTarget(command))
@@ -2277,6 +2367,21 @@ public sealed class WmDaemon : IDisposable
             report.AppendLine($"  state      {window.State}");
             report.AppendLine($"  workspace  {window.Workspace?.Name ?? "(none)"}");
             report.AppendLine($"  focused    {ReferenceEquals(window, _wm.FocusedWindow)}");
+
+            // Membership, which until now this report was silent about.
+            //
+            // A tagged window relocates to whichever of its workspaces was activated
+            // last, so it appears to follow the user around - and nothing anywhere
+            // said it was tagged. This report exists to answer "why is this window
+            // behaving like this?", answered that well for windows it does not manage,
+            // and then went quiet about the most confusing state a managed one can be
+            // in. A stray keypress was enough to reach it and there was no way to see
+            // it and no way to find the way out.
+            report.AppendLine($"  sticky     {(window.IsSticky ? "yes - follows every workspace on its monitor" : "no")}");
+            report.AppendLine($"  tags       {DescribeTags(window)}");
+
+            if (window.ScratchpadName is { Length: > 0 } slot)
+                report.AppendLine($"  scratchpad {slot}");
         }
         else
         {
@@ -3979,6 +4084,11 @@ public sealed class WmDaemon : IDisposable
                     undeclaredMode = true;
                 }
             }
+
+            // Membership is the one state change that alters how a window behaves for
+            // the rest of its life and reports itself nowhere else. Said out loud for
+            // the same reason a swallowing binding mode is.
+            if (wmEvent is WindowTagsChanged tagged) ReportTags(tagged);
 
             if (wmEvent is CommandRejected rejected)
             {

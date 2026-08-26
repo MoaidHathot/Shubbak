@@ -106,6 +106,9 @@ public sealed record MonitorInfoDto(
 /// <param name="Scratchpad">
 /// The scratchpad slot holding this window, when one is. Null for everything else.
 /// </param>
+/// <param name="Tags">
+/// Every workspace this window is a member of, including the one it sits on.
+/// </param>
 public sealed record WindowCandidate(
     long Handle,
     string Title,
@@ -125,10 +128,12 @@ public sealed record WindowCandidate(
     long FocusSequence,
 
     // Added after the fact, and optional, so the protocol version stays where it is -
-    // an older client simply never sees it. A window in a scratchpad is retrieved by
-    // naming its slot, so without this a client can tell that something is stashed
-    // and not how to get it back.
-    string? Scratchpad = null);
+    // an older client simply never sees them. A window in a scratchpad is retrieved by
+    // naming its slot, and a tagged window relocates to whichever of its workspaces
+    // was activated last; without either, a client can tell that a window is behaving
+    // oddly and not why.
+    string? Scratchpad = null,
+    IReadOnlyList<string>? Tags = null);
 
 /// <summary>A command verb, as described to clients.</summary>
 /// <remarks>

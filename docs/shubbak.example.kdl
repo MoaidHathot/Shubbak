@@ -549,6 +549,11 @@ bar {
 // done to the selected window. The prefixes >, #, ~ and $ jump straight to
 // commands, workspaces, layouts and the scratchpad; "?" lists every key, including
 // the ones you have bound yourself. The mouse works too.
+//
+// A window tagged onto another workspace is badged "also on <name>", because a
+// window that relocates itself reads as a fault rather than as something that was
+// asked for. `shubbak inspect <handle>` says the same thing, and the log says it at
+// the moment it happens.
 // ---------------------------------------------------------------------------
 
 dalil {

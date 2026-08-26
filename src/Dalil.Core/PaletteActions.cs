@@ -88,6 +88,18 @@ public static class PaletteActions
                     Chord: "Ctrl+Shift+S"));
         }
 
+        // Only when there is something to clear, and worded as the way out of a state
+        // rather than as a feature. A tagged window relocates itself whenever one of
+        // its workspaces is activated, which reads as a fault - and until this existed
+        // the only way to find the escape hatch was to read your own configuration.
+        if (PaletteEntries.FollowsTo(window) is { Count: > 0 } elsewhere)
+        {
+            actions.Add(new PaletteAction(
+                "Stop it following me",
+                $"Clear its tags, so it stays put instead of moving to {string.Join(", ", elsewhere)}",
+                $"{focus}\ntag --clear"));
+        }
+
         // Adopting a window the user's own rule excluded is a decision, not a
         // convenience, which is why it is worded as one and marked.
         actions.Add(window.Managed

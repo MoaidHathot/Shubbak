@@ -98,6 +98,16 @@ internal static class StateProjection
             WindowTitleChanged e => Json(Describe(e.Window, focused)),
             WindowStateChanged e => Json(Describe(e.Window, focused)),
             WindowMoved e => Json(Describe(e.Window, focused)),
+
+            // Described rather than left to the fallback below, which published an
+            // empty object on a topic clients can subscribe to - telling a subscriber
+            // that something had changed, and neither what nor for which window.
+            // Membership is the state most worth announcing, because a tagged window
+            // relocates itself and nothing else says why.
+            WindowTagsChanged e =>
+                $"{{\"window\":{Json(Describe(e.Window, focused))}," +
+                $"\"tags\":[{string.Join(',', e.Tags.Select(JsonString))}]," +
+                $"\"sticky\":{(e.IsSticky ? "true" : "false")}}}",
             WorkspaceActivated e => Json(Describe(e.Workspace)),
             WorkspaceCreated e => Json(Describe(e.Workspace)),
             WorkspaceMoved e => Json(Describe(e.Workspace)),
