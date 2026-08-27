@@ -86,6 +86,9 @@ public abstract record WmCommand
         ToggleMinimisedCommand or
         ToggleManagedCommand or
         TogglePauseCommand or
+        SuspendCommand or
+        ResumeCommand or
+        ToggleSuspendCommand or
         CycleLayoutCommand or
         ScratchpadCommand or
 
@@ -379,6 +382,48 @@ public sealed record DisableBindingModeCommand : WmCommand
 public sealed record TogglePauseCommand : WmCommand
 {
     public override string Name => "wm-toggle-pause";
+}
+
+/// <summary>
+/// <c>wm-suspend</c> - stop managing windows <em>and</em> let go of the keyboard.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Distinct from <see cref="TogglePauseCommand"/>, and the difference is the whole
+/// point. Pausing stops Shubbak rearranging the desktop but leaves the low-level
+/// keyboard hook installed, so every bound chord is still swallowed and never reaches
+/// the focused application. That is correct for pause - the command that resumes is a
+/// keybinding, and a pause that cannot be undone from the keyboard is a trap - and it
+/// is exactly wrong for the case this exists for.
+/// </para>
+/// <para>
+/// Suspending removes the hook. The reason people reach for it is a game: an input
+/// the window manager swallows is an input the game never sees, which matters far more
+/// than the microsecond the hook costs. Until this existed the only way to get that
+/// was to exit the window manager entirely, which un-conceals every window on every
+/// workspace on the way out and takes seconds to undo.
+/// </para>
+/// </remarks>
+public sealed record SuspendCommand : WmCommand
+{
+    public override string Name => "wm-suspend";
+}
+
+/// <summary><c>wm-resume</c> - undo <see cref="SuspendCommand"/>.</summary>
+public sealed record ResumeCommand : WmCommand
+{
+    public override string Name => "wm-resume";
+}
+
+/// <summary><c>wm-toggle-suspend</c></summary>
+/// <remarks>
+/// The one worth binding to a key, since the key that suspends cannot be the key that
+/// resumes - by the time it would be needed, the hook that would have seen it is gone.
+/// Resuming is done from the resume hotkey, the CLI, or a click.
+/// </remarks>
+public sealed record ToggleSuspendCommand : WmCommand
+{
+    public override string Name => "wm-toggle-suspend";
 }
 
 /// <summary><c>wm-reload-config</c></summary>

@@ -193,6 +193,27 @@ public sealed record PauseChanged(bool Paused) : WmEvent
 }
 
 /// <summary>
+/// The window manager has let go of the keyboard, or taken it back.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Distinct from <see cref="PauseChanged"/> because the two answer different
+/// questions. Paused means "windows are not being rearranged"; suspended means "the
+/// keyboard hook is gone", which is what somebody about to play a game cares about and
+/// what pausing deliberately does not do.
+/// </para>
+/// <para>
+/// Announced so that a bar can say so. A window manager that has stopped responding to
+/// keys looks identical to one that has crashed, and the difference matters a great
+/// deal to whoever is looking at it.
+/// </para>
+/// </remarks>
+public sealed record SuspendChanged(bool Suspended) : WmEvent
+{
+    public override string Topic => "wm.suspended";
+}
+
+/// <summary>
 /// The configuration was re-read from disk.
 /// </summary>
 /// <remarks>

@@ -68,6 +68,17 @@ internal static class Program
             return CheckConfig(configPath);
         }
 
+        // Only one window manager per account, enforced before anything touches the
+        // desktop. Two daemons used to start in silence and then fight: two low-level
+        // keyboard hooks, so every binding fired twice; two layout passes contradicting
+        // each other through DeferWindowPos; a CLI connecting to whichever accept loop
+        // won the race; and on exit, one restoring windows the other still believed
+        // were concealed. Nothing reported any of it, because nothing was looking.
+        using var instance = SingleInstance.TryAcquire(
+            args.Contains("--replace", StringComparer.Ordinal));
+
+        if (!instance.Held) return 1;
+
         using var daemon = new WmDaemon();
 
         Console.CancelKeyPress += (_, e) =>
@@ -357,6 +368,25 @@ internal static class Program
 
           --version            Print the version and exit.
           --help               Show this message.
+
+          --replace            Ask a running window manager to stand down, then take
+                               over. Without it, starting a second one is refused -
+                               two window managers on one desktop fight over every
+                               window and run every keybinding twice.
+
+        GETTING OUT OF THE WAY
+          shubbak wm-toggle-suspend
+
+          Releases the keyboard hook and the window event hooks, and leaves every
+          window exactly where it is. This is the one to use before a game: a bound
+          chord is a chord the game never receives, and suspending gives it back.
+
+          Resume with the same key - the system watches for that one chord while
+          suspended, which costs nothing per keystroke because it is not a hook -
+          or with `shubbak wm-resume`.
+
+          `wm-toggle-pause` is a different thing and worth not confusing: it stops
+          windows being rearranged but keeps the keyboard, so bindings still work.
 
         DIAGNOSING A PROBLEM
           Reproduce it with tracing on, then bundle everything into one file:

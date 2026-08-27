@@ -15,8 +15,61 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Added
+
+- **`wm-suspend`, `wm-resume`, `wm-toggle-suspend`.** Releases the low-level keyboard
+  hook and the window event hooks, and leaves every window exactly where it is.
+
+  This is for playing a game, and it is not the same as `wm-toggle-pause`. Pausing
+  stops Shubbak rearranging the desktop but **keeps the keyboard hook**, so every bound
+  chord is still swallowed and never reaches the focused application — deliberately,
+  because the command that resumes is a keybinding and a pause that cannot be undone
+  from the keyboard is a trap. That is the wrong property for a game: a chord Shubbak
+  swallows is an input the game never sees, which matters far more than the microsecond
+  the hook costs (ADR 0001 measured p99.9 at 0.8–1.0 µs).
+
+  The only way to get this before was to exit the window manager entirely, which
+  un-conceals every window on every workspace on the way out and costs a full restart
+  to undo — measured at over two seconds, plus re-adopting every window, plus the bar
+  and the palette restarting with it. Suspending costs none of that: the tree stays in
+  memory and nothing on screen moves in either direction.
+
+  While suspended the periodic work stops too — no focus-border re-assertion five times
+  a second, no monitor polling — and the loop idles instead of running at frame pace.
+
+  Resuming uses **the same key that suspended**, which works because
+  `RegisterHotKey` is not a hook: the system matches that one chord itself and posts a
+  single message. Nothing of Shubbak's runs for any other keystroke. `shubbak wm-resume`
+  works too, and is the way back if another program already owns the chord.
+
+  `shubbak status` now distinguishes `running`, `running, paused` and
+  `running, suspended`, and `shubbak diagnose` reports whether each hook is actually
+  installed — because "is it really out of the way" deserves an answer rather than
+  trust.
+
+- **`wm-toggle-pause` is unchanged.** Both exist because they are genuinely different.
+
 ### Fixed
 
+- **Two window managers could run at once, silently.** There was no single-instance
+  guard of any kind, and the named pipe could not serve as one: it is created with
+  `MaxAllowedServerInstances`, which is precisely the flag that lets any number of
+  processes host the same name.
+
+  So a second `shubbak-wm` started perfectly happily, and then the two fought — two
+  keyboard hooks, so every binding ran twice; two layout passes issuing contradictory
+  `DeferWindowPos` batches; a CLI reaching whichever accept loop won the race, so
+  consecutive commands could land in different processes; and on exit, one daemon
+  un-concealing windows the other still had recorded as concealed. Nothing reported any
+  of it.
+
+  A second launch is now refused with a message naming the running process. `--replace`
+  asks the running one to stand down over IPC — so it saves its session and restores
+  its windows rather than being terminated — and waits for it to let go before starting.
+  An abandoned mutex, left by a daemon that was killed rather than asked to exit, counts
+  as free rather than as someone else running.
+
+## [0.9.0] - 2026-08-26
 - **A window that moved itself stayed moved.** Reopening Firefox put it on the wrong
   monitor, on top of the window already tiled there, and it stayed until `wm-redraw`
   was pressed.

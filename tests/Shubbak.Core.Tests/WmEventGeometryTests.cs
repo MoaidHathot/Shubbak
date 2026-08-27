@@ -55,6 +55,22 @@ public sealed class WmEventGeometryTests
         Assert.False(new ConfigReloaded("shubbak.kdl").AffectsGeometry());
     }
 
+    /// <summary>
+    /// Suspending and resuming must not schedule a layout pass of their own.
+    /// </summary>
+    /// <remarks>
+    /// Suspending has just released the hooks, so a pass would arrange a desktop
+    /// nothing is watching any more. Resuming asks for one itself, but only after
+    /// re-reading the monitors and re-adopting whatever appeared while it was not
+    /// looking - a pass scheduled by the event would run before either.
+    /// </remarks>
+    [Fact]
+    public void SuspendingAndResumingDoNotMoveAnything()
+    {
+        Assert.False(new SuspendChanged(true).AffectsGeometry());
+        Assert.False(new SuspendChanged(false).AffectsGeometry());
+    }
+
     [Fact]
     public void FocusMovingIsTreatedAsGeometric()
     {
@@ -212,6 +228,7 @@ public sealed class WmEventGeometryTests
                 nameof(MonitorChanged),
                 nameof(MonitorRemoved),
                 nameof(PauseChanged),
+                nameof(SuspendChanged),
                 nameof(WindowFocused),
                 nameof(WindowManaged),
                 nameof(WindowMoved),

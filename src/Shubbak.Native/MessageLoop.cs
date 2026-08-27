@@ -116,6 +116,25 @@ public sealed class MessageLoop : IDisposable
     /// <summary>Waits that ran to their timeout.</summary>
     public long WaitsTimedOut => Interlocked.Read(ref _waitsTimedOut);
 
+    /// <summary>
+    /// Sees every message before it is dispatched.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For thread messages, which have no window and so cannot be dispatched at all.
+    /// <c>WM_HOTKEY</c> from a <c>RegisterHotKey</c> registered against a thread rather
+    /// than a window is exactly that: <c>DispatchMessage</c> has no window procedure to
+    /// hand it to and discards it silently, so a loop that only pumps would never see
+    /// the one key a suspended window manager is still listening for.
+    /// </para>
+    /// <para>
+    /// Observing rather than filtering, deliberately. The handler is told what arrived
+    /// and the message is dispatched regardless, so nothing here can accidentally
+    /// swallow a message something else depends on.
+    /// </para>
+    /// </remarks>
+    public Action<uint, nuint, nint>? MessageReceived { get; set; }
+
     /// <summary>Waits cut short by a message or a signal arriving.</summary>
     /// <remarks>
     /// How often anything paced by the timeout is interrupted mid-interval. High
@@ -193,6 +212,10 @@ public sealed class MessageLoop : IDisposable
                         _running = false;
                         return;
                     }
+
+                    // Before dispatch, because a thread message never reaches a window
+                    // procedure and dispatching it is where it would disappear.
+                    MessageReceived?.Invoke(msg.message, msg.wParam, msg.lParam);
 
                     PInvoke.TranslateMessage(in msg);
                     PInvoke.DispatchMessage(in msg);

@@ -55,6 +55,26 @@ public enum HostAction
 
     /// <summary>Announce <see cref="SignalCommand.Signal"/> to subscribed clients.</summary>
     Signal,
+
+    /// <summary>
+    /// Let go of the keyboard and the window events, keeping the tree.
+    /// </summary>
+    /// <remarks>
+    /// A host action because the hooks are the platform layer's, not the state
+    /// machine's. <see cref="WindowManager"/> has never known that a keyboard hook
+    /// exists, and this is not the change that should teach it.
+    /// </remarks>
+    Suspend,
+
+    /// <summary>Re-install the hooks and take the desktop back.</summary>
+    Resume,
+
+    /// <summary>Whichever of <see cref="Suspend"/> and <see cref="Resume"/> applies.</summary>
+    /// <remarks>
+    /// Decided by the host rather than here, because the host owns the hooks and so is
+    /// the only thing that knows whether they are currently installed.
+    /// </remarks>
+    ToggleSuspend,
 }
 
 /// <summary>The outcome of executing one command.</summary>
@@ -164,6 +184,13 @@ public sealed class CommandExecutor
             ReloadConfigCommand => Host(HostAction.ReloadConfig),
             RedrawCommand => Host(HostAction.Redraw),
             ExitCommand => Host(HostAction.Exit),
+
+            // Host effects rather than state-machine ones, because what they change is
+            // which hooks are installed - which the state machine has never known
+            // about and should not start knowing about now.
+            SuspendCommand => Host(HostAction.Suspend),
+            ResumeCommand => Host(HostAction.Resume),
+            ToggleSuspendCommand => Host(HostAction.ToggleSuspend),
 
             // Only meaningful inside a window rule, where the rule engine consumes it
             // before execution. Reaching here means it was bound to a key by mistake.
