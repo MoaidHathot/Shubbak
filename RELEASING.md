@@ -50,7 +50,7 @@ looked, which is why it is checked rather than trusted.
 ## 4. Tag it
 
 ```
-git tag v0.9.0
+git tag -a v0.9.0 -m "Shubbak 0.9.0 - the first public release"
 git push origin v0.9.0
 ```
 
@@ -58,6 +58,19 @@ The tag must be `v` followed by exactly what is in `Directory.Build.props`. The
 workflow compares them before it builds anything, because a release named one thing
 and containing another only ever surfaces in a bug report months later quoting a
 version that was never published.
+
+Annotated (`-a`) rather than lightweight, so the tag records who made the release and
+when. The workflow accepts either; `git describe` and `git for-each-ref` do not treat
+them alike, and a release is the one kind of tag worth being able to attribute.
+
+If the workflow fails, delete the tag from both places before retrying - the version
+check runs before the build, but the test and publish steps run after, so a tag can
+outlive the run that rejected it:
+
+```
+git push --delete origin v0.9.0
+git tag -d v0.9.0
+```
 
 ## 5. Wait for the workflow, then publish
 
@@ -73,6 +86,12 @@ version that was never published.
 It is a draft on purpose. Read the generated notes, paste the SHA256 into anything
 that needs it, then publish by hand.
 
+The SHA256 is printed by the "Stage the package" step and written to
+`shubbak-<version>-win-x64.zip.sha256` beside the zip. Until the draft is published
+both are reachable only when authenticated — a draft release is not served to anonymous
+callers, and neither is the build artefact — so the hash for step 6 either comes out of
+the workflow log or waits until the release is public.
+
 ## 6. Update the package manifests
 
 Both need the new version and the new SHA256, which the workflow prints and writes
@@ -83,7 +102,31 @@ Scoop looks for a `bucket` directory in the repository you add and falls back to
 root, so a manifest anywhere else is never found. Users get it from the bucket, so a
 commit to `main` is the release, and `scoop update` picks it up.
 
-**winget** — regenerate and submit from `packaging/winget/`:
+**winget** — the verb depends on whether the package is already in `winget-pkgs`.
+
+Check first, because the wrong one fails in a way that reads like a broken tool rather
+than a wrong command:
+
+```
+winget show MoaidHathot.Shubbak
+```
+
+**If that finds nothing, this is a first submission.** `wingetcreate update` operates on
+a manifest already in the upstream repository and cannot create one, so it answers a
+first release with a "package not found" that says nothing about what to do instead.
+Submit the manifests in `packaging/winget/`, which are maintained here and already
+validate:
+
+```
+winget validate --manifest packaging\winget
+wingetcreate submit --token <pat> packaging\winget
+```
+
+Edit `InstallerSha256` and `ReleaseDate` by hand first; the URL and `PackageVersion`
+are already right if the version was set in step 1.
+
+**Once it is upstream, later releases use `update`**, which fetches the asset, computes
+the hash and opens the pull request in one step:
 
 ```
 wingetcreate update MoaidHathot.Shubbak `
@@ -94,6 +137,10 @@ wingetcreate update MoaidHathot.Shubbak `
 
 `wingetcreate` recomputes the hash itself, so it will disagree loudly if the release
 asset was replaced after the workflow measured it. Do not replace release assets.
+
+The PAT needs `public_repo`. `wingetcreate` forks `microsoft/winget-pkgs` to your
+account and opens the pull request from there, so the fork is a normal consequence
+rather than something to undo.
 
 ## Why there is no installer yet
 
