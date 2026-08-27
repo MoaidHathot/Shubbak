@@ -171,6 +171,16 @@ public sealed class WmDaemon : IDisposable
     private readonly ResumeHotKey _resumeHotKey = new();
 
     /// <summary>
+    /// The icon beside the clock.
+    /// </summary>
+    /// <remarks>
+    /// The one place Shubbak can be reached without the keyboard, which matters most
+    /// in exactly the state where the keyboard has been given away. Suspending is
+    /// undoable from here even if the resume chord is taken by something else.
+    /// </remarks>
+    private readonly TrayIcon _tray = new();
+
+    /// <summary>
     /// Whether the hooks have been let go of.
     /// </summary>
     /// <remarks>
@@ -334,6 +344,9 @@ public sealed class WmDaemon : IDisposable
         _ipc = new IpcServer { Warn = message => Log.Warn(LogCategory.Ipc, message) };
         _ipc.Start(new WmDaemonIpc(this).HandleAsync);
         phase = ReportPhase("ipc server", phase);
+
+        StartTray();
+        phase = ReportPhase("tray icon", phase);
 
         RunStartupCommands();
         phase = ReportPhase("startup commands", phase);
@@ -3431,6 +3444,140 @@ public sealed class WmDaemon : IDisposable
         return true;
     }
 
+    /// <summary>Identifies each entry in the tray menu.</summary>
+    /// <remarks>
+    /// Explicit values because they cross into Win32 as menu command ids and back, and
+    /// an id that shifts because an entry was inserted above it is the kind of bug that
+    /// makes the wrong menu item run.
+    /// </remarks>
+    private static class TrayCommand
+    {
+        public const int ToggleSuspend = 1;
+        public const int TogglePause = 2;
+        public const int ReloadConfig = 3;
+        public const int OpenConfigFolder = 4;
+        public const int Exit = 5;
+    }
+
+    /// <summary>
+    /// Puts an icon beside the clock.
+    /// </summary>
+    /// <remarks>
+    /// Best effort. A window manager without a tray icon is a window manager; refusing
+    /// to start because the shell was not ready yet would be a poor trade, and the
+    /// shell frequently is not ready at logon, which is precisely when this runs.
+    /// </remarks>
+    private void StartTray()
+    {
+        _tray.MenuItems = BuildTrayMenu;
+        _tray.ItemChosen = OnTrayCommand;
+
+        if (_tray.Create(TrayTooltip()))
+        {
+            // Worth a line. The tray is the one way in that does not need the keyboard,
+            // so whether it is there is exactly what somebody wants to know when the
+            // keyboard is the thing that has stopped working.
+            Log.Info(LogCategory.Wm, "tray icon added");
+            return;
+        }
+
+        Log.Warn(LogCategory.Wm, "no tray icon this session");
+    }
+
+    /// <summary>
+    /// Describes the current state in the menu, rather than listing fixed labels.
+    /// </summary>
+    /// <remarks>
+    /// Built each time it is opened. The difference between "Suspend" and "Resume" is
+    /// the whole reason somebody opens it, and a menu that says the wrong one is worse
+    /// than no menu at all.
+    /// </remarks>
+    private IReadOnlyList<TrayMenuItem> BuildTrayMenu() =>
+    [
+        _suspended
+            ? new TrayMenuItem(TrayCommand.ToggleSuspend, "Resume\tkeyboard released", Default: true)
+            : new TrayMenuItem(TrayCommand.ToggleSuspend, "Suspend - release the keyboard"),
+
+        new TrayMenuItem(TrayCommand.TogglePause, "Stop arranging windows", Checked: _wm.IsPaused),
+
+        TrayMenuItem.Separator,
+
+        new TrayMenuItem(TrayCommand.ReloadConfig, "Reload configuration"),
+        new TrayMenuItem(TrayCommand.OpenConfigFolder, "Open configuration folder"),
+
+        TrayMenuItem.Separator,
+
+        new TrayMenuItem(TrayCommand.Exit, "Exit Shubbak"),
+    ];
+
+    /// <summary>Runs whatever was chosen from the tray menu.</summary>
+    /// <remarks>
+    /// Routed through the same commands a keybinding runs, rather than calling the
+    /// methods directly. A tray that could reach states the keyboard could not would
+    /// be a second way for the program to behave, and this codebase has one executor
+    /// precisely so that cannot happen.
+    /// </remarks>
+    private void OnTrayCommand(int id)
+    {
+        switch (id)
+        {
+            case TrayCommand.ToggleSuspend:
+                RunCommand(new ToggleSuspendCommand());
+                break;
+
+            case TrayCommand.TogglePause:
+                RunCommand(new TogglePauseCommand());
+                break;
+
+            case TrayCommand.ReloadConfig:
+                RunCommand(new ReloadConfigCommand());
+                break;
+
+            case TrayCommand.OpenConfigFolder:
+                OpenConfigFolder();
+                break;
+
+            case TrayCommand.Exit:
+                RunCommand(new ExitCommand());
+                break;
+
+            default:
+                break;
+        }
+
+        _tray.SetTooltip(TrayTooltip());
+    }
+
+    /// <summary>Shows the folder the config was loaded from.</summary>
+    /// <remarks>
+    /// The directory rather than the file, because the answer to "where do I change
+    /// this" is a place, and because a user with no config yet still needs to be shown
+    /// where to put one.
+    /// </remarks>
+    private void OpenConfigFolder()
+    {
+        string? folder = _configPath is { Length: > 0 } path
+            ? Path.GetDirectoryName(Path.GetFullPath(path))
+            : Path.GetDirectoryName(ConfigPathResolver.Resolve(null).Path);
+
+        if (folder is not { Length: > 0 } || !Directory.Exists(folder))
+        {
+            Log.Warn(LogCategory.Config, "there is no configuration folder to open");
+            return;
+        }
+
+        ShellExecute(folder);
+    }
+
+    /// <summary>What hovering over the icon says.</summary>
+    private string TrayTooltip()
+    {
+        if (_suspended) return "Shubbak - suspended, keyboard released";
+        if (_wm.IsPaused) return "Shubbak - not arranging windows";
+
+        return $"Shubbak {ShubbakVersion.Current}";
+    }
+
     /// <summary>
     /// Lets go of the keyboard and the desktop, keeping everything else.
     /// </summary>
@@ -3473,6 +3620,7 @@ public sealed class WmDaemon : IDisposable
         Log.Info(LogCategory.Wm, $"suspended: keyboard hook and window events released; {how}");
 
         Publish(new WmResult(true, [new SuspendChanged(true)]));
+        _tray.SetTooltip(TrayTooltip());
     }
 
     /// <summary>Takes the keyboard and the desktop back.</summary>
@@ -3503,6 +3651,7 @@ public sealed class WmDaemon : IDisposable
         Log.Info(LogCategory.Wm, $"resumed: {_windows.ManagedCount} windows managed");
 
         Publish(new WmResult(true, [new SuspendChanged(false)]));
+        _tray.SetTooltip(TrayTooltip());
     }
 
     /// <summary>
@@ -3554,6 +3703,11 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void OnLoopMessage(uint message, nuint wParam, nint lParam)
     {
+        // Explorer restarting takes every tray icon with it, and tells each program so
+        // it can put its own back. Broadcast to top-level windows rather than posted to
+        // ours, so it is seen here rather than in the tray's own window procedure.
+        _tray.OnLoopMessage(message);
+
         if (message != ResumeHotKey.Message || (int)wParam != ResumeHotKey.Id) return;
 
         Log.Info(LogCategory.Wm, "resume requested from the keyboard");
@@ -4531,6 +4685,10 @@ public sealed class WmDaemon : IDisposable
         _keyboard?.Dispose();
         _winEvents?.Dispose();
         _resumeHotKey.Dispose();
+
+        // Before the loop goes: removing the icon needs the window it belongs to, and
+        // an icon left behind is a ghost the user has to hover over to clear.
+        _tray.Dispose();
 
         // Process-wide, so leaving it raised would outlive the reason for it.
         _timerResolution.Dispose();
