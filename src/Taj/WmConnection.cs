@@ -28,6 +28,18 @@ namespace Taj;
 public sealed class WmConnection : IAsyncDisposable
 {
     private readonly BarModel _model;
+
+    /// <summary>Whether the window manager has stopped arranging windows.</summary>
+    private bool _paused;
+
+    /// <summary>Whether it has let go of the keyboard.</summary>
+    /// <remarks>
+    /// Kept apart from <see cref="_paused"/> rather than collapsed into one flag,
+    /// because the two arrive on different topics and either can change without the
+    /// other. Collapsing them would make the second event overwrite what the first
+    /// said.
+    /// </remarks>
+    private bool _suspended;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly int _monitorIndex;
 
@@ -273,6 +285,20 @@ public sealed class WmConnection : IAsyncDisposable
                 _model.SetValue("binding_mode", Unquote(notification.Data));
                 break;
 
+            // Both change what Shubbak is doing without changing anything on screen,
+            // which is exactly the kind of state a bar exists to make visible. A
+            // suspended window manager in particular looks identical to a crashed one
+            // until you press a key and nothing happens.
+            case "wm.paused":
+                _paused = notification.Data.Contains("\"paused\":true", StringComparison.Ordinal);
+                PublishStatus();
+                break;
+
+            case "wm.suspended":
+                _suspended = notification.Data.Contains("\"suspended\":true", StringComparison.Ordinal);
+                PublishStatus();
+                break;
+
             case "layout.changed":
                 await RefreshAsync(client).ConfigureAwait(false);
                 break;
@@ -306,6 +332,34 @@ public sealed class WmConnection : IAsyncDisposable
             default:
                 break;
         }
+    }
+
+    /// <summary>
+    /// Publishes the window manager's own state, as one combined value and as two
+    /// separate ones.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>status</c> is for a bar with room for one pill: suspended wins when both
+    /// hold, because a window manager that is not arranging windows is inconvenient
+    /// and one that has let go of the keyboard is why none of your keys work.
+    /// </para>
+    /// <para>
+    /// <c>suspended</c> and <c>paused</c> are separate so a config can show two pills
+    /// and give each the click that undoes it. That is the point of them: a pill
+    /// saying "suspended" which you can click to resume is a way back that does not
+    /// need the keyboard, which is the one thing suspending took away.
+    /// </para>
+    /// <para>
+    /// All three are empty when there is nothing to say, and a template widget hides
+    /// itself when its result is empty.
+    /// </para>
+    /// </remarks>
+    private void PublishStatus()
+    {
+        _model.SetValue("suspended", WindowManagerStatus.SuspendedLabel(_suspended));
+        _model.SetValue("paused", WindowManagerStatus.PausedLabel(_paused));
+        _model.SetValue("status", WindowManagerStatus.Combined(_suspended, _paused));
     }
 
     private void UpdateFocusedWindow(string json)
@@ -369,6 +423,14 @@ public sealed class WmConnection : IAsyncDisposable
             _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
             _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
             _model.SetValue("layout", FindActiveLayout(state));
+
+            // From the snapshot as well as from the events, because a bar that starts
+            // while Shubbak is already suspended would otherwise show nothing until
+            // the state next changed - which is precisely the moment somebody is
+            // looking at the bar wondering why their keys do nothing.
+            _paused = state.Paused;
+            _suspended = state.Suspended;
+            PublishStatus();
 
             if (active.Length > 0) ActiveWorkspaceChanged?.Invoke(active);
         }

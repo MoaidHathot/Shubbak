@@ -126,6 +126,7 @@ internal static class StateProjection
             MonitorRemoved e => $"{{\"id\":{e.Id.Value},\"device_id\":{JsonString(e.DeviceId)}}}",
             BindingModeChanged e => e.Mode is null ? "null" : JsonString(e.Mode),
             PauseChanged e => $"{{\"paused\":{(e.Paused ? "true" : "false")}}}",
+            SuspendChanged e => $"{{\"suspended\":{(e.Suspended ? "true" : "false")}}}",
             LayoutChanged e => $"{{\"layout\":{JsonString(e.Layout)}}}",
             ContainerResized e => $"{{\"id\":{e.Container.Id.Value}}}",
             CommandRejected e =>

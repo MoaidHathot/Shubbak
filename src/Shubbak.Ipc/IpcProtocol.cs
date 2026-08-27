@@ -367,6 +367,7 @@ public static class IpcProtocol
         "command.rejected",
         "config.reloaded",
         "wm.paused",
+        "wm.suspended",
         SignalTopic,
         ShutdownTopic,
         ResyncTopic,

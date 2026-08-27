@@ -506,6 +506,21 @@ bar {
             }
 
             text id="seattle" template="{{ seattle }}" colour="#ffffff80"
+            // Shubbak has let go of the keyboard - see wm-toggle-suspend above.
+            //
+            // This is the only thing on screen that says so, which is why it is here.
+            // Suspended is indistinguishable from crashed by looking: windows stay
+            // where they are and no key does anything. Click it to resume, which is a
+            // way back that does not need the keyboard - the one thing suspending
+            // took away.
+            text id="suspended" template="{{ suspended }}" colour="#1e1e2e" \
+                 background="#f38ba8" on-click="wm-resume"
+
+            // Shubbak has stopped arranging windows. Less alarming - the keyboard
+            // still works - so amber rather than red. Click it to start again.
+            text id="paused"  template="{{ paused }}" colour="#1e1e2e" \
+                 background="#f9e2af" on-click="wm-toggle-pause"
+
             // Empty most of the time, so it takes no room. When it is showing, the
             // keyboard is behaving unusually - click it to return to the default
             // bindings, which is the one way out that does not need the keyboard.

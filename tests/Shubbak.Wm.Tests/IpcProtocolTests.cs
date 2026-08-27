@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using Shubbak.Core.Wm;
 using Shubbak.Ipc;
 
 namespace Shubbak.Wm.Tests;
@@ -37,16 +39,30 @@ public sealed class IpcProtocolTests
     {
         // The list is what a subscription is checked against, so a topic the window
         // manager publishes but the list omits would be refused to its own clients.
+        //
+        // Derived from the event types rather than written out. It was written out,
+        // and that is precisely how wm.suspended came to be published by the daemon
+        // and rejected by the subscription check at the same time: a new event was
+        // added, the hand-kept list was not, and the test that exists to catch exactly
+        // this passed because it was reading the same hand-kept list.
+        //
+        // Reflection is the only way to ask "what subtypes exist"; C# has no closed
+        // hierarchy and so no compile-time exhaustiveness over one. The trim analyser
+        // would object, and is off for test projects - which are never trimmed, never
+        // published and never AOT compiled.
         string[] published =
         [
-            "window.managed", "window.unmanaged", "window.focused",
-            "window.title_changed", "window.state_changed", "window.tags_changed",
-            "window.moved", "workspace.activated", "workspace.created",
-            "workspace.destroyed", "workspace.moved", "layout.changed",
-            "container.resized", "monitor.added", "monitor.removed",
-            "monitor.changed", "binding_mode.changed", "command.rejected",
-            "config.reloaded",
+            .. typeof(WmEvent).Assembly
+                .GetTypes()
+                .Where(t => t.IsSealed && !t.IsAbstract && t.IsSubclassOf(typeof(WmEvent)))
+                .Select(t => RuntimeHelpers.GetUninitializedObject(t) as WmEvent)
+                .Where(e => e is not null)
+                .Select(e => e!.Topic)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(topic => topic, StringComparer.Ordinal),
         ];
+
+        Assert.NotEmpty(published);
 
         foreach (string topic in published)
             Assert.Contains(topic, IpcProtocol.Topics);
