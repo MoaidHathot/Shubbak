@@ -416,25 +416,41 @@ public sealed class WindowCommitter
             // between a relayout costing one SetWindowPos and costing dozens, and
             // it also suppresses a large share of the LOCATIONCHANGE echo.
             //
-            // Judged on the target alone, deliberately. Comparing against where the
-            // window actually is starts a fight with any application that adjusts its
-            // own size - a terminal snapping to whole character cells never lands
-            // exactly where it was put, so the comparison failed every time and the
-            // window was moved again on every layout. Since focus changes trigger a
-            // layout, that was a visible jump every time focus moved.
+            // Judged on the target, not on an exact comparison with where the window
+            // actually is. That comparison was tried and reverted: a terminal snapping
+            // to whole character cells never lands precisely where it was put, so it
+            // failed on every pass and the window was moved again on every layout -
+            // and since focus changes trigger a layout, that was a visible jump every
+            // time focus moved.
             //
-            // A window moved by something else is handled where it should be: the
-            // location-change event, which already knows how to tell a user's drag
-            // from our own echo.
+            // But the target alone is not enough either, and the comment that used to
+            // sit here said this case was "handled where it should be: the
+            // location-change event". It was not. That subscription was removed the
+            // following day, for its own good reasons, and nothing replaced it - so a
+            // window that moved itself was skipped here on every subsequent pass, for
+            // ever, because the target had not changed and therefore there was
+            // seemingly nothing to do.
+            //
+            // That is what left a browser restoring its remembered geometry sitting on
+            // the wrong monitor until the user pressed wm-redraw, which cures it only
+            // because Redraw forgets every cached rectangle.
+            //
+            // So the window is asked where it is, but only when it was about to be
+            // skipped, and only coarsely enough that character-cell rounding cannot
+            // trip it. See PlacementDrift.
+            bool alreadyCommanded;
+
             lock (_lastCommitted)
             {
-                if (_lastCommitted.TryGetValue(handle, out Rect previous) &&
-                    previous == placement.Rect &&
-                    _lastApplied.ContainsKey(handle))
-                {
-                    continue;
-                }
+                alreadyCommanded = _lastCommitted.TryGetValue(handle, out Rect previous)
+                    && previous == placement.Rect
+                    && _lastApplied.ContainsKey(handle);
             }
+
+            // The geometry read is outside the lock on purpose. It is a syscall, and
+            // holding a lock across one that every layout pass performs per window is
+            // how a cheap check becomes a contended one.
+            if (alreadyCommanded && !HasWandered(handle, placement)) continue;
 
             toMove.Add((handle, placement.Rect));
         }
@@ -677,6 +693,19 @@ public sealed class WindowCommitter
     {
         lock (s_shadowGate) s_shadows.Remove(handle);
     }
+
+    /// <summary>
+    /// Whether a window we were about to skip has moved itself somewhere else.
+    /// </summary>
+    /// <remarks>
+    /// Asked only of windows whose target has not changed since they were last
+    /// committed - which in a settled desktop is nearly all of them, so it has to stay
+    /// cheap. It is one <c>GetWindowRect</c> plus a shadow margin this class has
+    /// already measured and cached.
+    /// </remarks>
+    private static bool HasWandered(nint handle, Placement placement) =>
+        PlacementDrift.HasEscaped(
+            VisibleBounds(handle), placement.Rect, placement.Window.Monitor?.Bounds);
 
     /// <summary>Places a single window immediately, outside any frame.</summary>
     public void CommitOne(nint handle, Rect rect)

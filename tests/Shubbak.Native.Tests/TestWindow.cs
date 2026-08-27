@@ -140,6 +140,33 @@ internal sealed class TestWindow : IDisposable
         PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNA);
 
     /// <summary>
+    /// Moves the window behind Shubbak's back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Stands in for an application repositioning its own window - a browser restoring
+    /// the geometry it remembered from last time, which it does shortly after the
+    /// window first appears and therefore after the window manager has placed it.
+    /// </para>
+    /// <para>
+    /// Deliberately not routed through <c>WindowCommitter</c>, which would record the
+    /// new rectangle as one Shubbak asked for and so hide the very thing under test.
+    /// Size is left alone: this is a move, not a resize.
+    /// </para>
+    /// </remarks>
+    public void MoveTo(int x, int y) =>
+        PInvoke.SetWindowPos(
+            _handle,
+            HWND.Null,
+            x,
+            y,
+            0,
+            0,
+            SET_WINDOW_POS_FLAGS.SWP_NOSIZE
+                | SET_WINDOW_POS_FLAGS.SWP_NOZORDER
+                | SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
+
+    /// <summary>
     /// Waits for <paramref name="until"/> to hold.
     /// </summary>
     /// <remarks>

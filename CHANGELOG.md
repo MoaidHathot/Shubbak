@@ -17,6 +17,43 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A window that moved itself stayed moved.** Reopening Firefox put it on the wrong
+  monitor, on top of the window already tiled there, and it stayed until `wm-redraw`
+  was pressed.
+
+  Applications reposition their own windows — a browser restoring the geometry it
+  remembered from last time does it a moment after its window appears, which is after
+  Shubbak has placed it. Windows announces that only through
+  `EVENT_OBJECT_LOCATIONCHANGE`, which Shubbak does not subscribe to and still does
+  not: the callbacks arrive on the message queue the pump waits on, so a single
+  dragged window used to produce 122 wake-ups a second and pace the animation loop
+  against its own output.
+
+  What made this *stick* rather than correct itself was the committer's skip check.
+  It asks "is this window already where I last told it to be", judged on the target
+  alone — so once a window had wandered, every later pass skipped it, because the
+  target had not changed and there was seemingly nothing to do. It now also asks
+  whether the window is still there, but only for windows it was about to skip, and
+  only coarsely: a different monitor, or a long way from its tile. An exact comparison
+  was tried once before and reverted, because a terminal snapping to whole character
+  cells never lands precisely where it was put and so was re-placed on every layout —
+  which, since focus changes run a layout, was a twitch on every focus change.
+
+  Newly adopted windows are additionally looked at twice, about 300 ms and 900 ms
+  after being placed, which catches the displacement without waiting for something
+  else to trigger a layout. Twice and then never again: an unbounded watch is how this
+  becomes a window manager arguing with an application several times a second for as
+  long as both are running.
+
+  Worth recording, since it was checked: **neither GlazeWM nor komorebi handles this
+  either.** Both subscribe to `EVENT_OBJECT_LOCATIONCHANGE` and both discard it for
+  tiling windows — GlazeWM falls through to a bare `_ => {}`, komorebi forwards it
+  only to its border overlay. GlazeWM's version of the bug is transient because its
+  commit path has no skip check, so the next redraw of that container corrects it;
+  komorebi's is masked for this specific case by an allowlist that turns a title
+  change into a re-tile, and names Firefox as the reason it exists.
+
+## [0.9.0] - 2026-08-26
 - **The scratchpad was one-way.** Stashing worked; pressing the same key again did
   nothing at all, silently.
 
