@@ -693,6 +693,16 @@ public static class TajConfigLoader
 
                 new BarZone("right", JustifyContent.End, 0, 10,
                 [
+                    // Says "suspended" or "paused" and is otherwise absent, because an
+                    // empty template hides its widget. Both states change what Shubbak
+                    // does without changing anything on screen - a suspended window
+                    // manager looks exactly like a crashed one until you press a key -
+                    // so this is the only warning the user gets.
+                    //
+                    // First in the zone and in red, deliberately. It is the one thing
+                    // here that means something is not working.
+                    new TemplateWidget("status", "{{ status }}",
+                        style with { Foreground = new Colour(0xF3, 0x8B, 0xA8) }, padded),
                     new TemplateWidget("mode", "{{ binding_mode }}",
                         style with { Foreground = new Colour(0xF9, 0xE2, 0xAF) }, padded),
                     new TemplateWidget("layout", "{{ layout }}",

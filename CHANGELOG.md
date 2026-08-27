@@ -17,6 +17,21 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **Taj says when Shubbak has stopped.** New template values `status`, `suspended` and
+  `paused`, rendered as pills that hide themselves when there is nothing to report.
+
+  Both states change what Shubbak does without changing anything on screen, so neither
+  was discoverable by looking. Suspended is the one that matters: it is
+  indistinguishable from a crash — windows stay where they are and no key does
+  anything — so somebody who suspended it and forgot has no way to tell the difference
+  without trying a command and reasoning about the answer.
+
+  `status` is the combined value for a bar with room for one pill, and suspended wins
+  when both hold. `suspended` and `paused` are separate so a config can show two and
+  give each the click that undoes it — a pill saying "suspended" that resumes when
+  clicked is a way back that does not need the keyboard, which is the one thing
+  suspending took away.
+
 - **A system tray icon.** Right-click or left-click it for suspend/resume, stop
   arranging windows, reload configuration, open the configuration folder, and exit.
   The labels describe the current state rather than being fixed, because the
@@ -70,6 +85,18 @@ schedule and breaking either is a different kind of event:
 - **`wm-toggle-pause` is unchanged.** Both exist because they are genuinely different.
 
 ### Fixed
+
+- **`wm.suspended` was published but could not be subscribed to by name.** The topic
+  was missing from `IpcProtocol.Topics`, which is what a subscription is checked
+  against — so `shubbak sub wm.suspended` was refused for a topic the daemon was
+  actively publishing. It also carried an empty `{}` payload rather than saying what
+  had changed.
+
+  There was already a test for exactly this, `EveryPublishedTopicIsDeclared`, and it
+  passed — because it compared the topic list against a **second hand-maintained
+  list**, which had drifted in the same way and for the same reason. It now derives
+  the published topics from the event types themselves, so it cannot drift again.
+  Verified by removing the entry and watching it fail.
 
 - **Two window managers could run at once, silently.** There was no single-instance
   guard of any kind, and the named pipe could not serve as one: it is created with
