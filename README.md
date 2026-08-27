@@ -2,7 +2,7 @@
 
 # Shubbak
 
-**A tiling window manager for Windows — with animations, a status bar, a command
+**A tiling window manager for Windows with animations, a status bar, a command
 palette, and a config file that tells you when you've made a mistake.**
 
 [![Build](https://img.shields.io/github/actions/workflow/status/MoaidHathot/Shubbak/build.yml?branch=main&logo=github&label=build)](https://github.com/MoaidHathot/Shubbak/actions/workflows/build.yml)
@@ -25,21 +25,9 @@ palette, and a config file that tells you when you've made a mistake.**
 
 Shubbak (شبّاك, *"window"*) arranges your windows for you so you can stop dragging
 them around. It's keyboard-driven, it animates, and it ships with everything you
-need in the box — no second app to install before your desktop looks like a
+need in the box, no second app to install before your desktop looks like a
 desktop.
 
-If you already use **GlazeWM** or **komorebi**, the fastest way to describe Shubbak
-is: *a hybrid of the two.*
-
-- From **GlazeWM**, the batteries-included part. One config file. Keybindings are
-  built in — no separate hotkey daemon. A bar you don't have to go and find.
-  Install it, run it, done.
-- From **komorebi**, the engine part. A real CLI, a JSON view of the whole window
-  manager, and an event stream you can subscribe to and build on.
-
-Both of those projects are excellent and Shubbak wouldn't exist without them. The
-bet here is that you shouldn't have to pick between "it just works" and "I can
-script every inch of it."
 
 ## Demos
 
