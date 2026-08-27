@@ -78,6 +78,17 @@ public sealed class WinEventSource : IDisposable
         // that would throw it away.
         //
         // Nothing downstream wants it. MoveSizeEnd is the event that carries intent.
+        //
+        // What this costs, and where that is paid: a window that moves *itself* -
+        // a browser restoring its remembered geometry a moment after it opens -
+        // announces it through this event and no other, so Shubbak cannot be told
+        // about it. It is noticed by looking instead, in WindowCommitter's skip check
+        // and in the daemon's settle check for newly adopted windows. Both use
+        // PlacementDrift, which asks the question coarsely enough that an application
+        // rounding its own size cannot start the fight this removal was avoiding.
+        //
+        // Neither GlazeWM nor komorebi does better here, for the record: both subscribe
+        // to this event and both discard it for tiling windows.
         (PInvoke.EVENT_OBJECT_CLOAKED, WinEventKind.Cloaked),
         (PInvoke.EVENT_OBJECT_UNCLOAKED, WinEventKind.Uncloaked),
         (PInvoke.EVENT_SYSTEM_FOREGROUND, WinEventKind.Foreground),

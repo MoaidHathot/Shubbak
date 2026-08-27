@@ -191,6 +191,23 @@ public sealed class WmDaemon : IDisposable
     private long _lastMonitorSyncTicks;
 
     /// <summary>
+    /// Newly placed windows still being watched, and how many times each has been
+    /// looked at. See <see cref="WatchForDrift"/>.
+    /// </summary>
+    /// <remarks>
+    /// Small and short-lived: an entry exists only for the second or so after a window
+    /// is adopted, and every entry is removed after a fixed number of checks whatever
+    /// the outcome. It cannot grow with the number of windows on the desktop.
+    /// </remarks>
+    private readonly Dictionary<nint, (long Placed, int Attempt)> _settling = [];
+
+    /// <summary>
+    /// Reused by the settle pass, so that a dictionary can be modified while the
+    /// windows due a check are being walked.
+    /// </summary>
+    private readonly List<nint> _settleScratch = [];
+
+    /// <summary>
     /// Whether the log level came from the command line, and so must not be
     /// overridden by config.
     /// </summary>
@@ -452,8 +469,27 @@ public sealed class WmDaemon : IDisposable
 
         // The wait is the other question, and has a different answer: a pending pass
         // does want to run promptly.
-        return _layoutDirty ? FrameInterval : IdleInterval;
+        if (_layoutDirty) return FrameInterval;
+
+        // A window adopted moments ago is due another look. Without this the pump
+        // would sleep for the idle interval and the check would happen whenever
+        // something else next woke it - which on a still desktop is a long time, and
+        // is exactly the situation the check exists for.
+        //
+        // The idle interval is still the ceiling: this only ever shortens the wait.
+        return _settling.Count > 0 ? SettleInterval : IdleInterval;
     }
+
+    /// <summary>
+    /// How long to wait when the only thing pending is a look at a new window.
+    /// </summary>
+    /// <remarks>
+    /// Coarse on purpose. The settle checks are hundreds of milliseconds apart, so
+    /// waking more often than this would buy nothing but wake-ups, and this path is
+    /// reached only while a window is settling - at most a second or so after one
+    /// opens.
+    /// </remarks>
+    private static readonly TimeSpan SettleInterval = TimeSpan.FromMilliseconds(100);
 
     /// <summary>
     /// Whether the fine timer was held the last time a frame was being paced.
@@ -656,6 +692,7 @@ public sealed class WmDaemon : IDisposable
                 reported = ReportMotionEnded();
             }
 
+            SettleArrivedWindows(now);
             MaybeSyncMonitors(now);
             MaybeRefreshFocusBorder(now);
             MaybeSaveSession(now);
@@ -3049,6 +3086,13 @@ public sealed class WmDaemon : IDisposable
         // OpeningIsWorthAnimating.
         if (_windows.TakeArriving(handle))
         {
+            // Watched for a moment after it is placed. An application that restores its
+            // own remembered geometry does so shortly after its window first appears,
+            // which is after this - and it announces that only through
+            // EVENT_OBJECT_LOCATIONCHANGE, which Shubbak does not subscribe to. See
+            // WatchForDrift.
+            WatchForDrift(handle);
+
             if (!_config.Animation.AnimateNewWindows ||
                 !OpeningIsWorthAnimating(current, placement.Window.Monitor?.Bounds))
             {
@@ -3314,6 +3358,112 @@ public sealed class WmDaemon : IDisposable
 
         last = now;
         return true;
+    }
+
+    /// <summary>
+    /// Watches a newly placed window for a moment, in case it moves itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Shubbak places a window the moment it adopts it. An application that restores
+    /// its own remembered geometry does so shortly afterwards - Firefox reopening onto
+    /// the display it was last on is the case this was written for - and Windows
+    /// announces that only through <c>EVENT_OBJECT_LOCATIONCHANGE</c>, which is not
+    /// subscribed to. See the note in <c>WinEventSource</c> for why not.
+    /// </para>
+    /// <para>
+    /// So the window is looked at, twice, and then left alone. Twice because an
+    /// application's startup is not on a schedule anyone knows: the first check catches
+    /// the common case and the second covers a slower start. Then it stops, and that
+    /// bound is the point - an unbounded watch is how this turns into a window manager
+    /// arguing with an application over where a window lives, several times a second,
+    /// for as long as both are running.
+    /// </para>
+    /// <para>
+    /// <see cref="WindowCommitter"/> is what actually repairs it; this only decides
+    /// that a repair is worth attempting and makes the next pass reconsider a window it
+    /// would otherwise skip.
+    /// </para>
+    /// </remarks>
+    private void WatchForDrift(nint handle)
+    {
+        if (handle == 0) return;
+
+        _settling[handle] = (Stopwatch.GetTimestamp(), 0);
+    }
+
+    /// <summary>The moments after placement at which a new window is re-examined.</summary>
+    /// <remarks>
+    /// The first is late enough that an application has shown its window and had a
+    /// chance to reposition it, and early enough that a user watching the screen reads
+    /// the correction as part of the window opening rather than as the window moving on
+    /// its own afterwards. The second is for applications that take longer to settle.
+    /// </remarks>
+    private static readonly double[] s_settleChecksMs = [300, 900];
+
+    /// <summary>
+    /// Re-places any newly adopted window that has since moved itself.
+    /// </summary>
+    private void SettleArrivedWindows(long now)
+    {
+        if (_settling.Count == 0) return;
+
+        _settleScratch.Clear();
+
+        foreach ((nint handle, (long placed, int attempt)) in _settling)
+        {
+            double elapsedMs = (now - placed) * 1000.0 / Stopwatch.Frequency;
+
+            if (elapsedMs < s_settleChecksMs[attempt]) continue;
+
+            _settleScratch.Add(handle);
+        }
+
+        foreach (nint handle in _settleScratch)
+        {
+            (long placed, int attempt) = _settling[handle];
+
+            // Done watching. Recorded before the check so that every path through the
+            // rest of this loop is the last one for this window at this attempt, and
+            // the bound holds however the check turns out.
+            if (attempt + 1 >= s_settleChecksMs.Length) _settling.Remove(handle);
+            else _settling[handle] = (placed, attempt + 1);
+
+            if (!_windows.TryGet(handle, out WindowNode? window))
+            {
+                _settling.Remove(handle);
+                continue;
+            }
+
+            // Closed, or on a workspace nobody is looking at. A concealed window is
+            // parked off screen on purpose and has no business being dragged back.
+            if (!Win32Window.Exists(handle) || !window.IsOnADisplayedWorkspace)
+            {
+                _settling.Remove(handle);
+                continue;
+            }
+
+            // Mid-flight. The animation owns the window's position until it lands, and
+            // measuring it against its destination now would always report a
+            // difference, because it has not arrived yet.
+            if (_animation.TryGetCurrent(window.Handle, out _)) continue;
+
+            if (!PlacementDrift.HasEscaped(
+                    WindowCommitter.VisibleBounds(handle), window.Rect, window.Monitor?.Bounds))
+            {
+                continue;
+            }
+
+            Log.Debug(
+                LogCategory.Layout,
+                $"0x{handle:X} moved itself after being placed; putting it back");
+
+            // Forgetting the cached rectangle is what makes the next pass act. Without
+            // it the placement is unchanged, so the committer skips the window as
+            // already done - which is the whole reason this was invisible.
+            _committer.Forget(handle);
+            _layoutDirty = true;
+        }
     }
 
     /// <summary>

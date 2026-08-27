@@ -24,6 +24,11 @@ WM_QUIT
 PostMessage
 WM_CLOSE
 
+// Moving a test window without telling the window manager, so the drift check can be
+// exercised against an application that repositions itself.
+SetWindowPos
+SET_WINDOW_POS_FLAGS
+
 // Synthesising a keystroke, so the hook callback can be driven for real. The only
 // way to prove the guard around it survives a fault: without it the exception
 // leaves an UnmanagedCallersOnly callback and takes the test host with it.
