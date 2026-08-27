@@ -53,7 +53,7 @@ internal static class StateProjection
         monitor.Bounds.Height,
         monitor.ActiveWorkspace?.Name);
 
-    public static StateSnapshot Snapshot(WindowManager wm)
+    public static StateSnapshot Snapshot(WindowManager wm, bool suspended = false)
     {
         WindowNode? focused = wm.FocusedWindow;
 
@@ -63,7 +63,12 @@ internal static class StateProjection
             [.. wm.Root.DescendantWindows().Select(w => Describe(w, focused))],
             focused is null ? null : Describe(focused, focused),
             wm.BindingMode,
-            wm.IsPaused);
+            wm.IsPaused,
+
+            // Passed in rather than read from the tree, because the state machine has
+            // never known that a keyboard hook exists and this is not the change that
+            // should teach it.
+            suspended);
     }
 
     /// <summary>

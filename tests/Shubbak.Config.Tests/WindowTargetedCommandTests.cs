@@ -56,6 +56,15 @@ public sealed class WindowTargetedCommandTests
     [InlineData("wm-redraw")]
     [InlineData("wm-exit")]
     [InlineData("move-workspace --direction left")]
+
+    // Suspending must work from an unmanaged window above all others. Somebody
+    // reaching for it is looking at a game, and a game is very often exactly the
+    // sort of window Shubbak passed over - so a suspend that refused because the
+    // foreground window is unmanaged would refuse precisely when it was wanted.
+    [InlineData("wm-suspend")]
+    [InlineData("wm-resume")]
+    [InlineData("wm-toggle-suspend")]
+    [InlineData("wm-toggle-pause")]
     public void ACommandThatDoesNotActOnAWindowSaysThatToo(string text)
     {
         // These stay useful from an unmanaged window. Moving focus out of one is

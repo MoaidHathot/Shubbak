@@ -131,6 +131,17 @@ VIRTUAL_KEY
 MapVirtualKey
 MAP_VIRTUAL_KEY_TYPE
 
+// The one chord a suspended window manager still listens for.
+//
+// RegisterHotKey is not a hook: the system matches the chord itself and posts a
+// single WM_HOTKEY to this thread's queue. Nothing runs per keystroke, so a
+// suspended Shubbak costs the input path exactly nothing - which is the entire
+// reason suspending is worth having.
+RegisterHotKey
+UnregisterHotKey
+HOT_KEY_MODIFIERS
+WM_HOTKEY
+
 // --- message loop -----------------------------------------------------------------
 GetMessage
 PeekMessage

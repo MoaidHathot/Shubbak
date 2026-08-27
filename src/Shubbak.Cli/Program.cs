@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Wm;
@@ -296,8 +297,41 @@ internal static class Program
         await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
         IpcResponse response = await client.SendAsync("ping").ConfigureAwait(false);
 
-        Console.WriteLine(response.Ok ? "running" : "not responding");
-        return response.Ok ? 0 : 1;
+        if (!response.Ok)
+        {
+            Console.WriteLine("not responding");
+            return 1;
+        }
+
+        // "running" alone is not enough once suspending exists. A suspended window
+        // manager is running and deliberately doing nothing, which from the outside is
+        // indistinguishable from one that has stopped working - and somebody who
+        // suspended it before a game and then wondered why their keys do nothing needs
+        // to be told which of the two they are looking at.
+        IpcResponse state = await client.SendAsync("query", "state").ConfigureAwait(false);
+
+        if (state.Ok && state.Data is { Length: > 0 } payload)
+        {
+            StateSnapshot? snapshot = JsonSerializer.Deserialize(
+                payload, IpcJsonContext.Default.StateSnapshot);
+
+            if (snapshot is { Suspended: true })
+            {
+                Console.WriteLine("running, suspended");
+                Console.WriteLine("hint: shubbak wm-resume takes the keyboard back");
+                return 0;
+            }
+
+            if (snapshot is { Paused: true })
+            {
+                Console.WriteLine("running, paused");
+                Console.WriteLine("hint: shubbak wm-toggle-pause starts arranging windows again");
+                return 0;
+            }
+        }
+
+        Console.WriteLine("running");
+        return 0;
     }
 
     /// <summary>Tails the event stream.</summary>
@@ -680,6 +714,20 @@ internal static class Program
           every concealed window back, and takes the bar down with it. Terminating
           the process instead strands windows off screen - use 'restore' if that
           has already happened.
+
+        GETTING OUT OF THE WAY
+          wm-toggle-suspend    Release the keyboard hook and the window event hooks,
+          wm-suspend           leaving every window where it is. For a game: a chord
+          wm-resume            Shubbak swallows is a chord the game never sees.
+
+                               Resume with the same key that suspended - the system
+                               watches for that one chord while suspended, which is
+                               not a hook and costs nothing per keystroke - or with
+                               `shubbak wm-resume`.
+
+          wm-toggle-pause      Different, and worth not confusing: stops windows
+                               being rearranged but keeps the keyboard, so every
+                               binding still works.
 
         PROCESSES
           taj-exit             Close the bar, leaving the window manager running.

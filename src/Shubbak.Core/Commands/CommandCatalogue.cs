@@ -161,7 +161,14 @@ public static class CommandCatalogue
 
         Spec("wm-enable-binding-mode", "Enter a binding mode", [CommandArgument.BindingMode]),
         Spec("wm-disable-binding-mode", "Leave the current binding mode"),
-        Spec("wm-toggle-pause", "Suspend tiling, or resume it"),
+        Spec("wm-toggle-pause", "Stop rearranging windows, or start again"),
+
+        // Worded to make the difference from pause findable, because the two are one
+        // word apart and do very different things. Pause keeps the keyboard; suspend
+        // gives it back, which is what a game needs.
+        Spec("wm-suspend", "Let go of the keyboard and stop managing windows"),
+        Spec("wm-resume", "Take the keyboard back and manage windows again"),
+        Spec("wm-toggle-suspend", "Let go of the keyboard, or take it back"),
         Spec("wm-reload-config", "Re-read the configuration file"),
         Spec("wm-redraw", "Force every window back to its computed rectangle"),
         Spec("wm-exit", "Shut the window manager down"),

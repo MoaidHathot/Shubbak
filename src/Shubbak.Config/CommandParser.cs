@@ -263,6 +263,18 @@ public static class CommandParser
                 command = new TogglePauseCommand();
                 return true;
 
+            case "wm-suspend":
+                command = new SuspendCommand();
+                return true;
+
+            case "wm-resume":
+                command = new ResumeCommand();
+                return true;
+
+            case "wm-toggle-suspend":
+                command = new ToggleSuspendCommand();
+                return true;
+
             case "wm-reload-config":
                 command = new ReloadConfigCommand();
                 return true;

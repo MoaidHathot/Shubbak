@@ -165,6 +165,26 @@ public sealed class WmDaemon : IDisposable
     private WinEventSource? _winEvents;
     private KeyboardSource? _keyboard;
 
+    /// <summary>
+    /// The chord the system watches for while suspended, so suspending is undoable.
+    /// </summary>
+    private readonly ResumeHotKey _resumeHotKey = new();
+
+    /// <summary>
+    /// Whether the hooks have been let go of.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="WindowManager.IsPaused"/>, and the difference is the
+    /// reason both exist. Pausing stops Shubbak rearranging the desktop and keeps the
+    /// keyboard hook, so bindings still work and the command that resumes is one of
+    /// them. Suspending gives the keyboard back, which is what a game needs and what
+    /// pausing cannot do.
+    /// </remarks>
+    private bool _suspended;
+
+    /// <summary>Whether the hooks have been let go of.</summary>
+    internal bool IsSuspended => _suspended;
+
     private ShubbakConfig _config = ShubbakConfig.Default;
     private string? _configPath;
 
@@ -324,6 +344,7 @@ public sealed class WmDaemon : IDisposable
         _layoutDirty = true;
         _loop.Tick += OnTick;
         _loop.NextTimeout = NextTimeout;
+        _loop.MessageReceived = OnLoopMessage;
 
         Log.Info(LogCategory.Wm, $"started in {Since(_startedTicks):F0} ms: " +
             $"{_windows.ManagedCount} windows adopted, " +
@@ -467,6 +488,13 @@ public sealed class WmDaemon : IDisposable
         _timerResolution.Release();
         _loop.IsPacingFrames = false;
 
+        // Suspended: nothing is watching the desktop and nothing is pending, so the
+        // only thing that can wake this thread is the resume hotkey or an IPC command
+        // - both of which arrive as messages and interrupt the wait anyway. Waiting
+        // long is what makes a suspended window manager genuinely idle rather than
+        // merely quiet.
+        if (_suspended) return SuspendedInterval;
+
         // The wait is the other question, and has a different answer: a pending pass
         // does want to run promptly.
         if (_layoutDirty) return FrameInterval;
@@ -490,6 +518,16 @@ public sealed class WmDaemon : IDisposable
     /// opens.
     /// </remarks>
     private static readonly TimeSpan SettleInterval = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>How long to wait when suspended.</summary>
+    /// <remarks>
+    /// A second, not because anything is expected then, but because a wait has to end
+    /// eventually and an idle thread waking once a second is free. Both things that
+    /// can end a suspension - the resume hotkey and an IPC command - arrive as
+    /// messages and cut the wait short, so this is a floor on responsiveness rather
+    /// than a delay anyone experiences.
+    /// </remarks>
+    private static readonly TimeSpan SuspendedInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Whether the fine timer was held the last time a frame was being paced.
@@ -692,10 +730,19 @@ public sealed class WmDaemon : IDisposable
                 reported = ReportMotionEnded();
             }
 
-            SettleArrivedWindows(now);
-            MaybeSyncMonitors(now);
-            MaybeRefreshFocusBorder(now);
-            MaybeSaveSession(now);
+            // Suspended means out of the way, and that has to be true of the periodic
+            // work as well as the hooks. The focus border alone re-asserts itself
+            // through DwmSetWindowAttribute five times a second; a monitor sync reads
+            // the display configuration twice a second. Neither has any business
+            // running while the user is in a game, and neither is needed - resuming
+            // re-reads the monitors and the windows before doing anything else.
+            if (!_suspended)
+            {
+                SettleArrivedWindows(now);
+                MaybeSyncMonitors(now);
+                MaybeRefreshFocusBorder(now);
+                MaybeSaveSession(now);
+            }
         }
         catch (Exception ex)
         {
@@ -1637,6 +1684,17 @@ public sealed class WmDaemon : IDisposable
             $" (uiAccess {Win32Privilege.HasUiAccess}, elevated {Win32Privilege.IsElevated})",
 
             $"- **Animating**: {_animation.ActiveCount}",
+
+            // Stated as the hooks rather than as a flag, because "is Shubbak really
+            // out of the way" is the question somebody about to play a game is
+            // actually asking, and a boolean named "suspended" asks them to trust that
+            // it means what they hope.
+            $"- **Keyboard hook**: {(_keyboard is null ? "released" : "installed")}",
+            $"- **Window event hooks**: {(_winEvents is null ? "released" : "installed")}",
+            $"- **Suspended**: {_suspended}" +
+                (_resumeHotKey.IsRegistered ? $" (resume with {_resumeHotKey.Display})" : string.Empty),
+            $"- **Paused**: {_wm.IsPaused}",
+
             $"- **Keybindings**: {_config.Keybindings.Count}",
             $"- **Rules**: {_config.Rules.Count}",
             $"- **IPC clients**: {_ipc?.ClientCount ?? 0}",
@@ -2579,6 +2637,19 @@ public sealed class WmDaemon : IDisposable
                 Stop();
                 break;
 
+            case HostAction.Suspend:
+                Suspend();
+                break;
+
+            case HostAction.Resume:
+                Resume();
+                break;
+
+            case HostAction.ToggleSuspend:
+                if (_suspended) Resume();
+                else Suspend();
+                break;
+
             case HostAction.RevealWindow:
                 if (outcome.Payload is { } target) RevealWindow(target);
                 break;
@@ -3358,6 +3429,135 @@ public sealed class WmDaemon : IDisposable
 
         last = now;
         return true;
+    }
+
+    /// <summary>
+    /// Lets go of the keyboard and the desktop, keeping everything else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two hooks are removed and the windows are left exactly where they are. The
+    /// tree, the workspaces, which windows are concealed and which are not - all of it
+    /// stays in memory, so resuming is instant and nothing on screen moves in either
+    /// direction.
+    /// </para>
+    /// <para>
+    /// This is what exiting was being used for, and it is better at it. A clean exit
+    /// un-conceals every window on every workspace on the way out, which is right for
+    /// exiting - nothing should be stranded if Shubbak does not come back - and quite
+    /// wrong as a thing that happens every time somebody starts a game. Coming back
+    /// then costs a fresh start: measured at over two seconds, plus re-adopting every
+    /// window, plus the bar and the palette restarting with it.
+    /// </para>
+    /// </remarks>
+    private void Suspend()
+    {
+        if (_suspended) return;
+
+        _suspended = true;
+
+        // The keyboard first. It is the one the user is waiting on, and the reason
+        // they asked.
+        _keyboard?.Dispose();
+        _keyboard = null;
+
+        _winEvents?.Dispose();
+        _winEvents = null;
+
+        // Anything half-observed belongs to a world we are no longer watching.
+        _settling.Clear();
+        _layoutDirty = false;
+
+        string how = RegisterResumeHotKey();
+
+        Log.Info(LogCategory.Wm, $"suspended: keyboard hook and window events released; {how}");
+
+        Publish(new WmResult(true, [new SuspendChanged(true)]));
+    }
+
+    /// <summary>Takes the keyboard and the desktop back.</summary>
+    /// <remarks>
+    /// Windows that appeared while suspended were never seen, so the desktop is
+    /// re-read rather than assumed unchanged. Everything already in the tree keeps its
+    /// workspace, which is what makes this cheap.
+    /// </remarks>
+    private void Resume()
+    {
+        if (!_suspended) return;
+
+        _suspended = false;
+        _resumeHotKey.Unregister();
+
+        _winEvents = new WinEventSource { WorkQueued = _loop.Wake };
+        _winEvents.Start();
+
+        _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
+        _keyboard.Start(_bindings.IsBound);
+
+        // Whatever opened, closed or moved while nobody was looking.
+        SyncMonitors();
+        AdoptExistingWindows();
+
+        _layoutDirty = true;
+
+        Log.Info(LogCategory.Wm, $"resumed: {_windows.ManagedCount} windows managed");
+
+        Publish(new WmResult(true, [new SuspendChanged(false)]));
+    }
+
+    /// <summary>
+    /// Asks the system to watch for the chord that resumes.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Taken from the user's own configuration rather than invented or made into
+    /// another setting: whichever key is bound to <c>wm-toggle-suspend</c> or
+    /// <c>wm-resume</c> is the one they will press, because it is the one that got them
+    /// here. A toggle whose key stops working the moment it is used would be a strange
+    /// kind of toggle.
+    /// </para>
+    /// <para>
+    /// Failure is survivable and reported rather than fatal. Another program may
+    /// already own the chord - <c>RegisterHotKey</c> refuses rather than sharing - and
+    /// <c>shubbak wm-resume</c> still works regardless.
+    /// </para>
+    /// </remarks>
+    private string RegisterResumeHotKey()
+    {
+        if (FindResumeBinding() is not { } binding)
+        {
+            return "no key is bound to wm-toggle-suspend or wm-resume, so resume with " +
+                   "`shubbak wm-resume`";
+        }
+
+        bool ok = _resumeHotKey.Register(
+            (KeyModifiers)binding.Key.Modifiers, binding.Key.VirtualKey, binding.Key.Display);
+
+        return ok
+            ? $"press {binding.Key.Display} to resume"
+            : $"{binding.Key.Display} is already taken by another program, so resume with " +
+              "`shubbak wm-resume`";
+    }
+
+    /// <summary>The binding that will be used to come back, if there is one.</summary>
+    private Keybinding? FindResumeBinding() =>
+        _config.Keybindings.FirstOrDefault(binding =>
+            binding.Commands.Any(command => command is ToggleSuspendCommand or ResumeCommand));
+
+    /// <summary>
+    /// Notices the resume chord, which arrives as a thread message.
+    /// </summary>
+    /// <remarks>
+    /// A hotkey registered against a thread rather than a window produces a
+    /// <c>WM_HOTKEY</c> with no window to dispatch to, so the pump reports it here
+    /// instead of discarding it.
+    /// </remarks>
+    private void OnLoopMessage(uint message, nuint wParam, nint lParam)
+    {
+        if (message != ResumeHotKey.Message || (int)wParam != ResumeHotKey.Id) return;
+
+        Log.Info(LogCategory.Wm, "resume requested from the keyboard");
+        Resume();
     }
 
     /// <summary>
@@ -4330,6 +4530,7 @@ public sealed class WmDaemon : IDisposable
 
         _keyboard?.Dispose();
         _winEvents?.Dispose();
+        _resumeHotKey.Dispose();
 
         // Process-wide, so leaving it raised would outlive the reason for it.
         _timerResolution.Dispose();

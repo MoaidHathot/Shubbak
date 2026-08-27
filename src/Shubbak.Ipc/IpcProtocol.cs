@@ -164,7 +164,14 @@ public sealed record StateSnapshot(
     IReadOnlyList<WindowInfo> Windows,
     WindowInfo? FocusedWindow,
     string? BindingMode,
-    bool Paused);
+    bool Paused,
+
+    // Appended and optional, so the protocol version stays where it is and an older
+    // client simply never sees it. Distinct from Paused: paused means windows are not
+    // being rearranged, suspended means the keyboard hook has been let go of - and a
+    // client showing "everything is fine" while keys do nothing is the reason this is
+    // worth reporting at all.
+    bool Suspended = false);
 
 /// <summary>
 /// Source-generated JSON serialisation for the IPC protocol.
@@ -260,6 +267,30 @@ public static class IpcProtocol
 
         return $"shubbak-v{ProtocolVersion}-{account}";
     }
+
+    /// <summary>
+    /// The name of the mutex that decides which process is <em>the</em> window manager.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Scoped exactly like <see cref="PipeName"/>, and for the same reason: one window
+    /// manager per logged-in account, not one per machine. Two people signed in at once
+    /// each get their own desktop and must each get their own daemon.
+    /// </para>
+    /// <para>
+    /// <c>Local\</c> rather than <c>Global\</c>. The session-local namespace is what
+    /// matches "per desktop", needs no privilege, and cannot be squatted by another
+    /// session. The account is in the name as well, because a single session can host
+    /// more than one account once <c>runas</c> is involved.
+    /// </para>
+    /// <para>
+    /// Kept next to the pipe name deliberately. These two answers must agree - a
+    /// daemon that holds the mutex but serves a pipe another daemon also serves is the
+    /// exact failure the mutex exists to prevent - and answers that must agree are
+    /// easiest to keep that way when they are computed side by side.
+    /// </para>
+    /// </remarks>
+    public static string InstanceMutexName { get; } = @"Local\" + PipeName;
 
     /// <summary>Messages are newline-delimited JSON.</summary>
     public const char MessageTerminator = '\n';

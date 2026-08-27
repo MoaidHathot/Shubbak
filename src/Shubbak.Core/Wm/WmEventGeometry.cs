@@ -56,6 +56,11 @@ public static class WmEventGeometry
         // pass on the way out.
         PauseChanged => false,
 
+        // The same, for the same reason. Suspending must not schedule a pass - there
+        // are no hooks left to notice the result - and resuming asks for one itself,
+        // after re-reading the desktop it stopped watching.
+        SuspendChanged => false,
+
         // Carries a path. Reloading may well change the gaps, but the reload path
         // marks the layout dirty itself, having already applied the new options -
         // this event is the announcement to other processes, sent afterwards.

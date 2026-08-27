@@ -358,6 +358,20 @@ keybindings {
     bind "alt+shift+w" { wm-redraw }
     bind "alt+shift+e" { wm-exit }
 
+    // Get out of the way entirely, for a game.
+    //
+    // This releases the keyboard hook and the window event hooks and leaves every
+    // window where it is. It is not the same as wm-toggle-pause, which stops
+    // windows being rearranged but keeps the keyboard - and a chord Shubbak
+    // swallows is a chord the game never receives, which matters far more than the
+    // microsecond the hook costs.
+    //
+    // The same key brings it back. While suspended, Shubbak asks the system to
+    // watch for this one chord and tell it - which is not a hook, and so costs
+    // nothing on any other keystroke. `shubbak wm-resume` works too, and is the way
+    // back if something else on the machine has already claimed this combination.
+    bind "alt+shift+g" { wm-toggle-suspend }
+
     // Per-workspace bindings, generated from the workspaces declared above.
     // This one block replaces 40 hand-written lines, and can never drift out of
     // sync with the workspace list.
