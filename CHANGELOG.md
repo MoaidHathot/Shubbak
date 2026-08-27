@@ -13,44 +13,19 @@ schedule and breaking either is a different kind of event:
 - **The session format** is versioned in the file, so an unreadable session is
   discarded rather than misread.
 
-## [Unreleased]
+## [0.9.0] - 2026-08-27
+
+The first public release: the point at which Shubbak can be installed rather than
+built.
+
+Most of what it does predates this entry — tiling, workspaces, the bar, the palette.
+What is new is everything needed to hand it to somebody else: a release zip and the two
+package managers that serve it, autostart, a starter config, icons. And alongside that,
+the things a program which owns your keyboard has to offer before it can be trusted
+with it — a way to make it let go, a way to see at a glance that it has, and a refusal
+to be running twice.
 
 ### Added
-
-- **Taj says when Shubbak has stopped.** New template values `status`, `suspended` and
-  `paused`, rendered as pills that hide themselves when there is nothing to report.
-
-  Both states change what Shubbak does without changing anything on screen, so neither
-  was discoverable by looking. Suspended is the one that matters: it is
-  indistinguishable from a crash — windows stay where they are and no key does
-  anything — so somebody who suspended it and forgot has no way to tell the difference
-  without trying a command and reasoning about the answer.
-
-  `status` is the combined value for a bar with room for one pill, and suspended wins
-  when both hold. `suspended` and `paused` are separate so a config can show two and
-  give each the click that undoes it — a pill saying "suspended" that resumes when
-  clicked is a way back that does not need the keyboard, which is the one thing
-  suspending took away.
-
-- **A system tray icon.** Right-click or left-click it for suspend/resume, stop
-  arranging windows, reload configuration, open the configuration folder, and exit.
-  The labels describe the current state rather than being fixed, because the
-  difference between "Suspend" and "Resume" is why anyone opens it.
-
-  It matters most in the state where the keyboard has been given away: suspending is
-  undoable from here even if the resume chord is already owned by another program.
-
-  Two details worth recording, because both would be bugs if got wrong. The window is
-  **message-only** — parented to `HWND_MESSAGE`, so `EnumWindows` never returns it. The
-  program enumerating windows and deciding which to tile is this one, and a findable
-  tray window would be a window manager arranging its own plumbing; there is a test
-  asserting it stays invisible to Shubbak's own enumerator. And it lives on the daemon
-  thread, never the keyboard hook's: `TrackPopupMenu` runs a modal loop while the menu
-  is open, which on the hook thread would put every keystroke on the machine behind an
-  open menu against a 300 ms deadline.
-
-  The icon is taken from the executable itself, so the tray matches Alt-Tab and the
-  taskbar rather than being a second image to keep in step.
 
 - **`wm-suspend`, `wm-resume`, `wm-toggle-suspend`.** Releases the low-level keyboard
   hook and the window event hooks, and leaves every window exactly where it is.
@@ -84,114 +59,40 @@ schedule and breaking either is a different kind of event:
 
 - **`wm-toggle-pause` is unchanged.** Both exist because they are genuinely different.
 
-### Fixed
+- **A system tray icon.** Right-click or left-click it for suspend/resume, stop
+  arranging windows, reload configuration, open the configuration folder, and exit.
+  The labels describe the current state rather than being fixed, because the
+  difference between "Suspend" and "Resume" is why anyone opens it.
 
-- **`wm.suspended` was published but could not be subscribed to by name.** The topic
-  was missing from `IpcProtocol.Topics`, which is what a subscription is checked
-  against — so `shubbak sub wm.suspended` was refused for a topic the daemon was
-  actively publishing. It also carried an empty `{}` payload rather than saying what
-  had changed.
+  It matters most in the state where the keyboard has been given away: suspending is
+  undoable from here even if the resume chord is already owned by another program.
 
-  There was already a test for exactly this, `EveryPublishedTopicIsDeclared`, and it
-  passed — because it compared the topic list against a **second hand-maintained
-  list**, which had drifted in the same way and for the same reason. It now derives
-  the published topics from the event types themselves, so it cannot drift again.
-  Verified by removing the entry and watching it fail.
+  Two details worth recording, because both would be bugs if got wrong. The window is
+  **message-only** — parented to `HWND_MESSAGE`, so `EnumWindows` never returns it. The
+  program enumerating windows and deciding which to tile is this one, and a findable
+  tray window would be a window manager arranging its own plumbing; there is a test
+  asserting it stays invisible to Shubbak's own enumerator. And it lives on the daemon
+  thread, never the keyboard hook's: `TrackPopupMenu` runs a modal loop while the menu
+  is open, which on the hook thread would put every keystroke on the machine behind an
+  open menu against a 300 ms deadline.
 
-- **Two window managers could run at once, silently.** There was no single-instance
-  guard of any kind, and the named pipe could not serve as one: it is created with
-  `MaxAllowedServerInstances`, which is precisely the flag that lets any number of
-  processes host the same name.
+  The icon is taken from the executable itself, so the tray matches Alt-Tab and the
+  taskbar rather than being a second image to keep in step.
 
-  So a second `shubbak-wm` started perfectly happily, and then the two fought — two
-  keyboard hooks, so every binding ran twice; two layout passes issuing contradictory
-  `DeferWindowPos` batches; a CLI reaching whichever accept loop won the race, so
-  consecutive commands could land in different processes; and on exit, one daemon
-  un-concealing windows the other still had recorded as concealed. Nothing reported any
-  of it.
+- **Taj says when Shubbak has stopped.** New template values `status`, `suspended` and
+  `paused`, rendered as pills that hide themselves when there is nothing to report.
 
-  A second launch is now refused with a message naming the running process. `--replace`
-  asks the running one to stand down over IPC — so it saves its session and restores
-  its windows rather than being terminated — and waits for it to let go before starting.
-  An abandoned mutex, left by a daemon that was killed rather than asked to exit, counts
-  as free rather than as someone else running.
+  Both states change what Shubbak does without changing anything on screen, so neither
+  was discoverable by looking. Suspended is the one that matters: it is
+  indistinguishable from a crash — windows stay where they are and no key does
+  anything — so somebody who suspended it and forgot has no way to tell the difference
+  without trying a command and reasoning about the answer.
 
-## [0.9.0] - 2026-08-26
-- **A window that moved itself stayed moved.** Reopening Firefox put it on the wrong
-  monitor, on top of the window already tiled there, and it stayed until `wm-redraw`
-  was pressed.
-
-  Applications reposition their own windows — a browser restoring the geometry it
-  remembered from last time does it a moment after its window appears, which is after
-  Shubbak has placed it. Windows announces that only through
-  `EVENT_OBJECT_LOCATIONCHANGE`, which Shubbak does not subscribe to and still does
-  not: the callbacks arrive on the message queue the pump waits on, so a single
-  dragged window used to produce 122 wake-ups a second and pace the animation loop
-  against its own output.
-
-  What made this *stick* rather than correct itself was the committer's skip check.
-  It asks "is this window already where I last told it to be", judged on the target
-  alone — so once a window had wandered, every later pass skipped it, because the
-  target had not changed and there was seemingly nothing to do. It now also asks
-  whether the window is still there, but only for windows it was about to skip, and
-  only coarsely: a different monitor, or a long way from its tile. An exact comparison
-  was tried once before and reverted, because a terminal snapping to whole character
-  cells never lands precisely where it was put and so was re-placed on every layout —
-  which, since focus changes run a layout, was a twitch on every focus change.
-
-  Newly adopted windows are additionally looked at twice, about 300 ms and 900 ms
-  after being placed, which catches the displacement without waiting for something
-  else to trigger a layout. Twice and then never again: an unbounded watch is how this
-  becomes a window manager arguing with an application several times a second for as
-  long as both are running.
-
-  Worth recording, since it was checked: **neither GlazeWM nor komorebi handles this
-  either.** Both subscribe to `EVENT_OBJECT_LOCATIONCHANGE` and both discard it for
-  tiling windows — GlazeWM falls through to a bare `_ => {}`, komorebi forwards it
-  only to its border overlay. GlazeWM's version of the bug is transient because its
-  commit path has no skip check, so the next redraw of that container corrects it;
-  komorebi's is masked for this specific case by an allowlist that turns a title
-  change into a re-tile, and names Firefox as the reason it exists.
-
-## [0.9.0] - 2026-08-26
-- **The scratchpad was one-way.** Stashing worked; pressing the same key again did
-  nothing at all, silently.
-
-  Every command that declares `TargetsFocusedWindow` is checked against the foreground
-  window before it runs, and refused if that window is not one Shubbak manages.
-  Stashing the last window on a workspace leaves nothing focused, so the foreground
-  became the desktop — and the next press was refused before `ToggleScratchpad` could
-  run. Summoning needs somewhere to *put* a window, not a window to act on, so an
-  occupied slot is now exempt from that check.
-
-  The single-window case is the common one, because a scratchpad is what you reach for
-  when you want the screen to yourself — which is exactly the case that could never be
-  undone.
-
-- **`scratchpad` could not fail to parse.** Its case in the parser ended in an
-  unconditional `return true`: an unrecognised option was skipped, no positional
-  remained, and the slot silently became `default`. So `scratchpad --hide notes`
-  stashed into `default` and summoned from `default`, appearing to work until somebody
-  used two slots and found one had swallowed the other.
-
-  `--show`, `--hide`, `--toggle` and friends are now `SHB0312`, and the message says
-  the command is already a toggle rather than only listing what is allowed. A trailing
-  `--name` with nothing after it is `SHB0313` instead of quietly meaning `default`.
-
-- **Dalil aimed every action on a stashed window at a window about to vanish.** All of
-  them were built on a `focus-window` prefix, and focusing a cloaked window reveals it
-  without unstashing it, so it concealed itself again at the next layout pass — which
-  reads as the palette having done nothing. `PaletteEntries` documented why the row
-  itself must summon by slot; `PaletteActions` did not follow suit. It now does, so
-  closing, tagging and un-managing a stashed window reach it. "Go to it" becomes
-  "Summon it", and "Bring it here" is dropped as a duplicate of it.
-
-## [0.9.0] - 2026-08-26
-
-The first public release. Everything below already worked; what changed is that it
-can now be installed rather than built.
-
-### Added
+  `status` is the combined value for a bar with room for one pill, and suspended wins
+  when both hold. `suspended` and `paused` are separate so a config can show two and
+  give each the click that undoes it — a pill saying "suspended" that resumes when
+  clicked is a way back that does not need the keyboard, which is the one thing
+  suspending took away.
 
 - **`shubbak autostart enable | disable | status`.** Registers the window manager to
   run at logon under `HKCU\...\CurrentVersion\Run`. There was previously no way for
@@ -276,6 +177,104 @@ can now be installed rather than built.
 
 ### Fixed
 
+- **Two window managers could run at once, silently.** There was no single-instance
+  guard of any kind, and the named pipe could not serve as one: it is created with
+  `MaxAllowedServerInstances`, which is precisely the flag that lets any number of
+  processes host the same name.
+
+  So a second `shubbak-wm` started perfectly happily, and then the two fought — two
+  keyboard hooks, so every binding ran twice; two layout passes issuing contradictory
+  `DeferWindowPos` batches; a CLI reaching whichever accept loop won the race, so
+  consecutive commands could land in different processes; and on exit, one daemon
+  un-concealing windows the other still had recorded as concealed. Nothing reported any
+  of it.
+
+  A second launch is now refused with a message naming the running process. `--replace`
+  asks the running one to stand down over IPC — so it saves its session and restores
+  its windows rather than being terminated — and waits for it to let go before starting.
+  An abandoned mutex, left by a daemon that was killed rather than asked to exit, counts
+  as free rather than as someone else running.
+
+- **A window that moved itself stayed moved.** Reopening Firefox put it on the wrong
+  monitor, on top of the window already tiled there, and it stayed until `wm-redraw`
+  was pressed.
+
+  Applications reposition their own windows — a browser restoring the geometry it
+  remembered from last time does it a moment after its window appears, which is after
+  Shubbak has placed it. Windows announces that only through
+  `EVENT_OBJECT_LOCATIONCHANGE`, which Shubbak does not subscribe to and still does
+  not: the callbacks arrive on the message queue the pump waits on, so a single
+  dragged window used to produce 122 wake-ups a second and pace the animation loop
+  against its own output.
+
+  What made this *stick* rather than correct itself was the committer's skip check.
+  It asks "is this window already where I last told it to be", judged on the target
+  alone — so once a window had wandered, every later pass skipped it, because the
+  target had not changed and there was seemingly nothing to do. It now also asks
+  whether the window is still there, but only for windows it was about to skip, and
+  only coarsely: a different monitor, or a long way from its tile. An exact comparison
+  was tried once before and reverted, because a terminal snapping to whole character
+  cells never lands precisely where it was put and so was re-placed on every layout —
+  which, since focus changes run a layout, was a twitch on every focus change.
+
+  Newly adopted windows are additionally looked at twice, about 300 ms and 900 ms
+  after being placed, which catches the displacement without waiting for something
+  else to trigger a layout. Twice and then never again: an unbounded watch is how this
+  becomes a window manager arguing with an application several times a second for as
+  long as both are running.
+
+  Worth recording, since it was checked: **neither GlazeWM nor komorebi handles this
+  either.** Both subscribe to `EVENT_OBJECT_LOCATIONCHANGE` and both discard it for
+  tiling windows — GlazeWM falls through to a bare `_ => {}`, komorebi forwards it
+  only to its border overlay. GlazeWM's version of the bug is transient because its
+  commit path has no skip check, so the next redraw of that container corrects it;
+  komorebi's is masked for this specific case by an allowlist that turns a title
+  change into a re-tile, and names Firefox as the reason it exists.
+
+- **The scratchpad was one-way.** Stashing worked; pressing the same key again did
+  nothing at all, silently.
+
+  Every command that declares `TargetsFocusedWindow` is checked against the foreground
+  window before it runs, and refused if that window is not one Shubbak manages.
+  Stashing the last window on a workspace leaves nothing focused, so the foreground
+  became the desktop — and the next press was refused before `ToggleScratchpad` could
+  run. Summoning needs somewhere to *put* a window, not a window to act on, so an
+  occupied slot is now exempt from that check.
+
+  The single-window case is the common one, because a scratchpad is what you reach for
+  when you want the screen to yourself — which is exactly the case that could never be
+  undone.
+
+- **`scratchpad` could not fail to parse.** Its case in the parser ended in an
+  unconditional `return true`: an unrecognised option was skipped, no positional
+  remained, and the slot silently became `default`. So `scratchpad --hide notes`
+  stashed into `default` and summoned from `default`, appearing to work until somebody
+  used two slots and found one had swallowed the other.
+
+  `--show`, `--hide`, `--toggle` and friends are now `SHB0312`, and the message says
+  the command is already a toggle rather than only listing what is allowed. A trailing
+  `--name` with nothing after it is `SHB0313` instead of quietly meaning `default`.
+
+- **Dalil aimed every action on a stashed window at a window about to vanish.** All of
+  them were built on a `focus-window` prefix, and focusing a cloaked window reveals it
+  without unstashing it, so it concealed itself again at the next layout pass — which
+  reads as the palette having done nothing. `PaletteEntries` documented why the row
+  itself must summon by slot; `PaletteActions` did not follow suit. It now does, so
+  closing, tagging and un-managing a stashed window reach it. "Go to it" becomes
+  "Summon it", and "Bring it here" is dropped as a duplicate of it.
+
+- **`wm.suspended` was published but could not be subscribed to by name.** The topic
+  was missing from `IpcProtocol.Topics`, which is what a subscription is checked
+  against — so `shubbak sub wm.suspended` was refused for a topic the daemon was
+  actively publishing. It also carried an empty `{}` payload rather than saying what
+  had changed.
+
+  There was already a test for exactly this, `EveryPublishedTopicIsDeclared`, and it
+  passed — because it compared the topic list against a **second hand-maintained
+  list**, which had drifted in the same way and for the same reason. It now derives
+  the published topics from the event types themselves, so it cannot drift again.
+  Verified by removing the entry and watching it fail.
+
 - **`taj --help` printed nothing at all.** It is a GUI-subsystem binary writing to a
   console it did not have. Same for every diagnostic it wrote before its window
   existed.
@@ -305,5 +304,4 @@ can now be installed rather than built.
 
 - **x64 only.** There is no ARM64 configuration yet.
 
-[Unreleased]: https://github.com/MoaidHathot/Shubbak/compare/v0.9.0...HEAD
 [0.9.0]: https://github.com/MoaidHathot/Shubbak/releases/tag/v0.9.0
