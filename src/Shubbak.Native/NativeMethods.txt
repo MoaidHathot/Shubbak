@@ -142,6 +142,58 @@ UnregisterHotKey
 HOT_KEY_MODIFIERS
 WM_HOTKEY
 
+// --- the tray icon --------------------------------------------------------------
+//
+// The daemon's first and only window, and it is message-only: created with
+// HWND_MESSAGE as its parent, so EnumWindows never returns it and Shubbak cannot
+// end up trying to tile its own tray plumbing.
+//
+// Shell_NotifyIcon needs a window to send its callback message to, which is the
+// entire reason any of this is here. TrackPopupMenu runs a modal loop while the
+// menu is open - acceptable on this thread, which is not on the input path, and
+// unacceptable on the keyboard hook's, which is why the tray lives here and not
+// there.
+RegisterClassEx
+WNDCLASSEXW
+CreateWindowEx
+DestroyWindow
+DefWindowProc
+GetModuleHandle
+HWND_MESSAGE
+WM_APP
+WM_DESTROY
+WM_COMMAND
+WM_CLOSE
+WM_NULL
+WM_LBUTTONUP
+WM_RBUTTONUP
+
+Shell_NotifyIcon
+NOTIFYICONDATAW
+NOTIFY_ICON_MESSAGE
+NOTIFY_ICON_DATA_FLAGS
+
+// The icon shown is the executable's own, so the tray matches Alt-Tab and the
+// taskbar rather than being a second thing to keep in step.
+//
+// By index rather than by resource name. The apphost's icon does not land on a
+// resource id this code can rely on - LoadImage with "#1" found nothing - and the
+// index is what every shell API uses to mean "the icon this file shows".
+ExtractIconEx
+DestroyIcon
+
+CreatePopupMenu
+AppendMenu
+TrackPopupMenu
+DestroyMenu
+MENU_ITEM_FLAGS
+TRACK_POPUP_MENU_FLAGS
+
+// Explorer restarts, and takes every tray icon with it. This is how a program is
+// told to put its own back; without it the icon simply vanishes for the rest of the
+// session and looks like a crash.
+RegisterWindowMessage
+
 // --- message loop -----------------------------------------------------------------
 GetMessage
 PeekMessage

@@ -4,6 +4,22 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>x64</Platforms>
+
+    <!--
+      Platforms lists what may be selected; it does not select anything, so this
+      project was still compiling as AnyCPU.
+
+      That is not merely untidy. Some Win32 APIs have a different shape per
+      architecture - NOTIFYICONDATAW contains a union whose size differs - and CsWin32
+      refuses to generate those at all for AnyCPU, because there is no single correct
+      answer. The tray icon is the first thing here to need one.
+
+      Declaring x64 is honest rather than restrictive: every executable in this
+      solution already sets RuntimeIdentifier win-x64, and the ADR's distribution
+      decision is a NativeAOT x64 build.
+    -->
+    <PlatformTarget>x64</PlatformTarget>
+
     <RootNamespace>Shubbak.Native</RootNamespace>
   </PropertyGroup>
 

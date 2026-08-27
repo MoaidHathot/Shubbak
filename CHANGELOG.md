@@ -17,6 +17,26 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **A system tray icon.** Right-click or left-click it for suspend/resume, stop
+  arranging windows, reload configuration, open the configuration folder, and exit.
+  The labels describe the current state rather than being fixed, because the
+  difference between "Suspend" and "Resume" is why anyone opens it.
+
+  It matters most in the state where the keyboard has been given away: suspending is
+  undoable from here even if the resume chord is already owned by another program.
+
+  Two details worth recording, because both would be bugs if got wrong. The window is
+  **message-only** — parented to `HWND_MESSAGE`, so `EnumWindows` never returns it. The
+  program enumerating windows and deciding which to tile is this one, and a findable
+  tray window would be a window manager arranging its own plumbing; there is a test
+  asserting it stays invisible to Shubbak's own enumerator. And it lives on the daemon
+  thread, never the keyboard hook's: `TrackPopupMenu` runs a modal loop while the menu
+  is open, which on the hook thread would put every keystroke on the machine behind an
+  open menu against a 300 ms deadline.
+
+  The icon is taken from the executable itself, so the tray matches Alt-Tab and the
+  taskbar rather than being a second image to keep in step.
+
 - **`wm-suspend`, `wm-resume`, `wm-toggle-suspend`.** Releases the low-level keyboard
   hook and the window event hooks, and leaves every window exactly where it is.
 
