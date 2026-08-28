@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/assets/social-card.png" width="120" alt="Shubbak" />
+<img src="docs/assets/shubbak-wm.png" width="120" alt="Shubbak" />
 
 # Shubbak
 
