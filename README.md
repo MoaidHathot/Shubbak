@@ -27,7 +27,7 @@ palette, and a config file that tells you when you've made a mistake.**
 
 Shubbak (شبّاك, *"window"*) arranges your windows for you so you can stop dragging
 them around. It's keyboard-driven, it animates, and it ships with everything you
-need in the box, No second app to install before your desktop looks like your own.
+need in the box, no second app to install before your desktop looks like your own.
 
 
 ## Demos
@@ -150,7 +150,7 @@ Two different things you'll actually want:
 
 Resuming from a full suspend uses a real Windows hotkey rather than a keyboard hook,
 so a suspended Shubbak costs you nothing per keystroke. The bar and the tray icon
-both tell you which state you're in, and both are clickable , because "suspended"
+both tell you which state you're in, and both are clickable, because "suspended"
 and "crashed" look identical if the only way back is the keyboard you just gave up.
 
 ### Layout belongs to the container, not the workspace

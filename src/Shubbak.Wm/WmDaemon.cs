@@ -406,6 +406,57 @@ public sealed class WmDaemon : IDisposable
             Log.Info(LogCategory.Window, $"restored {restored} concealed window(s) on shutdown");
     }
 
+    /// <summary>
+    /// Takes Shubbak's border off every window on the way out.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The border is drawn by the compositor on the window's own frame, so it outlives
+    /// the process that asked for it. Releasing a single window has always cleared it,
+    /// for a reason written down there: leaving it lit marks something Shubbak no
+    /// longer controls, which is the opposite of the signal it exists to give. Exiting
+    /// releases every window at once and did not clear any of them.
+    /// </para>
+    /// <para>
+    /// The mark therefore survived a restart, and on anything whose frame outlives the
+    /// application - a UWP window, whose frame belongs to ApplicationFrameHost - it
+    /// survived the app being closed and reopened too. Somebody who stopped Shubbak was
+    /// left with a desktop of windows still wearing its colours and nothing running
+    /// that would ever take them off.
+    /// </para>
+    /// <para>
+    /// Every failure is swallowed. This runs while shutting down, often after something
+    /// has already gone wrong, and a window that has just closed underneath the
+    /// enumeration must not be the reason the rest keep their borders.
+    /// </para>
+    /// </remarks>
+    private void ClearBordersOnShutdown()
+    {
+        if (!_config.Effects.Enabled) return;
+
+        int cleared = 0;
+
+        foreach (WindowNode window in _wm.Root.DescendantWindows())
+        {
+            nint handle = (nint)window.Handle;
+
+            try
+            {
+                if (!Win32Window.Exists(handle)) continue;
+
+                WindowActions.ClearBorderColour(handle);
+                cleared++;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogCategory.Window, $"could not clear the border on 0x{handle:X}: {ex.Message}");
+            }
+        }
+
+        if (cleared > 0)
+            Log.Info(LogCategory.Window, $"cleared the border on {cleared} window(s) on shutdown");
+    }
+
     public void Stop() => _loop.Stop();
 
     /// <summary>Milliseconds since a <see cref="Stopwatch"/> timestamp.</summary>
@@ -4664,11 +4715,24 @@ public sealed class WmDaemon : IDisposable
         // twice is harmless; restoring never is not.
         try
         {
-            RestoreConcealedWindows();
+        RestoreConcealedWindows();
+        ClearBordersOnShutdown();
+
         }
         catch (Exception ex)
         {
             Log.Error(LogCategory.Window, "could not restore concealed windows", ex);
+        }
+
+        // Same reasoning, and the same belt and braces. Clearing a border twice is a
+        // second call telling the compositor what it already did.
+        try
+        {
+            ClearBordersOnShutdown();
+        }
+        catch (Exception ex)
+        {
+            Log.Error(LogCategory.Window, "could not clear window borders", ex);
         }
 
         _keyboard?.Dispose();
