@@ -27,13 +27,12 @@ palette, and a config file that tells you when you've made a mistake.**
 
 Shubbak (شبّاك, *"window"*) arranges your windows for you so you can stop dragging
 them around. It's keyboard-driven, it animates, and it ships with everything you
-need in the box, no second app to install before your desktop looks like a
-desktop.
+need in the box, No second app to install before your desktop looks like your own.
 
 
 ## Demos
 
-Videos are on the way — I'm recording them now and they'll land here shortly:
+Videos are on the way, I'm recording them now and they'll land here shortly:
 tiling and layouts, the animation engine at full speed, Taj, and Dalil.
 
 <!--
@@ -49,12 +48,11 @@ heavily commented, real-world config you can read end to end.
 
 ## What makes Shubbak different
 
-Here's the short list of things I built Shubbak *for*. Everything else it does,
-GlazeWM and komorebi mostly do too.
+I created Shubbak after being a heavy user of window tiling managers on Windows, aiming to keep the features I liked and improve the aspects that didn’t work well for me in other tiling managers for Windows, in all aspects: architecture, implementation, and features.
 
 ### The config file talks back
 
-Most window manager configs fail silently. You press the key, nothing happens, and
+Instead of failing silently: you press the key, nothing happens, and
 you go hunting. Shubbak reads the whole file up front and tells you exactly where
 you went wrong, with a line, a column and a caret:
 
@@ -66,18 +64,19 @@ shubbak.kdl:8:20: error SHB0305: Unknown command 'focuss'.
 ```
 
 It also warns about the mistakes that *look* fine. A real one from my own config:
-a regex wrapped in `/slashes/`, which Windows matches literally — so the rule had
+a regex wrapped in `/slashes/`, which Windows matches literally, so the rule had
 never once fired, and nothing had ever said so. Shubbak warns and prints the
 corrected pattern. Same for duplicate bindings, unknown settings, unknown sections,
 and rules that would match every window on your desktop.
 
+You could also manually validate the configuration before reloading
 ```
 shubbak check-config       # validate before you reload
 ```
 
 ### `for-each` — stop copy-pasting keybindings
 
-I run 19 workspaces. That's 40 near-identical lines in GlazeWM, and every one of
+I run 19 workspaces. That's 40 near-identical lines in other window tiling managers, and every one of
 them is a chance to typo a number. Here it's six lines that can't drift out of sync
 with the workspace list:
 
@@ -105,13 +104,13 @@ You get every matchable attribute of the window, whether Shubbak will manage it,
 distinct reasons a window gets skipped and each one explains itself in plain
 English. Copy the attributes straight into a rule and you're done.
 
-`inspect --all` and `restore` both run entirely locally, so they still work when
+`inspect --all` and `restore` both run entirely locally and independently, so they still work when
 the window manager isn't running at all.
 
 ### Nothing gets stranded
 
 Windows on inactive workspaces are **cloaked**, not hidden. A cloaked window still
-reports as visible to Win32 — so if Shubbak crashes, is killed, or you pull the
+reports as visible to Win32, so if Shubbak crashes, is killed, or you pull the
 plug, the next run finds those windows and brings them straight back.
 
 Hiding (which is what this used to do, and what a lot of tools do) is a one-way
@@ -132,7 +131,7 @@ shubbak diagnose -o report.md
 ```
 
 One Markdown file: your environment, your config, the live window tree, and the
-recent log — including a ring buffer that's kept even at the default log level, so
+recent log, including a ring buffer that's kept even at the default log level, so
 the report is still useful *after* the weird thing happened. You can also raise the
 log level on the running daemon without restarting it:
 
@@ -151,7 +150,7 @@ Two different things you'll actually want:
 
 Resuming from a full suspend uses a real Windows hotkey rather than a keyboard hook,
 so a suspended Shubbak costs you nothing per keystroke. The bar and the tray icon
-both tell you which state you're in, and both are clickable — because "suspended"
+both tell you which state you're in, and both are clickable , because "suspended"
 and "crashed" look identical if the only way back is the keyboard you just gave up.
 
 ### Layout belongs to the container, not the workspace
@@ -169,7 +168,7 @@ obviously different from the last.
 
 A window can belong to several workspaces and show up in whichever one you're
 looking at. Windows only lets a window be in one place at a time, so membership
-means the window *relocates* to whichever tagged workspace you activated last —
+means the window *relocates* to whichever tagged workspace you activated last,
 exactly what AwesomeWM does.
 
 ### Animations that don't fight you
@@ -182,14 +181,13 @@ jump backwards or stutter. Frame rate follows your fastest display by default
 ### Mouse gestures that stick
 
 Drag a tiled window onto the middle of another to **swap** them, or near an edge to
-**insert** beside it. Drag a border to resize — and the resize is written back into
+**insert** beside it. Drag a border to resize, and the resize is written back into
 the tree's ratios, so the next layout pass respects it instead of undoing it.
 
 ### It's four small executables and no runtime
 
-`shubbak-wm`, `shubbak`, `taj`, `dalil` — around 19 MB total, under 9 MB zipped,
-compiled ahead-of-time with NativeAOT. Nothing to install first. CI publishes all
-four on every push, runs each one and checks it actually starts.
+`shubbak-wm`, `shubbak`, `taj`, `dalil`: around 19 MB total, under 9 MB zipped,
+compiled ahead-of-time with NativeAOT. Nothing to install first.
 
 ## Install
 
