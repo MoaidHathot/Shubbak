@@ -25,9 +25,114 @@ public sealed class PaletteEntriesTests
         string? workspace = "1",
         bool sticky = false,
         bool elevated = false,
-        long focusSequence = 0) =>
+        long focusSequence = 0,
+        string? summary = null) =>
         new(handle, title, className, process, 42, elevated, managed, reason, state,
-            concealment, workspace, true, "\\\\.\\DISPLAY1", sticky, false, focusSequence);
+            concealment, workspace, true, "\\\\.\\DISPLAY1", sticky, false, focusSequence,
+            Scratchpad: null, Tags: null, ExclusionSummary: summary);
+
+    [Fact]
+    public void AnUnmanagedWindowSaysWhyOnTheRowItself()
+    {
+        // The window manager has always sent this and the palette threw it away, so
+        // the list could say a window was unmanaged and never why - leaving the reason
+        // three keystrokes down an action list nobody knew was there.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows(
+        [
+            Window(managed: false, workspace: null, summary: "not an Alt+Tab target"),
+        ]));
+
+        Assert.Contains("not an Alt+Tab target", entry.Secondary, StringComparison.Ordinal);
+
+        // Beside the process, not instead of it. Which application it belongs to is
+        // still how somebody recognises the row.
+        Assert.Contains("test", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AManagedWindowSaysWhereItIsRatherThanWhyItIsNotManaged()
+    {
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Window(workspace: "3")]));
+
+        Assert.Contains("3", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheLongReasonIsUsedWhenThereIsNoShortOne()
+    {
+        // What an older window manager sends. A clipped sentence still says more than
+        // nothing, and it is searchable in full however much of it a row can draw.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows(
+        [
+            Window(managed: false, workspace: null, reason: "window has no area"),
+        ]));
+
+        Assert.Contains("window has no area", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SkippedShowsOnlyTheWindowsThatWereSkipped()
+    {
+        // The whole reason it earns a prefix of its own. The window list already shows
+        // everything; this is the "what is being passed over" view.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForSkipped(
+        [
+            Window(handle: 1, title: "managed one"),
+            Window(handle: 2, title: "skipped one", managed: false, workspace: null,
+                summary: "not an Alt+Tab target"),
+        ]);
+
+        Assert.Equal("skipped one", Assert.Single(entries).Primary);
+    }
+
+    [Fact]
+    public void SkippedOffersTheReportRatherThanOnlyTheWindow()
+    {
+        // Enter in this mode asks why, because going to a window you have just been
+        // told is not managed answers nothing.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForSkipped(
+        [
+            Window(handle: 0x2A, managed: false, workspace: null, summary: "no title"),
+        ]));
+
+        Assert.Equal(0x2A, entry.Explains);
+    }
+
+    [Fact]
+    public void SkippedPutsTheAnswerableOnesFirst()
+    {
+        // A rule is something the user wrote and can unwrite; a child window with no
+        // area is a fact about Win32. Recency would sort these almost equally, because
+        // most of them have never been focused.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForSkipped(
+        [
+            Window(handle: 1, title: "win32 says no", managed: false, workspace: null,
+                summary: "a child window"),
+            Window(handle: 2, title: "your rule says no", managed: false, workspace: null,
+                summary: "excluded by a rule"),
+            Window(handle: 3, title: "not yet", managed: false, workspace: null,
+                summary: "not adopted yet"),
+        ]);
+
+        Assert.Equal(
+            ["your rule says no", "not yet", "win32 says no"],
+            entries.OrderByDescending(e => e.Rank).Select(e => e.Primary));
+    }
+
+    [Fact]
+    public void EveryWindowStillCarriesItsActionsWhenSkipped()
+    {
+        // Ctrl+Enter has to reach "Manage it" from here. That is the fix for most of
+        // what this mode shows, and a list that diagnoses without offering the remedy
+        // is half a feature.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForSkipped(
+        [
+            Window(managed: false, workspace: null, summary: "not adopted yet"),
+        ]));
+
+        Assert.NotNull(entry.Actions);
+        Assert.Contains(entry.Actions!, a => a.Name == "Manage it");
+    }
 
     [Fact]
     public void EnterOnAWindowFocusesItByHandle()
@@ -370,53 +475,96 @@ public sealed class PaletteEntriesTests
     [Fact]
     public void AReportBecomesRowsOfLabelAndValue()
     {
-        // The real shape the window manager emits: columns padded with spaces, not
-        // colons. Written against the wrong shape this produced one very wide row per
-        // line with the padding left in, which is the report as text rather than as
-        // something you can search.
+        // The value is the searched half and the label the dim one, because somebody
+        // narrowing a long report types the thing they are looking for - a class name,
+        // a path - not the word "class".
         IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(
+            Report(handle: 0x3047A, className: "Chrome_WidgetWin_1"));
+
+        PaletteEntry handle = entries.First(e => e.Secondary == "handle");
+
+        Assert.Equal("0x3047A", handle.Primary);
+
+        PaletteEntry className = entries.First(e => e.Secondary == "class");
+
+        Assert.Equal("Chrome_WidgetWin_1", className.Primary);
+    }
+
+    [Fact]
+    public void AReportSaysWhyAWindowIsNotManageable()
+    {
+        // The whole point of the report. The verdict and the sentence explaining it
+        // belong on one row, because "no" on its own is the half that says nothing.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(
+            Report(manageable: false, verdict: "window has no area"));
+
+        Assert.Equal(
+            "no - window has no area",
+            entries.First(e => e.Secondary == "manageable").Primary);
+    }
+
+    [Fact]
+    public void AnUnmanagedWindowSaysWhetherARuleIsWhy()
+    {
+        // Two different answers with two different fixes: a rule is something the user
+        // wrote and can unwrite, and everything else is not.
+        Assert.Equal(
+            "no - excluded by a rule",
+            PaletteEntries.ForReport(Report(excludedByRule: true))
+                .First(e => e.Secondary == "managed").Primary);
+
+        Assert.Equal(
+            "no",
+            PaletteEntries.ForReport(Report())
+                .First(e => e.Secondary == "managed").Primary);
+    }
+
+    [Fact]
+    public void ARuleRowSaysWhetherItMatchedAndWhereItLives()
+    {
+        // The line number is what makes the answer actionable: a rule that did not
+        // match is only useful if you can go and look at it.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(Report(rules:
         [
-            "handle       0x3047A",
-            "class        Chrome_WidgetWin_1",
-            string.Empty,
-            "manageable   yes - manageable",
-            "  tags       1, 3",
-        ]);
+            new RuleReport("float the pip", 42, Matched: true),
+            new RuleReport("browsers to 2", 51, Matched: false),
+        ]));
 
-        Assert.Equal(4, entries.Count);
+        PaletteEntry matched = entries.First(e => e.Primary.StartsWith("float", StringComparison.Ordinal));
 
-        Assert.Equal("0x3047A", entries[0].Primary);
-        Assert.Equal("handle", entries[0].Secondary);
+        Assert.Equal("rule  [x]", matched.Secondary);
+        Assert.Contains("line 42", matched.Primary, StringComparison.Ordinal);
 
-        // The value keeps its own spacing and punctuation - only the padding goes.
-        Assert.Equal("yes - manageable", entries[2].Primary);
-        Assert.Equal("manageable", entries[2].Secondary);
-
-        // Indented sub-keys read as ordinary labels once the indent is trimmed.
-        Assert.Equal("1, 3", entries[3].Primary);
-        Assert.Equal("tags", entries[3].Secondary);
+        Assert.Equal(
+            "rule  [ ]",
+            entries.First(e => e.Primary.StartsWith("browsers", StringComparison.Ordinal)).Secondary);
     }
 
     [Fact]
-    public void AReportLineWithNoColumnsStaysWhole()
+    public void NoRulesIsSaidOutLoudRatherThanLeftBlank()
     {
-        // A sentence is not a label, and splitting one at its first double space would
-        // turn it into a row titled with half of itself.
-        PaletteEntry entry = Assert.Single(PaletteEntries.ForReport(["no such window"]));
-
-        Assert.Equal("no such window", entry.Primary);
-        Assert.Equal(string.Empty, entry.Secondary);
+        // An absent section reads as the report having failed. "None configured" is
+        // the answer to "why did my rule not fire" when there are no rules at all.
+        Assert.Equal(
+            "(none configured)",
+            PaletteEntries.ForReport(Report()).First(e => e.Secondary == "rules").Primary);
     }
 
     [Fact]
-    public void AReportValueKeepsAColonThatIsPartOfIt()
+    public void AnAppThatMissedListsTheMatchersThatMissed()
     {
-        // A path is not a label and a colon inside one separates nothing.
-        PaletteEntry entry = Assert.Single(
-            PaletteEntries.ForReport([@"path         C:\Program Files\msedge.exe"]));
+        // What turns "my rule does not fire" into a one-glance diagnosis: the rule is
+        // usually fine, and one matcher in the app definition is what missed.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(Report(apps:
+        [
+            new AppReport("browser", Matched: false, ["class ~= Chrome_WidgetWin_1"]),
+        ]));
 
-        Assert.Equal(@"C:\Program Files\msedge.exe", entry.Primary);
-        Assert.Equal("path", entry.Secondary);
+        Assert.Equal("app  [ ]", entries.First(e => e.Primary == "browser").Secondary);
+
+        Assert.Equal(
+            "class ~= Chrome_WidgetWin_1",
+            entries.First(e => e.Secondary == "failed").Primary);
     }
 
     [Fact]
@@ -424,27 +572,168 @@ public sealed class PaletteEntriesTests
     {
         // A report is an argument read top to bottom. Sorting it by rank the way the
         // other lists are sorted would shuffle the reasoning.
-        IReadOnlyList<PaletteEntry> entries =
-            PaletteEntries.ForReport(["first: a", "second: b", "third: c"]);
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(Report());
 
-        Assert.True(entries[0].Rank > entries[1].Rank);
-        Assert.True(entries[1].Rank > entries[2].Rank);
+        for (int i = 1; i < entries.Count; i++)
+            Assert.True(entries[i - 1].Rank > entries[i].Rank);
     }
 
     [Fact]
     public void AReportRowDoesNothingWhenChosen()
     {
-        // It is something to read, not something to run.
+        // It is something to read, not something to run. Choosing one opens it rather
+        // than sending anything, which is why Expands carries the text and Command
+        // stays empty.
         Assert.All(
-            PaletteEntries.ForReport(["Cloaked: yes"]),
+            PaletteEntries.ForReport(Report()),
             e => Assert.Equal(string.Empty, e.Command));
     }
 
     [Fact]
-    public void AnEmptyReportStillSaysSomething()
+    public void EveryReportRowCanBeOpenedInFull()
     {
-        // An empty list would read as "the palette is broken" rather than "there was
-        // nothing to say".
-        Assert.Equal("Nothing to report", Assert.Single(PaletteEntries.ForReport([])).Primary);
+        // A row is drawn on one line and clipped, and the values worth opening a
+        // report for - a path, the sentence about elevation - are the long ones.
+        Assert.All(
+            PaletteEntries.ForReport(Report()),
+            e => Assert.False(string.IsNullOrEmpty(e.Expands)));
+    }
+
+    [Fact]
+    public void AnExpandedRowCarriesItsLabelAsWellAsItsValue()
+    {
+        // Copied on its own, "0x3047A" says nothing about what it is. The row on
+        // screen has the label beside it; the copy has to carry it too.
+        string expanded = PaletteEntries.ForReport(Report(handle: 0x3047A))
+            .First(e => e.Secondary == "handle").Expands!;
+
+        Assert.Contains("handle", expanded, StringComparison.Ordinal);
+        Assert.Contains("0x3047A", expanded, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AFailedReportStillSaysSomething()
+    {
+        // An empty list would read as "the palette is broken" rather than "the window
+        // manager would not answer" - and Push refuses an empty frame, so the request
+        // would appear to do nothing at all.
+        Assert.Equal(
+            "no such window",
+            Assert.Single(PaletteEntries.ForReportFailure("no such window")).Primary);
+    }
+
+    private static WindowReport Report(
+        long handle = 0x100,
+        string className = "TestClass",
+        bool manageable = true,
+        string verdict = "manageable",
+        bool excludedByRule = false,
+        ManagedWindowReport? node = null,
+        IReadOnlyList<RuleReport>? rules = null,
+        IReadOnlyList<AppReport>? apps = null) =>
+        new(handle, "a window", className, "test", @"C:\test.exe", 0, 0, 800, 600,
+            0x16CF0000, 0x00040100, true, "None", false, manageable, verdict, "manageable",
+            node is not null, excludedByRule, node, rules ?? [], apps ?? []);
+
+    /// <summary>A stand-in for the renderer: every character the same width.</summary>
+    /// <remarks>
+    /// Fixed-width on purpose. The real measurer is a proportional font behind a GDI
+    /// device context, and a test that needed one would be testing the font.
+    /// </remarks>
+    private static int Measure(string text) => text.Length * 10;
+
+    [Fact]
+    public void AValueThatFitsIsLeftAsOneLine()
+    {
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWrapped("short", 500, Measure));
+
+        Assert.Equal("short", entry.Primary);
+    }
+
+    [Fact]
+    public void AValueTooLongIsBrokenBetweenWords()
+    {
+        // Greedy: as many words as fit, then the next line. Words stay whole, because
+        // a sentence broken mid-word is harder to read than one broken a little early.
+        IReadOnlyList<PaletteEntry> entries =
+            PaletteEntries.ForWrapped("one two three four", 100, Measure);
+
+        Assert.Equal(["one two", "three four"], entries.Select(e => e.Primary));
+
+        // Nothing lost and nothing invented: the words come back in order.
+        Assert.Equal("one two three four", string.Join(' ', entries.Select(e => e.Primary)));
+    }
+
+    [Fact]
+    public void AWordWithNoSpacesIsBrokenAnyway()
+    {
+        // A path or a regular expression has nowhere to break politely, and those are
+        // exactly the values worth opening in full. Refusing to break would put the
+        // whole thing on one clipped line, which is the problem this solves.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForWrapped(
+            @"C:\Program_Files\a_very_long_directory\msedge.exe", 100, Measure);
+
+        Assert.True(entries.Count > 1);
+        Assert.All(entries, e => Assert.True(Measure(e.Primary) <= 100));
+
+        Assert.Equal(
+            @"C:\Program_Files\a_very_long_directory\msedge.exe",
+            string.Concat(entries.Select(e => e.Primary)));
+    }
+
+    [Fact]
+    public void NoLineIsWiderThanTheRoomItHas()
+    {
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForWrapped(
+            "the window runs at a higher integrity level than Shubbak so Windows refuses to move it",
+            200,
+            Measure);
+
+        Assert.All(entries, e => Assert.True(
+            Measure(e.Primary) <= 200,
+            $"\"{e.Primary}\" is {Measure(e.Primary)} wide"));
+    }
+
+    [Fact]
+    public void WrappedLinesKeepTheirOrder()
+    {
+        // A sentence sorted by rank is not a sentence.
+        IReadOnlyList<PaletteEntry> entries =
+            PaletteEntries.ForWrapped("one two three four five six", 100, Measure);
+
+        for (int i = 1; i < entries.Count; i++)
+            Assert.True(entries[i - 1].Rank > entries[i].Rank);
+    }
+
+    [Fact]
+    public void AWrappedLineDoesNothingAndCannotBeOpenedAgain()
+    {
+        // Otherwise Enter on a wrapped line would expand it into itself, for ever.
+        IReadOnlyList<PaletteEntry> entries =
+            PaletteEntries.ForWrapped("one two three four", 100, Measure);
+
+        Assert.All(entries, e =>
+        {
+            Assert.Equal(string.Empty, e.Command);
+            Assert.Null(e.Expands);
+        });
+    }
+
+    [Fact]
+    public void AWidthThatCanHoldNothingDoesNotHang()
+    {
+        // Guards the loop rather than the look of it. Asking for a smaller prefix for
+        // ever is the failure mode here, and it would take the message loop with it.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForWrapped("something", 0, Measure);
+
+        Assert.Equal("something", Assert.Single(entries).Primary);
+    }
+
+    [Fact]
+    public void WrappingSomethingEmptyStillProducesARow()
+    {
+        // Push refuses an empty frame, so returning nothing would make Enter appear to
+        // do nothing at all.
+        Assert.Single(PaletteEntries.ForWrapped(string.Empty, 100, Measure));
     }
 }

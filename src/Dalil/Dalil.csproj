@@ -49,4 +49,15 @@
     <ProjectReference Include="..\Shubbak.Native\Shubbak.Native.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      What a keystroke means is decided in PaletteInput, which is internal because
+      nothing outside this process has any business asking. It is also the part most
+      worth holding to account: the window it used to live in cannot be constructed
+      without a real HWND, a message loop and a device context, so none of those
+      judgements could be tested at all.
+    -->
+    <InternalsVisibleTo Include="Dalil.Tests" />
+  </ItemGroup>
+
 </Project>

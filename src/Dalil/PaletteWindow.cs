@@ -4,6 +4,8 @@ using Dalil.Core;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
+using Shubbak.Ipc;
+using Shubbak.Native;
 using Shubbak.Ui.Gdi;
 using Shubbak.Ui.Layout;
 using Windows.Win32;
@@ -81,6 +83,11 @@ public sealed class PaletteWindow : IDisposable
     /// <param name="Title">What the search box calls it.</param>
     /// <param name="SavedQuery">What was typed before it took over the box.</param>
     /// <param name="Entries">The rows it shows.</param>
+    /// <param name="Whole">
+    /// The single value this frame is showing broken across its rows, when it is one.
+    /// Set only for an expanded row: copying there has to yield the text as it was
+    /// written, not as it happened to be broken to fit this window's width.
+    /// </param>
     /// <remarks>
     /// The rows are held here rather than reached back through the row the frame was
     /// opened from. Most frames are a row's own children, but not all: an explanation
@@ -88,7 +95,10 @@ public sealed class PaletteWindow : IDisposable
     /// has to work the same way as going back to anything else.
     /// </remarks>
     private readonly record struct Overlay(
-        string Title, string SavedQuery, IReadOnlyList<PaletteEntry> Entries);
+        string Title,
+        string SavedQuery,
+        IReadOnlyList<PaletteEntry> Entries,
+        string? Whole = null);
 
     /// <summary>Lists opened from a row, innermost last.</summary>
     private readonly Stack<Overlay> _overlays = new();
@@ -320,7 +330,9 @@ public sealed class PaletteWindow : IDisposable
         // WM_CHAR - and every one of them is handled as a key rather than as text.
         if (char.IsControl(value)) return;
 
-        ApplyQuery(_query + value);
+        // Not simply appended: a prefix typed while there is nothing to search replaces
+        // the mode rather than being searched for. See PaletteInput.Typed.
+        ApplyQuery(PaletteInput.Typed(_query, value));
     }
 
     /// <summary>
@@ -366,12 +378,22 @@ public sealed class PaletteWindow : IDisposable
                 EnterActions();
                 return true;
 
+            case VIRTUAL_KEY.VK_C when control:
+                Copy(everything: shift);
+                return true;
+
             case VIRTUAL_KEY.VK_RETURN:
                 Choose();
                 return true;
 
             case VIRTUAL_KEY.VK_BACK:
-                Backspace(wholeWord: control);
+                // Empty and inside a frame, Backspace has nothing to delete, so it
+                // goes back instead. Escape already did, but Backspace is what a hand
+                // reaches for when the thing on screen arrived by pressing Enter -
+                // and doing nothing at all was the least useful of the three options.
+                if (_query.Length == 0 && _overlays.Count > 0) Pop();
+                else Backspace(wholeWord: control);
+
                 return true;
 
             case VIRTUAL_KEY.VK_UP:
@@ -429,31 +451,36 @@ public sealed class PaletteWindow : IDisposable
     /// Runs an action directly, when the guard is off.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Chords are the whole point of turning the guard off, so closing is chorded too
     /// rather than being kept back - a switch that says "direct chords" and then makes
     /// an exception is a switch nobody can predict. The list stays available either
     /// way, because it is also where the chords are written down.
+    /// </para>
+    /// <para>
+    /// Inspecting is the one chord the guard does not hold back. See
+    /// <see cref="PaletteInput.IsExemptFromGuard"/>, which is where that rule lives and
+    /// where it is tested.
+    /// </para>
     /// </remarks>
     private bool TryChord(VIRTUAL_KEY key, bool control, bool shift)
     {
-        if (_config.ActionGuard || _overlays.Count > 0) return false;
-        if (_model.Selected?.Entry.Actions is not { Count: > 0 } actions) return false;
+        if (_overlays.Count > 0) return false;
+        if (_model.Selected is not { } selected) return false;
+        if (selected.Entry.Actions is not { Count: > 0 } actions) return false;
 
-        string? wanted = (key, control, shift) switch
+        if (PaletteInput.ChordFor(key, control, shift) is not { } wanted) return false;
+        if (_config.ActionGuard && !PaletteInput.IsExemptFromGuard(wanted)) return false;
+
+        if (actions.FirstOrDefault(a => a.Chord == wanted) is not { } action) return false;
+
+        // Not closed, exactly as when the same action is chosen from the list: the
+        // report arrives later and needs somewhere to arrive.
+        if (action.Explains is { } handle)
         {
-            (VIRTUAL_KEY.VK_RETURN, false, _) => null,
-            (VIRTUAL_KEY.VK_F, true, true) => "Ctrl+Shift+F",
-            (VIRTUAL_KEY.VK_S, true, true) => "Ctrl+Shift+S",
-            (VIRTUAL_KEY.VK_M, true, true) => "Ctrl+Shift+M",
-            (VIRTUAL_KEY.VK_A, true, true) => "Ctrl+Shift+A",
-            (VIRTUAL_KEY.VK_W, true, true) => "Ctrl+Shift+W",
-            _ => null,
-        };
-
-        if (wanted is null) return false;
-
-        PaletteAction? action = actions.FirstOrDefault(a => a.Chord == wanted);
-        if (action is null) return false;
+            ExplainRequested?.Invoke(handle, Breadcrumb(selected.Entry.Primary));
+            return true;
+        }
 
         Close();
         CommandRequested?.Invoke(action.Command);
@@ -484,6 +511,39 @@ public sealed class PaletteWindow : IDisposable
     }
 
     /// <summary>
+    /// Opens one row's whole text, broken across as many rows as it needs.
+    /// </summary>
+    /// <remarks>
+    /// The answer to a report row being one clipped line. Rather than teaching the
+    /// palette to wrap - which would mean variable row heights, a measuring layout
+    /// pass and a window that resizes underneath the selection - the text becomes
+    /// several ordinary rows in an ordinary frame, and Escape leaves it exactly the
+    /// way Escape leaves an action list.
+    /// </remarks>
+    private void Expand(string whole, string title)
+    {
+        if (_renderer is not { } renderer) return;
+
+        // The width a row's text actually gets, which is what it has to be broken to
+        // fit. Measured against the same renderer that will draw it.
+        PaletteLayout layout = Layout();
+        int width = layout.RowBounds(0).Width - (layout.TextInset * 2);
+
+        IReadOnlyList<PaletteEntry> lines =
+            PaletteEntries.ForWrapped(whole, width, text => renderer.Measure(text, RowFont()).Width);
+
+        if (lines.Count == 0) return;
+
+        _overlays.Push(new Overlay(title, _query, lines, whole));
+
+        _query = string.Empty;
+        _model.SetQuery(_query);
+        _model.SetEntries(lines);
+
+        Repaint();
+    }
+
+    /// <summary>
     /// Shows a fetched report as a level of its own.
     /// </summary>
     /// <remarks>
@@ -491,11 +551,19 @@ public sealed class PaletteWindow : IDisposable
     /// row that asked for it was chosen, which is why the palette does not close on
     /// that choice - there would be nothing left to show it in.
     /// </remarks>
-    public void ShowReport(string title, IReadOnlyList<string> lines)
+    public void ShowReport(string title, WindowReport report)
     {
         if (!_open) return;
 
-        Push(title, PaletteEntries.ForReport(lines));
+        Push(title, PaletteEntries.ForReport(report));
+    }
+
+    /// <summary>Says why a report could not be fetched, where the report would have been.</summary>
+    public void ShowReportFailure(string title, string reason)
+    {
+        if (!_open) return;
+
+        Push(title, PaletteEntries.ForReportFailure(reason));
     }
 
     /// <summary>Shows what can be done to the selected row.</summary>
@@ -509,6 +577,36 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>The title for a list opened from a row, in context.</summary>
     private string Breadcrumb(string leaf) =>
         _overlays.Count == 0 ? leaf : $"{_overlays.Peek().Title} \u203A {leaf}";
+
+    /// <summary>
+    /// Copies the selected row, or everything on screen, to the clipboard.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Both, because both are wanted and for different things. One row is a class name
+    /// or a path going into a rule you are about to write. Everything is the whole
+    /// report going into an issue, which is the single most useful thing to do with an
+    /// explanation of why a window will not tile - and until now the only way to get
+    /// one out of the palette was to read it off the screen and retype it.
+    /// </para>
+    /// <para>
+    /// What text that produces is decided by <see cref="PaletteInput.CopyText"/>. The
+    /// palette stays open either way: copying is not choosing, and closing on it would
+    /// take away the list somebody is working through one line at a time.
+    /// </para>
+    /// </remarks>
+    private void Copy(bool everything)
+    {
+        string? text = PaletteInput.CopyText(
+            _model.Selected?.Entry,
+            _model.Rows.Select(r => r.Entry),
+            _overlays.Count > 0 ? _overlays.Peek().Whole : null,
+            everything);
+
+        if (string.IsNullOrEmpty(text)) return;
+
+        _ = Clipboard.SetText(text, Handle);
+    }
 
     /// <summary>
     /// Goes back one level, or closes when there is nowhere left to go.
@@ -652,60 +750,56 @@ public sealed class PaletteWindow : IDisposable
     /// Acts on the selected row.
     /// </summary>
     /// <remarks>
-    /// Closed first, and deliberately. The command usually raises another window, and
-    /// a palette still on screen and still topmost when that happens covers the thing
-    /// the user just asked to see.
+    /// What a row does is decided by <see cref="PaletteInput.Choose"/>, which is where
+    /// that reasoning lives and where it is tested. This is the half that needs a
+    /// window: sending, opening and closing.
+    /// <para>
+    /// Closed before a command is sent, deliberately. The command usually raises
+    /// another window, and a palette still on screen and still topmost when that
+    /// happens covers the thing the user just asked to see.
+    /// </para>
     /// </remarks>
     private void Choose()
     {
         if (_model.Selected is not { } row) return;
 
-        // A row that names a mode changes mode. This is what makes the help list
-        // usable: somebody reading a list of keys will press Enter on the line they
-        // want, and a help screen that ignores that has taught them the key and then
-        // refused to honour it.
-        if (row.Entry.SwitchesTo is { } mode)
+        PaletteEntry entry = row.Entry;
+
+        switch (PaletteInput.Choose(entry, _model.Mode, _overlays.Count > 0))
         {
-            SwitchTo(mode);
-            return;
+            case PaletteChoice.SwitchMode:
+                SwitchTo(entry.SwitchesTo!.Value);
+                return;
+
+            case PaletteChoice.Inspect:
+                // The report has to be fetched, so the palette stays open and the host
+                // pushes it when it arrives.
+                ExplainRequested?.Invoke(entry.Explains!.Value, Breadcrumb(entry.Primary));
+                return;
+
+            case PaletteChoice.Expand:
+                Expand(entry.Expands!, Breadcrumb(
+                    entry.Secondary is { Length: > 0 } label ? label : entry.Primary));
+                return;
+
+            case PaletteChoice.OpenChildren:
+                Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.Actions!));
+                return;
+
+            case PaletteChoice.Complete:
+                _query = ">" + entry.Primary + " ";
+                _model.SetQuery(_query);
+                Repaint();
+                return;
+
+            case PaletteChoice.Run:
+                Close();
+                CommandRequested?.Invoke(entry.Command);
+                return;
+
+            default:
+                return;
         }
-
-        string command = row.Entry.Command;
-
-        // Some rows explain rather than do. The report has to be fetched, so the
-        // palette stays open and the host pushes it when it arrives.
-        if (row.Entry.Explains is { } handle)
-        {
-            ExplainRequested?.Invoke(handle, Breadcrumb(row.Entry.Primary));
-            return;
-        }
-
-        // A row carrying its own list opens it instead of running. Only inside an
-        // overlay: at the top level a row's list is what Ctrl+Enter is for, and Enter
-        // has to keep meaning "go to this window".
-        if (command.Length == 0 && _overlays.Count > 0 && row.Entry.Actions is { Count: > 0 })
-        {
-            Push(Breadcrumb(row.Entry.Primary), PaletteActions.AsEntries(row.Entry.Actions));
-            return;
-        }
-
-        // A verb that needs arguments is offered as text to complete rather than run.
-        // Running it bare would be rejected by the parser and read as a broken
-        // palette. A help row that is only a key reference has nothing to run either,
-        // and so does the workspace a window is already on - and both simply do
-        // nothing rather than pretending.
-        if (command.Length == 0)
-        {
-            if (_model.Mode is PaletteMode.Help || _overlays.Count > 0) return;
-
-            _query = ">" + row.Entry.Primary + " ";
-            _model.SetQuery(_query);
-            Repaint();
-            return;
-        }
-
-        Close();
-        CommandRequested?.Invoke(command);
     }
 
     /// <summary>What the search box calls the list currently showing.</summary>
@@ -743,6 +837,14 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>The layout for the window as it currently stands.</summary>
     private PaletteLayout Layout() =>
         new(_scaled, _scale, new Rect(0, 0, _bounds.Width, _bounds.Height));
+
+    /// <summary>The font a row's own text is drawn in.</summary>
+    /// <remarks>
+    /// Built the same way the renderer builds it, from the scaled config, so text
+    /// broken to fit a row is measured in the face it will actually be drawn in.
+    /// </remarks>
+    private FontStyle RowFont() =>
+        new(_scaled.FontFamily, _scaled.FontSize, Bold: false, Italic: false);
 
     /// <summary>
     /// Puts the palette on the monitor the user is looking at, at that monitor's scale.

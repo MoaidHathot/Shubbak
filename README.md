@@ -443,7 +443,7 @@ on screen. Swapping the renderer means implementing one interface.
 **Dalil** (دليل, *"guide"*) is a fuzzy-search palette for your whole desktop. Bind a
 key to `signal "palette"` and it appears.
 
-Seven modes, each with a prefix:
+Eight modes, each with a prefix:
 
 | Prefix | Mode | |
 |---|---|---|
@@ -453,23 +453,36 @@ Seven modes, each with a prefix:
 | `~` | Layouts | Marks the one you're already in |
 | `%` | Monitors | Size, DPI, and what each is showing |
 | `$` | Scratchpad | Everything you've stashed, by slot |
+| `!` | Inspect | Every window Shubbak is **not** managing, and why not |
 | `?` | Help | The palette's keys — **and your own keybindings** |
 
-Two things I'm particularly happy with:
+Three things I'm particularly happy with:
 
 **Type a command and it's parsed for real.** Whatever you type becomes a top-ranked
 row, run through the *same* parser your config file uses. So a bad argument gives
 you the same message it would at load time, right there, before you press Enter.
 
+**`shubbak inspect`, without leaving the palette.** Press **Ctrl+Shift+I** on any
+window and you get the full report — attributes, verdict, which rules matched, which
+app definitions missed and on which matcher. Any line too long to fit opens in full
+with Enter, and Escape or Backspace steps back out. **Ctrl+C** copies the selected
+line; **Ctrl+Shift+C** copies the whole report, which is the version that belongs in
+a bug report.
+
+**The `!` mode answers "what is being skipped?"** — the palette's version of
+`shubbak inspect --all`. Every window Shubbak passed over, each one saying why on the
+row itself, with the ones you can do something about (excluded by a rule, not adopted
+yet) sorted to the top. Enter inspects; Ctrl+Enter still reaches "Manage it".
+
 **Every row has actions** (Ctrl+Enter): go to it, bring it here, float/tile,
-minimise/restore, make it sticky, edit its tags, close it, start or stop managing
-it — and **"Explain this window"**, which runs the same report as
-`shubbak inspect <handle>` without leaving the palette.
+minimise/restore, make it sticky, edit its tags, close it, start or stop managing it,
+and inspect it.
 
 Rows carry badges so you can see at a glance what you're looking at: `unmanaged`,
 `minimised`, `cloaked`, `floating`, `fullscreen`, `sticky`, `elevated`, `stashed`,
-`also on <workspace>`. The search box also tells you when tiling is paused or a
-binding mode is eating your keys.
+`also on <workspace>`. Unmanaged windows also carry the reason in the dim text, so
+you don't have to open anything to find out why. The search box tells you when tiling
+is paused or a binding mode is eating your keys.
 
 Dalil is opened by a **signal**, not by a hard-wired command — which means Shubbak
 doesn't know Dalil exists. That's the same extension point anything else can use.
@@ -568,7 +581,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1254 test methods**, around 700 ms to run. Everything except the platform layer
+**1345 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -628,7 +641,7 @@ src/
   Taj/              bar host
   Dalil.Core/       fuzzy matching, palette model                     — no Win32
   Dalil/            the palette
-tests/              1254 test methods across 8 projects
+tests/              1345 test methods across 9 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```

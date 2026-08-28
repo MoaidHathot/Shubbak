@@ -69,6 +69,76 @@ public static class PaletteEntries
         return entries;
     }
 
+    /// <summary>
+    /// Describes only the windows Shubbak is not managing, and why not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The palette's answer to <c>shubbak inspect --all</c>. The reason is on the row
+    /// rather than one keystroke down in an action list, because the question this
+    /// mode exists for - "what is being skipped, and why?" - is asked about the set
+    /// rather than about any one window, and answering it one window at a time is how
+    /// it was asked before.
+    /// </para>
+    /// <para>
+    /// Ranked by how actionable the answer is rather than by recency. A window a rule
+    /// excluded, or one that is merely waiting to be adopted, is something the user
+    /// can change their mind about; a child window with no area is a fact about Win32.
+    /// Recency would be meaningless here anyway - these windows have mostly never been
+    /// focused, so it would sort almost everything equally and leave the order to
+    /// chance.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForSkipped(
+        IEnumerable<WindowCandidate> windows,
+        string? focusedWorkspace = null,
+        IReadOnlyList<string>? workspaces = null,
+        bool severalMonitors = false)
+    {
+        ArgumentNullException.ThrowIfNull(windows);
+
+        List<PaletteEntry> entries = [];
+
+        foreach (WindowCandidate window in windows)
+        {
+            if (window.Managed) continue;
+
+            entries.Add(new PaletteEntry(
+                Title(window),
+                Describe(window, severalMonitors),
+                Badges(window),
+
+                // Focus rather than inspect, because Enter is handled by the palette:
+                // in this mode it opens the report instead of sending this. The
+                // command is still here so that the row remains useful if it is ever
+                // shown somewhere that does not know the mode.
+                $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}",
+                Actionable(window),
+                SwitchesTo: null,
+                Actions: PaletteActions.For(window, focusedWorkspace, workspaces),
+
+                // So Ctrl+Shift+I and the action list both reach the full report from
+                // here, exactly as they do from the window list.
+                Explains: window.Handle));
+        }
+
+        return entries;
+    }
+
+    /// <summary>How much can be done about the reason a window was skipped.</summary>
+    /// <remarks>
+    /// Three tiers rather than a score. Something the user turned on, something
+    /// Shubbak has simply not got to yet, and something about the window itself - and
+    /// only the first two are worth looking at first.
+    /// </remarks>
+    private static long Actionable(WindowCandidate window) =>
+        Reason(window) switch
+        {
+            "excluded by a rule" => 2,
+            "not adopted yet" => 1,
+            _ => 0,
+        };
+
     /// <summary>Describes every command verb as a row.</summary>
     public static IReadOnlyList<PaletteEntry> ForCommands(IEnumerable<CommandInfo> commands)
     {
@@ -178,71 +248,240 @@ public static class PaletteEntries
     /// Turns a window manager report into rows.
     /// </summary>
     /// <remarks>
-    /// The report is plain text meant for a terminal, laid out in columns padded with
-    /// spaces - <c>cloaked      None</c>. Split at that padding it reads as label and
-    /// value, which is what the rows want, and as rows it becomes searchable: "cloak"
-    /// finds the line about cloaking in a report too long to read through.
     /// <para>
-    /// A colon is accepted as a separator too, for the lines that use one. Neither is
-    /// required: a line with no separator at all stays whole rather than being forced
-    /// into a shape it does not have.
+    /// One row per fact, label on the dim side and value on the searched side, so a
+    /// report too long to read through can be narrowed by typing: "cloak" finds the
+    /// line about cloaking, "rule" finds the rules.
     /// </para>
     /// <para>
-    /// Blank lines are dropped. They separate paragraphs on a terminal, and in a list
-    /// they would only be empty rows you can select and land on.
+    /// Built from the report's fields. It used to be built by splitting the printed
+    /// text at its column padding, which worked and meant the daemon's choice of
+    /// whitespace was quietly an interface - widen a column and the labels here stop
+    /// being labels, with nothing to notice it.
+    /// </para>
+    /// <para>
+    /// Every row carries its whole text in <see cref="PaletteEntry.Expands"/>, because
+    /// a row is drawn on one line and clipped. The values worth opening a report for -
+    /// a path, a regular expression, the sentence saying a window cannot be moved and
+    /// what to do about it - are exactly the ones too long to fit.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<PaletteEntry> ForReport(IEnumerable<string> lines)
+    public static IReadOnlyList<PaletteEntry> ForReport(WindowReport report)
     {
-        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(report);
 
         List<PaletteEntry> entries = [];
 
-        foreach (string line in lines)
+        void Add(string label, string value) => entries.Add(new PaletteEntry(
+            value,
+            label,
+            [],
+            string.Empty,
+
+            // Negative and descending, so the report keeps the order it was written
+            // in. It is an argument read top to bottom, and sorting it the way the
+            // other lists are sorted would shuffle the reasoning.
+            -entries.Count,
+            SwitchesTo: null,
+            Actions: null,
+            Explains: null,
+            Expands: $"{label}  {value}"));
+
+        Add("handle", $"0x{report.Handle:X}");
+        Add("title", report.Title);
+        Add("class", report.ClassName);
+        Add("process", report.ProcessName);
+        Add("path", report.ProcessPath ?? "(unreadable - elevated process?)");
+        Add("rect", $"({report.X},{report.Y} {report.Width}x{report.Height})");
+        Add("style", $"0x{report.Style:X8}");
+        Add("ex-style", $"0x{report.ExStyle:X8}");
+        Add("visible", report.Visible ? "yes" : "no");
+        Add("cloaked", report.Cloaked);
+        Add("minimised", report.Minimised ? "yes" : "no");
+        Add("manageable", $"{(report.Manageable ? "yes" : "no")} - {report.Verdict}");
+
+        if (report.Node is { } node)
         {
-            string trimmed = line.Trim();
-            if (trimmed.Length == 0) continue;
+            Add("managed", "yes");
+            Add("node", $"#{node.Id}");
+            Add("state", node.State);
+            Add("workspace", node.Workspace);
+            Add("focused", node.Focused ? "yes" : "no");
+            Add("sticky", node.Sticky ? "yes - follows every workspace on its monitor" : "no");
+            Add("tags", node.Tags.Count == 0
+                ? "(none)"
+                : $"{string.Join(", ", node.Tags)} - it will follow you there");
 
-            (string label, string value) = SplitReportLine(trimmed);
+            if (node.Scratchpad is { Length: > 0 } slot) Add("scratchpad", slot);
+        }
+        else
+        {
+            Add("managed", report.ExcludedByRule ? "no - excluded by a rule" : "no");
+        }
 
+        // Only the rules, not a heading followed by them. A heading is a row you can
+        // select and land on that says nothing, and the label column already carries
+        // the word "rule" on every line beneath it.
+        if (report.Rules.Count == 0)
+        {
+            Add("rules", "(none configured)");
+        }
+        else
+        {
+            foreach (RuleReport rule in report.Rules)
+                Add(rule.Matched ? "rule  [x]" : "rule  [ ]", $"{rule.Name}  (line {rule.Line})");
+        }
+
+        // What turns "my rule does not fire" into a one-glance diagnosis: the rule is
+        // usually fine, and the app definition is what missed.
+        foreach (AppReport app in report.Apps)
+        {
+            Add(app.Matched ? "app  [x]" : "app  [ ]", app.Name);
+
+            foreach (string matcher in app.FailedMatchers)
+                Add("failed", matcher);
+        }
+
+        return entries;
+    }
+
+    /// <summary>One line saying why there is no report.</summary>
+    /// <remarks>
+    /// A frame of its own rather than an empty list, because Push refuses an empty one
+    /// and the palette would then answer a request to explain a window by appearing to
+    /// do nothing at all.
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForReportFailure(string reason) =>
+    [
+        new PaletteEntry(
+            string.IsNullOrWhiteSpace(reason) ? "Nothing to report" : reason,
+            string.Empty,
+            [],
+            string.Empty,
+            Expands: reason),
+    ];
+
+    /// <summary>
+    /// Breaks one long value across as many rows as it needs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is how the palette shows something too long to fit without learning to
+    /// wrap. A row is a fixed height and one clipped line, by design - the layout is
+    /// arithmetic and the renderer draws single lines - so instead of making a row
+    /// taller, the text becomes several rows, and the frame they are pushed into is
+    /// the one that already exists for action lists and reports. Escape leaves it the
+    /// way Escape leaves everything else.
+    /// </para>
+    /// <para>
+    /// Measured rather than counted. Segoe UI is proportional, so wrapping at a
+    /// character count leaves a ragged half-empty column on one line and clips the
+    /// next. The measurer is passed in because the width of a string is a question
+    /// only the renderer can answer, and this has to stay testable without one.
+    /// </para>
+    /// </remarks>
+    /// <param name="text">The whole value.</param>
+    /// <param name="width">Pixels available to a row.</param>
+    /// <param name="measure">How wide a string would be drawn.</param>
+    public static IReadOnlyList<PaletteEntry> ForWrapped(
+        string text, int width, Func<string, int> measure)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(measure);
+
+        List<PaletteEntry> entries = [];
+
+        foreach (string line in Wrap(text, width, measure))
+        {
             entries.Add(new PaletteEntry(
-                value.Length > 0 ? value : label,
-                value.Length > 0 ? label : string.Empty,
+                line,
+                string.Empty,
                 [],
                 string.Empty,
 
-                // Negative and descending, so the report keeps the order it was
-                // written in. It is an argument read top to bottom, and sorting it the
-                // way the other lists are sorted would shuffle the reasoning.
+                // Descending, so the lines stay in the order they were written. A
+                // sentence sorted by rank is not a sentence.
                 -entries.Count));
         }
 
         return entries.Count > 0
             ? entries
-            : [new PaletteEntry("Nothing to report", string.Empty, [], string.Empty)];
+            : [new PaletteEntry(string.Empty, string.Empty, [], string.Empty)];
     }
 
-    /// <summary>Splits one report line into its label and its value.</summary>
-    private static (string Label, string Value) SplitReportLine(string line)
+    /// <summary>Greedy word wrap, falling back to breaking a word that cannot fit.</summary>
+    private static List<string> Wrap(string text, int width, Func<string, int> measure)
     {
-        for (int i = 0; i < line.Length - 1; i++)
-        {
-            if (line[i] == ' ' && line[i + 1] == ' ')
-            {
-                string value = line[i..].TrimStart();
+        List<string> lines = [];
 
-                // A line that is only a label followed by padding has no value, and
-                // pretending otherwise would produce a row with an empty title.
-                return value.Length > 0 ? (line[..i], value) : (line, string.Empty);
+        foreach (string paragraph in text.Split('\n'))
+        {
+            string remaining = paragraph.TrimEnd('\r');
+
+            if (remaining.Length == 0)
+            {
+                lines.Add(string.Empty);
+                continue;
             }
 
-            // Only a colon with something after it separates anything. A line that
-            // merely contains one - a path, a window title - stays whole.
-            if (line[i] == ':' && i > 0 && line[(i + 1)..].Trim() is { Length: > 0 } after)
-                return (line[..i], after);
+            // A width that cannot hold anything would loop for ever asking for a
+            // smaller prefix. One line whole is a worse answer than wrapping and a
+            // much better one than hanging.
+            if (width <= 0)
+            {
+                lines.Add(remaining);
+                continue;
+            }
+
+            while (remaining.Length > 0)
+            {
+                if (measure(remaining) <= width)
+                {
+                    lines.Add(remaining);
+                    break;
+                }
+
+                int cut = LongestFit(remaining, width, measure);
+
+                // Prefer the last space inside what fits, so words stay whole. Only
+                // when there is one: a path or a regular expression has none, and
+                // those are exactly the values worth opening in full.
+                int space = remaining.LastIndexOf(' ', Math.Min(cut, remaining.Length - 1));
+
+                if (space > 0)
+                {
+                    lines.Add(remaining[..space]);
+                    remaining = remaining[(space + 1)..];
+                }
+                else
+                {
+                    lines.Add(remaining[..cut]);
+                    remaining = remaining[cut..];
+                }
+            }
         }
 
-        return (line, string.Empty);
+        return lines;
+    }
+
+    /// <summary>The longest prefix that still fits, and never fewer than one character.</summary>
+    /// <remarks>
+    /// Linear from the front rather than a binary search. The strings are one row wide
+    /// - tens of characters, not thousands - and this runs when a person presses Enter
+    /// rather than on every frame.
+    /// </remarks>
+    private static int LongestFit(string text, int width, Func<string, int> measure)
+    {
+        int fits = 1;
+
+        for (int length = 1; length <= text.Length; length++)
+        {
+            if (measure(text[..length]) > width) break;
+
+            fits = length;
+        }
+
+        return fits;
     }
 
     /// <summary>Describes every layout as a row.</summary>
@@ -343,6 +582,7 @@ public static class PaletteEntries
                     PaletteMode.Layouts => "change the layout of this container",
                     PaletteMode.Monitors => "your displays, and what each is showing",
                     PaletteMode.Scratchpad => "windows you have put away",
+                    PaletteMode.Inspect => "windows Shubbak is not managing, and why not",
                     _ => "these keys",
                 },
                 prefix == '\0' ? ["no prefix", "Tab"] : [$"{prefix}", "Tab"],
@@ -390,13 +630,22 @@ public static class PaletteEntries
     [
         ("Tab / Shift+Tab", "next or previous mode"),
         ("Enter", "act on the selected row"),
+
+        // Both of these existed and were written down nowhere. The action list is the
+        // only route to most of what the palette can do to a window, and inspecting is
+        // the thing worth reaching for when a window is behaving oddly - so a user who
+        // opens the help looking for either of them was reading the one page that did
+        // not mention them.
+        ("Ctrl+Enter", "what else can be done to this row"),
+        ("Ctrl+Shift+I", "explain why a window is or is not managed"),
+        ("Ctrl+C", "copy the selected line"),
         ("Escape", "dismiss the palette"),
         ("Up / Down", "move the selection"),
         ("Ctrl+P / Ctrl+N", "move the selection"),
         ("Ctrl+K / Ctrl+J", "move the selection"),
         ("PageUp / PageDown", "move a screenful"),
         ("Ctrl+Home / Ctrl+End", "first or last row"),
-        ("Backspace", "delete a character"),
+        ("Backspace", "delete a character, or go back"),
         ("Ctrl+Backspace", "delete a word"),
         ("Ctrl+U", "clear what you typed"),
     ];
@@ -418,8 +667,22 @@ public static class PaletteEntries
     /// The dimmer half of a row: which application, and where it is.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Searched as well as shown. Finding a window by its application when the title
     /// says nothing about it - "Untitled document" - is most of what this is for.
+    /// </para>
+    /// <para>
+    /// For a window Shubbak is not managing, why not. The window manager has always
+    /// sent this and the palette has always thrown it away, so the list could say a
+    /// window was unmanaged but never why - leaving the reason one keystroke down in
+    /// an action list nobody knew was there. It takes the place of the workspace,
+    /// which an unmanaged window does not have, so no row grows to carry it.
+    /// </para>
+    /// <para>
+    /// The short form, because this line is clipped rather than wrapped. The full
+    /// sentence - with the part that says what to do about it - is what Inspect
+    /// shows.
+    /// </para>
     /// </remarks>
     private static string Describe(WindowCandidate window, bool severalMonitors)
     {
@@ -427,13 +690,36 @@ public static class PaletteEntries
 
         string described = window.Workspace is { } workspace
             ? $"{process}  ·  {workspace}"
-            : process;
+            : window.Managed
+                ? process
+                : Reason(window) is { Length: > 0 } why
+                    ? $"{process}  ·  {why}"
+                    : process;
 
         // Only with more than one display. On a single monitor the answer is the same
         // on every row, which is noise rather than information.
         return severalMonitors && ShortMonitor(window.Monitor) is { Length: > 0 } screen
             ? $"{described}  ·  {screen}"
             : described;
+    }
+
+    /// <summary>
+    /// Why a window is not managed, in as few words as the manager can put it.
+    /// </summary>
+    /// <remarks>
+    /// Falls back to the long form when the short one is absent, which is what an
+    /// older window manager sends: a clipped sentence still says more than nothing,
+    /// and it is still searchable in full whatever the row has room to draw.
+    /// </remarks>
+    public static string Reason(WindowCandidate window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        if (window.Managed) return string.Empty;
+
+        return window.ExclusionSummary is { Length: > 0 } summary
+            ? summary
+            : window.ExclusionReason ?? string.Empty;
     }
 
     /// <summary>

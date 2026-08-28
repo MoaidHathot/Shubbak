@@ -54,6 +54,25 @@ public enum PaletteMode
     /// straight back out.
     /// </remarks>
     Help,
+
+    /// <summary>
+    /// The windows Shubbak is not managing, and why not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A filter rather than a second window list, which is what earns it a prefix of
+    /// its own. The window list shows everything and is where you go to find a window;
+    /// this shows only what has been passed over and is where you go when a window is
+    /// on screen and refusing to tile.
+    /// </para>
+    /// <para>
+    /// Deliberately ignores <c>show-unmanaged</c>. That setting keeps unmanaged windows
+    /// out of the ordinary list, which is a reasonable thing to want and would make
+    /// this mode permanently empty - a mode that exists to show what is excluded
+    /// cannot honour a setting that excludes it.
+    /// </para>
+    /// </remarks>
+    Inspect,
 }
 
 /// <summary>One thing the palette can offer.</summary>
@@ -82,6 +101,16 @@ public enum PaletteMode
 /// than doing anything to it. The answer has to be fetched, so the palette stays open
 /// until it arrives.
 /// </param>
+/// <param name="Expands">
+/// The row's full text, when the row is showing a clipped version of it. Choosing such
+/// a row opens the whole thing as a list of its own, and Ctrl+C copies it.
+/// <para>
+/// A row is one line, drawn once, ellipsised where it runs out of width - which is
+/// fine for a title and not fine for a path, a regular expression, or the sentence
+/// explaining that a window cannot be moved and what to do about it. Those are
+/// precisely the values somebody opened a report to read.
+/// </para>
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -90,7 +119,8 @@ public sealed record PaletteEntry(
     long Rank = 0,
     PaletteMode? SwitchesTo = null,
     IReadOnlyList<PaletteAction>? Actions = null,
-    long? Explains = null);
+    long? Explains = null,
+    string? Expands = null);
 
 /// <summary>
 /// What the window manager is currently doing, beyond the lists themselves.
@@ -176,6 +206,10 @@ public sealed class PaletteModel
             ['%'] = PaletteMode.Monitors,
             ['$'] = PaletteMode.Scratchpad,
             ['?'] = PaletteMode.Help,
+
+            // Chosen because it is the punctuation of negation, and this is the list
+            // of windows Shubbak said no to.
+            ['!'] = PaletteMode.Inspect,
         };
 
     /// <summary>The prefix that selects a mode, or nothing for the default.</summary>
@@ -197,6 +231,7 @@ public sealed class PaletteModel
         PaletteMode.Monitors => "monitors",
         PaletteMode.Scratchpad => "scratchpad",
         PaletteMode.Help => "help",
+        PaletteMode.Inspect => "inspect",
         _ => "windows",
     };
 

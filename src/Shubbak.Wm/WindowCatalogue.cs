@@ -138,7 +138,8 @@ internal static class WindowCatalogue
                 node is not null && ReferenceEquals(node, focused),
                 node?.FocusSequence ?? 0,
                 node?.ScratchpadName,
-                node is { } tagged && tagged.Tags.Count > 0 ? [.. tagged.Tags] : null));
+                node is { } tagged && tagged.Tags.Count > 0 ? [.. tagged.Tags] : null,
+                node is not null ? null : Summarise(window, registry)));
         }
 
         return candidates;
@@ -163,6 +164,21 @@ internal static class WindowCatalogue
             return "Shubbak has not adopted it yet";
 
         return window.Decision.Explain();
+    }
+
+    /// <summary>The same answer in a few words, for a list rather than a report.</summary>
+    /// <remarks>
+    /// Mirrors <see cref="Explain"/> case for case, including the two answers the
+    /// filter cannot give on its own. A client showing the short form in a list and
+    /// the long one on demand must be describing the same window both times.
+    /// </remarks>
+    private static string Summarise(Discovered window, WindowRegistry registry)
+    {
+        if (registry.IsExcluded(window.Handle)) return "excluded by a rule";
+
+        if (window.Decision.Manageable) return "not adopted yet";
+
+        return window.Decision.Summarise();
     }
 
     /// <summary>

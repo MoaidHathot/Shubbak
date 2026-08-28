@@ -296,10 +296,18 @@ internal sealed partial class WmDaemonIpc
     /// Describes a window and explains how Shubbak sees it.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The feature neither GlazeWM nor komorebi has: it answers "why is this window
     /// not being tiled?" directly, and shows which rules matched and which did not.
     /// Diagnosing that by trial and error is otherwise a genuinely miserable
     /// experience.
+    /// </para>
+    /// <para>
+    /// Answers with a <see cref="WindowReport"/> rather than the text of one. Both
+    /// clients that ask want different shapes - printed columns for the command line,
+    /// rows for the palette - and sending the columns meant the palette recovered the
+    /// fields by splitting on the padding.
+    /// </para>
     /// </remarks>
     private Task<IpcResponse> InspectAsync(IpcRequest request)
     {
@@ -313,7 +321,8 @@ internal sealed partial class WmDaemonIpc
             if (!Win32Window.Exists(handle))
                 return new IpcResponse(request.Id, false, null, "no such window");
 
-            return new IpcResponse(request.Id, true, _daemon.Inspect(handle));
+            return new IpcResponse(request.Id, true, JsonSerializer.Serialize(
+                _daemon.Inspect(handle), IpcJsonContext.Default.WindowReport));
         });
     }
 }

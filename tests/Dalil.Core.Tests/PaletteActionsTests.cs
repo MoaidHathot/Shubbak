@@ -455,6 +455,37 @@ public sealed class PaletteActionsTests
     }
 
     [Fact]
+    public void InspectingIsFindableByTheNameOfTheCommandThatProducesIt()
+    {
+        // It was called "Explain this window", which described it better and was
+        // findable only by somebody who had already found it. Anybody who knows
+        // `shubbak inspect` exists and wants it here searches for "inspect".
+        PaletteAction inspect = Assert.Single(
+            PaletteActions.For(Window(), "1"),
+            a => a.Explains is not null);
+
+        Assert.Contains("Inspect", inspect.Name, StringComparison.Ordinal);
+
+        // Both vocabularies hit: the description keeps the old wording, and the
+        // description is searched as well as the name.
+        Assert.Contains("Explain", inspect.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void InspectingHasAChordOfItsOwn()
+    {
+        // Three layers of "you had to already know" - no chord, not a mode, and last
+        // in a list reached by a key that is itself undocumented. This is the first of
+        // those undone; the palette lets this one chord through even when the action
+        // guard is on, because it is the only action that takes no action.
+        PaletteAction inspect = Assert.Single(
+            PaletteActions.For(Window(), "1"),
+            a => a.Explains is not null);
+
+        Assert.Equal("Ctrl+Shift+I", inspect.Chord);
+    }
+
+    [Fact]
     public void AnExplainActionSurvivesBecomingARow()
     {
         // The handle has to reach the window, which is what actually sends the

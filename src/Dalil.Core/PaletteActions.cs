@@ -186,10 +186,16 @@ public static class PaletteActions
         // among the things worth reaching for when a window is behaving oddly, which
         // is why it exists at all. The window manager already assembles this report;
         // until now only the command line could ask for it.
+        //
+        // Named for the command that produces it. "Explain this window" described it
+        // better and was findable only by somebody who had already found it: a user
+        // who knows `shubbak inspect` exists and wants it here searches for "inspect",
+        // and the description carries the other wording so both spellings hit.
         actions.Add(new PaletteAction(
-            "Explain this window",
-            "Why it is or is not managed, and which rules matched",
+            "Inspect this window",
+            "Explain why it is or is not managed, and which rules matched",
             string.Empty,
+            Chord: "Ctrl+Shift+I",
             Explains: window.Handle));
 
         return actions;

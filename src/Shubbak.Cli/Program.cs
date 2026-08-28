@@ -67,7 +67,8 @@ internal static class Program
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "restore" => Restore(args),
-                "taj-exit" => TajExit(),
+                "taj-exit" => CloseWindowsOfClass("TajBarWindow", "bar"),
+                "dalil-exit" => CloseWindowsOfClass("DalilPaletteWindow", "palette"),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
@@ -86,31 +87,37 @@ internal static class Program
     }
 
     /// <summary>
-    /// Closes the bar, without going through the window manager.
+    /// Closes the bar, or the palette, without going through the window manager.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Deliberately not over IPC. The case that most needs this is a bar left behind
-    /// by a window manager that is already gone - and a command routed through the
-    /// window manager cannot reach it.
+    /// Deliberately not over IPC. The case that most needs this is one left behind by a
+    /// window manager that is already gone - and a command routed through the window
+    /// manager cannot reach it.
     /// </para>
     /// <para>
     /// So it asks the windows themselves. <c>WM_CLOSE</c> is a request rather than a
     /// kill: Taj answers it by leaving its message loop, which unregisters the appbar
     /// and gives back the strip of screen it reserved. Terminating the process instead
     /// skips that, and the shell can be left holding space for a bar that no longer
-    /// exists.
+    /// exists. Dalil answers it by shutting down, which lets go of its own single
+    /// instance claim.
+    /// </para>
+    /// <para>
+    /// Both matter more now that each refuses to start twice: without a way to stop the
+    /// one that is running, a wedged bar or palette could only be cleared through Task
+    /// Manager - which is a worse position than the double-start the guard prevents.
     /// </para>
     /// </remarks>
-    private static int TajExit()
+    /// <param name="windowClass">The class the program registers for its windows.</param>
+    /// <param name="what">What to call it when there is none, or several.</param>
+    private static int CloseWindowsOfClass(string windowClass, string what)
     {
-        const string BarWindowClass = "TajBarWindow";
-
         int closed = 0;
 
         foreach (nint handle in Win32Window.EnumerateTopLevel())
         {
-            if (!string.Equals(Win32Window.GetClassName(handle), BarWindowClass, StringComparison.Ordinal))
+            if (!string.Equals(Win32Window.GetClassName(handle), windowClass, StringComparison.Ordinal))
                 continue;
 
             WindowActions.Close(handle);
@@ -119,11 +126,11 @@ internal static class Program
 
         if (closed == 0)
         {
-            Console.Error.WriteLine("shubbak: no bar is running.");
+            Console.Error.WriteLine($"shubbak: no {what} is running.");
             return 2;
         }
 
-        Console.WriteLine($"closed {closed} bar window(s)");
+        Console.WriteLine($"closed {closed} {what} window(s)");
         return 0;
     }
 
@@ -578,11 +585,14 @@ internal static class Program
             }
         }
 
-        // Local detail first, so inspect still works with no window manager running.
-        PrintLocalReport(handle);
-
+        // With no window manager there is no tree and no configuration, so only the
+        // attributes and the filter's verdict can be answered - but they can be
+        // answered entirely locally, which is the point: inspect still works when the
+        // thing being diagnosed is that nothing is running.
         if (!IpcClient.IsServerRunning())
         {
+            Console.WriteLine();
+            Console.Write(WindowReportText.Format(LocalReport(handle), complete: false));
             Console.WriteLine();
             Console.WriteLine("(no window manager running - rule matching not shown)");
             return 0;
@@ -600,27 +610,66 @@ internal static class Program
             return 1;
         }
 
+        WindowReport? report = response.Data is { Length: > 0 } json
+            ? JsonSerializer.Deserialize(json, IpcJsonContext.Default.WindowReport)
+            : null;
+
+        if (report is null)
+        {
+            // Not a version mismatch: the protocol version is in the pipe name, so a
+            // daemon from another release is not found at all rather than misread.
+            // Reaching here means the report itself was empty or malformed.
+            Console.Error.WriteLine("shubbak: the window manager sent a report that could not be read.");
+            Console.Error.WriteLine("hint: shubbak diagnose -o report.md, and please open an issue.");
+            return 1;
+        }
+
         Console.WriteLine();
-        Console.WriteLine(response.Data);
+        Console.Write(WindowReportText.Format(report));
         return 0;
     }
 
-    private static void PrintLocalReport(nint handle)
+    /// <summary>
+    /// As much of a report as can be worked out without the window manager.
+    /// </summary>
+    /// <remarks>
+    /// The attributes and the filter's verdict, which are properties of the window and
+    /// of Win32 rather than of anything Shubbak is running. The tree and the rules are
+    /// left empty and the caller says so, rather than being reported as absent - "no
+    /// rules configured" and "no rules visible from here" are different answers and
+    /// only one of them is true.
+    /// </remarks>
+    private static WindowReport LocalReport(nint handle)
     {
         ManageDecision decision = WindowFilter.Evaluate(handle);
 
-        Console.WriteLine();
-        Console.WriteLine($"handle       0x{handle:X}");
-        Console.WriteLine($"title        {Win32Window.GetTitle(handle)}");
-        Console.WriteLine($"class        {Win32Window.GetClassName(handle)}");
-
         uint processId = Win32Window.GetProcessId(handle);
         string? path = Win32Window.GetProcessPath(processId);
+        Core.Geometry.Rect bounds = Win32Window.GetBounds(handle);
 
-        Console.WriteLine($"process      {(path is null ? "(unreadable)" : Path.GetFileNameWithoutExtension(path))}");
-        Console.WriteLine($"path         {path ?? "(unreadable - elevated process?)"}");
-        Console.WriteLine($"rect         {Win32Window.GetBounds(handle)}");
-        Console.WriteLine($"manageable   {(decision.Manageable ? "yes" : "no")} - {decision.Explain()}");
+        return new WindowReport(
+            handle,
+            Win32Window.GetTitle(handle),
+            Win32Window.GetClassName(handle),
+            path is null ? "(unreadable)" : Path.GetFileNameWithoutExtension(path),
+            path,
+            bounds.X,
+            bounds.Y,
+            bounds.Width,
+            bounds.Height,
+            Win32Window.GetStyleBits(handle),
+            Win32Window.GetExStyleBits(handle),
+            Win32Window.IsVisible(handle),
+            Win32Window.GetCloakState(handle).ToString(),
+            Win32Window.IsMinimised(handle),
+            decision.Manageable,
+            decision.Explain(),
+            decision.Summarise(),
+            Managed: false,
+            ExcludedByRule: false,
+            Node: null,
+            Rules: [],
+            Apps: []);
     }
 
     private static int CheckConfig(string[] args)
@@ -735,6 +784,10 @@ internal static class Program
                                it, so the strip of screen it reserved is given
                                back. Works when no window manager is running,
                                which is the case that most needs it.
+
+          dalil-exit           Close the command palette, the same way. Both of
+                               these refuse to start a second copy of themselves,
+                               so this is how you stop the one that is running.
 
           autostart <action>   Whether the window manager starts when you log in.
                                enable | disable | status
