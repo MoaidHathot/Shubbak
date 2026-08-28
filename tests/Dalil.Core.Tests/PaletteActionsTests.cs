@@ -497,4 +497,41 @@ public sealed class PaletteActionsTests
 
         Assert.Equal(0x2A, row.Explains);
     }
+
+    [Fact]
+    public void AChordSurvivesBecomingARow()
+    {
+        // It used to reach the row only as a badge - a caption saying which key would
+        // work, on a row that could not be found by that key. So the list printed
+        // Ctrl+Shift+S beside "Make sticky" and pressing it there did nothing.
+        IReadOnlyList<PaletteEntry> rows =
+            PaletteActions.AsEntries(PaletteActions.For(Window(), "1"));
+
+        PaletteEntry sticky = Assert.Single(rows, e => e.Primary == "Make sticky");
+
+        Assert.Equal("Ctrl+Shift+S", sticky.Chord);
+    }
+
+    [Fact]
+    public void EveryChordedActionIsFindableByItsBadge()
+    {
+        // The two have to agree, because the badge is what a user reads and the chord
+        // is what the key looks for. Held together here rather than by inspection.
+        IReadOnlyList<PaletteEntry> rows =
+            PaletteActions.AsEntries(PaletteActions.For(Window(), "9"));
+
+        foreach (PaletteEntry row in rows.Where(e => e.Chord is not null))
+            Assert.Contains(row.Chord!, row.Badges);
+    }
+
+    [Fact]
+    public void ARowWithNoChordAdvertisesNone()
+    {
+        // "Go to it" is what Enter already does, and a badge there would be a key that
+        // does not exist.
+        IReadOnlyList<PaletteEntry> rows =
+            PaletteActions.AsEntries(PaletteActions.For(Window(), "1"));
+
+        Assert.Null(Assert.Single(rows, e => e.Primary == "Go to it").Chord);
+    }
 }

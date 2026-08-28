@@ -109,6 +109,26 @@ palette recovering the report by taking the printed text apart.
 
 ### Fixed
 
+- **The action chords did nothing, anywhere, with the shipped defaults.** Every row in
+  the action list carries the key that acts on it as a badge — `Ctrl+Shift+S` beside
+  "Make sticky", `Ctrl+Shift+W` beside "Close it" — and pressing any of them did
+  nothing at all.
+
+  Two guards met. Chords were refused outright whenever a list was open, which is the
+  only place they are written down; and from the main list they were refused by
+  `action-guard`, which is on by default. So the one place a user could learn a chord
+  was the one place it could not work, and the place it could work was the one place
+  nothing said it existed.
+
+  A chord inside the action list now always acts. The guard is not weakened by that: it
+  exists to stop an action being taken by accident from a list where the keyboard is
+  busy searching, and by the time somebody has pressed Ctrl+Enter and is reading a list
+  of verbs, pressing the key printed on one of them is no more accidental than pressing
+  Enter on it. From the main list the guard applies exactly as before.
+
+  The chord also survives becoming a row now. It used to reach the list only as the
+  badge — a caption naming a key, on a row that could not be found by that key.
+
 - **A mode prefix only ever worked from the window list.** In any other mode the query
   already began with one, so typing `!` in the command list produced `>!` — still the
   command list, now searching for an exclamation mark. Only the first character decides

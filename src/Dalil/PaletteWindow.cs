@@ -448,42 +448,66 @@ public sealed class PaletteWindow : IDisposable
     }
 
     /// <summary>
-    /// Runs an action directly, when the guard is off.
+    /// Acts on a chord, from the main list or from inside a list of actions.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Chords are the whole point of turning the guard off, so closing is chorded too
-    /// rather than being kept back - a switch that says "direct chords" and then makes
-    /// an exception is a switch nobody can predict. The list stays available either
-    /// way, because it is also where the chords are written down.
+    /// Where a chord acts is decided by <see cref="PaletteInput.ChordActsHere"/>, which
+    /// is where that rule lives and where it is tested. In short: always inside the
+    /// action list, because that is the only place the chord is written down; and from
+    /// the main list only when the guard is off, which is what the guard is for.
     /// </para>
     /// <para>
-    /// Inspecting is the one chord the guard does not hold back. See
-    /// <see cref="PaletteInput.IsExemptFromGuard"/>, which is where that rule lives and
-    /// where it is tested.
+    /// The two look in different places for the same thing. From the main list the
+    /// chords belong to the selected row's actions; inside the list the rows are those
+    /// actions, and each carries its own.
     /// </para>
     /// </remarks>
     private bool TryChord(VIRTUAL_KEY key, bool control, bool shift)
     {
-        if (_overlays.Count > 0) return false;
+        if (PaletteInput.ChordFor(key, control, shift) is not { } wanted) return false;
+
+        bool inside = _overlays.Count > 0;
+
+        if (!PaletteInput.ChordActsHere(wanted, inside, _config.ActionGuard)) return false;
+
+        if (inside)
+        {
+            // The frame's own rows rather than the filtered ones. A chord names the
+            // action, not whatever happens to have survived what is typed in the box.
+            PaletteEntry? row = _overlays.Peek().Entries
+                .FirstOrDefault(e => string.Equals(e.Chord, wanted, StringComparison.Ordinal));
+
+            return row is not null && Act(row.Command, row.Explains, row.Primary);
+        }
+
         if (_model.Selected is not { } selected) return false;
         if (selected.Entry.Actions is not { Count: > 0 } actions) return false;
 
-        if (PaletteInput.ChordFor(key, control, shift) is not { } wanted) return false;
-        if (_config.ActionGuard && !PaletteInput.IsExemptFromGuard(wanted)) return false;
-
         if (actions.FirstOrDefault(a => a.Chord == wanted) is not { } action) return false;
 
-        // Not closed, exactly as when the same action is chosen from the list: the
-        // report arrives later and needs somewhere to arrive.
-        if (action.Explains is { } handle)
+        return Act(action.Command, action.Explains, selected.Entry.Primary);
+    }
+
+    /// <summary>Does what a chord selected, and says whether anything happened.</summary>
+    /// <remarks>
+    /// Explaining leaves the palette open, exactly as choosing the same row from the
+    /// list does: the report is fetched and needs somewhere to arrive. Everything else
+    /// closes first, because the command usually raises another window and a palette
+    /// still topmost would cover the thing that was just asked for.
+    /// </remarks>
+    private bool Act(string command, long? explains, string leaf)
+    {
+        if (explains is { } handle)
         {
-            ExplainRequested?.Invoke(handle, Breadcrumb(selected.Entry.Primary));
+            ExplainRequested?.Invoke(handle, Breadcrumb(leaf));
             return true;
         }
 
+        if (command.Length == 0) return false;
+
         Close();
-        CommandRequested?.Invoke(action.Command);
+        CommandRequested?.Invoke(command);
 
         return true;
     }

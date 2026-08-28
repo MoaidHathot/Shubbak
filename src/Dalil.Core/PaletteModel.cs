@@ -111,6 +111,14 @@ public enum PaletteMode
 /// precisely the values somebody opened a report to read.
 /// </para>
 /// </param>
+/// <param name="Chord">
+/// The key that acts on this row directly, when it has one.
+/// <para>
+/// Carried rather than left in <see cref="Badges"/>, where it was only a caption. A
+/// row that advertises a key has to be findable by that key, or the badge is a promise
+/// nothing keeps.
+/// </para>
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -120,7 +128,8 @@ public sealed record PaletteEntry(
     PaletteMode? SwitchesTo = null,
     IReadOnlyList<PaletteAction>? Actions = null,
     long? Explains = null,
-    string? Expands = null);
+    string? Expands = null,
+    string? Chord = null);
 
 /// <summary>
 /// What the window manager is currently doing, beyond the lists themselves.
