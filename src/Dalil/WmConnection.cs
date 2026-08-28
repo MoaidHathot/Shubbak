@@ -89,9 +89,15 @@ public sealed class WmConnection : IAsyncDisposable
     /// which is the wrong place: by the time you are asking why a window is behaving
     /// oddly, you are looking at it, not at a shell.
     /// </remarks>
-    /// <returns>The report split into lines, or an explanation of why there is none.</returns>
-    public async Task<IReadOnlyList<string>> InspectAsync(long handle)
+    /// <returns>
+    /// The report, or null with the reason in <paramref name="failure"/>. The two are
+    /// kept apart because the palette draws them differently: a report becomes a list
+    /// of labelled facts, and a failure is one line saying why there is none.
+    /// </returns>
+    public async Task<WindowReport?> InspectAsync(long handle, Action<string> failure)
     {
+        ArgumentNullException.ThrowIfNull(failure);
+
         try
         {
             await using IpcClient client = new();
@@ -102,16 +108,29 @@ public sealed class WmConnection : IAsyncDisposable
                 .ConfigureAwait(false);
 
             if (!response.Ok)
-                return [response.Error ?? "The window manager would not describe it."];
+            {
+                failure(response.Error ?? "The window manager would not describe it.");
+                return null;
+            }
 
-            return [.. (response.Data ?? string.Empty)
-                .Split('\n')
-                .Select(line => line.TrimEnd('\r'))];
+            WindowReport? report = response.Data is { Length: > 0 } json
+                ? JsonSerializer.Deserialize(json, IpcJsonContext.Default.WindowReport)
+                : null;
+
+            // Not a version mismatch: the protocol version is in the pipe name, so a
+            // daemon from another release is never reached in the first place. Getting
+            // here means the report itself was empty or malformed - said plainly,
+            // because "Nothing to report" for a window that plainly exists sends
+            // somebody looking for a bug in the wrong place.
+            if (report is null) failure("The window manager sent a report that could not be read.");
+
+            return report;
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not inspect {handle:X}: {ex.Message}");
-            return [$"Could not ask: {ex.Message}"];
+            failure($"Could not ask: {ex.Message}");
+            return null;
         }
     }
 
@@ -174,7 +193,14 @@ public sealed class WmConnection : IAsyncDisposable
                     layouts,
                     [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
                     [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]),
-                new WmStatus(state?.Paused ?? false, state?.BindingMode));        }
+                new WmStatus(state?.Paused ?? false, state?.BindingMode),
+
+                // Deliberately built from the same unfiltered list, ignoring
+                // includeUnmanaged. That setting keeps unmanaged windows out of the
+                // ordinary list; honouring it here would leave the one mode whose
+                // whole purpose is showing them permanently empty.
+                PaletteEntries.ForSkipped(windows, here, names, several));
+        }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not read the window list: {ex.Message}");
@@ -369,7 +395,8 @@ public sealed record PaletteSources(
     IReadOnlyList<PaletteEntry> Scratchpad,
     IReadOnlyList<PaletteEntry> Help,
     CompletionSources Completions,
-    WmStatus Status)
+    WmStatus Status,
+    IReadOnlyList<PaletteEntry>? Skipped = null)
 {
     /// <summary>
     /// Before anything has been read.
@@ -391,6 +418,7 @@ public sealed record PaletteSources(
         PaletteMode.Monitors => Monitors,
         PaletteMode.Scratchpad => Scratchpad,
         PaletteMode.Help => Help,
+        PaletteMode.Inspect => Skipped ?? [],
         _ => Windows,
     };
 }

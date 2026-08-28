@@ -13,6 +13,187 @@ schedule and breaking either is a different kind of event:
 - **The session format** is versioned in the file, so an unreadable session is
   discarded rather than misread.
 
+## [Unreleased]
+
+Inspection, which was the best thing the command line could do and the hardest thing
+in the palette to find.
+
+`shubbak inspect` has always been able to say why a window is not being tiled. Dalil
+has been able to ask for the same report since it existed — from the bottom of an
+action list, reached by an undocumented key, under a name that did not contain the
+word "inspect". This release makes it findable, makes it readable, and stops the
+palette recovering the report by taking the printed text apart.
+
+### Added
+
+- **`Ctrl+Shift+I` inspects the selected window**, from anywhere in the palette. It is
+  the one action the `action-guard` setting does not hold back, and the exemption is
+  principled rather than convenient: the guard exists so an action cannot be taken by
+  accident, and inspecting takes no action. It is the only entry in the list that runs
+  no command at all, which a test holds true.
+
+- **An inspect mode, on the `!` prefix.** Every window Shubbak is *not* managing, each
+  saying why on the row itself, ranked so the ones you can do something about — excluded
+  by a rule, not adopted yet — come before the ones that are facts about Win32. This is
+  the palette's answer to `shubbak inspect --all`, which until now was reachable only
+  from a shell.
+
+  It deliberately ignores `show-unmanaged`. That setting keeps unmanaged windows out of
+  the ordinary list, which is reasonable and would leave this mode permanently empty.
+
+- **The reason a window is unmanaged now appears in the window list**, in the dim text
+  where the workspace would be for a managed window. The window manager has always sent
+  this and the palette has always discarded it, so the list could say a window was
+  `unmanaged` and never say why.
+
+  It is a new short form of the verdict rather than the existing sentence. The long
+  ones run past 150 characters and end with the part that says what to do about it, so
+  a clipped row showed the half that was no use.
+
+- **Any report line can be opened in full**, with Enter, and left with Escape or
+  Backspace. A row is one clipped line, and the values worth opening a report for — a
+  path, a regular expression, the sentence about elevation — are the long ones.
+
+  Wrapping is done by breaking the value across ordinary rows rather than by teaching
+  the palette to wrap. Variable row heights would have meant a measuring layout pass and
+  a window that resizes underneath the selection; this reuses the frame stack that
+  already exists for action lists.
+
+- **`Ctrl+C` copies the selected line, `Ctrl+Shift+C` copies everything on screen.**
+  The most useful thing to do with an explanation of why a window will not tile is to
+  paste it into an issue, and until now the only way to get one out of the palette was
+  to read it off the screen and retype it. Rows are copied whole rather than as drawn:
+  a path with an ellipsis in the middle of it is not a path.
+
+- **Backspace goes back** when there is nothing left to delete and a list is open.
+  Escape already did. Backspace did nothing at all, which is the least useful of the
+  three available behaviours.
+
+- `Ctrl+Enter`, `Ctrl+Shift+I` and `Ctrl+C` are now listed in the palette's own help.
+  The first two already worked and were written down nowhere, so the one page somebody
+  opens to find a key was the one page that did not mention them.
+
+### Changed
+
+- **The `inspect` IPC method returns a structured `WindowReport` rather than the text
+  of one**, and the **IPC protocol version is now 2**.
+
+  The report was built as printed columns in the daemon, and the palette — the other
+  client — split that text back apart at the padding to find the labels. The daemon's
+  choice of whitespace had quietly become an interface for a different process, with
+  nothing anywhere testing it: widening a column would have silently stopped the
+  palette's labels being labels.
+
+  The fields are the contract now, and the printed layout is decided in exactly one
+  place, next to the code that prints it. **The command line's output is unchanged**,
+  deliberately — people have it pasted in issues and sitting in scrollback.
+
+  The version rises because this is a payload whose meaning no longer matches its
+  name, which is the documented trigger for raising it. Since the version is part of
+  the pipe name, a `shubbak` and a `shubbak-wm` from either side of this change do not
+  find each other at all, rather than one showing the other's JSON verbatim.
+
+- **`shubbak inspect` no longer prints the same seven fields twice.** With a window
+  manager running it printed a local report and then the daemon's, which repeated the
+  handle, title, class, process, path, rect and verdict. There is one report builder
+  and one formatter now, and the local path fills in what it can.
+
+- The palette's hint bar says what Enter will actually do to the selected row —
+  `inspect`, `open`, `read it`, `do it` — instead of always saying "do it". Every
+  overlay advertised "do it", including a report whose rows all did nothing, so the one
+  list where Enter was inert was also the one insisting it was not.
+
+- The action is called **"Inspect this window"** rather than "Explain this window". The
+  old name described it better and was findable only by somebody who had already found
+  it; the description keeps the old wording, and descriptions are searched too.
+
+### Fixed
+
+- **A mode prefix only ever worked from the window list.** In any other mode the query
+  already began with one, so typing `!` in the command list produced `>!` — still the
+  command list, now searching for an exclamation mark. Only the first character decides
+  the mode, and it was never replaced. Every mode but the default was a one-way door,
+  escapable only with Tab or Backspace.
+
+  A prefix typed while there is nothing to search now replaces the mode. Once there is
+  a search term it stays literal, because typing `#` after `>foo` is somebody spelling
+  a query rather than changing their mind.
+
+  This was not new. It applied to all six prefixes for as long as they have existed;
+  adding a seventh is what made somebody try to switch between two of them.
+
+- **The hint bar dropped whichever mode came last.** A hint that does not fit is not
+  drawn, and the modes are drawn in the order they are declared — so adding `!` pushed
+  it past the right-hand edge of a 720-pixel palette and it appeared nowhere at all.
+
+  The bar is now tried at four levels of detail and drawn at the fullest that fits,
+  rather than budgeting for a particular width. What is given up, in order: the word
+  "modes" beside Tab, which explains a key that explains itself; the advertisement for
+  Ctrl+Enter, which is also listed under `?`; and only then the mode names, all
+  together — a bar naming three modes and showing four bare caps would read as the
+  names belonging to the wrong caps.
+
+  Nothing in it knows how wide Segoe UI is at a given scale, so a wider window, a
+  larger font or another mode all settle at the right level on their own.
+
+- **The bar and the palette could each run twice, silently.** Only the window manager
+  had a single-instance guard; `taj` and `dalil` had none, and reached the doubled
+  state by an entirely ordinary route. Both are designed to survive the window manager
+  restarting — they reconnect inside `window-manager-timeout` — and the restarted
+  window manager then runs its startup commands, one of which starts each of them.
+
+  Two bars is not merely untidy: each reserves its strip through the shell's appbar
+  API, so the work area is taken twice and every tiled window is laid out into a
+  desktop shorter than it should be, which reads as a gaps setting gone wrong. Two
+  palettes both answer the same signal, so one keypress raises two windows, stacked and
+  both topmost, and Escape dismisses one to reveal the other.
+
+  Both now refuse to start a second copy and say so. An uncertain answer starts anyway,
+  which is the opposite of what the window manager does with the same uncertainty: two
+  bars are visibly wrong and easily undone, whereas no bar at all because a mutex could
+  not be opened is worse than the thing being guarded against.
+
+- **Raising the protocol version opened the hole the instance mutex exists to close.**
+  The window manager's mutex was the pipe name with `Local\` in front, and the pipe name
+  carries the protocol version — so a daemon on the old version held a different name
+  from one on the new, and both could run. That is precisely the pairing somebody
+  working on Shubbak produces all day: an installed copy running while a build from
+  source is started.
+
+  Instance names are no longer versioned. The two questions look alike and are not: a
+  pipe asks whether two builds can understand each other, and a mutex asks whether one
+  is already running — and two bars reserve the same strip of screen whether or not
+  they speak the same protocol.
+
+- **`shubbak dalil-exit`**, alongside the existing `taj-exit` and sharing its
+  implementation. Both matter more now that each program refuses to start twice:
+  without a way to stop the one that is running, a wedged palette could only be cleared
+  through Task Manager, which is a worse position than the double-start the guard
+  prevents.
+
+### Internal
+
+- **A test project for the palette host.** `Dalil.Core` has been tested since it
+  existed; the executable had never been, because the decisions lived inside
+  `PaletteWindow` and that cannot be constructed without a real window, a message loop
+  and a device context.
+
+  What a keystroke means is decided in a new `PaletteInput` now — which chord a key
+  spells, whether the guard holds it back, what Enter does to a row, and what a copy
+  puts on the clipboard. All four are pure functions of the row and the state it is
+  chosen in, and all four are covered.
+
+  It also simplified the chord path: inspecting is found by the same lookup as every
+  other chord rather than by a branch of its own, because the action now carries the
+  chord like the rest of them.
+
+- **The single-instance mechanics are shared.** The mutex handling — including treating
+  an abandoned mutex as free, so a process that was killed does not lock the user out
+  until they reboot — now lives in `Shubbak.Native.SingleInstanceLock` and is used by
+  all three programs. What stays in the window manager is the part specific to it:
+  standing an incumbent down over IPC for `--replace`, and refusing rather than
+  carrying on when the answer cannot be had.
+
 ## [0.9.0] - 2026-08-27
 
 The first public release: the point at which Shubbak can be installed rather than

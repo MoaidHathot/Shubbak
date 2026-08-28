@@ -460,22 +460,44 @@ internal static class PaletteRenderer
         // In the action list the modes are not what matters and Escape is, because a
         // list of verbs with no visible way back is the one place somebody will press
         // it hoping to undo and expect the whole palette to vanish.
+        //
+        // What Enter does is read off the selected row rather than assumed. Every
+        // overlay used to advertise "do it", including a report whose rows all do
+        // nothing at all - so the one list where Enter was inert was also the one
+        // insisting it was not.
         if (actionsFor is { Length: > 0 })
         {
-            x = DrawHint(renderer, config, theme, layout, small, "\u21B5", "do it", x, textY, limit, active: true);
+            if (VerbFor(model.Selected?.Entry) is { Length: > 0 } verb)
+                x = DrawHint(renderer, config, theme, layout, small, "\u21B5", verb, x, textY, limit, active: true);
+
+            if (model.Selected?.Entry.Expands is { Length: > 0 })
+                x = DrawHint(renderer, config, theme, layout, small, "\u2303C", "copy", x, textY, limit, active: false);
+
             _ = DrawHint(renderer, config, theme, layout, small, "Esc", "back", x, textY, limit, active: false);
             return;
         }
 
-        // Tab first, because it is the one that needs no memory at all: a user who
-        // reads nothing else can still reach every mode by pressing it.
-        x = DrawHint(renderer, config, theme, layout, small, "Tab", "modes", x, textY, limit, active: false);
+        // Every prefix is shown, always. A hint that does not fit is not drawn at all,
+        // so the last mode in the list used to fall off the end in silence - which is
+        // how adding one made another disappear, with nothing to suggest it had.
+        //
+        // Rather than budgeting for a particular width, the bar is tried at each level
+        // of detail until one fits. Nothing here needs to know how wide Segoe UI is at
+        // this scale, and a wider window or a shorter mode list simply gets a fuller
+        // bar without anybody adjusting a number.
+        bool hasActions = model.Selected?.Entry.Actions is { Count: > 0 };
+        HintStyle style = StyleThatFits(renderer, layout, small, x, limit, hasActions);
 
-        // Before the modes, not after. Space runs out on a narrow window or a long
-        // scroll position, and whatever comes last is what goes - so the thing that
-        // goes should be a mode, which Tab still reaches, rather than the only
-        // advertisement this key has anywhere.
-        if (model.Selected?.Entry.Actions is { Count: > 0 })
+        // Tab first, because it is the one that needs no memory at all: a user who
+        // reads nothing else can still reach every mode by pressing it. Its label is
+        // the first thing to go, though - "Tab" beside a row of prefixes is legible
+        // without being told that prefixes are modes, and the word costs as much room
+        // as a mode name.
+        x = DrawHint(
+            renderer, config, theme, layout, small,
+            "Tab", style.TabLabel ? "modes" : string.Empty, x, textY, limit, active: false);
+
+        if (hasActions && style.Actions)
             x = DrawHint(renderer, config, theme, layout, small, "\u2303\u21B5", "actions", x, textY, limit, active: false);
 
         foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
@@ -485,10 +507,104 @@ internal static class PaletteRenderer
 
             x = DrawHint(
                 renderer, config, theme, layout, small,
-                prefix.ToString(), PaletteModel.NameOf(mode),
+                prefix.ToString(), style.ModeNames ? PaletteModel.NameOf(mode) : string.Empty,
                 x, textY, limit, active: model.Mode == mode);
         }
     }
+
+    /// <summary>How much of the hint bar is spelled out rather than left as a key cap.</summary>
+    private readonly record struct HintStyle(bool TabLabel, bool Actions, bool ModeNames);
+
+    /// <summary>
+    /// The bar from fullest to plainest, in the order things are given up.
+    /// </summary>
+    /// <remarks>
+    /// The mode names go last, and all together. They are what the bar is for - a
+    /// prefix nobody can read is a shortcut nobody has - and a bar naming three modes
+    /// and showing four bare caps would read as the names belonging to the wrong caps.
+    /// Before them go the word "modes", which explains a key that explains itself, and
+    /// then the advertisement for Ctrl+Enter, which is also written under <c>?</c>.
+    /// </remarks>
+    private static readonly HintStyle[] s_hintStyles =
+    [
+        new(TabLabel: true, Actions: true, ModeNames: true),
+        new(TabLabel: false, Actions: true, ModeNames: true),
+        new(TabLabel: false, Actions: false, ModeNames: true),
+        new(TabLabel: false, Actions: false, ModeNames: false),
+    ];
+
+    /// <summary>The fullest bar that fits, or the plainest when none does.</summary>
+    private static HintStyle StyleThatFits(
+        IRenderer renderer, PaletteLayout layout, FontStyle small,
+        int x, int limit, bool hasActions)
+    {
+        foreach (HintStyle style in s_hintStyles)
+        {
+            if (x + HintsWidth(renderer, layout, small, style, hasActions) <= limit)
+                return style;
+        }
+
+        return s_hintStyles[^1];
+    }
+
+    /// <summary>How much room a whole bar of hints needs.</summary>
+    private static int HintsWidth(
+        IRenderer renderer, PaletteLayout layout, FontStyle small,
+        HintStyle style, bool hasActions)
+    {
+        int width = HintWidth(renderer, layout, small, "Tab", style.TabLabel ? "modes" : string.Empty);
+
+        if (hasActions && style.Actions)
+            width += HintWidth(renderer, layout, small, "\u2303\u21B5", "actions");
+
+        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        {
+            char prefix = PaletteModel.PrefixFor(mode);
+            if (prefix == '\0') continue;
+
+            width += HintWidth(
+                renderer, layout, small,
+                prefix.ToString(),
+                style.ModeNames ? PaletteModel.NameOf(mode) : string.Empty);
+        }
+
+        // Every hint includes the gap that would follow it, and nothing follows the
+        // last one. Left in, the bar would be judged a whole gap wider than it draws
+        // and would give up its names slightly before it had to.
+        return width - layout[16];
+    }
+
+    /// <summary>How much room a hint needs, cap and label together.</summary>
+    private static int HintWidth(
+        IRenderer renderer, PaletteLayout layout, FontStyle small, string key, string label)
+    {
+        int cap = Measure(renderer, key, small).Width + (layout[6] * 2);
+
+        return label.Length == 0
+            ? cap + layout[16]
+            : cap + layout[5] + Measure(renderer, label, small).Width + layout[16];
+    }
+
+    /// <summary>
+    /// What Enter would do to the selected row, in one word, or nothing.
+    /// </summary>
+    /// <remarks>
+    /// Read from the row rather than from the kind of list it is in, because the two
+    /// disagree: a report and an action list are both overlays, and Enter is inert in
+    /// one and consequential in the other. Returning empty for a row that does nothing
+    /// leaves the hint out altogether, which is the honest answer - a key cap that
+    /// promises an outcome it cannot deliver is worse than no key cap.
+    /// </remarks>
+    private static string VerbFor(PaletteEntry? entry) => entry switch
+    {
+        null => string.Empty,
+        { SwitchesTo: not null } => "go",
+        { Explains: not null } => "inspect",
+        { Expands.Length: > 0 } => "read it",
+        { Actions.Count: > 0, Command.Length: 0 } => "open",
+        { Command.Length: > 0 } => "do it",
+        _ => string.Empty,
+    };
 
     /// <summary>
     /// Draws one key cap and its label, if it fits, and says where the next would go.
@@ -508,14 +624,22 @@ internal static class PaletteRenderer
         string key, string label, int x, int y, int limit, bool active)
     {
         Size keySize = Measure(renderer, key, small);
-        Size labelSize = Measure(renderer, label, small);
 
         int width = keySize.Width + (layout[6] * 2);
         int height = keySize.Height + layout[4];
 
         // Measured whole before anything is drawn, so a hint is never half-printed
         // with its label clipped off - a lone key cap explains nothing.
-        int end = x + width + layout[5] + labelSize.Width;
+        //
+        // Unless it is deliberately alone: a mode reduced to its cap because the bar
+        // ran out of room is still worth showing, and is the only way every prefix
+        // stays visible on a narrow window.
+        Size labelSize = label.Length == 0 ? default : Measure(renderer, label, small);
+
+        int end = label.Length == 0
+            ? x + width
+            : x + width + layout[5] + labelSize.Width;
+
         if (end > limit) return x;
 
         var cap = new Rect(x, y - layout[1], width, height);
@@ -530,6 +654,8 @@ internal static class PaletteRenderer
             new Rect(cap.X + layout[6], cap.Y + layout[2], keySize.Width + 2, keySize.Height + 2),
             active ? theme.ChipText : config.Secondary,
             small);
+
+        if (label.Length == 0) return cap.Right + layout[16];
 
         x = cap.Right + layout[5];
 

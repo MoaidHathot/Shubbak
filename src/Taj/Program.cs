@@ -2,6 +2,7 @@ using System.Runtime.InteropServices;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
+using Shubbak.Ipc;
 using Shubbak.Native;
 using Taj.Core;
 using Windows.Win32;
@@ -63,6 +64,36 @@ internal static class Program
 
         ConfigureLogging(args);
         s_args = args;
+
+        // One bar per account, for the same reason there is one window manager.
+        //
+        // Two of these is not merely untidy. Each bar reserves its strip of screen
+        // through the shell's appbar API, so a second set takes the work area a second
+        // time and every tiled window is laid out into a desktop shorter than it
+        // should be - which reads as a gaps setting gone wrong rather than as two bars.
+        // They then draw on top of each other, and `shubbak taj-exit` closes all of
+        // them at once because it goes by window class.
+        //
+        // The pairing happens without anybody doing anything strange: a bar survives
+        // the window manager restarting - that is deliberate, it reconnects inside
+        // window-manager-timeout - and the restarted window manager then runs its
+        // startup commands, one of which starts a bar.
+        using SingleInstanceLock instance = SingleInstanceLock.Claim(
+            IpcProtocol.InstanceMutexNameFor("taj"));
+
+        // An uncertain answer starts anyway, which is the opposite of what the window
+        // manager does with the same uncertainty. Two bars are visibly wrong and easily
+        // undone; no bar at all, because a mutex could not be opened, is a worse
+        // outcome than the thing being guarded against.
+        if (!instance.Held && instance.Certain)
+        {
+            ConsoleHost.Ensure();
+            Console.Error.WriteLine("taj: a bar is already running.");
+            Console.Error.WriteLine("hint: `shubbak taj-exit` stops it.");
+
+            Log.Info(LogCategory.Wm, "another bar is already running; leaving it to it");
+            return 1;
+        }
 
         // Before any window is created: without it Windows reports virtualised
         // coordinates on scaled displays and the bar lands in the wrong place.

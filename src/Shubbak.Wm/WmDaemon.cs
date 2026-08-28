@@ -2353,18 +2353,11 @@ public sealed class WmDaemon : IDisposable
     /// verbatim would list where the window already is alongside where it will go,
     /// which is the noisier half of the answer.
     /// </remarks>
-    internal static string DescribeTags(WindowNode window)
+    internal static IReadOnlyList<string> TagsElsewhere(WindowNode window)
     {
         string? here = window.Workspace?.Name;
 
-        string[] elsewhere =
-        [
-            .. window.Tags.Where(t => !string.Equals(t, here, StringComparison.OrdinalIgnoreCase)),
-        ];
-
-        if (elsewhere.Length == 0) return "(none)";
-
-        return $"{string.Join(", ", elsewhere)} - it will follow you there";
+        return [.. window.Tags.Where(t => !string.Equals(t, here, StringComparison.OrdinalIgnoreCase))];
     }
 
     /// <summary>Explains that a window has become a member of other workspaces.</summary>
@@ -2453,102 +2446,98 @@ public sealed class WmDaemon : IDisposable
     /// Explains how Shubbak sees a window.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Reports every matchable attribute, whether the window is manageable and why
     /// not if it is not, and which configured rules match. This is the answer to
     /// "why is this window not being tiled?", which is otherwise diagnosed only by
     /// trial and error.
+    /// </para>
+    /// <para>
+    /// Returns the facts rather than a rendering of them. Two clients ask for this -
+    /// the command line, which prints it, and the palette, which shows it as rows -
+    /// and while this built text the second had to take the first one's column
+    /// padding apart again to find the labels. Whitespace is a poor interface and was
+    /// never tested as one; the fields are the interface now, and the columns are
+    /// decided in exactly one place, next to the code that prints them.
+    /// </para>
     /// </remarks>
-    internal string Inspect(nint handle)
+    internal WindowReport Inspect(nint handle)
     {
-        var report = new System.Text.StringBuilder();
-
         WindowAttributes attributes = ToAttributes(handle);
         ManageDecision decision = WindowFilter.Evaluate(handle);
         Rect bounds = Win32Window.GetBounds(handle);
 
-        report.AppendLine($"handle       0x{handle:X}");
-        report.AppendLine($"title        {attributes.Title}");
-        report.AppendLine($"class        {attributes.ClassName}");
-        report.AppendLine($"process      {attributes.ProcessName}");
-        report.AppendLine($"path         {attributes.ProcessPath ?? "(unreadable - elevated process?)"}");
-        report.AppendLine($"rect         {bounds}");
-        report.AppendLine($"style        0x{Win32Window.GetStyleBits(handle):X8}");
-        report.AppendLine($"ex-style     0x{Win32Window.GetExStyleBits(handle):X8}");
-        report.AppendLine($"visible      {Win32Window.IsVisible(handle)}");
-        report.AppendLine($"cloaked      {Win32Window.GetCloakState(handle)}");
-        report.AppendLine($"minimised    {Win32Window.IsMinimised(handle)}");
-        report.AppendLine();
+        _windows.TryGet(handle, out WindowNode? window);
 
-        report.AppendLine($"manageable   {(decision.Manageable ? "yes" : "no")} - {decision.Explain()}");
+        List<RuleReport> rules = new(_config.Rules.Count);
 
-        if (_windows.TryGet(handle, out WindowNode? window))
+        foreach (WindowRule rule in _config.Rules)
+            rules.Add(new RuleReport(rule.Name, rule.Span.Start.Line, rule.Matches(attributes, _config.Apps)));
+
+        List<AppReport> apps = new(_config.Apps.Count);
+
+        foreach ((string name, AppDefinition app) in _config.Apps)
         {
-            report.AppendLine($"managed      yes");
-            report.AppendLine($"  node       #{window.Id}");
-            report.AppendLine($"  state      {window.State}");
-            report.AppendLine($"  workspace  {window.Workspace?.Name ?? "(none)"}");
-            report.AppendLine($"  focused    {ReferenceEquals(window, _wm.FocusedWindow)}");
+            bool matched = app.Matches(attributes);
 
-            // Membership, which until now this report was silent about.
-            //
-            // A tagged window relocates to whichever of its workspaces was activated
-            // last, so it appears to follow the user around - and nothing anywhere
-            // said it was tagged. This report exists to answer "why is this window
-            // behaving like this?", answered that well for windows it does not manage,
-            // and then went quiet about the most confusing state a managed one can be
-            // in. A stray keypress was enough to reach it and there was no way to see
-            // it and no way to find the way out.
-            report.AppendLine($"  sticky     {(window.IsSticky ? "yes - follows every workspace on its monitor" : "no")}");
-            report.AppendLine($"  tags       {DescribeTags(window)}");
+            // Only for the ones that missed. Listing the matchers of an app that
+            // matched would be restating the definition back at the reader, and the
+            // question this answers is always "why did this one not fire?".
+            List<string> failed = [];
 
-            if (window.ScratchpadName is { Length: > 0 } slot)
-                report.AppendLine($"  scratchpad {slot}");
-        }
-        else
-        {
-            report.AppendLine($"managed      no{(_windows.IsExcluded(handle) ? " (excluded by a rule)" : "")}");
-        }
-
-        report.AppendLine();
-        report.AppendLine("rules");
-
-        if (_config.Rules.Count == 0)
-        {
-            report.AppendLine("  (none configured)");
-        }
-        else
-        {
-            foreach (WindowRule rule in _config.Rules)
+            if (!matched)
             {
-                bool matched = rule.Matches(attributes, _config.Apps);
-                report.AppendLine($"  [{(matched ? "x" : " ")}] {rule.Name} (line {rule.Span.Start.Line})");
-            }
-        }
-
-        // Listing apps separately is what turns "my rule does not fire" into a
-        // one-glance diagnosis: the rule is fine, the app definition is what missed.
-        if (_config.Apps.Count > 0)
-        {
-            report.AppendLine();
-            report.AppendLine("apps");
-
-            foreach ((string name, AppDefinition app) in _config.Apps)
-            {
-                bool matched = app.Matches(attributes);
-                report.AppendLine($"  [{(matched ? "x" : " ")}] {name}");
-
-                if (!matched)
+                foreach (WindowMatcher matcher in app.Matchers)
                 {
-                    foreach (WindowMatcher matcher in app.Matchers)
-                    {
-                        bool ok = matcher.Matches(attributes.Get(matcher.Target));
-                        if (!ok) report.AppendLine($"        failed: {matcher}");
-                    }
+                    if (!matcher.Matches(attributes.Get(matcher.Target)))
+                        failed.Add(matcher.ToString() ?? string.Empty);
                 }
             }
+
+            apps.Add(new AppReport(name, matched, failed));
         }
 
-        return report.ToString();
+        return new WindowReport(
+            handle,
+            attributes.Title,
+            attributes.ClassName,
+            attributes.ProcessName,
+            attributes.ProcessPath,
+            bounds.X,
+            bounds.Y,
+            bounds.Width,
+            bounds.Height,
+            Win32Window.GetStyleBits(handle),
+            Win32Window.GetExStyleBits(handle),
+            Win32Window.IsVisible(handle),
+            Win32Window.GetCloakState(handle).ToString(),
+            Win32Window.IsMinimised(handle),
+            decision.Manageable,
+            decision.Explain(),
+            decision.Summarise(),
+            window is not null,
+            window is null && _windows.IsExcluded(handle),
+            window is null ? null : new ManagedWindowReport(
+                window.Id.Value,
+                window.State.ToString(),
+                window.Workspace?.Name ?? "(none)",
+                ReferenceEquals(window, _wm.FocusedWindow),
+                window.IsSticky,
+
+                // Membership, which this report was once silent about.
+                //
+                // A tagged window relocates to whichever of its workspaces was
+                // activated last, so it appears to follow the user around - and
+                // nothing anywhere said it was tagged. This report exists to answer
+                // "why is this window behaving like this?", answered that well for
+                // windows it does not manage, and then went quiet about the most
+                // confusing state a managed one can be in. A stray keypress was
+                // enough to reach it and there was no way to see it and no way to
+                // find the way out.
+                TagsElsewhere(window),
+                window.ScratchpadName),
+            rules,
+            apps);
     }
 
     /// <summary>

@@ -65,6 +65,47 @@ public readonly record struct ManageDecision(bool Manageable, ExclusionReason Re
             "start Shubbak elevated, or use a signed build installed under Program Files with uiAccess",
         _ => "unknown",
     };
+
+    /// <summary>
+    /// The same verdict in a few words, for somewhere a sentence will not fit.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="Explain"/> is written for a terminal, where a paragraph costs
+    /// nothing and the advice at the end of it - "start Shubbak elevated, or use a
+    /// signed build" - is the most useful part. A palette row is one clipped line, so
+    /// the same text arrives as a sentence with its ending cut off, and the ending is
+    /// where the answer was.
+    /// </para>
+    /// <para>
+    /// Kept beside <see cref="Explain"/> rather than derived from it. Deriving would
+    /// mean trimming the prose - dropping a leading "window is", cutting at the first
+    /// dash - which reads as a tidy rule until a reason is worded slightly differently
+    /// and the short form silently becomes nonsense. Two switches over one enum cannot
+    /// drift without the compiler or a test noticing.
+    /// </para>
+    /// </remarks>
+    public string Summarise() => Reason switch
+    {
+        ExclusionReason.None => "manageable",
+        ExclusionReason.NotAWindow => "not a live window",
+        ExclusionReason.NotVisible => "not visible",
+        ExclusionReason.CloakedByShell => "cloaked by the shell",
+        ExclusionReason.CloakedByOwner => "cloaked by its owner",
+        ExclusionReason.ChildWindow => "a child window",
+        ExclusionReason.ToolWindow => "a tool window",
+        ExclusionReason.NotInAltTabList => "not an Alt+Tab target",
+        ExclusionReason.CannotActivate => "cannot take focus",
+        ExclusionReason.OwnedPopup => "a menu or popup",
+        ExclusionReason.Chromeless => "a flyout or panel",
+        ExclusionReason.ZeroSized => "no area",
+        ExclusionReason.ShellWindow => "belongs to the shell",
+        ExclusionReason.NoTitle => "no title",
+        ExclusionReason.ExcludedClass => "class excluded by default",
+        ExclusionReason.ExcludedProcess => "shell process excluded by default",
+        ExclusionReason.Elevated => "elevated",
+        _ => "unknown",
+    };
 }
 
 /// <summary>

@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using Dalil.Core;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
+using Shubbak.Ipc;
 using Shubbak.Native;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -68,6 +69,33 @@ internal static class Program
         s_configPath = PathFrom(args);
 
         ConfigureLogging(args);
+
+        // One palette per account, for the same reason there is one window manager.
+        //
+        // Dalil is opened by a signal rather than by being started, so two of them are
+        // both subscribed and both answer: one keypress raises two windows, stacked and
+        // both topmost, with the keyboard going to whichever won the race and Escape
+        // dismissing one of them to reveal the other underneath.
+        //
+        // Nothing strange has to happen to end up with two. The palette survives the
+        // window manager restarting - deliberately, it reconnects - and the restarted
+        // window manager then runs its startup commands, one of which starts a palette.
+        using SingleInstanceLock instance = SingleInstanceLock.Claim(
+            IpcProtocol.InstanceMutexNameFor("dalil"));
+
+        // An uncertain answer starts anyway. Two palettes are confusing and can be
+        // undone; no palette, because a mutex could not be opened, removes the only way
+        // into half of what Shubbak can do.
+        if (!instance.Held && instance.Certain)
+        {
+            ConsoleHost.Ensure();
+            Console.Error.WriteLine("dalil: a palette is already running.");
+            Console.Error.WriteLine("hint: `shubbak dalil-exit` stops it.");
+
+            Log.Info(LogCategory.Wm, "another palette is already running; leaving it to it");
+            return 1;
+        }
+
         s_config = LoadConfig();
 
         s_palette = new PaletteWindow(s_config);
@@ -96,9 +124,17 @@ internal static class Program
         // for it without freezing the very window that is meant to display it.
         s_palette.ExplainRequested += (handle, title) => _ = Task.Run(async () =>
         {
-            IReadOnlyList<string> report = await s_connection!.InspectAsync(handle).ConfigureAwait(false);
+            string? failure = null;
 
-            Post(() => s_palette?.ShowReport(title, report));
+            WindowReport? report = await s_connection!
+                .InspectAsync(handle, reason => failure = reason)
+                .ConfigureAwait(false);
+
+            Post(() =>
+            {
+                if (report is not null) s_palette?.ShowReport(title, report);
+                else s_palette?.ShowReportFailure(title, failure ?? "Nothing to report");
+            });
         });
 
         PaletteWindow.RequestShutdown += () => s_running = false;

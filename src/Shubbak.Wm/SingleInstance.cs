@@ -26,17 +26,21 @@ namespace Shubbak.Wm;
 /// <para>
 /// A mutex is the cheapest thing that actually answers the question: one call at
 /// startup, held for the life of the process, never contended because only one holder
-/// can exist. Nothing on any hot path.
+/// can exist. Nothing on any hot path. The mechanics live in
+/// <see cref="SingleInstanceLock"/>, shared with the bar and the palette, which have
+/// the same problem and had no guard at all; what stays here is the part specific to a
+/// window manager - standing an incumbent down over IPC, and refusing rather than
+/// carrying on when the answer cannot be had.
 /// </para>
 /// </remarks>
 internal sealed class SingleInstance : IDisposable
 {
-    private Mutex? _mutex;
+    private SingleInstanceLock? _lock;
 
-    private SingleInstance(Mutex? mutex) => _mutex = mutex;
+    private SingleInstance(SingleInstanceLock? held) => _lock = held;
 
     /// <summary>Whether this process is the one window manager.</summary>
-    public bool Held => _mutex is not null;
+    public bool Held => _lock is { Held: true };
 
     /// <summary>
     /// Claims the right to manage this account's desktop.
@@ -53,61 +57,30 @@ internal sealed class SingleInstance : IDisposable
     /// </returns>
     public static SingleInstance TryAcquire(bool replace)
     {
-        // Total by construction. This runs before Main installs the unhandled-exception
-        // handler, so anything escaping here ends the process with a stack trace and no
-        // window manager - a far worse outcome than the double-start it is guarding
-        // against. Every failure below resolves to "carry on" or "refuse", never to
-        // "throw".
-        try
-        {
-            return Acquire(replace);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(LogCategory.Wm, "the single-instance check failed", ex);
+        if (replace && !AskTheRunningOneToStandDown()) return new SingleInstance(null);
 
+        SingleInstanceLock claim = SingleInstanceLock.Claim(IpcProtocol.InstanceMutexName);
+
+        if (claim.Held) return new SingleInstance(claim);
+
+        claim.Dispose();
+
+        // An uncertain answer refuses too, which is the opposite of what the bar and
+        // the palette do with the same uncertainty. Two of those are untidy; two window
+        // managers fight over every window on the desktop and leave concealed ones
+        // stranded on the way out.
+        if (!claim.Certain)
+        {
             ReportToUser(
-                $"shubbak-wm: could not check whether one is already running: {ex.Message}",
+                "shubbak-wm: could not check whether one is already running.",
                 "hint: make sure no other shubbak-wm.exe is running, then try again.");
 
             return new SingleInstance(null);
         }
-    }
 
-    private static SingleInstance Acquire(bool replace)
-    {
-        if (replace && !AskTheRunningOneToStandDown()) return new SingleInstance(null);
-
-        var mutex = new Mutex(initiallyOwned: false, IpcProtocol.InstanceMutexName);
-
-        if (TryAcquire(mutex)) return new SingleInstance(mutex);
-
-        mutex.Dispose();
         Refuse(replace);
 
         return new SingleInstance(null);
-    }
-
-    /// <summary>Takes the mutex, treating an abandoned one as free.</summary>
-    /// <remarks>
-    /// A daemon that was killed rather than asked to exit leaves the mutex abandoned,
-    /// and waiting on it reports that by throwing rather than returning. Abandoned
-    /// means the previous owner is gone, which is the same thing as available - and
-    /// treating a crash as "someone else is running" would leave the user unable to
-    /// start Shubbak again without a reboot, which is a far worse failure than the one
-    /// being guarded against.
-    /// </remarks>
-    private static bool TryAcquire(Mutex mutex)
-    {
-        try
-        {
-            return mutex.WaitOne(TimeSpan.Zero);
-        }
-        catch (AbandonedMutexException)
-        {
-            Log.Warn(LogCategory.Wm, "the previous window manager did not exit cleanly; taking over");
-            return true;
-        }
     }
 
     /// <summary>
@@ -173,24 +146,9 @@ internal sealed class SingleInstance : IDisposable
 
         while (Environment.TickCount64 - started < deadline.TotalMilliseconds)
         {
-            using var probe = new Mutex(initiallyOwned: false, IpcProtocol.InstanceMutexName);
-
-            bool free;
-
-            try
-            {
-                free = probe.WaitOne(TimeSpan.Zero);
-            }
-            catch (AbandonedMutexException)
-            {
-                free = true;
-            }
-
-            if (free)
-            {
-                probe.ReleaseMutex();
-                return true;
-            }
+            // Null means the question could not be answered, which is not "it has let
+            // go" - carrying on there would start the second daemon this is preventing.
+            if (SingleInstanceLock.IsHeldByAnyone(IpcProtocol.InstanceMutexName) is false) return true;
 
             Thread.Sleep(50);
         }
@@ -284,19 +242,7 @@ internal sealed class SingleInstance : IDisposable
 
     public void Dispose()
     {
-        if (_mutex is null) return;
-
-        try
-        {
-            _mutex.ReleaseMutex();
-        }
-        catch (ApplicationException)
-        {
-            // Not the owner, which can only happen if the mutex was abandoned and
-            // reacquired underneath us. Disposing is still correct.
-        }
-
-        _mutex.Dispose();
-        _mutex = null;
+        _lock?.Dispose();
+        _lock = null;
     }
 }

@@ -18,6 +18,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Dalil.Core.Tests/Dalil.Core.Tests.csproj" />
+    <Project Path="tests/Dalil.Tests/Dalil.Tests.csproj" />
     <Project Path="tests/Shubbak.Cli.Tests/Shubbak.Cli.Tests.csproj" />
     <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />

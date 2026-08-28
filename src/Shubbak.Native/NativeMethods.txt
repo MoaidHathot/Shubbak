@@ -237,6 +237,21 @@ EnumDisplaySettings
 DEVMODEW
 ENUM_DISPLAY_SETTINGS_MODE
 
+// --- the clipboard ------------------------------------------------------------------
+// So a report can leave the palette. The thing most worth doing with an explanation
+// of why a window will not tile is pasting it into an issue, and until this existed
+// the only way to get one out of Dalil was to retype it off the screen.
+OpenClipboard
+CloseClipboard
+EmptyClipboard
+SetClipboardData
+CLIPBOARD_FORMAT
+GlobalAlloc
+GlobalLock
+GlobalUnlock
+GlobalFree
+GLOBAL_ALLOC_FLAGS
+
 // --- consoles ------------------------------------------------------------------------
 // The daemon is a GUI-subsystem binary so that starting it at logon does not put a
 // console window on the desktop. These are how it gets one back when a human asks

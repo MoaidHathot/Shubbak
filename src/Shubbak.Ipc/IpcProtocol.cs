@@ -109,6 +109,10 @@ public sealed record MonitorInfoDto(
 /// <param name="Tags">
 /// Every workspace this window is a member of, including the one it sits on.
 /// </param>
+/// <param name="ExclusionSummary">
+/// The same answer as <paramref name="ExclusionReason"/> in a few words, for a client
+/// with one clipped line rather than a paragraph. Null exactly when that is.
+/// </param>
 public sealed record WindowCandidate(
     long Handle,
     string Title,
@@ -133,7 +137,8 @@ public sealed record WindowCandidate(
     // was activated last; without either, a client can tell that a window is behaving
     // oddly and not why.
     string? Scratchpad = null,
-    IReadOnlyList<string>? Tags = null);
+    IReadOnlyList<string>? Tags = null,
+    string? ExclusionSummary = null);
 
 /// <summary>A command verb, as described to clients.</summary>
 /// <remarks>
@@ -156,6 +161,110 @@ public sealed record BindingInfo(
     string? Mode,
     IReadOnlyList<string> Commands,
     bool RepeatsOnHold);
+
+/// <summary>
+/// Everything Shubbak knows about one window, as <c>inspect</c> answers it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Structured rather than prose. The report began as text built for a terminal, laid
+/// out in columns padded with spaces, and that was fine while the command line was
+/// the only thing asking - but the palette shows the same report as rows, and to do
+/// that it had to split the text back apart at the padding. The daemon's choice of
+/// whitespace had quietly become an interface for another process, with nothing
+/// anywhere testing it: widen a column and the palette's labels silently stop being
+/// labels.
+/// </para>
+/// <para>
+/// So the fields are the contract and the prose is a rendering of it. The command
+/// line formats this back into the same columns it always printed, which is now the
+/// only place that layout is decided.
+/// </para>
+/// </remarks>
+/// <param name="Handle">Native window handle.</param>
+/// <param name="Title">Window title.</param>
+/// <param name="ClassName">Win32 window class.</param>
+/// <param name="ProcessName">Owning executable, without extension.</param>
+/// <param name="ProcessPath">Full path, or null when it cannot be read - usually elevation.</param>
+/// <param name="X">Left edge, in virtual-desktop pixels.</param>
+/// <param name="Y">Top edge, in virtual-desktop pixels.</param>
+/// <param name="Width">Width in pixels.</param>
+/// <param name="Height">Height in pixels.</param>
+/// <param name="Style">WS_* bits.</param>
+/// <param name="ExStyle">WS_EX_* bits.</param>
+/// <param name="Visible">What <c>IsWindowVisible</c> reports.</param>
+/// <param name="Cloaked">The DWM cloak state.</param>
+/// <param name="Minimised">Whether the window is minimised.</param>
+/// <param name="Manageable">The filter's verdict.</param>
+/// <param name="Verdict">That verdict in a sentence, whichever way it went.</param>
+/// <param name="VerdictSummary">The same in a few words, for a list rather than a report.</param>
+/// <param name="Managed">Whether the window is in the tree right now.</param>
+/// <param name="ExcludedByRule">Whether a rule or a release by hand is why it is not.</param>
+/// <param name="Node">What the tree knows, when it is managed. Null when it is not.</param>
+/// <param name="Rules">Every configured rule, and whether it matched this window.</param>
+/// <param name="Apps">Every configured app definition, and why it did not match.</param>
+public sealed record WindowReport(
+    long Handle,
+    string Title,
+    string ClassName,
+    string ProcessName,
+    string? ProcessPath,
+    int X,
+    int Y,
+    int Width,
+    int Height,
+    uint Style,
+    uint ExStyle,
+    bool Visible,
+    string Cloaked,
+    bool Minimised,
+    bool Manageable,
+    string Verdict,
+    string VerdictSummary,
+    bool Managed,
+    bool ExcludedByRule,
+    ManagedWindowReport? Node,
+    IReadOnlyList<RuleReport> Rules,
+    IReadOnlyList<AppReport> Apps);
+
+/// <summary>What the tree knows about a window it manages.</summary>
+/// <param name="Id">Node id, as the tree numbers it.</param>
+/// <param name="State">Tiling, floating, fullscreen, minimised and so on.</param>
+/// <param name="Workspace">The workspace it sits on.</param>
+/// <param name="Focused">Whether it is the focused window.</param>
+/// <param name="Sticky">Whether it follows the user to every workspace on its monitor.</param>
+/// <param name="Tags">
+/// The other workspaces it is a member of. Empty when it stays where it is put - which
+/// is the ordinary case, and the one worth being able to tell apart at a glance.
+/// </param>
+/// <param name="Scratchpad">The slot holding it, when one is.</param>
+public sealed record ManagedWindowReport(
+    long Id,
+    string State,
+    string Workspace,
+    bool Focused,
+    bool Sticky,
+    IReadOnlyList<string> Tags,
+    string? Scratchpad);
+
+/// <summary>One configured rule, and whether it matched.</summary>
+/// <param name="Name">The rule's name, as written in the config.</param>
+/// <param name="Line">Where it is written, so it can be found and edited.</param>
+/// <param name="Matched">Whether this window satisfies it.</param>
+public sealed record RuleReport(string Name, int Line, bool Matched);
+
+/// <summary>One configured app definition, and why it did not match.</summary>
+/// <remarks>
+/// The failing matchers are what turns "my rule does not fire" into a one-glance
+/// diagnosis: the rule is usually fine and the app definition is what missed.
+/// </remarks>
+/// <param name="Name">The app's name, as referenced by rules.</param>
+/// <param name="Matched">Whether every matcher held.</param>
+/// <param name="FailedMatchers">The ones that did not, written as they are in the config.</param>
+public sealed record AppReport(
+    string Name,
+    bool Matched,
+    IReadOnlyList<string> FailedMatchers);
 
 /// <summary>The whole state, for a bar that has just connected.</summary>
 public sealed record StateSnapshot(
@@ -196,6 +305,10 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(CommandInfo))]
 [JsonSerializable(typeof(BindingInfo))]
 [JsonSerializable(typeof(StateSnapshot))]
+[JsonSerializable(typeof(WindowReport))]
+[JsonSerializable(typeof(ManagedWindowReport))]
+[JsonSerializable(typeof(RuleReport))]
+[JsonSerializable(typeof(AppReport))]
 [JsonSerializable(typeof(IReadOnlyList<WindowInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<WorkspaceInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<MonitorInfoDto>))]
@@ -240,13 +353,47 @@ public static class IpcProtocol
     /// The wire format both ends must agree on.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Raise this whenever a payload changes shape - a renamed field, a removed one,
     /// or a meaning that no longer matches the name. Adding an optional field with a
     /// sensible default does not need it.
+    /// </para>
+    /// <para>
+    /// Raised to 2 when <c>inspect</c> began answering with a <see cref="WindowReport"/>
+    /// rather than the printed text of one. That is a meaning that no longer matches
+    /// the name, which is exactly the case above: a client expecting prose would have
+    /// received JSON and shown it verbatim. Refusing to connect is the failure anybody
+    /// can act on.
+    /// </para>
     /// </remarks>
-    public const int ProtocolVersion = 1;
+    public const int ProtocolVersion = 2;
 
-    private static string BuildPipeName()
+    /// <summary>
+    /// Who this process is running as, for scoping a name to one desktop.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The SID rather than the user name. A name can differ in case, can be duplicated
+    /// across a domain and a local account, and is not a stable identifier; the SID is
+    /// what Windows itself means by "this account".
+    /// </para>
+    /// <para>
+    /// Computed on first use rather than in a field initialiser, deliberately. Static
+    /// initialisers run in the order they are written, and both the pipe name and the
+    /// mutex names are themselves initialisers that need this one - so a field would
+    /// make the declaration order of three members load-bearing, and reading it too
+    /// early yields null rather than an error. That is not hypothetical: it produced a
+    /// pipe called <c>shubbak-v2-</c>, scoped to no account at all, and every process
+    /// on the machine would have shared it.
+    /// </para>
+    /// </remarks>
+    private static string Account => s_account ??= BuildAccount();
+
+    private static string? s_account;
+
+    private static string BuildPipeName() => $"shubbak-v{ProtocolVersion}-{Account}";
+
+    private static string BuildAccount()
     {
         string account = Environment.UserName;
 
@@ -265,7 +412,7 @@ public static class IpcProtocol
             }
         }
 
-        return $"shubbak-v{ProtocolVersion}-{account}";
+        return account;
     }
 
     /// <summary>
@@ -273,9 +420,9 @@ public static class IpcProtocol
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Scoped exactly like <see cref="PipeName"/>, and for the same reason: one window
-    /// manager per logged-in account, not one per machine. Two people signed in at once
-    /// each get their own desktop and must each get their own daemon.
+    /// Scoped per account, and for the same reason the pipe is: one window manager per
+    /// logged-in account, not one per machine. Two people signed in at once each get
+    /// their own desktop and must each get their own daemon.
     /// </para>
     /// <para>
     /// <c>Local\</c> rather than <c>Global\</c>. The session-local namespace is what
@@ -283,14 +430,32 @@ public static class IpcProtocol
     /// session. The account is in the name as well, because a single session can host
     /// more than one account once <c>runas</c> is involved.
     /// </para>
+    /// </remarks>
+    public static string InstanceMutexName { get; } = InstanceMutexNameFor("wm");
+
+    /// <summary>
+    /// The mutex that decides which process is <em>the</em> one of its kind.
+    /// </summary>
+    /// <remarks>
     /// <para>
-    /// Kept next to the pipe name deliberately. These two answers must agree - a
-    /// daemon that holds the mutex but serves a pipe another daemon also serves is the
-    /// exact failure the mutex exists to prevent - and answers that must agree are
-    /// easiest to keep that way when they are computed side by side.
+    /// Deliberately <em>not</em> versioned, which is the one way it differs from
+    /// <see cref="PipeName"/>. The pipe carries a version so that two builds which
+    /// cannot understand each other fail to connect; this answers a different question,
+    /// and the answer does not depend on what the two can say to one another. Two window
+    /// managers fight over the same desktop, and two bars reserve the same strip of
+    /// screen twice, whether or not they speak the same protocol.
+    /// </para>
+    /// <para>
+    /// It used to be the pipe name with <c>Local\</c> in front, which meant raising the
+    /// protocol version quietly opened the hole the mutex exists to close: a daemon on
+    /// the old version held a different name from one on the new, so both could run.
+    /// That is precisely the pairing a person working on Shubbak produces all day - an
+    /// installed copy running while a build from source is started.
     /// </para>
     /// </remarks>
-    public static string InstanceMutexName { get; } = @"Local\" + PipeName;
+    /// <param name="component">Which program is being counted: <c>wm</c>, <c>taj</c>, <c>dalil</c>.</param>
+    public static string InstanceMutexNameFor(string component) =>
+        $@"Local\shubbak-{component}-{Account}";
 
     /// <summary>Messages are newline-delimited JSON.</summary>
     public const char MessageTerminator = '\n';
