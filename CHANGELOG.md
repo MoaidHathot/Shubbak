@@ -171,6 +171,20 @@ palette recovering the report by taking the printed text apart.
   through Task Manager, which is a worse position than the double-start the guard
   prevents.
 
+- **The icons are visible somewhere other than the taskbar.** Four were drawn for the
+  executables and then only ever seen by Windows: the readme showed none of them, and
+  an ICO is not something GitHub renders.
+
+  `tools/make-icons.ps1` now writes the 256-pixel frame of each as a PNG into
+  `docs/assets` alongside the ICO it already produced — from the same frames, so the
+  picture in the readme cannot drift from the one in the taskbar. The readme leads with
+  Shubbak's, and Taj and Dalil carry theirs beside their sections.
+
+  The release zip gains `docs/assets` for the same reason it already carries the readme:
+  the links are relative so that GitHub resolves them, and without the images the copy
+  in the zip would greet a first-time reader with three broken pictures. The
+  executables stay at the root, which is the part winget and Scoop name.
+
 ### Internal
 
 - **A test project for the palette host.** `Dalil.Core` has been tested since it

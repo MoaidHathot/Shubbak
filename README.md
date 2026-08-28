@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/assets/shubbak-wm.png" width="120" alt="Shubbak" />
+
 # Shubbak
 
 **A tiling window manager for Windows with animations, a status bar, a command
@@ -371,6 +373,8 @@ the daemon, so `shubbak focus --direction left` just works.
 
 ## Taj — the bar
 
+<img src="docs/assets/taj.png" width="72" align="right" alt="" />
+
 **Taj** (تاج, *"crown"*) is the status bar, and it's already in the box. One bar per
 monitor, each reserving its own strip, each able to show a different profile.
 
@@ -439,6 +443,8 @@ L2 and L3 contain no drawing code and are covered by tests that run with no wind
 on screen. Swapping the renderer means implementing one interface.
 
 ## Dalil — the command palette
+
+<img src="docs/assets/dalil.png" width="72" align="right" alt="" />
 
 **Dalil** (دليل, *"guide"*) is a fuzzy-search palette for your whole desktop. Bind a
 key to `signal "palette"` and it appears.

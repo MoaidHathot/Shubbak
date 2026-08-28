@@ -57,6 +57,14 @@ Documentations:
   - DocumentLabel: Example configuration
     DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/main/docs/shubbak.example.kdl
 
+# No Icons field, deliberately. The schema has one and docs/assets/shubbak-wm.png is
+# exactly what it wants, but `winget validate` answers it with "Field usage requires
+# verified publishers" - so it would display nothing here and would put a restricted
+# field in front of a reviewer at submission time. See RELEASING.md.
+#
+# winget shows the icon compiled into the executable regardless, which is the same
+# drawing from the same script.
+
 InstallationNotes: |-
   Nothing is running yet. To start the window manager at logon:
 
