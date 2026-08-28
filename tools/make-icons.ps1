@@ -19,6 +19,11 @@
     because they carry a real alpha channel, which is what stops the corners from
     being a grey box on a dark taskbar.
 
+    The 256-pixel frame is also written on its own as a .png, into docs/assets. GitHub
+    will not render an ICO in a readme and winget's Icons field wants a URL to a single
+    image, so without this both would need a copy exported by hand - and a copy
+    exported by hand is a copy that stops matching the icon it came from.
+
 .NOTES
     The glyphs are deliberately simple. They have to survive being drawn at 16 pixels
     in a taskbar, where anything with detail becomes a smudge.
@@ -27,7 +32,17 @@
 [CmdletBinding()]
 param(
     # Where the .ico files go. Defaults to the icons folder beside the sources.
-    [string] $OutputDirectory = (Join-Path $PSScriptRoot '..\src\icons')
+    [string] $OutputDirectory = (Join-Path $PSScriptRoot '..\src\icons'),
+
+    # Where the .png copies go, for the README, the winget manifest and anywhere else
+    # that cannot display an ICO. Written from the same frames as the icons, so the
+    # picture in the readme is the picture in the taskbar rather than a lookalike
+    # somebody exported once and forgot about.
+    [string] $ImageDirectory = (Join-Path $PSScriptRoot '..\docs\assets'),
+
+    # The frame published as a .png. 256 is the largest the ICO format carries, and is
+    # what a readme wants to scale down from.
+    [int] $ImageSize = 256
 )
 
 Set-StrictMode -Version Latest
@@ -288,15 +303,34 @@ function Build-Icon {
 
     $size = (Get-Item $path).Length
     Write-Output ("  {0,-14} {1,7:N0} bytes" -f "$Name.ico", $size)
+
+    # The same frame again as a plain PNG. GitHub will not render an ICO in a readme,
+    # and winget's Icons field takes a URL to a single image - so both would otherwise
+    # need a copy exported by hand, which is a copy that drifts.
+    $image = Join-Path $ImageDirectory "$Name.png"
+    [System.IO.File]::WriteAllBytes($image, $frames[$ImageSize])
+
+    $size = (Get-Item $image).Length
+    Write-Output ("  {0,-14} {1,7:N0} bytes" -f "$Name.png", $size)
 }
 
 if (-not (Test-Path -LiteralPath $OutputDirectory)) {
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 }
 
+if (-not (Test-Path -LiteralPath $ImageDirectory)) {
+    New-Item -ItemType Directory -Path $ImageDirectory -Force | Out-Null
+}
+
 $OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
+$ImageDirectory = (Resolve-Path -LiteralPath $ImageDirectory).Path
+
+if ($Sizes -notcontains $ImageSize) {
+    throw "ImageSize $ImageSize is not one of the frames drawn ($($Sizes -join ', '))."
+}
 
 Write-Output "Writing icons to $OutputDirectory"
+Write-Output "Writing images to $ImageDirectory"
 
 # The window manager and its CLI share a glyph and differ in shade: they are the same
 # program from the user's point of view, and two unrelated icons would suggest

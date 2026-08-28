@@ -160,6 +160,14 @@ jobs:
           Copy-Item README.md $stage
           Copy-Item docs/shubbak.example.kdl $stage
 
+          # The pictures the readme points at, at the path it points at them by. The
+          # readme uses relative links so that GitHub renders them, and without these
+          # the copy in the zip would show three broken images to somebody reading it
+          # for the first time. The executables stay at the root either way, which is
+          # the part winget and Scoop name.
+          New-Item -ItemType Directory -Path "$stage/docs/assets" -Force | Out-Null
+          Copy-Item docs/assets/*.png "$stage/docs/assets"
+
           $flat = Get-ChildItem $stage -File | Select-Object -ExpandProperty Name
           Write-Output "package contents: $($flat -join ', ')"
 

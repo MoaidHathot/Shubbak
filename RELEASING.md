@@ -142,6 +142,28 @@ The PAT needs `public_repo`. `wingetcreate` forks `microsoft/winget-pkgs` to you
 account and opens the pull request from there, so the fork is a normal consequence
 rather than something to undo.
 
+### The icon winget will not show
+
+The `defaultLocale` schema has an `Icons` field, and `docs/assets/shubbak-wm.png` is
+exactly what it takes — a 256-pixel PNG at a public URL. It is deliberately not in the
+manifest, because `winget validate` answers it with:
+
+```
+Manifest Warning: Field usage requires verified publishers. [Icons]
+```
+
+So it would display nothing, and would put a restricted field in front of a reviewer
+who has no reason to expect one. Add it once the publisher is verified, and pin
+`IconUrl` and `IconSha256` to the release tag rather than to `main` — a hash against a
+moving branch goes stale the next time `tools/make-icons.ps1` runs.
+
+Nothing is lost meanwhile: winget falls back to the icon compiled into the executable,
+which the same script draws.
+
+Scoop has no icon field at all. It could gain Start Menu shortcuts with icons through
+`shortcuts`, but that would put four entries in the Start Menu for a window manager and
+three programs it starts itself, which is a worse trade than a missing picture.
+
 ## Why there is no installer yet
 
 `uiAccess` — moving windows that belong to elevated processes without running the
