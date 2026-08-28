@@ -547,9 +547,21 @@ public static class WindowFilter
     /// The state a newly discovered window should start in.
     /// </summary>
     /// <remarks>
-    /// A window that is already minimised or maximised when Shubbak starts must keep
-    /// that state, or starting the window manager would visibly disturb every open
-    /// window - the first impression that makes people uninstall.
+    /// <para>
+    /// A window that is already minimised when Shubbak starts keeps that state, or
+    /// starting the window manager would pop open every window somebody had put away -
+    /// the first impression that makes people uninstall.
+    /// </para>
+    /// <para>
+    /// Maximised is deliberately <em>not</em> preserved, and this comment used to say
+    /// it was. It never has been: only the minimised branch below was ever written, so
+    /// a maximised window was adopted as tiling and handed a tile rectangle while
+    /// Windows still had the flag set - which is drawn as a black strip along the top
+    /// and a frame the wrong shape. It is unmaximised on its way into the layout
+    /// instead, by the committer, which is the one place every rectangle passes
+    /// through. Adoption already moves every other window, so a tiling window manager
+    /// tiling a maximised one disturbs nothing that was not about to be disturbed.
+    /// </para>
     /// </remarks>
     public static WindowState InitialStateFor(nint handle, WindowState fallback)
     {

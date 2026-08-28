@@ -461,6 +461,30 @@ public sealed class WindowCommitter
             return 0;
         }
 
+        // Nothing is placed while Windows still believes it is maximised.
+        //
+        // The compositor draws a maximised window as though it fills the monitor - no
+        // shadow, and part of the frame deliberately off the top of the screen. Moved
+        // to half the screen with the flag still set, that frame lands back on screen
+        // as a black strip along the top, and the focus border is drawn around a shape
+        // that is not the window. Applications that reopen maximised, which is most of
+        // the Store ones, arrived that way and were tiled that way.
+        //
+        // Here rather than at adoption, because adoption is only one of the routes in.
+        // Win+Up, a double-clicked title bar, or an application maximising itself all
+        // set the flag later, and by then the drift watch has long since expired and
+        // EVENT_OBJECT_LOCATIONCHANGE is deliberately not subscribed. This is the one
+        // place every rectangle passes through.
+        //
+        // The cost is one IsZoomed per window actually being moved - windows already
+        // where they belong were skipped above - which is a style read beside a
+        // SetWindowPos that is about to cross a process boundary.
+        foreach ((nint handle, Rect rect) in toMove)
+        {
+            if (Win32Window.IsMaximised(handle))
+                WindowActions.Unmaximise(handle, Expand(handle, rect));
+        }
+
         try
         {
             ApplyBatch(toMove);

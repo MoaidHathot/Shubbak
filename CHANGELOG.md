@@ -109,6 +109,39 @@ palette recovering the report by taking the printed text apart.
 
 ### Fixed
 
+- **Windows that reopen maximised were tiled while Windows still had them flagged
+  maximised.** Store applications — Calculator and Settings among them — remember that
+  they were maximised and come back that way. Shubbak adopted one as an ordinary tiling
+  window, handed it half the screen, and never cleared `WS_MAXIMIZE`.
+
+  The compositor draws a maximised window on the assumption that it fills the monitor:
+  the shadow is suppressed and part of the frame is deliberately put off the top of the
+  screen. At half the screen that frame is back on screen as a black strip along the
+  top, and the focus border is drawn around a shape that is not the window — which is
+  how it was reported, as UWP applications having "a strange border and a thin black
+  row on the top" with the border invisible on them.
+
+  `WindowFilter.InitialStateFor` claimed in its own comment that a window "already
+  minimised or maximised must keep that state". Only the minimised half was ever
+  written. `Win32Window.IsMaximised` existed and was called by nothing, and
+  `WindowState.Maximised` existed and was assigned by nothing.
+
+  The flag is now cleared before the window is placed, in the committer rather than at
+  adoption. Adoption is only one way in: Win+Up, a double-clicked title bar and an
+  application maximising itself all set it later, by which time the drift watch has
+  expired and `EVENT_OBJECT_LOCATIONCHANGE` is deliberately not subscribed. The
+  committer is the one place every rectangle passes through, and the check runs only
+  for windows actually being moved.
+
+  Clearing it goes through `SetWindowPlacement`, which carries the destination with it.
+  `SW_RESTORE` alone returns the window to whatever it occupied before it was
+  maximised, a visible jump to a stale position immediately before the layout corrects
+  it. It is also synchronous, and that matters: the committer places windows with a
+  *sending* `SetWindowPos`, and a send overtakes anything merely posted — so the
+  asynchronous form would have arrived after the placement and undone it. A window that
+  is not answering gets the asynchronous form anyway, rather than blocking a layout
+  pass on one stuck application.
+
 - **The action chords did nothing, anywhere, with the shipped defaults.** Every row in
   the action list carries the key that acts on it as a badge — `Ctrl+Shift+S` beside
   "Make sticky", `Ctrl+Shift+W` beside "Close it" — and pressing any of them did

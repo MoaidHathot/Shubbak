@@ -1,3 +1,4 @@
+using Shubbak.Core.Geometry;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.Input.KeyboardAndMouse;
@@ -119,6 +120,68 @@ public static class WindowActions
 
     public static void Maximise(nint handle) =>
         PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_MAXIMIZE);
+
+    /// <summary>
+    /// Drops a window's maximised flag, and tells it where it lives now.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A maximised window is drawn by the compositor on the assumption that it fills
+    /// the monitor: the shadow is suppressed and part of the frame is deliberately put
+    /// off the top of the screen. Move one to half the screen without clearing the flag
+    /// and that frame is no longer off the screen - it is a black strip along the top -
+    /// and the border colour renders against a frame that is the wrong shape. Windows
+    /// that reopen maximised, which is most of the Store applications, arrived that way
+    /// and were tiled that way.
+    /// </para>
+    /// <para>
+    /// <c>SetWindowPlacement</c> rather than <c>ShowWindow(SW_RESTORE)</c>, because it
+    /// carries the restored rectangle with it. Restoring on its own puts the window
+    /// back wherever it was before it was maximised, which is a visible jump to a
+    /// stale position immediately before the layout corrects it.
+    /// </para>
+    /// <para>
+    /// Synchronous, and that matters. The committer places windows with a sending
+    /// <c>SetWindowPos</c>, and a send overtakes anything merely posted - so the
+    /// asynchronous form of this would arrive <i>after</i> the placement and undo it.
+    /// A window that is not answering is given the asynchronous form anyway: it cannot
+    /// be worse than leaving it maximised, and blocking the whole layout pass on one
+    /// stuck application is what the committer already refuses to do elsewhere.
+    /// </para>
+    /// </remarks>
+    /// <param name="handle">The window.</param>
+    /// <param name="restored">
+    /// Where it should sit once restored, as a window rectangle - shadow included,
+    /// because that is what Windows stores and what <c>SetWindowPos</c> is given.
+    /// </param>
+    /// <returns>Whether the flag was cleared synchronously.</returns>
+    public static unsafe bool Unmaximise(nint handle, Rect restored)
+    {
+        var hwnd = new HWND(handle);
+
+        if (handle == 0 || !PInvoke.IsWindow(hwnd)) return false;
+
+        if (Win32Window.IsHung(handle))
+        {
+            PInvoke.ShowWindowAsync(hwnd, SHOW_WINDOW_CMD.SW_RESTORE);
+            return false;
+        }
+
+        var placement = new WINDOWPLACEMENT
+        {
+            length = (uint)sizeof(WINDOWPLACEMENT),
+            showCmd = SHOW_WINDOW_CMD.SW_SHOWNORMAL,
+            rcNormalPosition = new RECT
+            {
+                left = restored.X,
+                top = restored.Y,
+                right = restored.X + restored.Width,
+                bottom = restored.Y + restored.Height,
+            },
+        };
+
+        return PInvoke.SetWindowPlacement(hwnd, in placement);
+    }
 
     /// <summary>Adds or removes the always-on-top band.</summary>
     public static void SetAlwaysOnTop(nint handle, bool onTop)

@@ -75,6 +75,15 @@ SET_WINDOW_POS_FLAGS
 ShowWindow
 ShowWindowAsync
 SHOW_WINDOW_CMD
+
+// Clearing WS_MAXIMIZE before placing a window somewhere that is not the work area.
+//
+// SetWindowPlacement rather than ShowWindow(SW_RESTORE) because it does both halves in
+// one synchronous call: it drops the maximised flag and sets the restored rectangle
+// together, so the window never appears at its old pre-maximise position on the way
+// past. See WindowActions.Unmaximise.
+SetWindowPlacement
+WINDOWPLACEMENT
 SetForegroundWindow
 BringWindowToTop
 AttachThreadInput
