@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Draws the application icons for the four Shubbak executables.
+    Draws the application icons for the four Shubbak executables, and the social card.
 
 .DESCRIPTION
     The binaries shipped with no icon at all, which Alt-Tab, the taskbar, Task
@@ -24,9 +24,21 @@
     image, so without this both would need a copy exported by hand - and a copy
     exported by hand is a copy that stops matching the icon it came from.
 
+    docs/assets/social-card.png is the picture GitHub shows when the repository is
+    linked anywhere that unfurls a URL. It is composed from the same two drawing
+    functions as the icon, so the tile on the card cannot drift from the tile in the
+    taskbar. It is not used by anything in the repository and has to be uploaded by
+    hand, once:
+
+        Settings > General > Social preview > Upload an image
+
 .NOTES
     The glyphs are deliberately simple. They have to survive being drawn at 16 pixels
     in a taskbar, where anything with detail becomes a smudge.
+
+    The card is checked against GitHub's recommended 40pt border rather than merely
+    laid out inside it, because a caption that fits at 1280x640 and is cropped away in
+    a Slack unfurl is not a failure anybody would see by opening the file.
 #>
 
 [CmdletBinding()]
@@ -42,7 +54,14 @@ param(
 
     # The frame published as a .png. 256 is the largest the ICO format carries, and is
     # what a readme wants to scale down from.
-    [int] $ImageSize = 256
+    [int] $ImageSize = 256,
+
+    # The repository's social card. GitHub asks for at least 640x320 and renders
+    # 1280x640 best, and its own template recommends keeping anything that matters
+    # inside a 40pt border - which on a 2x canvas is the 80 pixels below.
+    [int] $CardWidth = 1280,
+    [int] $CardHeight = 640,
+    [int] $CardMargin = 80
 )
 
 Set-StrictMode -Version Latest
@@ -314,10 +333,164 @@ function Build-Icon {
     Write-Output ("  {0,-14} {1,7:N0} bytes" -f "$Name.png", $size)
 }
 
+<#
+    Refuses to write a card with anything in the border GitHub asks to be kept clear.
+
+    The card is cropped to a different shape by every service that unfurls a link, so
+    the outer band is the part that may or may not survive. A caption that fits here
+    and is beheaded on a phone is exactly the failure this prevents, and it is not one
+    anybody would notice by looking at the file.
+#>
+function Assert-InsideBorder {
+    param(
+        [float] $Left, [float] $Top, [float] $Right, [float] $Bottom,
+        [int] $Width, [int] $Height, [int] $Margin, [string] $What
+    )
+
+    $over = @()
+
+    if ($Left -lt $Margin) { $over += "left by $([Math]::Ceiling($Margin - $Left))px" }
+    if ($Top -lt $Margin) { $over += "top by $([Math]::Ceiling($Margin - $Top))px" }
+    if ($Right -gt ($Width - $Margin)) { $over += "right by $([Math]::Ceiling($Right - ($Width - $Margin)))px" }
+    if ($Bottom -gt ($Height - $Margin)) { $over += "bottom by $([Math]::Ceiling($Bottom - ($Height - $Margin)))px" }
+
+    if ($over.Count -gt 0) {
+        throw "$What crosses the ${Margin}px safe border on the $($over -join ', '). " +
+              "Move it, shrink it, or shorten the text."
+    }
+}
+
+<#
+    The repository's social card - the picture GitHub shows when the repository is
+    linked anywhere that unfurls a URL.
+
+    Drawn here rather than in a design tool for the same reason the icons are, and
+    composed from the same two functions: the tile on the card is the tile in the
+    taskbar, by construction rather than by somebody remembering to re-export it.
+
+    Everything is laid out inside a margin, because the card is cropped to different
+    shapes in different places and GitHub's own template asks for a 40pt border - 80
+    pixels at this size - around anything that matters.
+#>
+function Build-SocialCard {
+    param([string] $Name, [int] $Width, [int] $Height, [int] $Margin)
+
+    $bitmap = New-Object System.Drawing.Bitmap($Width, $Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bitmap)
+
+    try {
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+        # AntiAlias rather than ClearType. Subpixel rendering assumes it knows what is
+        # behind the glyph, and on a gradient saved to a PNG it leaves coloured fringes
+        # that show up the moment anybody views the card on a different background.
+        $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAlias
+
+        # Darker at the bottom than the icon is, because a large field of the icon's
+        # own gradient reads as a washed-out square rather than as a backdrop.
+        $backdrop = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+            (New-Object System.Drawing.Point(0, 0)),
+            (New-Object System.Drawing.Point($Width, $Height)),
+            [System.Drawing.ColorTranslator]::FromHtml('#2E7D8F'),
+            [System.Drawing.ColorTranslator]::FromHtml('#132C34'))
+
+        $g.FillRectangle($backdrop, 0, 0, $Width, $Height)
+        $backdrop.Dispose()
+
+        # The logo, rendered by the same pair of functions that draw the icon and then
+        # composited, so there is one description of what Shubbak looks like.
+        $logoSize = 152
+        $logo = New-Canvas -Size $logoSize
+
+        try {
+            Add-Backdrop -Graphics $logo.Graphics -Size $logoSize -Top '#3E97AB' -Bottom '#1B4A57'
+            Add-TilesGlyph -Graphics $logo.Graphics -Size $logoSize
+
+            $logoX = [int](($Width - $logoSize) / 2)
+            $logoY = $Margin + 48
+
+            $g.DrawImage($logo.Bitmap, $logoX, $logoY)
+
+            Assert-InsideBorder `
+                -Left $logoX -Top $logoY `
+                -Right ($logoX + $logoSize) -Bottom ($logoY + $logoSize) `
+                -Width $Width -Height $Height -Margin $Margin -What 'the logo'
+        }
+        finally {
+            $logo.Graphics.Dispose()
+            $logo.Bitmap.Dispose()
+        }
+
+        $centre = New-Object System.Drawing.StringFormat
+        $centre.Alignment = [System.Drawing.StringAlignment]::Center
+
+        $white = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 255, 255, 255))
+        $muted = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 191, 216, 224))
+
+        # Named apart from the $Name parameter deliberately. PowerShell variables are
+        # case-insensitive and a typed parameter keeps its constraint, so assigning a
+        # Font to $name silently converts it to a string - and the failure surfaces
+        # later as String having no Dispose, which names neither the variable nor the
+        # cause.
+        $titleFont = New-Object System.Drawing.Font('Segoe UI', 76, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+        $arabicFont = New-Object System.Drawing.Font('Segoe UI', 40, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+        $taglineFont = New-Object System.Drawing.Font('Segoe UI', 30, [System.Drawing.FontStyle]::Regular, [System.Drawing.GraphicsUnit]::Pixel)
+
+        try {
+            $middle = $Width / 2
+
+            # Drawn and then checked against the border, so the guidance is enforced
+            # rather than described. A card is cropped to a different shape in every
+            # place that unfurls a link, and something drifting into the outer 80
+            # pixels is invisible here and clipped there.
+            $lines = @(
+                @{ Text = 'Shubbak'; Font = $titleFont; Brush = $white; Y = 314 }
+
+                # The name it is named for. Segoe UI carries Arabic and GDI+ shapes it,
+                # so this is the line worth looking at after any change to the font.
+                @{ Text = [string][char]0x0634 + [char]0x0628 + [char]0x0651 + [char]0x0627 + [char]0x0643
+                   Font = $arabicFont; Brush = $muted; Y = 406 }
+
+                @{ Text = 'A tiling window manager for Windows'; Font = $taglineFont; Brush = $muted; Y = 476 }
+            )
+
+            foreach ($line in $lines) {
+                $g.DrawString($line.Text, $line.Font, $line.Brush, $middle, $line.Y, $centre)
+
+                $measured = $g.MeasureString($line.Text, $line.Font)
+
+                Assert-InsideBorder `
+                    -Left ($middle - ($measured.Width / 2)) -Top $line.Y `
+                    -Right ($middle + ($measured.Width / 2)) -Bottom ($line.Y + $measured.Height) `
+                    -Width $Width -Height $Height -Margin $Margin -What "`"$($line.Text)`""
+            }
+        }
+        finally {
+            $titleFont.Dispose()
+            $arabicFont.Dispose()
+            $taglineFont.Dispose()
+            $white.Dispose()
+            $muted.Dispose()
+            $centre.Dispose()
+        }
+
+        $path = Join-Path $ImageDirectory "$Name.png"
+        $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+
+        $size = (Get-Item $path).Length
+        Write-Output ("  {0,-14} {1,7:N0} bytes  {2}x{3}" -f "$Name.png", $size, $Width, $Height)
+    }
+    finally {
+        $g.Dispose()
+        $bitmap.Dispose()
+    }
+}
+
 if (-not (Test-Path -LiteralPath $OutputDirectory)) {
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 }
-
 if (-not (Test-Path -LiteralPath $ImageDirectory)) {
     New-Item -ItemType Directory -Path $ImageDirectory -Force | Out-Null
 }
@@ -340,5 +513,7 @@ Build-Icon -Name 'shubbak-wm' -Top '#2E7D8F' -Bottom '#1B4A57' -Glyph ${function
 Build-Icon -Name 'shubbak'    -Top '#4A5A63' -Bottom '#2B3940' -Glyph ${function:Add-TilesGlyph}
 Build-Icon -Name 'taj'        -Top '#C99A2E' -Bottom '#8A6416' -Glyph ${function:Add-CrownGlyph}
 Build-Icon -Name 'dalil'      -Top '#4F7BA8' -Bottom '#2C4A68' -Glyph ${function:Add-SearchGlyph}
+
+Build-SocialCard -Name 'social-card' -Width $CardWidth -Height $CardHeight -Margin $CardMargin
 
 Write-Output "Done."
