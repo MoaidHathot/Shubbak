@@ -287,7 +287,12 @@ public static class PaletteActions
                 // action list is itself a list of rows, so a row's children ride in
                 // the same place a window row's actions do.
                 Actions: action.Children,
-                Explains: action.Explains));
+                Explains: action.Explains,
+
+                // And the chord, so the badge beside the row is something the row can
+                // actually be found by. It used to exist only as that caption, which
+                // is why pressing it in the list it was printed in did nothing.
+                Chord: action.Chord));
         }
 
         return entries;

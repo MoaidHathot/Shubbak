@@ -84,6 +84,35 @@ internal static class PaletteInput
         string.Equals(chord, InspectChord, StringComparison.Ordinal);
 
     /// <summary>
+    /// Whether a chord should act, given where it was pressed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Inside the action list it always acts. That is the only place a chord is written
+    /// down - each row carries its own as a badge - and a key printed beside the thing
+    /// it does, which then does nothing, is worse than no key at all. It was also the
+    /// only combination that could not work: the guard blocked chords in the main list
+    /// and the list itself blocked them everywhere else, so with the shipped default
+    /// every chord but one was inert in both places while being advertised in one.
+    /// </para>
+    /// <para>
+    /// The guard is not weakened by this. It exists to stop an action being taken by
+    /// accident from a list where the keyboard is busy searching; by the time somebody
+    /// has pressed Ctrl+Enter and is looking at a list of verbs, pressing the chord
+    /// printed on one of them is no more accidental than pressing Enter on it.
+    /// </para>
+    /// </remarks>
+    /// <param name="chord">The chord that was pressed.</param>
+    /// <param name="insideActionList">Whether a list opened from a row is showing.</param>
+    /// <param name="guard">The <c>action-guard</c> setting.</param>
+    internal static bool ChordActsHere(string chord, bool insideActionList, bool guard)
+    {
+        ArgumentNullException.ThrowIfNull(chord);
+
+        return insideActionList || !guard || IsExemptFromGuard(chord);
+    }
+
+    /// <summary>
     /// The query a typed character produces.
     /// </summary>
     /// <remarks>

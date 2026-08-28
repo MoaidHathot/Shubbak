@@ -83,6 +83,45 @@ public class PaletteInputTests
             Assert.False(PaletteInput.IsExemptFromGuard(chord), chord);
     }
 
+    [Fact]
+    public void AChordAlwaysActsInsideTheActionList()
+    {
+        // The bug this exists for. The action list is the only place a chord is written
+        // down - every row carries its own as a badge - and it was the one place chords
+        // were refused outright. With the shipped default the guard blocked them in the
+        // main list too, so every chord but one was inert everywhere while being
+        // advertised in a list that could not honour it.
+        foreach (string chord in new[] { "Ctrl+Shift+S", "Ctrl+Shift+F", "Ctrl+Shift+W", "Ctrl+Shift+A" })
+        {
+            Assert.True(PaletteInput.ChordActsHere(chord, insideActionList: true, guard: true), chord);
+            Assert.True(PaletteInput.ChordActsHere(chord, insideActionList: true, guard: false), chord);
+        }
+    }
+
+    [Fact]
+    public void TheGuardStillHoldsChordsBackInTheMainList()
+    {
+        // Which is what the setting is for: the keyboard there is busy searching, and
+        // a stray Ctrl+Shift+W would close a window somebody was only looking for.
+        Assert.False(PaletteInput.ChordActsHere("Ctrl+Shift+W", insideActionList: false, guard: true));
+        Assert.False(PaletteInput.ChordActsHere("Ctrl+Shift+S", insideActionList: false, guard: true));
+    }
+
+    [Fact]
+    public void TurningTheGuardOffGivesEveryChordToTheMainList()
+    {
+        // The documented trade: a safety net for speed, as one switch rather than a
+        // per-action table nobody would finish filling in.
+        foreach (string chord in new[] { "Ctrl+Shift+S", "Ctrl+Shift+F", "Ctrl+Shift+W", "Ctrl+Shift+A" })
+            Assert.True(PaletteInput.ChordActsHere(chord, insideActionList: false, guard: false), chord);
+    }
+
+    [Fact]
+    public void InspectingReachesTheMainListThroughTheGuard()
+    {
+        Assert.True(PaletteInput.ChordActsHere("Ctrl+Shift+I", insideActionList: false, guard: true));
+    }
+
     // ---- typing ---------------------------------------------------------------------
 
     [Fact]
