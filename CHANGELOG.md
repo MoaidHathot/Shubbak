@@ -185,6 +185,14 @@ palette recovering the report by taking the printed text apart.
   in the zip would greet a first-time reader with three broken pictures. The
   executables stay at the root, which is the part winget and Scoop name.
 
+  The same script draws `docs/assets/social-card.png`, the 1280×640 picture GitHub
+  shows wherever the repository is linked and a URL unfurls. It is composed from the
+  same two functions as the icon, so the tile on the card cannot drift from the tile in
+  the taskbar, and it is checked against GitHub's recommended 40pt border rather than
+  merely laid out inside it — a caption that fits at full size and is cropped away in a
+  Slack unfurl is not a failure anybody would see by opening the file. It has to be
+  uploaded by hand under Settings → Social preview.
+
 ### Internal
 
 - **A test project for the palette host.** `Dalil.Core` has been tested since it
