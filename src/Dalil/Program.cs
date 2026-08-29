@@ -50,6 +50,20 @@ internal static class Program
     /// </remarks>
     private static long s_foreground;
 
+    /// <summary>
+    /// What was wrong with the palette's own section, last time it was read.
+    /// </summary>
+    /// <remarks>
+    /// Kept so the <c>config</c> row in the command list can say how many problems
+    /// there are without re-reading the file, and so the row can be absent entirely
+    /// when there are none - which is the ordinary case and should cost nothing to
+    /// look at.
+    /// </remarks>
+    private static DiagnosticCounts s_problems;
+
+    /// <summary>The diagnostics themselves, for the frame that lists them.</summary>
+    private static IReadOnlyList<Diagnostic> s_diagnostics = [];
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -107,7 +121,7 @@ internal static class Program
             return 1;
         }
 
-        s_config = LoadConfig();
+        s_config = LoadConfig().Config;
 
         s_palette = new PaletteWindow(s_config);
 
@@ -194,6 +208,22 @@ internal static class Program
         if (!PaletteEntries.IsBuiltin(command))
         {
             _ = s_connection!.SendAsync(command);
+            return;
+        }
+
+        if (string.Equals(command, PaletteEntries.BuiltinConfig, StringComparison.Ordinal))
+        {
+            // Answered from what the last load produced rather than by re-reading. The
+            // list is about the configuration the palette is actually running on, which
+            // after a refused reload is not what is currently on disk.
+            string? path = ConfigPathResolver.Resolve(s_configPath).Path;
+
+            if (s_palette is { } showing)
+            {
+                showing.Open(PaletteMode.Commands);
+                showing.Push("config", PaletteEntries.ForDiagnostics(s_diagnostics, path));
+            }
+
             return;
         }
 
@@ -415,7 +445,11 @@ internal static class Program
         _ = Task.Run(async () =>
         {
             PaletteSources read = await s_connection!
-                .ReadAsync(s_config.ShowUnmanaged, s_config.Macros, s_foreground)
+                .ReadAsync(
+                    s_config.ShowUnmanaged,
+                    s_config.Macros,
+                    s_foreground,
+                    s_problems.Errors + s_problems.Warnings)
                 .ConfigureAwait(false);
 
             if (s_config.ShowIcons && read.WindowHandles is { Count: > 0 } handles)
@@ -497,7 +531,23 @@ internal static class Program
 
     private static void ReloadConfig()
     {
-        s_config = LoadConfig();
+        DalilConfigLoad load = LoadConfig();
+
+        // Kept rather than applied, matching what the window manager does with the rest
+        // of the same file. Defaults over a running palette is how a stray brace
+        // mid-edit silently reset somebody's colours, their size, their prefixes and
+        // their actions - a visible change with nothing to connect it to the keystroke
+        // that caused it, which is a worse failure than staying as it was.
+        if (!load.Usable)
+        {
+            Log.Error(LogCategory.Config,
+                "the configuration has errors; keeping the palette as it is. " +
+                "Run `shubbak check-config` to see them.");
+
+            return;
+        }
+
+        s_config = load.Config;
         s_palette?.Reconfigure(s_config);
 
         Log.Info(LogCategory.Config, $"reloaded; listening for signal \"{s_config.OpenOnSignal}\"");
@@ -507,24 +557,41 @@ internal static class Program
     /// Reads the <c>dalil</c> section of the shared configuration.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A missing section is not an error: the defaults are a working palette, and
     /// requiring configuration before a feature does anything is a good way to have it
     /// never tried.
+    /// </para>
+    /// <para>
+    /// Everything wrong with the section goes to the log. Dalil is started detached and
+    /// has no console, so the diagnostics it used to produce for nobody are now written
+    /// where a detached process can be read from - and where <c>shubbak diagnose</c>
+    /// will pick them up, which is the moment they matter most.
+    /// </para>
     /// </remarks>
-    private static DalilConfig LoadConfig()
+    private static DalilConfigLoad LoadConfig()
     {
         try
         {
             ConfigLocation location = ConfigPathResolver.Resolve(s_configPath);
 
-            if (!location.Found || location.Path is not { } path) return new DalilConfig();
+            if (!location.Found || location.Path is not { } path)
+                return new DalilConfigLoad(new DalilConfig(), [], Usable: true);
 
-            return DalilConfigLoader.LoadFile(path);
+            DalilConfigLoad load = DalilConfigLoader.Validate(File.ReadAllText(path));
+
+            s_diagnostics = load.Diagnostics;
+            s_problems = ConfigDiagnostics.Report(load.Diagnostics, path, "the palette's settings");
+
+            return load;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log.Warn(LogCategory.Config, $"could not read the configuration: {ex.Message}");
-            return new DalilConfig();
+
+            // Unreadable is not the same as wrong. Nothing is known about the file, so
+            // nothing should be applied over a palette that is already running.
+            return new DalilConfigLoad(new DalilConfig(), [], Usable: false);
         }
     }
 

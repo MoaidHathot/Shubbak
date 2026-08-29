@@ -74,6 +74,17 @@ You could also manually validate the configuration before reloading
 shubbak check-config       # validate before you reload
 ```
 
+It checks the whole file, not just the window manager's part of it — the `bar` and
+`dalil` sections too, so a misspelt setting in either is reported here rather than
+being accepted and quietly doing nothing.
+
+And it tells you without being asked. Each process writes what is wrong with the part
+it reads to its own log, so a mistake made at logon is not something you have to go
+looking for; the bar's `{{ config }}` indicator appears when its settings could not be
+read, and `>config` in the palette lists the palette's own. **A file that won't parse
+never replaces what's already running** — the bar, the palette and your keybindings all
+keep working on the last good config rather than reverting to stock.
+
 ### `for-each` — stop copy-pasting keybindings
 
 I run 19 workspaces. That's 40 near-identical lines in other window tiling managers, and every one of

@@ -206,10 +206,15 @@ public sealed class WmConnection : IAsyncDisposable
     /// The window that had focus when the palette opened, for the row that answers
     /// "why is this one not being managed" before it is asked.
     /// </param>
+    /// <param name="configProblems">
+    /// How many things are wrong with the palette's own settings, so the command list
+    /// can offer to show them. Zero leaves that row out.
+    /// </param>
     public async Task<PaletteSources> ReadAsync(
         bool includeUnmanaged,
         IReadOnlyList<PaletteMacro>? macros = null,
-        long foreground = 0)
+        long foreground = 0,
+        int configProblems = 0)
     {
         try
         {
@@ -261,7 +266,7 @@ public sealed class WmConnection : IAsyncDisposable
             List<PaletteEntry> everyCommand =
             [
                 .. PaletteEntries.ForMacros(macros ?? []),
-                .. PaletteEntries.ForBuiltins(),
+                .. PaletteEntries.ForBuiltins(configProblems),
                 .. PaletteEntries.ForCommands(commands, status),
             ];
 

@@ -708,8 +708,8 @@ internal static class Program
         // And the palette's, for exactly the same reason. Its section name was on the
         // allow-list and its contents were on nobody's, so `dalil { with-icons #true }`
         // was accepted in silence and did nothing for ever.
-        (Dalil.Core.DalilConfig palette, IReadOnlyList<Diagnostic> paletteDiagnostics) =
-            Dalil.Core.DalilConfigLoader.Validate(source);
+        Dalil.Core.DalilConfigLoad paletteLoad = Dalil.Core.DalilConfigLoader.Validate(source);
+        IReadOnlyList<Diagnostic> paletteDiagnostics = paletteLoad.Diagnostics;
 
         foreach (Diagnostic diagnostic in paletteDiagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
@@ -727,9 +727,9 @@ internal static class Program
                 ? $"{path}: ok - {result.Config.Keybindings.Count} keybindings, " +
                   $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules, " +
                   $"{bar.Profiles.Count} bar profile(s)" +
-                  (palette.Macros.Count == 0
+                  (paletteLoad.Config.Macros.Count == 0
                       ? " "
-                      : $", {palette.Macros.Count} palette action(s) ") +
+                      : $", {paletteLoad.Config.Macros.Count} palette action(s) ") +
                   $"(found via {location.Origin})"
                 : $"{path}: {errors} error(s), {warnings} warning(s)");
 

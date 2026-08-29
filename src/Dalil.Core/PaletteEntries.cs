@@ -1,4 +1,5 @@
 using System.Globalization;
+using Shubbak.Config;
 using Shubbak.Ipc;
 
 namespace Dalil.Core;
@@ -380,18 +381,53 @@ public static class PaletteEntries
     /// cannot be mistaken for one and sent down the pipe as text.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<PaletteEntry> ForBuiltins() =>
-    [
-        new PaletteEntry(
-            "diagnose",
-            "Write a report for a bug tracker: environment, config, the live tree and the log",
-            ["dalil"],
-            BuiltinDiagnose,
-            Rank: 5),
-    ];
+    public static IReadOnlyList<PaletteEntry> ForBuiltins() => ForBuiltins(problems: 0);
+
+    /// <summary>
+    /// The things the palette itself can do, with a row about the config when it needs one.
+    /// </summary>
+    /// <param name="problems">
+    /// How many things are wrong with the palette's own section. Zero leaves the row
+    /// out altogether: a clean configuration is the ordinary case and should cost
+    /// nothing to look at.
+    /// </param>
+    public static IReadOnlyList<PaletteEntry> ForBuiltins(int problems)
+    {
+        List<PaletteEntry> entries =
+        [
+            new PaletteEntry(
+                "diagnose",
+                "Write a report for a bug tracker: environment, config, the live tree and the log",
+                ["dalil"],
+                BuiltinDiagnose,
+                Rank: 5),
+        ];
+
+        // Only when there is something to read. A row promising to list problems and
+        // then listing none is a row that teaches you to ignore it.
+        if (problems > 0)
+        {
+            entries.Add(new PaletteEntry(
+                "config",
+                problems == 1
+                    ? "1 problem with the palette's settings - Enter to read it"
+                    : $"{problems.ToString(CultureInfo.InvariantCulture)} problems with the palette's settings - Enter to read them",
+                ["dalil"],
+                BuiltinConfig,
+
+                // Above diagnose, and above every window manager verb. Somebody whose
+                // settings are being ignored is not looking for anything else.
+                Rank: 20));
+        }
+
+        return entries;
+    }
 
     /// <summary>The command a row carries when it asks the palette rather than the manager.</summary>
     public const string BuiltinDiagnose = "dalil:diagnose";
+
+    /// <summary>The command that lists what is wrong with the palette's own settings.</summary>
+    public const string BuiltinConfig = "dalil:config";
 
     /// <summary>The command that forgets every mark.</summary>
     /// <remarks>
@@ -629,6 +665,68 @@ public static class PaletteEntries
             string.Empty,
             Expands: reason),
     ];
+
+    /// <summary>
+    /// Turns what is wrong with the configuration into rows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The severity and the code lead, because that is what a search narrows on -
+    /// "error" finds the things that stopped a setting applying, and a code pasted from
+    /// a changelog finds the one line about it. The position is kept in the expanded
+    /// text so <c>Ctrl+C</c> yields something an editor can be told to jump to.
+    /// </para>
+    /// <para>
+    /// The hint is on the row rather than a level down. A diagnostic without its hint is
+    /// half of what the config loader knows, and the half that says what to do about it.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForDiagnostics(
+        IEnumerable<Diagnostic> diagnostics, string? path = null)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostics);
+
+        List<PaletteEntry> entries = [];
+
+        foreach (Diagnostic diagnostic in diagnostics)
+        {
+            bool bad = diagnostic.Severity == DiagnosticSeverity.Error;
+
+            string position =
+                $"line {diagnostic.Span.Start.Line.ToString(CultureInfo.InvariantCulture)}";
+
+            string whole = path is { Length: > 0 }
+                ? $"{path}:{diagnostic}" + (diagnostic.Hint is { Length: > 0 } h ? $"\n  hint: {h}" : string.Empty)
+                : diagnostic.ToString();
+
+            entries.Add(new PaletteEntry(
+                diagnostic.Message,
+                diagnostic.Hint is { Length: > 0 } hint
+                    ? $"{position}  \u00B7  {hint}"
+                    : position,
+                [diagnostic.Code, bad ? "error" : "warning"],
+                string.Empty,
+
+                // In the order the file was read, which is the order they were written.
+                -entries.Count,
+                SwitchesTo: null,
+                Actions: null,
+                Explains: null,
+                Expands: whole,
+                Chord: null,
+                Target: null,
+                IconHandle: null,
+                Destructive: bad));
+        }
+
+        return entries.Count > 0
+            ? entries
+            : [new PaletteEntry(
+                "Nothing wrong with the palette's settings",
+                path ?? string.Empty,
+                [],
+                string.Empty)];
+    }
 
     /// <summary>
     /// Breaks one long value across as many rows as it needs.
