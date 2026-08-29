@@ -15,6 +15,39 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Added
+
+- **`shubbak check-config` validates the `dalil` section.** It never had. The section
+  name was on the window manager's allow-list and its contents were on nobody's, so
+  `dalil { with-icons #true }` was accepted in silence and did nothing for ever — in a
+  project whose first selling point is a config file that tells you when you have made a
+  mistake. Twelve diagnostics, all with a line, a column and a caret: unknown settings
+  with a suggestion, numbers outside their range saying which one will be used instead,
+  colours that are not colours, unknown placements, prefixes for modes that do not
+  exist, prefixes longer than the one character the palette can match on, a prefix that
+  takes a character another mode was using and leaves it with none, actions with no
+  name, duplicated action names, actions with nothing in them, and any command inside
+  an action that will not parse — reported in the parser's own words, at the line it is
+  written on.
+
+- **A workspace bound to a monitor by name is now an error rather than a shrug.**
+  `monitor=` reads an integer, so `monitor="DISPLAY2"` was dropped on the floor and the
+  workspace quietly took the primary. It now says so, and says that monitors are
+  numbered from 0 in the order `shubbak query monitors` lists them.
+
+### Fixed
+
+- **A palette action whose name contains a space could not be run.** The command
+  composer emits a row for any term containing a space — that is how a verb and its
+  arguments become something to press Enter on — and when the text does not parse, that
+  row explains why. Both kinds were inserted above the matches, so typing `code lay` put
+  an unrunnable "unknown command 'code'" row on top of the "Code layout" action it was
+  looking for, and Enter landed on the one that does nothing. Rows that can act still go
+  above; rows that only explain now go below, and are still the only row when nothing
+  else matched, which is the case they were written for.
+
+## [0.9.1-palette]
+
 Dalil stops being a viewer that can also send a few commands, and becomes a control
 surface. Three things drove it: shortcuts that could not be typed on half the world's
 keyboards, a safety setting whose default made almost every key in the palette inert,

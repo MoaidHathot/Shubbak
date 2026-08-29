@@ -607,6 +607,12 @@ bar {
 // ---------------------------------------------------------------------------
 
 dalil {
+    // Checked by `shubbak check-config`, which reports a misspelt setting here with
+    // a line, a column and a caret - the same as everywhere else in this file. It
+    // did not until recently: the section name was on the allow-list and its
+    // contents were on nobody's, so a typo was accepted in silence and the setting
+    // simply never did anything.
+
     // The signal that opens it. Must match what your keybinding raises.
     open-on-signal "palette"
 
