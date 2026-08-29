@@ -101,13 +101,18 @@ internal static class Program
 
         try
         {
-            TajConfig config = LoadConfig(args);
+            (TajConfig config, _) = LoadConfig(args, out DiagnosticCounts problems);
 
             if (!CreateBars(config))
             {
                 Log.Error(LogCategory.Wm, "no bars could be created");
                 return 1;
             }
+
+            // Said at startup as well as on reload. A config that has been wrong since
+            // logon is the one most likely to have been given up on.
+            foreach (BarModel model in s_models)
+                model.SetValue("config", Problems(problems));
 
             Log.Info(LogCategory.Wm, $"Taj started with {s_bars.Count} bar(s)");
 
@@ -126,14 +131,36 @@ internal static class Program
         }
     }
 
-    private static TajConfig LoadConfig(string[] args)
+    private static TajConfig LoadConfig(string[] args) => LoadConfig(args, out _).Config;
+
+    /// <summary>
+    /// Reads the bar's section, and says whether it is safe to apply over a running bar.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Diagnostics go to the log as well as to standard error. Taj is started detached
+    /// from the window manager's <c>startup-command</c>, so it has no console and every
+    /// rendered caret it produced went nowhere at all - which made the promise that the
+    /// config file talks back true only of <c>shubbak check-config</c>.
+    /// </para>
+    /// <para>
+    /// The usability flag exists because <see cref="TajConfigLoader"/> answers a file
+    /// that will not parse with <see cref="TajConfigLoader.CreateDefault"/>, which is
+    /// the right answer at startup and the wrong one on a reload: a stray brace
+    /// mid-edit replaced a carefully built bar with the stock one, silently, with
+    /// nothing to connect the change to the keystroke that caused it.
+    /// </para>
+    /// </remarks>
+    private static (TajConfig Config, bool Usable) LoadConfig(string[] args, out DiagnosticCounts problems)
     {
+        problems = default;
+
         string? path = ResolveConfigPath(args);
 
         if (path is null || !File.Exists(path))
         {
             Log.Info(LogCategory.Config, "no config found; using the default bar");
-            return TajConfigLoader.CreateDefault();
+            return (TajConfigLoader.CreateDefault(), true);
         }
 
         string source = File.ReadAllText(path);
@@ -142,10 +169,21 @@ internal static class Program
         foreach (Diagnostic diagnostic in diagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
 
-        Log.Info(LogCategory.Config,
-            $"loaded {config.Profiles.Count} profile(s) and {config.Rules.Count} rule(s) from {path}");
+        problems = ConfigDiagnostics.Report(diagnostics, path, "the bar's settings");
 
-        return config;
+        bool usable = problems.Errors == 0;
+
+        // Only when it is going to be used. Saying "loaded 1 profile(s)" and then
+        // "keeping the bar as it is" two lines later is a log arguing with itself, and
+        // the profile it counted is the stock one the loader falls back to rather than
+        // anything that was read out of the file.
+        if (usable)
+        {
+            Log.Info(LogCategory.Config,
+                $"loaded {config.Profiles.Count} profile(s) and {config.Rules.Count} rule(s) from {path}");
+        }
+
+        return (config, usable);
     }
 
     /// <summary>
@@ -255,14 +293,32 @@ internal static class Program
     private static void ReloadConfig()
     {
         TajConfig config;
+        bool usable;
+        DiagnosticCounts problems;
 
         try
         {
-            config = LoadConfig(s_args);
+            (config, usable) = LoadConfig(s_args, out problems);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log.Warn(LogCategory.Config, $"could not re-read the config: {ex.Message}");
+            return;
+        }
+
+        // Kept rather than applied, matching what the window manager does with the rest
+        // of the same file. A file that will not parse yields the stock bar, and
+        // swapping a carefully built bar for the stock one because of a stray brace is
+        // a visible change with nothing to explain it - worse than leaving it alone.
+        if (!usable)
+        {
+            Log.Error(LogCategory.Config,
+                "the configuration has errors; keeping the bar as it is. " +
+                "Run `shubbak check-config` to see them.");
+
+            foreach (BarModel unchanged in s_models)
+                unchanged.SetValue("config", Problems(problems));
+
             return;
         }
 
@@ -281,10 +337,24 @@ internal static class Program
             // is new after a reload even when it is the same profile by name, and the
             // reference check would otherwise skip it.
             model.Profile = s_selectors[index].Select(s_workspaces[index], index);
+
+            model.SetValue("config", Problems(problems));
         }
 
         Log.Info(LogCategory.Config, $"reloaded; {s_bars.Count} bar(s) rebuilt");
     }
+
+    /// <summary>
+    /// What the <c>config</c> template variable says.
+    /// </summary>
+    /// <remarks>
+    /// Empty when the settings are clean, which is the ordinary case - a widget whose
+    /// template renders empty hides itself, so it costs no room and no attention. The
+    /// same shape as <c>paused</c> and <c>suspended</c>, which are the other two
+    /// "something is unusual" indicators and are empty almost all of the time.
+    /// </remarks>
+    private static string Problems(DiagnosticCounts counts) =>
+        counts.Any ? $"config: {counts.Describe()}" : string.Empty;
 
     /// <summary>
     /// Pumps messages and updates the bars.
@@ -413,7 +483,14 @@ internal static class Program
     /// </remarks>
     private static void ConfigureLogging(string[] args)
     {
-        string? configuredFile = null;
+        // Beside the window manager's, unless the config or the command line says
+        // otherwise. Not optional, and its absence was found the hard way: this used to
+        // open a file only when `logging { file }` named one, so a config that could
+        // not be parsed - which yields defaults, and a default with no log path - left
+        // Taj with nowhere at all to say why. That is the one case where being able to
+        // say anything matters, and it was the one case that had no log. Dalil has
+        // always defaulted this way; the asymmetry was not a decision.
+        string configuredFile = DefaultTajLogPath;
 
         if (ConfigPathResolver.Resolve(Value(args, "--config")).Path is { } configPath &&
             File.Exists(configPath))
@@ -457,10 +534,9 @@ internal static class Program
                 : DefaultTajLogPath;
         }
 
-        if (configuredFile is null) return;
-
         try
         {
+            Directory.CreateDirectory(Path.GetDirectoryName(configuredFile)!);
             Log.OpenFile(configuredFile);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

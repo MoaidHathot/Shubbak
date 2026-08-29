@@ -450,6 +450,25 @@ bar {
     // calls, so a few times a second costs nothing.
     source "keyboard" kind="keyboard" interval=250
 
+    // Built-in template values, which need no source at all:
+    //
+    //   {{ window.title }} {{ window.state }} {{ layout }} {{ workspace }}
+    //   {{ paused }}       {{ suspended }}    {{ status }} {{ binding_mode }}
+    //   {{ config }}
+    //
+    // The last five are empty almost all of the time, and a widget whose template
+    // renders empty hides itself - so they cost no room until something is unusual.
+    //
+    // `config` says the bar's own settings could not be read: a misspelt setting,
+    // or a file that would not parse at all. Each process reports only the part it
+    // reads, so the window manager and the palette say the same about their own
+    // sections in their own logs, and `>config` in the palette lists its own.
+    //
+    // Worth having because the failure is otherwise quiet. A setting that parses
+    // but is not understood simply never does anything; and a file that does not
+    // parse leaves every process running on what it already had, so nothing on
+    // screen changes and the edit appears to have been ignored.
+
     // Any program that writes lines to stdout can drive a widget - in any
     // language, with no Taj source code. This is the extension point that means
     // Taj never has to grow a widget for everything.
@@ -520,6 +539,12 @@ bar {
             // still works - so amber rather than red. Click it to start again.
             text id="paused"  template="{{ paused }}" colour="#1e1e2e" \
                  background="#f9e2af" on-click="wm-toggle-pause"
+
+            // Something in this file is wrong, and the bar is running on whatever it
+            // had before. Clicking it re-reads the file, which is the other half of
+            // the loop; `shubbak check-config` says exactly what and where.
+            text id="config"  template="{{ config }}" colour="#1e1e2e" \
+                 background="#fab387" on-click="wm-reload-config"
 
             // Empty most of the time, so it takes no room. When it is showing, the
             // keyboard is behaving unusually - click it to return to the default

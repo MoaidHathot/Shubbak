@@ -15,6 +15,54 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Fixed
+
+- **A config that would not parse silently replaced your bar and your palette with
+  stock ones.** On reload, `TajConfigLoader` answers an unparseable file with
+  `CreateDefault()` and Dalil's loader answered with plain defaults — correct at
+  startup, where there is nothing to keep, and wrong on a reload, where there is. A
+  stray brace mid-edit therefore swapped a carefully built bar for the generic one and
+  reset the palette's colours, size, prefixes and actions, with nothing anywhere to
+  connect the change to the keystroke that caused it. Both now keep what they are
+  running, which is what the window manager has always done with the rest of the same
+  file and for the reason it gives: *a typo must not leave a running desktop with no
+  keybindings*.
+
+- **Config diagnostics went to a console that does not exist.** All three processes
+  wrote them to `Console.Error`, and none of the three asks for a console on the path
+  that matters — `shubbak-wm` only with `--foreground`, Taj and Dalil only for
+  `--help` and `--version`. Started at logon, or from `startup-command`, every one of
+  them formatted the line, the column, the caret and the hint and dropped the lot on
+  the floor. So the headline promise — *"instead of failing silently: you press the
+  key, nothing happens, and you go hunting"* — was true only of
+  `shubbak check-config`, which you have to decide to run. They now go to each
+  process's own log as well, through one shared helper so the three cannot drift apart
+  again, which is exactly how this arose: the bar's reporting was written, the
+  daemon's was written, the palette's never was, and nobody noticed that neither of
+  the first two reached a log.
+
+- **Taj kept no log unless the config asked for one**, so a file that could not be
+  parsed — which yields defaults, and a default with no log path — left the bar with
+  nowhere at all to say why. That is the one case where being able to say anything
+  matters, and it was the one case with no log. It now defaults beside the window
+  manager's, as Dalil always has; the asymmetry was not a decision.
+
+### Added
+
+- **`{{ config }}` on the bar.** Empty and invisible while the settings are readable,
+  like `paused` and `suspended`; when it appears, the bar is running on what it had
+  before rather than on what is in the file. Clickable, so it reloads. Each process
+  reports only the part it reads, which keeps the decoupling: the daemon does not need
+  to know what a bar profile is to say that one is wrong.
+
+- **`>config` in the palette**, listing what is wrong with the palette's own section —
+  severity and code as badges so `error` narrows the list, the hint on the row rather
+  than a level down, and `Ctrl+C` yielding a `path:line:col` an editor can jump to. The
+  row is absent when there is nothing wrong, because a row that promises problems and
+  lists none teaches you to ignore it.
+
+## [0.9.2-validation]
+
 ### Added
 
 - **`shubbak check-config` validates the `dalil` section.** It never had. The section

@@ -6,6 +6,27 @@ using Shubbak.Core.Rendering;
 namespace Dalil.Core;
 
 /// <summary>
+/// What reading the palette's section produced.
+/// </summary>
+/// <param name="Config">The settings, with defaults for anything unreadable.</param>
+/// <param name="Diagnostics">Everything wrong with the section, for a validator.</param>
+/// <param name="Usable">
+/// Whether the result is safe to apply over a configuration already running.
+/// <para>
+/// False when the file did not parse at all, and false when the section itself has
+/// errors. Both cases yield defaults, and applying defaults over a running palette is
+/// how a stray brace mid-edit silently reset somebody's colours, their size, their
+/// prefixes and their actions - with nothing on screen to connect the change to the
+/// keystroke that caused it. At startup there is nothing to keep and defaults are the
+/// right answer; on a reload there is, and they are not.
+/// </para>
+/// </param>
+public sealed record DalilConfigLoad(
+    DalilConfig Config,
+    IReadOnlyList<Diagnostic> Diagnostics,
+    bool Usable);
+
+/// <summary>
 /// Reads the <c>dalil</c> section of the shared configuration.
 /// </summary>
 /// <remarks>
@@ -56,7 +77,7 @@ public static class DalilConfigLoader
     public static DalilConfig LoadFile(string path) => Load(File.ReadAllText(path));
 
     /// <summary>Reads the section from configuration text, reporting nothing.</summary>
-    public static DalilConfig Load(string source) => Read(source, diagnostics: null);
+    public static DalilConfig Load(string source) => Validate(source).Config;
 
     /// <summary>
     /// Reads the section and says everything that is wrong with it.
@@ -65,28 +86,30 @@ public static class DalilConfigLoader
     /// The KDL parser's own diagnostics are deliberately not repeated here. The window
     /// manager's loader reads the same text and reports them, and
     /// <c>shubbak check-config</c> runs both - so including them would print every
-    /// syntax error twice.
+    /// syntax error twice. That is why the result carries
+    /// <see cref="DalilConfigLoad.Usable"/> separately: a file that will not parse
+    /// produces no diagnostics from this loader and must still not be applied.
     /// </remarks>
-    public static (DalilConfig Config, IReadOnlyList<Diagnostic> Diagnostics) Validate(string source)
+    public static DalilConfigLoad Validate(string source)
     {
         List<Diagnostic> diagnostics = [];
 
-        return (Read(source, diagnostics), diagnostics);
-    }
-
-    private static DalilConfig Read(string source, List<Diagnostic>? diagnostics)
-    {
         KdlParseResult parsed = KdlParser.Parse(source);
 
         // A file that does not parse is the window manager's problem to report, with
-        // carets and hints. Falling back to defaults here means a broken config
-        // degrades to a working palette rather than to no palette, and the user is
-        // already being told what is wrong by the thing that owns the file.
-        if (parsed.HasErrors) return new DalilConfig();
+        // carets and hints. Falling back to defaults means a broken config degrades to
+        // a working palette rather than to no palette, and the user is already being
+        // told what is wrong by the thing that owns the file - but it is not something
+        // to apply over a palette that is already running.
+        if (parsed.HasErrors) return new DalilConfigLoad(new DalilConfig(), diagnostics, Usable: false);
 
-        return parsed.Document.Node("dalil") is { } node
+        DalilConfig config = parsed.Document.Node("dalil") is { } node
             ? Read(node, diagnostics)
             : new DalilConfig();
+
+        bool usable = !diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
+
+        return new DalilConfigLoad(config, diagnostics, usable);
     }
 
     private static DalilConfig Read(KdlNode node, List<Diagnostic>? diagnostics)

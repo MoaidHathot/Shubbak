@@ -4328,6 +4328,12 @@ public sealed class WmDaemon : IDisposable
         foreach (Diagnostic diagnostic in result.Diagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
 
+        // And to the log, which is the only one of the two that exists on the path that
+        // matters. The daemon asks for a console with --foreground and not otherwise,
+        // so started at logon every caret above was formatted and dropped on the floor -
+        // leaving "the config file talks back" true only of `shubbak check-config`.
+        _ = ConfigDiagnostics.Report(result.Diagnostics, path, "the window manager's settings");
+
         if (result.HasErrors && !initial)
         {
             // Keeping the previous config is the safe failure mode: a typo must not
