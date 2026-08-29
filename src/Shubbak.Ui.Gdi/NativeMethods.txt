@@ -40,3 +40,8 @@ FONT_OUTPUT_PRECISION
 FONT_CLIP_PRECISION
 FONT_QUALITY
 FONT_WEIGHT
+
+// --- icons -------------------------------------------------------------------------
+// Only for hosts that draw them; the bar never does. See IIconRenderer.
+DrawIconEx
+DI_FLAGS

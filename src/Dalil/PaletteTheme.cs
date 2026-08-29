@@ -43,6 +43,32 @@ internal readonly record struct PaletteTheme
     /// <summary>The prompt glyph, and the caret.</summary>
     public required Colour Prompt { get; init; }
 
+    /// <summary>The stripe marking a row that is included in a bulk action.</summary>
+    /// <remarks>
+    /// The accent, not a colour of its own. A mark and a selection are both "this row
+    /// is chosen" and reading as two unrelated states would be worse than the small
+    /// risk of confusing them - which the position settles anyway, since one is a
+    /// stripe on the far left and the other is a filled row.
+    /// </remarks>
+    public required Colour Mark { get; init; }
+
+    /// <summary>Something that cannot be undone.</summary>
+    public required Colour Danger { get; init; }
+
+    /// <summary>Behind the warning on a confirmation row.</summary>
+    public required Colour DangerPill { get; init; }
+
+    /// <summary>
+    /// Text on a row that cannot do anything right now.
+    /// </summary>
+    /// <remarks>
+    /// Between the secondary colour and the background, so it reads as present but
+    /// inert. Hiding such a row would be worse - somebody searching for
+    /// <c>wm-resume</c> because something has gone wrong should not be told by an
+    /// empty list that no such command exists.
+    /// </remarks>
+    public required Colour Muted { get; init; }
+
     public static PaletteTheme From(DalilConfigView config) => new()
     {
         // Far enough from the background to read as a shape, nowhere near far enough
@@ -51,6 +77,7 @@ internal readonly record struct PaletteTheme
         ChipText = config.Match.Lerp(Colour.White, 0.25),
 
         Accent = config.Match,
+        Mark = config.Match,
 
         Pill = config.Background.Lerp(config.Border, 0.75),
         PillText = config.Secondary.Lerp(Colour.White, 0.12),
@@ -60,6 +87,11 @@ internal readonly record struct PaletteTheme
         Rule = config.Background.Lerp(config.Border, 0.6),
 
         Prompt = config.Secondary.Lerp(config.Match, 0.4),
+
+        Danger = config.Danger,
+        DangerPill = config.Background.Lerp(config.Danger, 0.35),
+
+        Muted = config.Secondary.Lerp(config.Background, 0.45),
     };
 }
 
@@ -73,4 +105,5 @@ internal readonly record struct DalilConfigView(
     Colour Foreground,
     Colour Match,
     Colour Secondary,
-    Colour Border);
+    Colour Border,
+    Colour Danger);

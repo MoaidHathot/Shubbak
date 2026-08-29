@@ -29,8 +29,11 @@ public readonly struct PaletteLayout
     private const int HintBarAt96 = 40;
     private const int CornerAt96 = 10;
     private const int SearchGapAt96 = 8;
+    private const int IconSizeAt96 = 18;
+    private const int IconGapAt96 = 10;
+    private const int MarkWidthAt96 = 3;
 
-    public PaletteLayout(DalilConfig config, double scale, Rect canvas)
+    public PaletteLayout(DalilConfig config, double scale, Rect canvas, bool icons = false)
     {
         Scale = scale;
         Canvas = canvas;
@@ -42,6 +45,19 @@ public readonly struct PaletteLayout
         ChipPadding = At(ChipPaddingAt96, scale);
         HintBar = At(HintBarAt96, scale);
         Corner = At(CornerAt96, scale);
+        MarkWidth = Math.Max(2, At(MarkWidthAt96, scale));
+
+        // Never taller than the row it sits in, whatever the user did to row-height.
+        // A row of 16 pixels with an 18-pixel icon in it is a row with an icon
+        // overlapping the rows above and below.
+        IconSize = icons ? Math.Min(At(IconSizeAt96, scale), config.RowHeight - At(8, scale)) : 0;
+        IconGap = icons ? At(IconGapAt96, scale) : 0;
+
+        if (IconSize <= 0)
+        {
+            IconSize = 0;
+            IconGap = 0;
+        }
 
         RowHeight = config.RowHeight;
         VisibleRows = config.VisibleRows;
@@ -84,6 +100,40 @@ public readonly struct PaletteLayout
     public int HintBar { get; }
 
     public int Corner { get; }
+
+    /// <summary>How big an application icon is drawn, or zero when they are off.</summary>
+    public int IconSize { get; }
+
+    /// <summary>The gap between an icon and the title beside it.</summary>
+    public int IconGap { get; }
+
+    /// <summary>How wide the stripe marking a row for a bulk action is.</summary>
+    public int MarkWidth { get; }
+
+    /// <summary>
+    /// Where a row's text starts, once anything drawn before it has had its room.
+    /// </summary>
+    /// <remarks>
+    /// One number rather than three additions repeated at every call site. The title,
+    /// the highlighted runs and the dim half all have to agree about this, and the
+    /// hit-testing does too - and an icon column that only some of them knew about
+    /// would be the same class of bug the whole type exists to prevent.
+    /// </remarks>
+    public int RowTextInset => TextInset + IconSize + IconGap;
+
+    /// <summary>Where the icon for a visible row goes.</summary>
+    public Rect IconBounds(int slot)
+    {
+        Rect row = RowBounds(slot);
+
+        return IconSize <= 0
+            ? new Rect(row.X, row.Y, 0, 0)
+            : new Rect(
+                row.X + TextInset,
+                row.Y + ((row.Height - IconSize) / 2),
+                IconSize,
+                IconSize);
+    }
 
     /// <summary>Scales a measurement written at 96 DPI.</summary>
     public int this[int value] => At(value, Scale);

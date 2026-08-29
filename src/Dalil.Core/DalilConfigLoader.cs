@@ -1,5 +1,6 @@
 using Shubbak.Config;
 using Shubbak.Config.Kdl;
+using Shubbak.Core.Commands;
 using Shubbak.Core.Rendering;
 
 namespace Dalil.Core;
@@ -28,9 +29,18 @@ public static class DalilConfigLoader
     public static IReadOnlyList<string> KnownKeys { get; } =
     [
         "open-on-signal", "width", "row-height", "visible-rows", "close-on-blur",
-        "show-unmanaged", "action-guard", "placement", "background", "foreground", "match",
-        "secondary", "selection-background", "border", "font", "font-size",
+        "show-unmanaged", "confirm-destructive", "action-guard", "show-icons",
+        "shrink-to-fit", "placement", "background", "foreground", "match",
+        "secondary", "selection-background", "border", "danger", "font", "font-size",
     ];
+
+    /// <summary>Blocks a <c>dalil</c> section can contain, as opposed to settings.</summary>
+    /// <remarks>
+    /// Kept apart from <see cref="KnownKeys"/> because these take children rather than
+    /// a value, and a validator checking "is this a known setting" would otherwise
+    /// report every one of them as a misspelling.
+    /// </remarks>
+    public static IReadOnlyList<string> KnownBlocks { get; } = ["prefixes", "action"];
 
     /// <summary>Reads the section from a configuration file.</summary>
     public static DalilConfig LoadFile(string path) => Load(File.ReadAllText(path));
@@ -67,8 +77,22 @@ public static class DalilConfigLoader
 
             CloseOnBlur = Boolean(node, "close-on-blur") ?? defaults.CloseOnBlur,
             ShowUnmanaged = Boolean(node, "show-unmanaged") ?? defaults.ShowUnmanaged,
-            ActionGuard = Boolean(node, "action-guard") ?? defaults.ActionGuard,
+            ShowIcons = Boolean(node, "show-icons") ?? defaults.ShowIcons,
+            ShrinkToFit = Boolean(node, "shrink-to-fit") ?? defaults.ShrinkToFit,
+
+            // The old name is still read, and still means what somebody who wrote it
+            // meant: ask before doing something irreversible. It no longer disables
+            // the eight reversible chords it used to take down with it, which is the
+            // whole of the change and is not something anybody configured on purpose.
+            ConfirmDestructive =
+                Boolean(node, "confirm-destructive") ??
+                Boolean(node, "action-guard") ??
+                defaults.ConfirmDestructive,
+
             Placement = ParsePlacement(Text(node, "placement")) ?? defaults.Placement,
+
+            Prefixes = ReadPrefixes(node),
+            Macros = ReadMacros(node),
 
             Background = Colour(node, "background") ?? defaults.Background,
             Foreground = Colour(node, "foreground") ?? defaults.Foreground,
@@ -76,9 +100,129 @@ public static class DalilConfigLoader
             Secondary = Colour(node, "secondary") ?? defaults.Secondary,
             SelectionBackground = Colour(node, "selection-background") ?? defaults.SelectionBackground,
             Border = Colour(node, "border") ?? defaults.Border,
+            Danger = Colour(node, "danger") ?? defaults.Danger,
 
             FontFamily = Text(node, "font") ?? defaults.FontFamily,
         };
+    }
+
+    /// <summary>
+    /// Reads a <c>prefixes</c> block: which character selects which mode.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Keyed by the mode's own name, which is the name the hint bar shows and the name
+    /// <c>signal "palette" "layouts"</c> already uses, so there is nothing new to
+    /// learn:
+    /// </para>
+    /// <code>
+    /// prefixes {
+    ///     layouts "l"
+    ///     monitors "m"
+    /// }
+    /// </code>
+    /// <para>
+    /// An empty string removes a prefix rather than being an error. A mode with no
+    /// prefix is still reachable by Tab and by its jump key, so this is a way of
+    /// freeing a character up rather than a way of losing a mode.
+    /// </para>
+    /// </remarks>
+    private static Dictionary<PaletteMode, char> ReadPrefixes(KdlNode node)
+    {
+        if (node.Child("prefixes") is not { } block) return new Dictionary<PaletteMode, char>();
+
+        Dictionary<PaletteMode, char> table = [];
+
+        foreach (KdlNode child in block.Children)
+        {
+            if (PaletteModel.ModeNamed(child.Name) is not { } mode) continue;
+
+            string spelling = child.Argument(0)?.AsString() ?? string.Empty;
+
+            // Exactly one character, or none. A two-character prefix is not something
+            // this can honour - the mode is decided by looking at the first character
+            // of the query - so accepting it would mean silently using the first
+            // letter of whatever was written.
+            table[mode] = spelling.Length == 1 ? spelling[0] : '\0';
+        }
+
+        return table;
+    }
+
+    /// <summary>
+    /// Reads the named command sequences.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each <c>action</c> is a name and a block of commands, written exactly the way a
+    /// keybinding's commands are written - one command per child node, arguments as
+    /// arguments - so there is no second syntax to learn and no quoting rules that
+    /// differ from the ones next door.
+    /// </para>
+    /// <code>
+    /// action "Dev layout" description="Two panes on 2" {
+    ///     focus --workspace "2"
+    ///     layout --set "master-left"
+    ///     equalise
+    /// }
+    /// </code>
+    /// <para>
+    /// Validated here with the real parser rather than sent hopefully down the pipe.
+    /// The palette already does this for what the user types in commands mode, and for
+    /// the same reason: a mistake should be reported in the words the config file would
+    /// have used, at the moment it can still be read, rather than as silence.
+    /// </para>
+    /// </remarks>
+    private static List<PaletteMacro> ReadMacros(KdlNode node)
+    {
+        List<PaletteMacro> macros = [];
+
+        foreach (KdlNode action in node.ChildrenNamed("action"))
+        {
+            if (action.Argument(0)?.AsString() is not { Length: > 0 } name) continue;
+
+            List<string> commands = [];
+            string? problem = null;
+
+            foreach (KdlNode child in action.Children)
+            {
+                // Tokens are passed through directly rather than rebuilt into a string
+                // and re-split. Re-splitting would destroy any argument containing a
+                // quote - and the author's config has a workspace named `'`.
+                List<string> tokens = [child.Name];
+
+                foreach (KdlValue argument in child.Arguments)
+                    tokens.Add(argument.AsString());
+
+                string display = string.Join(' ', tokens);
+
+                if (CommandParser.TryParseTokens(
+                        tokens, display, child.Span, out WmCommand? _, out Diagnostic? error))
+                {
+                    commands.Add(display);
+                    continue;
+                }
+
+                // The first mistake, in the parser's own words. Reporting every one of
+                // them in a row that is a single line long would mean reporting none of
+                // them legibly.
+                problem ??= error!.Hint is { Length: > 0 } hint
+                    ? $"{error.Message}  {hint}"
+                    : error!.Message;
+            }
+
+            if (commands.Count == 0 && problem is null) continue;
+
+            macros.Add(new PaletteMacro(
+                name,
+                action.Property("description")?.AsString() ??
+                    action.Child("description")?.Argument(0)?.AsString() ??
+                    string.Empty,
+                commands,
+                problem));
+        }
+
+        return macros;
     }
 
     private static PalettePlacement? ParsePlacement(string? text) => text?.ToLowerInvariant() switch

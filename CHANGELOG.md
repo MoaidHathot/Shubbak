@@ -7,13 +7,182 @@ Notable changes, newest first. The format follows
 Two version numbers are deliberately not this one, because they change on their own
 schedule and breaking either is a different kind of event:
 
-- **The IPC protocol** is versioned inside the pipe name (`shubbak-v1-<SID>`), so a
+- **The IPC protocol** is versioned inside the pipe name (`shubbak-v2-<SID>`), so a
   new CLI and an old daemon fail to find each other rather than misunderstand each
   other.
 - **The session format** is versioned in the file, so an unreadable session is
   discarded rather than misread.
 
 ## [Unreleased]
+
+Dalil stops being a viewer that can also send a few commands, and becomes a control
+surface. Three things drove it: shortcuts that could not be typed on half the world's
+keyboards, a safety setting whose default made almost every key in the palette inert,
+and a list of actions that could do less to a window than a keybinding could.
+
+### Added
+
+- **`Ctrl+1` … `Ctrl+8` jump straight to a mode**, in the order the hint bar draws
+  them. Prefixes are faster and cannot be typed at all on several layouts — on German
+  and the international layouts `~` is a dead key, so it produces no character until
+  the next keypress and the mode never changes — and Tab was seven presses from one
+  end of the ring to the other. A digit is one keystroke and is in the same place on
+  every keyboard in the world.
+
+- **Prefixes are configurable**, under `dalil { prefixes { … } }`. The defaults are
+  unchanged, so nobody who was happy has to do anything; what changed is that being
+  unhappy is now fixable. An empty string gives a prefix up without losing the mode,
+  which Tab and the jump key still reach.
+
+- **Marking, and acting on several windows at once.** `Ctrl+Space` marks a window;
+  `Ctrl+Enter` then offers the set — move them all to one workspace, float them, tile
+  them, minimise them, close them. This is the thing a palette is genuinely for:
+  moving six windows by keyboard is six rounds of find-it, focus-it, move-it, with the
+  focus landing somewhere different after each one. It needs nothing new from the
+  window manager, because the pipe has always accepted a newline-separated sequence.
+
+- **"Write a rule for it"**, on every window row and at the top of every report. It
+  composes the KDL that would match that window — class and process live, the
+  executable's path commented out beside them, the title commented out under that —
+  ready to read and paste. The `do { }` block is deliberately left empty: the same
+  window one person wants floated is one somebody else wants ignored, and a generated
+  rule that quietly did the wrong thing would be worse than none, because it would
+  look right. This was the step the flagship feature always left as an exercise.
+
+- **"Move it to…"**, which did not exist. The palette could bring a window *here* and
+  could tag it onto a workspace, and could not send it to one — despite `move
+  --workspace` being a verb the window manager has always accepted. Tagging was not a
+  substitute: a tag is a membership that makes the window follow you about.
+
+- **Named command sequences**, under `dalil { action "…" { … } }`. Keybindings are a
+  scarce resource — there are only so many chords a person can hold, so anything done
+  twice a week never gets bound and is then done by hand for ever. A palette row costs
+  nothing to have and nothing to remember. They are validated against the real command
+  parser at load time, so a mistake is reported on the row rather than swallowed.
+
+- **`diagnose` from the palette.** The method has existed on the pipe since the daemon
+  did and nothing but a shell had ever called it, which is exactly backwards: the
+  report is wanted at the moment something has gone wrong on somebody's desktop, which
+  is the moment they are looking at their desktop.
+
+- **Application icons on window rows**, and a caret in the search box with
+  `Left`/`Right`/`Home`/`End`/`Delete`. Commands mode is a text field somebody is
+  composing in rather than a filter, and a typo in the middle of `resize --width +5%`
+  used to cost the rest of the line.
+
+- **A first row that answers the question before it is asked.** If the window you were
+  just in is not being managed, the window list says so and offers the reason for one
+  Enter. Only while nothing has been typed.
+
+- **The window manager's state, said out loud.** The search box already reported
+  paused tiling and a swallowing binding mode; it now also reports a suspended manager
+  and one that cannot be reached at all. All four look exactly like a crash from the
+  outside, and a dead daemon and a slow one used to produce an identical empty list
+  with identical, confidently wrong, advice.
+
+### Changed
+
+- **`action-guard` became `confirm-destructive`.** The old setting turned every direct
+  chord off at once, and its default left every chord in the palette inert except the
+  one that took no action at all — while the action list went on printing those chords
+  as badges beside the rows they belonged to. So the keys were advertised in the one
+  place they were redundant and refused in the only place they would have saved
+  anything. Now the two actions that cannot be undone ask first, by whichever route
+  they were reached, and the eight that can just happen. Closing a window is stricter
+  than it was; floating one is eight keystrokes cheaper. The old name is still read and
+  still means "ask first", so no configuration breaks.
+
+- **Tab walks a ring ordered by how often a mode is wanted**, and help is not in it.
+  It used to walk the declaration order of a C# enum, which put monitors between
+  scratchpad and inspect for no reason anybody chose and made help a stop on the way
+  to somewhere else. Help has a prefix, a jump key and an Escape; it does not also need
+  to be in everybody's way.
+
+- **The window list is ranked by proximity below the eight most recent.** The list is
+  used for two things that want opposite orderings — switching between the few windows
+  you have been using wants recency absolutely, and finding one you have lost is a
+  search where recency means nothing, because it has not been focused. So the top is
+  left exactly as it was and only the tail is regrouped: same workspace, then same
+  display, then anywhere.
+
+- **A short list is drawn in a short window.** Two matches used to be two rows of text
+  above ten rows of empty background.
+
+- **Layout rows say what a layout does.** All eleven had "layout" in the dim column,
+  next to a list whose heading already said it — a wasted column in the one mode where
+  the row's own name is jargon.
+
+- **Building the window list is 10× faster and allocates 18× less.** Every window row
+  carried a dozen action records, two workspace-sized pickers and a composed rule,
+  built on every refresh to answer a question about exactly one of them: measured on a
+  desktop of 250 windows and 19 workspaces, 1.1 ms and 3.4 MiB per refresh, now 0.1 ms
+  and 183 KiB. The list is only ever read for the selected row, so nothing was traded
+  for it — it was work with no reader. Keystroke latency is unchanged at 0.07 ms.
+
+### Fixed
+
+- **`Ctrl+U` and `Ctrl+Backspace` no longer eject you from the mode.** Clearing the
+  query drops the prefix, which silently moves the palette back to the window list —
+  so a key documented as "clear what you typed" also changed what Enter was going to
+  do, and the user had asked for neither. `Ctrl+Backspace` did the same on any
+  single-word term.
+
+- **Choosing a monitor with no workspace on it no longer types its name into the
+  command box.** Completing was the fall-through for every command-less row in every
+  mode but help, so `\\.\DISPLAY2` was offered as a verb somebody had started typing.
+
+- **Badges no longer drop the ones that matter.** They were drawn from the end of the
+  list backwards and the loop gave up when it ran out of width, which meant a window
+  that was unmanaged, minimised, floating, sticky, tagged onto three workspaces and
+  elevated showed the last three and silently omitted the first three — the only ones
+  that explained why it was not where it had been left. An "also on" badge is now
+  counted rather than listed past a couple of names, so a window tagged onto nineteen
+  workspaces does not lose its own title.
+
+- **The selection survives a refresh.** It was preserved by reference identity alone,
+  and a refresh rebuilds every entry from the wire — so the selection went back to the
+  top on every window event, which on a busy desktop is several times a second.
+
+- **`Alt+Enter` works.** It has been printed as a badge on "Bring it here" since that
+  action was written and was in no lookup table, so pressing it did nothing.
+
+- **`?` lists the keys that exist.** `Ctrl+Shift+C` was implemented and documented in
+  the README and the changelog and missing from the help; so were all five action
+  chords, every one of which is printed as a badge in the list it belongs to. The
+  comment above that list has always claimed a test held it to the implementation.
+  There now is one.
+
+- **Rows matched on their application are highlighted.** Finding a window by its
+  process when the title says nothing about it — "Untitled document" — is most of what
+  the dim half of a row is for, and such a row appeared with nothing underlined
+  anywhere, which reads as the palette having matched it by accident.
+
+- **A palette that is on screen and cannot be reached is put away.** A window that
+  never became active is never told it has been deactivated, so close-on-blur cannot
+  dismiss it and Escape never arrives. `PaletteWindow.IsStranded` was written for
+  exactly this, with a careful explanation of why it mattered, and was referenced from
+  nowhere at all.
+
+- **Dalil survives the window manager shutting down.** It stopped with it, which is the
+  wrong half of the relationship — it reconnects when the daemon comes back, so a
+  restarted window manager had no palette until somebody noticed.
+
+- **A query longer than 64 characters no longer risks a crash.** The matcher reports
+  how many characters matched and writes a position only while the caller's span has
+  room, so slicing by the count read past the end.
+
+- **Copying a window row takes the class and process too**, which are the attributes
+  somebody is copying it for. The title alone is the one guaranteed to be the wrong
+  thing to match on.
+
+- **`AltGr` still types.** Suppressing characters chorded with Ctrl would have broken
+  `@`, `#`, `[` and `{` on exactly the European layouts this release is partly for,
+  since AltGr *is* Ctrl+Alt.
+
+- **`toggle-managed` is no longer marked destructive.** It is a toggle; pressing it
+  twice leaves the desktop exactly as it was found.
+
+## [0.9.0-inspection]
 
 Inspection, which was the best thing the command line could do and the hardest thing
 in the palette to find.

@@ -13,6 +13,39 @@ namespace Dalil.Core;
 /// </remarks>
 public static class PaletteEntries
 {
+    /// <summary>
+    /// How many of the most recently focused windows keep pure recency order.
+    /// </summary>
+    /// <remarks>
+    /// The window list is used for two different things and they want opposite
+    /// orderings. Switching between the handful of windows you have been using is
+    /// alt-tab, and wants recency, absolutely and without interference. Finding the
+    /// one you have lost is a search through everything else, and there recency is
+    /// nearly meaningless - it has not been focused, that is why it is lost - so
+    /// proximity is the better guess.
+    /// <para>
+    /// So the top of the list is left exactly as it was and only the tail is
+    /// regrouped. Eight is about as many windows as anybody holds in their head at
+    /// once, and comfortably more than fit above the fold.
+    /// </para>
+    /// </remarks>
+    public const int RecentlyFocusedCount = 8;
+
+    /// <summary>Ranks reserved for the recently focused, above every proximity tier.</summary>
+    private const long RecentBase = 1L << 50;
+
+    /// <summary>How far one proximity tier outranks the next.</summary>
+    private const long ProximityStep = 1L << 40;
+
+    /// <summary>How many workspaces a "also on" badge names before it starts counting.</summary>
+    /// <remarks>
+    /// A window can be tagged onto every workspace on the machine, and the author runs
+    /// nineteen of them. Unbounded, the badge is wider than the row and takes the
+    /// title with it - so a window that had been made to follow you everywhere became
+    /// the one window whose name you could not read.
+    /// </remarks>
+    private const int NamedTagLimit = 2;
+
     /// <summary>Describes every window as a row.</summary>
     /// <param name="windows">What <c>query all-windows</c> returned.</param>
     /// <param name="includeUnmanaged">Whether to offer windows Shubbak does not manage.</param>
@@ -20,25 +53,38 @@ public static class PaletteEntries
     /// Where "bring it here" means, for the row's actions. Null leaves that action out
     /// rather than offering one that cannot work.
     /// </param>
-    /// <param name="workspaces">Every workspace, for the row's tag picker.</param>
+    /// <param name="workspaces">Every workspace, for the row's pickers.</param>
     /// <param name="severalMonitors">
     /// Whether to say which screen a window is on. Silent on a single display, where
     /// the answer is always the same and would be noise on every row.
+    /// </param>
+    /// <param name="focusedMonitor">
+    /// The display the user is looking at, for ranking. Null ranks by recency alone.
     /// </param>
     public static IReadOnlyList<PaletteEntry> ForWindows(
         IEnumerable<WindowCandidate> windows,
         bool includeUnmanaged = true,
         string? focusedWorkspace = null,
         IReadOnlyList<string>? workspaces = null,
-        bool severalMonitors = false)
+        bool severalMonitors = false,
+        string? focusedMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(windows);
 
-        List<PaletteEntry> entries = [];
+        // Ordered once, here, so that "how recent is this" can be answered by position
+        // rather than by comparing sequence numbers whose absolute values mean nothing.
+        List<WindowCandidate> ordered =
+        [
+            .. windows
+                .Where(w => includeUnmanaged || w.Managed)
+                .OrderByDescending(w => w.FocusSequence),
+        ];
 
-        foreach (WindowCandidate window in windows)
+        List<PaletteEntry> entries = new(ordered.Count);
+
+        for (int i = 0; i < ordered.Count; i++)
         {
-            if (!includeUnmanaged && !window.Managed) continue;
+            WindowCandidate window = ordered[i];
 
             entries.Add(new PaletteEntry(
                 Title(window),
@@ -51,22 +97,75 @@ public static class PaletteEntries
                 // it - uncloaking, restoring and foregrounding.
                 $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}",
 
-                // Recency, so the list is useful before anything is typed. Windows
-                // that have never been focused sort last among themselves rather than
-                // being scattered, which puts anything genuinely lost at the bottom
-                // where it is looked for.
-                window.FocusSequence,
+                Rank(window, i, focusedWorkspace, focusedMonitor),
 
                 SwitchesTo: null,
 
-                // Built here, where the handle and the state are both to hand. Working
-                // them out later would mean parsing a handle back out of a command
-                // string, which is the kind of thing that breaks quietly the day the
-                // command format changes.
-                Actions: PaletteActions.For(window, focusedWorkspace, workspaces)));
+                Actions: null,
+                Explains: null,
+                Expands: null,
+                Chord: null,
+
+                // How a mark aims at this window, and how the bulk actions aim at it
+                // alongside five others.
+                Target: PaletteActions.TargetOf(window),
+
+                IconHandle: window.Handle,
+                Destructive: false,
+                Unavailable: false,
+
+                // Deferred rather than skipped. The window and the context are captured
+                // here, where they are both to hand - working them out later would mean
+                // parsing a handle back out of a command string, which is the kind of
+                // thing that breaks quietly the day the command format changes - but the
+                // dozen records and two workspace-sized pickers are built only for the
+                // row somebody actually asks about.
+                ActionsFactory: () => PaletteActions.For(window, focusedWorkspace, workspaces)));
         }
 
         return entries;
+    }
+
+    /// <summary>
+    /// Where a window sits in the list before anything has been typed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The recently focused keep their exact order and outrank everything. Below them,
+    /// windows are grouped by how near they are to what the user is looking at - same
+    /// workspace, then same display, then anywhere - and ordered by recency within each
+    /// group.
+    /// </para>
+    /// <para>
+    /// Windows that have never been focused carry a sequence of zero and so sort last
+    /// within their group rather than being scattered through it, which puts anything
+    /// genuinely lost at the bottom of the nearest group, where it is looked for.
+    /// </para>
+    /// </remarks>
+    private static long Rank(
+        WindowCandidate window, int recencyIndex, string? focusedWorkspace, string? focusedMonitor)
+    {
+        if (recencyIndex < RecentlyFocusedCount)
+            return RecentBase + (RecentlyFocusedCount - recencyIndex);
+
+        long proximity = 0;
+
+        if (focusedWorkspace is { Length: > 0 } &&
+            string.Equals(window.Workspace, focusedWorkspace, StringComparison.OrdinalIgnoreCase))
+        {
+            proximity = 2;
+        }
+        else if (focusedMonitor is { Length: > 0 } &&
+                 string.Equals(window.Monitor, focusedMonitor, StringComparison.OrdinalIgnoreCase))
+        {
+            proximity = 1;
+        }
+
+        // Clamped so a sequence number can never spill into the tier above it, which
+        // would silently undo the grouping for exactly the busiest desktops.
+        long recency = Math.Clamp(window.FocusSequence, 0, ProximityStep - 1);
+
+        return (proximity * ProximityStep) + recency;
     }
 
     /// <summary>
@@ -115,11 +214,18 @@ public static class PaletteEntries
                 $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}",
                 Actionable(window),
                 SwitchesTo: null,
-                Actions: PaletteActions.For(window, focusedWorkspace, workspaces),
+                Actions: null,
 
                 // So Ctrl+Shift+I and the action list both reach the full report from
                 // here, exactly as they do from the window list.
-                Explains: window.Handle));
+                Explains: window.Handle,
+                Expands: null,
+                Chord: null,
+                Target: PaletteActions.TargetOf(window),
+                IconHandle: window.Handle,
+                Destructive: false,
+                Unavailable: false,
+                ActionsFactory: () => PaletteActions.For(window, focusedWorkspace, workspaces)));
         }
 
         return entries;
@@ -139,24 +245,165 @@ public static class PaletteEntries
             _ => 0,
         };
 
-    /// <summary>Describes every command verb as a row.</summary>
-    public static IReadOnlyList<PaletteEntry> ForCommands(IEnumerable<CommandInfo> commands)
+    /// <summary>
+    /// Describes every command verb as a row.
+    /// </summary>
+    /// <param name="commands">What <c>query commands</c> returned.</param>
+    /// <param name="status">
+    /// What the window manager is currently doing, so that verbs which cannot achieve
+    /// anything right now can say so.
+    /// </param>
+    /// <remarks>
+    /// A verb that does not apply is marked rather than hidden. Hiding it would leave
+    /// somebody searching for <c>wm-resume</c> and being told by an empty list that no
+    /// such command exists - which is both false and the opposite of helpful, given
+    /// that the reason they are searching for it is that something has gone wrong.
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForCommands(
+        IEnumerable<CommandInfo> commands, WmStatus? status = null)
     {
         ArgumentNullException.ThrowIfNull(commands);
 
-        return
-        [
-            .. commands.Select(c => new PaletteEntry(
-                c.Verb,
-                c.Summary,
-                c.Arguments.Count == 0 ? [] : [.. c.Arguments.Select(a => $"<{a}>")],
+        List<PaletteEntry> entries = [];
+
+        foreach (CommandInfo command in commands)
+        {
+            string? unavailable = status is { } state ? WhyNotNow(command.Verb, state) : null;
+
+            List<string> badges = command.Arguments.Count == 0
+                ? []
+                : [.. command.Arguments.Select(a => $"<{a}>")];
+
+            if (unavailable is not null) badges.Add("not now");
+
+            entries.Add(new PaletteEntry(
+                command.Verb,
+                unavailable ?? command.Summary,
+                badges,
 
                 // A verb that takes arguments cannot simply be run. Offering it as
                 // text to complete is honest; running it with no argument would be
                 // rejected by the parser and read as the palette being broken.
-                c.Arguments.Count == 0 ? c.Verb : string.Empty)),
+                command.Arguments.Count == 0 ? command.Verb : string.Empty,
+
+                // Below everything that would do something, and above nothing. Still
+                // findable by name, which is the whole point of leaving it in.
+                Rank: unavailable is null ? 0 : -1,
+                Unavailable: unavailable is not null));
+        }
+
+        return entries;
+    }
+
+    /// <summary>Why a verb would achieve nothing in the state the manager is in.</summary>
+    /// <remarks>
+    /// Only the handful whose applicability the palette can actually know. Guessing at
+    /// the rest - whether the focused window is already tiled, whether a container has
+    /// siblings to equalise - would need state the palette does not have and would be
+    /// wrong often enough to make the marking untrustworthy everywhere.
+    /// </remarks>
+    private static string? WhyNotNow(string verb, WmStatus status) => verb switch
+    {
+        "wm-resume" when !status.Suspended =>
+            "nothing to resume - the window manager is already running",
+
+        "wm-suspend" when status.Suspended =>
+            "already suspended",
+
+        "wm-disable-binding-mode" when status.BindingMode is not { Length: > 0 } =>
+            "no binding mode is active",
+
+        _ => null,
+    };
+
+    /// <summary>
+    /// Describes the user's own named sequences as rows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The answer to keybindings being a scarce resource. There are only so many
+    /// chords a person can hold, and every one spent on something done twice a week is
+    /// one not spent on something done twice a minute - so the things done twice a
+    /// week do not get bound at all, and are then done by hand for ever.
+    /// </para>
+    /// <para>
+    /// A palette entry costs nothing to have and nothing to remember: it is found by
+    /// typing an approximation of its name. Twenty of them is a reasonable
+    /// configuration; twenty keybindings is not.
+    /// </para>
+    /// <para>
+    /// Ranked above the verbs, because somebody who named a thing is looking for the
+    /// thing they named rather than for the primitive it happens to start with.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForMacros(IEnumerable<PaletteMacro> macros)
+    {
+        ArgumentNullException.ThrowIfNull(macros);
+
+        return
+        [
+            .. macros.Select(m => new PaletteEntry(
+                m.Name,
+
+                m.Problem is { Length: > 0 } wrong
+                    ? wrong
+                    : m.Description is { Length: > 0 } said
+                        ? said
+                        : string.Join("  \u00B7  ", m.Commands),
+
+                m.Problem is { Length: > 0 } ? ["cannot run"] : ["macro"],
+
+                // Nothing to send when it did not parse. Enter does nothing rather
+                // than posting something the window manager will only refuse again,
+                // one command at a time, into a log nobody is reading.
+                m.Problem is { Length: > 0 } ? string.Empty : string.Join('\n', m.Commands),
+
+                Rank: 10,
+                Unavailable: m.Problem is { Length: > 0 })),
         ];
     }
+
+    /// <summary>
+    /// The things the palette itself can do, which are not window manager verbs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>diagnose</c> is a method on the pipe rather than a command, so it has never
+    /// appeared in any command list and could only be reached from a shell. That is
+    /// precisely backwards: the report exists to be attached to a bug report, and the
+    /// moment somebody wants one is the moment something has just gone wrong on their
+    /// desktop - which is when they are looking at their desktop and not at a
+    /// terminal.
+    /// </para>
+    /// <para>
+    /// Marked with a scheme the host recognises, so that a row which is not a command
+    /// cannot be mistaken for one and sent down the pipe as text.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ForBuiltins() =>
+    [
+        new PaletteEntry(
+            "diagnose",
+            "Write a report for a bug tracker: environment, config, the live tree and the log",
+            ["dalil"],
+            BuiltinDiagnose,
+            Rank: 5),
+    ];
+
+    /// <summary>The command a row carries when it asks the palette rather than the manager.</summary>
+    public const string BuiltinDiagnose = "dalil:diagnose";
+
+    /// <summary>The command that forgets every mark.</summary>
+    /// <remarks>
+    /// A row rather than a key, because it is needed exactly once per set of marks and
+    /// only from the list that is already showing what would happen to them. A key
+    /// would be a twenty-ninth thing to write down in the help.
+    /// </remarks>
+    public const string BuiltinClearMarks = "dalil:clear-marks";
+
+    /// <summary>Whether a command belongs to the palette rather than to the window manager.</summary>
+    public static bool IsBuiltin(string? command) =>
+        command is { Length: > 0 } && command.StartsWith("dalil:", StringComparison.Ordinal);
 
     /// <summary>Describes every workspace as a row.</summary>
     /// <remarks>
@@ -229,16 +476,22 @@ public static class PaletteEntries
             if (monitor.Primary) badges.Add("primary");
             if (monitor.Dpi != 96) badges.Add($"{monitor.Dpi} dpi");
 
+            bool showing = monitor.ActiveWorkspace is { Length: > 0 };
+
             entries.Add(new PaletteEntry(
                 ShortMonitor(monitor.DeviceId),
-                monitor.ActiveWorkspace is { Length: > 0 } showing
-                    ? $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  showing {showing}"
-                    : $"{monitor.Width}\u00D7{monitor.Height}",
+                showing
+                    ? $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  showing {monitor.ActiveWorkspace}"
+                    : $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  nothing on it",
                 badges,
-                monitor.ActiveWorkspace is { Length: > 0 } target
-                    ? $"focus --workspace {target}"
-                    : string.Empty,
-                monitor.Primary ? 1 : 0));
+                showing ? $"focus --workspace {monitor.ActiveWorkspace}" : string.Empty,
+                monitor.Primary ? 1 : 0,
+
+                // A display showing nothing cannot be gone to. Saying so is better
+                // than the row silently doing nothing, and far better than what it
+                // used to do - fall through to the command box and type the display's
+                // own name into it as though it were a verb.
+                Unavailable: !showing));
         }
 
         return entries;
@@ -286,6 +539,22 @@ public static class PaletteEntries
             Actions: null,
             Explains: null,
             Expands: $"{label}  {value}"));
+
+        // First, because it is the thing somebody reading this report is on their way
+        // to doing. Everything below explains why the window behaves as it does; this
+        // is what changes it, already written out, using the two attributes the rest of
+        // the report is about to spend twenty lines establishing.
+        entries.Add(new PaletteEntry(
+            "Write a rule for it",
+            "compose",
+            ["\u21B5 read it"],
+            string.Empty,
+            Rank: 1,
+            SwitchesTo: null,
+            Actions: null,
+            Explains: null,
+            Expands: RuleComposer.RuleFromReport(
+                report.ClassName, report.ProcessName, report.ProcessPath, report.Title)));
 
         Add("handle", $"0x{report.Handle:X}");
         Add("title", report.Title);
@@ -499,12 +768,43 @@ public static class PaletteEntries
         [
             .. layouts.Select(l => new PaletteEntry(
                 l,
-                "layout",
+                DescribeLayout(l),
                 string.Equals(l, current, StringComparison.OrdinalIgnoreCase) ? ["in use"] : [],
                 $"layout --set {l}",
                 string.Equals(l, current, StringComparison.OrdinalIgnoreCase) ? 1 : 0)),
         ];
     }
+
+    /// <summary>
+    /// What a layout actually does, in the words somebody would use to want it.
+    /// </summary>
+    /// <remarks>
+    /// The dim half of every one of these rows used to read "layout" - eleven rows, one
+    /// word, the same word, next to a list whose heading already said it. That is a
+    /// column of the row spent saying nothing, in the one mode where the row's own name
+    /// is a piece of jargon: nobody who has not already read the manual knows whether
+    /// they want <c>splith</c> or <c>fibonacci-mirrored</c>, and now they do not have
+    /// to.
+    /// <para>
+    /// Searched as well as shown, so typing "stack" or "spiral" finds the layout that
+    /// behaves that way rather than only the one that happens to be spelled that way.
+    /// </para>
+    /// </remarks>
+    public static string DescribeLayout(string layout) => layout?.ToLowerInvariant() switch
+    {
+        "splith" => "side by side, in a row",
+        "splitv" => "stacked, in a column",
+        "fibonacci" => "spiral - each new window halves the last, starting sideways",
+        "fibonacci-v" => "spiral - each new window halves the last, starting downwards",
+        "fibonacci-mirrored" => "spiral, wound the other way",
+        "master-left" => "one main window on the left, the rest stacked right",
+        "master-right" => "one main window on the right, the rest stacked left",
+        "master-top" => "one main window on top, the rest below",
+        "master-bottom" => "one main window below, the rest on top",
+        "grid" => "equal cells, as square as they will go",
+        "monocle" => "one window at a time, filling the space",
+        _ => "layout",
+    };
 
     /// <summary>
     /// Describes the windows put away in a scratchpad.
@@ -541,12 +841,61 @@ public static class PaletteEntries
                 $"scratchpad {slot}",
                 window.FocusSequence,
                 SwitchesTo: null,
-                Actions: PaletteActions.For(window, focusedWorkspace, workspaces)));
+                Actions: null,
+                Explains: null,
+                Expands: null,
+                Chord: null,
+                Target: PaletteActions.TargetOf(window),
+                IconHandle: window.Handle,
+                Destructive: false,
+                Unavailable: false,
+                ActionsFactory: () => PaletteActions.For(window, focusedWorkspace, workspaces)));
         }
 
         return entries;
     }
 
+    /// <summary>
+    /// The row that answers a question before it is asked.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The palette knows something the user is about to go looking for: the window they
+    /// were just in is not being managed, and the reason is one query away. Saying so
+    /// at the top of the list costs one row and turns a hunt through the inspect mode
+    /// into pressing Enter.
+    /// </para>
+    /// <para>
+    /// Only while nothing has been typed. The moment somebody starts searching they
+    /// have told the palette what they are looking for, and it is not this - a row
+    /// that ignored the query and sat above the results would be the single most
+    /// annoying thing in the interface.
+    /// </para>
+    /// </remarks>
+    /// <param name="focused">The window that had focus when the palette opened.</param>
+    public static IReadOnlyList<PaletteEntry> ForContext(WindowCandidate? focused)
+    {
+        if (focused is not { Managed: false } window) return [];
+
+        // A window with nothing identifying about it is usually a shell surface that
+        // was never going to be managed and that nobody is asking about.
+        if (string.IsNullOrWhiteSpace(window.Title)) return [];
+
+        string reason = Reason(window);
+
+        return
+        [
+            new PaletteEntry(
+                $"\u201C{Title(window)}\u201D is not being managed",
+                reason is { Length: > 0 } why ? $"{why} \u2014 Enter for the full story" : "Enter for the full story",
+                ["why?"],
+                string.Empty,
+                Rank: long.MaxValue,
+                SwitchesTo: null,
+                Actions: null,
+                Explains: window.Handle),
+        ];
+    }
 
     /// <summary>
     /// Describes the palette's own keys and prefixes.
@@ -555,8 +904,8 @@ public static class PaletteEntries
     /// <para>
     /// Prefixes are the fastest way to change mode and the least findable thing in the
     /// interface: nobody guesses that <c>~</c> means layouts. Tab makes every mode
-    /// reachable without knowing any of them, the hint bar names them permanently, and
-    /// this is where the whole set is written down.
+    /// reachable without knowing any of them, a digit jumps straight to one, the hint
+    /// bar names them permanently, and this is where the whole set is written down.
     /// </para>
     /// <para>
     /// The mode rows are chooseable rather than being text about choosing. Somebody
@@ -564,13 +913,29 @@ public static class PaletteEntries
     /// that ignores that has taught them the key and then refused to use it.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<PaletteEntry> ForHelp(IEnumerable<BindingInfo>? bindings = null)
+    /// <param name="bindings">The user's own keybindings, which nothing else can show them.</param>
+    /// <param name="prefixes">
+    /// The prefixes actually in effect, which are the user's to change and so cannot be
+    /// read off a constant.
+    /// </param>
+    public static IReadOnlyList<PaletteEntry> ForHelp(
+        IEnumerable<BindingInfo>? bindings = null, PalettePrefixes? prefixes = null)
     {
+        PalettePrefixes table = prefixes ?? PalettePrefixes.Default;
+
         List<PaletteEntry> entries = [];
 
-        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        for (int i = 0; i < PaletteModel.JumpOrder.Count; i++)
         {
-            char prefix = PaletteModel.PrefixFor(mode);
+            PaletteMode mode = PaletteModel.JumpOrder[i];
+            char prefix = table.PrefixFor(mode);
+
+            List<string> badges = [];
+            if (prefix != '\0') badges.Add(prefix.ToString());
+
+            // The jump key, which is the one route into a mode that works on every
+            // keyboard layout in the world and needs nothing memorised.
+            badges.Add($"Ctrl+{(i + 1).ToString(CultureInfo.InvariantCulture)}");
 
             entries.Add(new PaletteEntry(
                 PaletteModel.NameOf(mode),
@@ -585,7 +950,7 @@ public static class PaletteEntries
                     PaletteMode.Inspect => "windows Shubbak is not managing, and why not",
                     _ => "these keys",
                 },
-                prefix == '\0' ? ["no prefix", "Tab"] : [$"{prefix}", "Tab"],
+                badges,
                 string.Empty,
                 Rank: 300,
                 SwitchesTo: mode));
@@ -622,13 +987,24 @@ public static class PaletteEntries
 
     /// <summary>Every key the palette itself handles.</summary>
     /// <remarks>
-    /// Written here rather than in the window that implements them, so the list a
-    /// user reads and the keys that actually work are the same text - and so a test
-    /// can hold the two together.
+    /// <para>
+    /// Written here rather than in the window that implements them, so the list a user
+    /// reads and the keys that actually work are the same text - and so a test can hold
+    /// the two together.
+    /// </para>
+    /// <para>
+    /// That test now exists, which it did not when the claim was first made. The list
+    /// had already drifted: <c>Ctrl+Shift+C</c> was implemented, documented in the
+    /// README and in the changelog, and missing from here; so were all five of the
+    /// action chords, every one of which is printed as a badge in the action list it
+    /// belongs to. The one page written to be the source of truth was the only place
+    /// that did not mention them.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<(string Keys, string Does)> Keys { get; } =
     [
         ("Tab / Shift+Tab", "next or previous mode"),
+        ("Ctrl+1 \u2026 Ctrl+8", "jump straight to a mode"),
         ("Enter", "act on the selected row"),
 
         // Both of these existed and were written down nowhere. The action list is the
@@ -636,18 +1012,31 @@ public static class PaletteEntries
         // the thing worth reaching for when a window is behaving oddly - so a user who
         // opens the help looking for either of them was reading the one page that did
         // not mention them.
-        ("Ctrl+Enter", "what else can be done to this row"),
+        ("Ctrl+Enter", "what else can be done to this row, or to everything marked"),
+        ("Ctrl+Space", "mark a window, to act on several at once"),
+
         ("Ctrl+Shift+I", "explain why a window is or is not managed"),
+        ("Ctrl+Shift+F", "float the selected window, or tile it"),
+        ("Ctrl+Shift+S", "make the selected window sticky, or unstick it"),
+        ("Ctrl+Shift+M", "minimise the selected window, or restore it"),
+        ("Ctrl+Shift+A", "start managing the selected window, or stop"),
+        ("Ctrl+Shift+W", "close the selected window - asks first"),
+        ("Alt+Enter", "bring the selected window to this workspace"),
+
         ("Ctrl+C", "copy the selected line"),
-        ("Escape", "dismiss the palette"),
+        ("Ctrl+Shift+C", "copy everything on screen"),
+        ("Escape", "go back one level, or dismiss the palette"),
         ("Up / Down", "move the selection"),
         ("Ctrl+P / Ctrl+N", "move the selection"),
         ("Ctrl+K / Ctrl+J", "move the selection"),
         ("PageUp / PageDown", "move a screenful"),
         ("Ctrl+Home / Ctrl+End", "first or last row"),
+        ("Left / Right", "move the caret"),
+        ("Home / End", "start or end of what you typed"),
         ("Backspace", "delete a character, or go back"),
+        ("Delete", "delete the character after the caret"),
         ("Ctrl+Backspace", "delete a word"),
-        ("Ctrl+U", "clear what you typed"),
+        ("Ctrl+U", "clear what you typed, keeping the mode"),
     ];
 
     /// <summary>
@@ -723,11 +1112,22 @@ public static class PaletteEntries
     }
 
     /// <summary>
-    /// Short markers for the state a row is in.
+    /// Short markers for the state a row is in, most important first.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Words rather than symbols. A glyph needs a legend, and the palette is where
     /// someone goes when they are already confused about where a window went.
+    /// </para>
+    /// <para>
+    /// The order is now load-bearing rather than incidental. A row has room for two or
+    /// three badges and a window can easily earn six, so some are always going to be
+    /// dropped - and the renderer used to drop them from the front of this list, which
+    /// is where the important ones are. A window that was unmanaged, minimised,
+    /// floating, sticky, tagged onto three workspaces and elevated would show the last
+    /// three of those and silently omit the first three, which are the only ones that
+    /// explain why it is not where it was left.
+    /// </para>
     /// </remarks>
     private static List<string> Badges(WindowCandidate window)
     {
@@ -745,6 +1145,8 @@ public static class PaletteEntries
         if (window.State is "floating" or "fullscreen" or "monitorfullscreen" or "maximised")
             badges.Add(window.State);
 
+        if (window.Elevated) badges.Add("elevated");
+
         if (window.Sticky) badges.Add("sticky");
 
         // The workspaces this window will follow the user to. Worth a badge of its own
@@ -754,12 +1156,22 @@ public static class PaletteEntries
         // The workspace it is already on is left out. Tagging records complete
         // membership, so the set always contains where the window currently is, and
         // listing that alongside where it will go is the noisier half of the answer.
-        if (FollowsTo(window) is { Count: > 0 } elsewhere)
-            badges.Add($"also on {string.Join(", ", elsewhere)}");
-
-        if (window.Elevated) badges.Add("elevated");
+        //
+        // Last, and counted rather than listed past a couple of names: this is the
+        // longest badge a row can earn and the one it can most afford to lose.
+        if (FollowsTo(window) is { Count: > 0 } elsewhere) badges.Add(FollowsBadge(elsewhere));
 
         return badges;
+    }
+
+    /// <summary>"also on 3, 4" - and "+5 more" rather than naming all nineteen.</summary>
+    private static string FollowsBadge(IReadOnlyList<string> elsewhere)
+    {
+        if (elsewhere.Count <= NamedTagLimit) return $"also on {string.Join(", ", elsewhere)}";
+
+        string named = string.Join(", ", elsewhere.Take(NamedTagLimit));
+
+        return $"also on {named} +{(elsewhere.Count - NamedTagLimit).ToString(CultureInfo.InvariantCulture)}";
     }
 
     /// <summary>The workspaces a window is tagged onto, other than its own.</summary>

@@ -39,6 +39,17 @@ internal static class Program
     private static bool s_running = true;
     private static string? s_configPath;
 
+    /// <summary>
+    /// The window that had the keyboard when the palette was asked for.
+    /// </summary>
+    /// <remarks>
+    /// Read before the palette takes the foreground, because a moment later the answer
+    /// is the palette itself. It is what the contextual first row is about: the window
+    /// somebody was just looking at is the one they are about to ask a question
+    /// concerning.
+    /// </remarks>
+    private static long s_foreground;
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -106,17 +117,30 @@ internal static class Program
             return 1;
         }
 
-        s_palette.CommandRequested += command => _ = s_connection!.SendAsync(command);
+        s_palette.CommandRequested += OnCommand;
 
         // Typed commands become a row of their own, parsed by the same parser the
         // config file uses. Without this, every verb that takes an argument was a
         // dead end: the term outgrew the verb it named, matched nothing, and Enter
         // had no row to act on.
-        s_palette.Augment(term => CommandComposer.Compose(term, s_completions));
+        //
+        // The contextual row rides in the same place, because it is the same idea: a
+        // row derived from the state rather than filtered out of a list. It appears
+        // only on an untouched window list, so it can never sit above what somebody is
+        // actually searching for.
+        s_palette.Augment((mode, term) => mode switch
+        {
+            PaletteMode.Commands => CommandComposer.Compose(term, s_completions),
 
-        // Every route into a mode refills the list: Tab, typing a prefix, deleting
-        // one, or choosing a mode from the help list. Without this, typing ">" left
-        // the box saying "commands" while the rows underneath were still windows.
+            PaletteMode.Windows when term.Length == 0 => s_sources.Context ?? [],
+
+            _ => [],
+        });
+
+        // Every route into a mode refills the list: Tab, a jump key, typing a prefix,
+        // deleting one, or choosing a mode from the help list. Without this, typing
+        // ">" left the box saying "commands" while the rows underneath were still
+        // windows.
         s_palette.ModeChanged += mode => s_palette!.SetEntries(s_sources.For(mode));
 
         // Asked on a background thread and shown on the palette's own, because the
@@ -143,7 +167,7 @@ internal static class Program
         s_connection.Signalled += OnSignal;
         s_connection.Stale += () => Post(MarkStale);
         s_connection.Reloaded += () => Post(ReloadConfig);
-        s_connection.ShuttingDown += () => Post(() => s_running = false);
+        s_connection.ShuttingDown += () => Post(MarkOffline);
         s_connection.Start();
 
         Log.Info(LogCategory.Wm,
@@ -155,6 +179,54 @@ internal static class Program
         s_connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
         return 0;
+    }
+
+    /// <summary>
+    /// Acts on a chosen row - or answers it here, when it was one of the palette's own.
+    /// </summary>
+    /// <remarks>
+    /// Marked with a scheme rather than guessed at, so a window title that happens to
+    /// begin with the word "diagnose" cannot be mistaken for a request to write a
+    /// report.
+    /// </remarks>
+    private static void OnCommand(string command)
+    {
+        if (!PaletteEntries.IsBuiltin(command))
+        {
+            _ = s_connection!.SendAsync(command);
+            return;
+        }
+
+        if (string.Equals(command, PaletteEntries.BuiltinDiagnose, StringComparison.Ordinal))
+        {
+            _ = Task.Run(async () =>
+            {
+                string? failure = null;
+
+                string? path = await s_connection!
+                    .DiagnoseAsync(reason => failure = reason)
+                    .ConfigureAwait(false);
+
+                // Announced in the palette rather than only in the log. The whole point
+                // of moving this off the command line is that somebody who wanted a
+                // report should not then have to go looking for where it went.
+                Post(() =>
+                {
+                    if (s_palette is not { } palette) return;
+
+                    palette.Open(PaletteMode.Commands);
+
+                    if (path is not null)
+                        palette.ShowReportFailure("diagnose", $"Report written to {path}");
+                    else
+                        palette.ShowReportFailure("diagnose", failure ?? "Could not write a report.");
+                });
+            });
+
+            return;
+        }
+
+        Log.Warn(LogCategory.Wm, $"nothing here answers '{command}'");
     }
 
     /// <summary>
@@ -193,6 +265,7 @@ internal static class Program
             }
 
             Drain();
+            RescueStrandedPalette();
 
             if (!s_running) break;
 
@@ -202,6 +275,34 @@ internal static class Program
                 QUEUE_STATUS_FLAGS.QS_ALLINPUT,
                 MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
         }
+    }
+
+    /// <summary>
+    /// Puts away a palette that is on screen and cannot be reached.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A window that never became active is never told it has been deactivated, so
+    /// close-on-blur cannot dismiss it, Escape never arrives, and it sits on top of
+    /// everything looking perfectly normal and answering nothing. The only way out is
+    /// to notice from the outside.
+    /// </para>
+    /// <para>
+    /// <c>PaletteWindow.IsStranded</c> was written for exactly this, with a careful
+    /// explanation of why it mattered, and was then referenced from nowhere at all -
+    /// so the failure it describes has been unhandled ever since. It is checked here,
+    /// on the loop's own quarter-second tick, which costs one
+    /// <c>GetForegroundWindow</c> and only while the palette is open.
+    /// </para>
+    /// </remarks>
+    private static void RescueStrandedPalette()
+    {
+        if (s_palette is not { IsOpen: true } palette || !palette.IsStranded) return;
+
+        if (palette.EnsureForeground()) return;
+
+        Log.Warn(LogCategory.Wm, "the palette is on screen but unreachable; putting it away");
+        palette.Close();
     }
 
     /// <summary>Queues work for the message loop and wakes it.</summary>
@@ -279,26 +380,59 @@ internal static class Program
     /// and lands while the user is still reaching for the first key. Waiting for the
     /// data first would make the whole thing feel as slow as the slowest part of it.
     /// </remarks>
-    private static void Open(PaletteMode mode)
+    private static unsafe void Open(PaletteMode mode)
     {
-        if (s_palette is not { } palette || s_connection is not { } connection) return;
+        if (s_palette is not { } palette || s_connection is null) return;
+
+        // Before the palette takes the keyboard, or the answer is the palette.
+        if (!palette.IsOpen) s_foreground = (nint)PInvoke.GetForegroundWindow().Value;
 
         palette.SetEntries(s_sources.For(mode));
 
         if (!palette.Open(mode)) ScheduleForegroundRepair(palette);
 
+        Refresh(palette);
+    }
+
+    /// <summary>
+    /// Reads the world and hands it to an open palette.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The one place a read happens, so opening and reacting to a change cannot drift
+    /// apart - which they had, in the small way that matters: one of them primed the
+    /// completions and the other did too, in slightly different words, and a third
+    /// thing added later would have had to remember both.
+    /// </para>
+    /// <para>
+    /// The icons are worked out here, on this thread, before anything is posted. That
+    /// is the whole of the icon performance story: <c>WM_GETICON</c> is a synchronous
+    /// call into another process and must never happen while a frame is being painted.
+    /// </para>
+    /// </remarks>
+    private static void Refresh(PaletteWindow palette)
+    {
         _ = Task.Run(async () =>
         {
-            PaletteSources read = await connection.ReadAsync(s_config.ShowUnmanaged).ConfigureAwait(false);
+            PaletteSources read = await s_connection!
+                .ReadAsync(s_config.ShowUnmanaged, s_config.Macros, s_foreground)
+                .ConfigureAwait(false);
+
+            if (s_config.ShowIcons && read.WindowHandles is { Count: > 0 } handles)
+                WindowIcons.Prime(handles);
 
             Post(() =>
             {
                 s_sources = read;
                 s_completions = read.Completions;
-                palette.SetStatus(read.Status);
 
-                // Same reasoning as MarkStale: the user may have pressed Tab while
-                // this was in flight.
+                palette.SetStatus(read.Status);
+                palette.SetContext(read.FocusedWorkspace, read.WorkspaceNames ?? []);
+
+                // The mode is read here rather than captured, because the user may
+                // have changed it while the query was in flight. Capturing it would
+                // replace the list they are now looking at with the one they were
+                // looking at when the request went out.
                 if (palette.IsOpen) palette.SetEntries(read.For(palette.Mode));
             });
         });
@@ -309,19 +443,11 @@ internal static class Program
     /// leaving a window nobody can reach.
     /// </summary>
     /// <remarks>
-    /// <para>
     /// Taking the foreground fails for reasons that pass: a menu still closing, a drag
     /// still finishing, an application still starting. A second attempt a few frames
     /// later usually succeeds, and doing it after a delay rather than immediately is
-    /// the entire point - an immediate retry hits the same lock.
-    /// </para>
-    /// <para>
-    /// If it still fails the palette is hidden. That is the unobvious half: a window
-    /// that never activated will never be told it has been deactivated, so
-    /// close-on-blur cannot dismiss it, Escape never reaches it, and it sits on top of
-    /// everything looking perfectly normal and answering nothing. Vanishing is a
-    /// worse outcome than working and a much better one than that.
-    /// </para>
+    /// the entire point - an immediate retry hits the same lock. Anything that
+    /// survives that is caught by the loop's own stranded check.
     /// </remarks>
     private static void ScheduleForegroundRepair(PaletteWindow palette)
     {
@@ -331,10 +457,7 @@ internal static class Program
 
             Post(() =>
             {
-                if (!palette.IsOpen || palette.EnsureForeground()) return;
-
-                Log.Warn(LogCategory.Wm, "giving up on the keyboard; putting the palette away");
-                palette.Close();
+                if (palette.IsOpen) _ = palette.EnsureForeground();
             });
         });
     }
@@ -349,25 +472,27 @@ internal static class Program
     /// </remarks>
     private static void MarkStale()
     {
-        if (s_palette is not { IsOpen: true } palette || s_connection is not { } connection) return;
+        if (s_palette is not { IsOpen: true } palette || s_connection is null) return;
 
-        _ = Task.Run(async () =>
-        {
-            PaletteSources read = await connection.ReadAsync(s_config.ShowUnmanaged).ConfigureAwait(false);
+        Refresh(palette);
+    }
 
-            Post(() =>
-            {
-                s_sources = read;
-                s_completions = read.Completions;
-                palette.SetStatus(read.Status);
+    /// <summary>
+    /// The window manager said it was leaving.
+    /// </summary>
+    /// <remarks>
+    /// The palette used to stop with it, which is the wrong half of the relationship:
+    /// it reconnects when the daemon comes back, so shutting down meant a restarted
+    /// window manager had no palette until somebody noticed and started one. Now it
+    /// says so instead - the search box shows "offline" and the empty list explains
+    /// itself - and carries on waiting.
+    /// </remarks>
+    private static void MarkOffline()
+    {
+        s_sources = PaletteSources.Offline;
+        s_completions = CompletionSources.None;
 
-                // The mode is read here rather than captured, because the user may
-                // have changed it while the query was in flight. Capturing it would
-                // replace the list they are now looking at with the one they were
-                // looking at when the event arrived.
-                if (palette.IsOpen) palette.SetEntries(read.For(palette.Mode));
-            });
-        });
+        s_palette?.SetStatus(WmStatus.Offline);
     }
 
     private static void ReloadConfig()

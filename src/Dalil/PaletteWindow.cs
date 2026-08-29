@@ -8,6 +8,7 @@ using Shubbak.Ipc;
 using Shubbak.Native;
 using Shubbak.Ui.Gdi;
 using Shubbak.Ui.Layout;
+using Shubbak.Ui.Rendering;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Dwm;
@@ -64,9 +65,23 @@ public sealed class PaletteWindow : IDisposable
     private HWND _handle;
     private GdiRenderer? _renderer;
     private Rect _bounds;
-    private string _query = string.Empty;
     private bool _open;
     private bool _disposed;
+
+    /// <summary>How many rows the window is currently tall enough for.</summary>
+    private int _rowsShown;
+
+    /// <summary>
+    /// Where "here" is, and everywhere a window could be sent.
+    /// </summary>
+    /// <remarks>
+    /// Kept so that acting on several marked windows can build its own list without a
+    /// round trip. A single row carries its actions with it, built when the row was;
+    /// a set of rows has no such place to hang them, and asking the host at the moment
+    /// Ctrl+Enter is pressed would put a pipe request in front of a keystroke.
+    /// </remarks>
+    private string? _here;
+    private IReadOnlyList<string> _workspaces = [];
 
     /// <summary>
     /// True while the palette is deliberately giving focus away.
@@ -88,6 +103,11 @@ public sealed class PaletteWindow : IDisposable
     /// Set only for an expanded row: copying there has to yield the text as it was
     /// written, not as it happened to be broken to fit this window's width.
     /// </param>
+    /// <param name="Confirms">
+    /// Whether this frame is the one asking whether an irreversible thing should
+    /// happen. Its "yes" row is itself destructive, so without knowing this the choice
+    /// would be routed straight back into another confirmation, for ever.
+    /// </param>
     /// <remarks>
     /// The rows are held here rather than reached back through the row the frame was
     /// opened from. Most frames are a row's own children, but not all: an explanation
@@ -98,7 +118,8 @@ public sealed class PaletteWindow : IDisposable
         string Title,
         string SavedQuery,
         IReadOnlyList<PaletteEntry> Entries,
-        string? Whole = null);
+        string? Whole = null,
+        bool Confirms = false);
 
     /// <summary>Lists opened from a row, innermost last.</summary>
     private readonly Stack<Overlay> _overlays = new();
@@ -140,6 +161,8 @@ public sealed class PaletteWindow : IDisposable
     {
         _config = config;
         _scaled = config;
+        _rowsShown = config.VisibleRows;
+        _model.Prefixes = PalettePrefixes.With(config.Prefixes);
     }
 
     /// <summary>Whether the palette is currently on screen.</summary>
@@ -165,7 +188,7 @@ public sealed class PaletteWindow : IDisposable
             WindowClass,
             "Dalil",
             WINDOW_STYLE.WS_POPUP,
-            0, 0, _config.Width, RequiredHeight(),
+            0, 0, _config.Width, HeightFor(_config.VisibleRows),
             HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
 
         if (_handle.IsNull) return false;
@@ -178,20 +201,8 @@ public sealed class PaletteWindow : IDisposable
     }
 
     /// <summary>Supplies rows derived from the query itself.</summary>
-    /// <remarks>
-    /// Applied only in commands mode; every other mode offers what it was given.
-    /// </remarks>
-    public void Augment(Func<string, IReadOnlyList<PaletteEntry>> compose) =>
-        _model.Augmenter = (mode, term) =>
-            mode is PaletteMode.Commands ? compose(term) : [];
+    public void Augment(QueryAugmenter compose) => _model.Augmenter = compose;
 
-    /// <summary>Replaces the rows on offer.</summary>
-    /// <remarks>
-    /// Ignored while the action list is showing. Window events keep arriving whether
-    /// or not the palette is busy, and a refresh landing mid-decision would replace
-    /// "close it / float it / bring it here" with the window list underneath the
-    /// user's finger - and Enter would then act on whatever had taken that row.
-    /// </remarks>
     /// <summary>Records what the window manager last said about itself.</summary>
     public void SetStatus(WmStatus status)
     {
@@ -199,12 +210,32 @@ public sealed class PaletteWindow : IDisposable
         if (_open) Repaint();
     }
 
+    /// <summary>
+    /// Records where a marked window could be sent.
+    /// </summary>
+    /// <remarks>
+    /// Refreshed with the lists, because a workspace can be created while the palette
+    /// is open and a stale list would offer somewhere that no longer exists.
+    /// </remarks>
+    public void SetContext(string? focusedWorkspace, IReadOnlyList<string> workspaces)
+    {
+        _here = focusedWorkspace;
+        _workspaces = workspaces ?? [];
+    }
+
+    /// <summary>Replaces the rows on offer.</summary>
+    /// <remarks>
+    /// Ignored while a frame is showing. Window events keep arriving whether or not
+    /// the palette is busy, and a refresh landing mid-decision would replace
+    /// "close it / float it / bring it here" with the window list underneath the
+    /// user's finger - and Enter would then act on whatever had taken that row.
+    /// </remarks>
     public void SetEntries(IEnumerable<PaletteEntry> entries)
     {
         if (_overlays.Count > 0) return;
 
         _model.SetEntries(entries);
-        if (_open) Repaint();
+        if (_open) Refreshed();
     }
 
     /// <summary>Applies a reloaded configuration.</summary>
@@ -212,8 +243,11 @@ public sealed class PaletteWindow : IDisposable
     {
         _config = config;
         _scaled = config;
+        _model.Prefixes = PalettePrefixes.With(config.Prefixes);
 
-        if (_open) Repaint();
+        if (!config.ShowIcons) WindowIcons.Clear();
+
+        if (_open) Refreshed();
     }
 
     /// <summary>
@@ -244,11 +278,14 @@ public sealed class PaletteWindow : IDisposable
 
         bool wasOpen = _open;
 
-        // A fresh open is a fresh question, so anything opened last time goes.
+        // A fresh open is a fresh question, so anything opened last time goes - and so
+        // does anything marked. Marks are a sentence somebody was in the middle of;
+        // finding them still set on a palette opened an hour later, and acting on them,
+        // is the worst possible way to discover the feature exists.
         _overlays.Clear();
+        _model.ClearMarks();
 
-        _query = PrefixFor(mode);
-        _model.SetQuery(_query);
+        _model.SetQuery(PrefixFor(mode));
         _closing = false;
 
         if (!wasOpen)
@@ -258,7 +295,7 @@ public sealed class PaletteWindow : IDisposable
         }
 
         _open = true;
-        Repaint();
+        Refreshed();
 
         return EnsureForeground();
     }
@@ -300,8 +337,8 @@ public sealed class PaletteWindow : IDisposable
     /// <remarks>
     /// A palette that failed to activate never became active, so it will never be
     /// told it has been deactivated - which means close-on-blur cannot dismiss it and
-    /// it sits there looking normal and answering nothing. The host uses this to
-    /// notice and put it away rather than leave a window nobody can reach.
+    /// it sits there looking normal and answering nothing. The host polls this and
+    /// puts it away rather than leaving a window nobody can reach.
     /// </remarks>
     public unsafe bool IsStranded =>
         _open && !_handle.IsNull && PInvoke.GetForegroundWindow() != _handle;
@@ -314,6 +351,7 @@ public sealed class PaletteWindow : IDisposable
         // Forgotten on the way out, so the next open starts from the list rather than
         // from whatever was showing when it was dismissed.
         _overlays.Clear();
+        _model.ClearMarks();
 
         _closing = true;
         _open = false;
@@ -324,35 +362,47 @@ public sealed class PaletteWindow : IDisposable
     // ---- input ---------------------------------------------------------------
 
     /// <summary>A printable character was typed.</summary>
+    /// <remarks>
+    /// <para>
+    /// Control characters arrive here too - Enter, Escape, Backspace all produce a
+    /// <c>WM_CHAR</c> - and every one of them is handled as a key rather than as text.
+    /// </para>
+    /// <para>
+    /// So does anything chorded with Ctrl, which is what makes Ctrl+Space a mark rather
+    /// than a space. Not when Alt is also down: that combination is AltGr, and on the
+    /// European layouts this whole exercise is partly for, AltGr is how <c>@</c>,
+    /// <c>#</c>, <c>[</c> and <c>{</c> are typed at all. Filtering on Ctrl alone would
+    /// have made the palette unable to search for an email address on a German
+    /// keyboard.
+    /// </para>
+    /// </remarks>
     private void OnCharacter(char value)
     {
-        // Control characters arrive here too - Enter, Escape, Backspace all produce a
-        // WM_CHAR - and every one of them is handled as a key rather than as text.
         if (char.IsControl(value)) return;
+        if (IsDown(VIRTUAL_KEY.VK_CONTROL) && !IsDown(VIRTUAL_KEY.VK_MENU)) return;
+
+        PaletteMode before = _model.Mode;
 
         // Not simply appended: a prefix typed while there is nothing to search replaces
-        // the mode rather than being searched for. See PaletteInput.Typed.
-        ApplyQuery(PaletteInput.Typed(_query, value));
+        // the mode rather than being searched for. See PaletteModel.AfterTyping.
+        _model.Insert(value);
+
+        Announce(before);
     }
 
     /// <summary>
-    /// Replaces the query, announcing a mode change if one fell out of it.
+    /// Tells the host when a mode change fell out of an edit.
     /// </summary>
     /// <remarks>
-    /// The single place the query changes, so no route into a mode can forget to
-    /// refill the list. There are four: Tab, typing a prefix, deleting one, and
-    /// choosing a row in the help list.
+    /// The single place a mode change is noticed, so no route into a mode can forget
+    /// to refill the list. There are five: Tab, a jump key, typing a prefix, deleting
+    /// one, and choosing a mode from the help list.
     /// </remarks>
-    private void ApplyQuery(string query)
+    private void Announce(PaletteMode before)
     {
-        PaletteMode before = _model.Mode;
-
-        _query = query;
-        _model.SetQuery(_query);
-
         if (_model.Mode != before) ModeChanged?.Invoke(_model.Mode);
 
-        Repaint();
+        Refreshed();
     }
 
     /// <summary>A key that means something other than a character.</summary>
@@ -361,29 +411,45 @@ public sealed class PaletteWindow : IDisposable
     {
         bool control = IsDown(VIRTUAL_KEY.VK_CONTROL);
         bool shift = IsDown(VIRTUAL_KEY.VK_SHIFT);
+        bool alt = IsDown(VIRTUAL_KEY.VK_MENU);
+
+        // Before everything, because a digit is otherwise just a character and would
+        // be typed into the box. Ctrl+Alt is AltGr and belongs to the text.
+        if (!alt && PaletteInput.JumpFor(key, control) is { } jump)
+        {
+            SwitchTo(jump);
+            return true;
+        }
 
         switch (key)
         {
             case VIRTUAL_KEY.VK_ESCAPE:
-                // Backs out of the action list rather than dismissing. Escape means
-                // "not that" one level at a time; throwing the whole palette away
-                // because somebody changed their mind about an action would mean
-                // starting the search again.
+                // Backs out of the frame rather than dismissing. Escape means "not
+                // that" one level at a time; throwing the whole palette away because
+                // somebody changed their mind about an action would mean starting the
+                // search again.
                 if (_overlays.Count > 0) Pop();
                 else Close();
 
                 return true;
 
+            case VIRTUAL_KEY.VK_RETURN when alt:
+                return TryChord(key, control, shift, alt);
+
             case VIRTUAL_KEY.VK_RETURN when control:
                 EnterActions();
                 return true;
 
-            case VIRTUAL_KEY.VK_C when control:
-                Copy(everything: shift);
-                return true;
-
             case VIRTUAL_KEY.VK_RETURN:
                 Choose();
+                return true;
+
+            case VIRTUAL_KEY.VK_SPACE when control && !alt:
+                Mark();
+                return true;
+
+            case VIRTUAL_KEY.VK_C when control:
+                Copy(everything: shift);
                 return true;
 
             case VIRTUAL_KEY.VK_BACK:
@@ -391,9 +457,33 @@ public sealed class PaletteWindow : IDisposable
                 // goes back instead. Escape already did, but Backspace is what a hand
                 // reaches for when the thing on screen arrived by pressing Enter -
                 // and doing nothing at all was the least useful of the three options.
-                if (_query.Length == 0 && _overlays.Count > 0) Pop();
-                else Backspace(wholeWord: control);
+                if (_model.Query.Length == 0 && _overlays.Count > 0) Pop();
+                else Edit(() => _model.DeleteBack(wholeWord: control));
 
+                return true;
+
+            case VIRTUAL_KEY.VK_DELETE:
+                Edit(_model.DeleteForward);
+                return true;
+
+            case VIRTUAL_KEY.VK_LEFT:
+                _model.MoveCaret(-1);
+                Repaint();
+                return true;
+
+            case VIRTUAL_KEY.VK_RIGHT:
+                _model.MoveCaret(1);
+                Repaint();
+                return true;
+
+            case VIRTUAL_KEY.VK_HOME when !control:
+                _model.CaretToEdge(end: false);
+                Repaint();
+                return true;
+
+            case VIRTUAL_KEY.VK_END when !control:
+                _model.CaretToEdge(end: true);
+                Repaint();
                 return true;
 
             case VIRTUAL_KEY.VK_UP:
@@ -405,11 +495,11 @@ public sealed class PaletteWindow : IDisposable
                 return true;
 
             case VIRTUAL_KEY.VK_PRIOR:
-                Move(-_scaled.VisibleRows);
+                Move(-_rowsShown);
                 return true;
 
             case VIRTUAL_KEY.VK_NEXT:
-                Move(_scaled.VisibleRows);
+                Move(_rowsShown);
                 return true;
 
             case VIRTUAL_KEY.VK_HOME when control:
@@ -423,7 +513,7 @@ public sealed class PaletteWindow : IDisposable
                 return true;
 
             case VIRTUAL_KEY.VK_TAB:
-                CycleMode(forward: !shift);
+                SwitchTo(_model.NextMode(forward: !shift));
                 return true;
 
             // The Emacs-style pair, because a palette is a text field and every other
@@ -439,76 +529,121 @@ public sealed class PaletteWindow : IDisposable
                 return true;
 
             case VIRTUAL_KEY.VK_U when control:
-                ApplyQuery(string.Empty);
+                Edit(_model.ClearTerm);
                 return true;
 
             default:
-                return TryChord(key, control, shift);
+                return TryChord(key, control, shift, alt);
         }
     }
 
+    /// <summary>Runs an edit and reports whatever it did to the mode.</summary>
+    private void Edit(Action edit)
+    {
+        PaletteMode before = _model.Mode;
+
+        edit();
+
+        Announce(before);
+    }
+
     /// <summary>
-    /// Acts on a chord, from the main list or from inside a list of actions.
+    /// Marks or unmarks the selected window.
+    /// </summary>
+    /// <remarks>
+    /// Ctrl+Space rather than Space, which is a character somebody is very likely to
+    /// be typing: window titles are full of them. Moving down afterwards, so marking
+    /// six windows in a row is six presses of one chord rather than twelve keystrokes
+    /// alternating with the arrow key.
+    /// </remarks>
+    private void Mark()
+    {
+        if (!_model.ToggleMark()) return;
+
+        _model.MoveSelection(1);
+        Repaint();
+    }
+
+    /// <summary>
+    /// Acts on a chord, from the main list or from inside a frame.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Where a chord acts is decided by <see cref="PaletteInput.ChordActsHere"/>, which
-    /// is where that rule lives and where it is tested. In short: always inside the
-    /// action list, because that is the only place the chord is written down; and from
-    /// the main list only when the guard is off, which is what the guard is for.
+    /// Always, now. The chords used to be gated behind <c>action-guard</c>, whose
+    /// default disabled every one of them except inspecting - while the action list
+    /// went on printing them as badges beside the rows they belonged to. So the keys
+    /// were advertised in the one place they were redundant, and refused in the only
+    /// place they would have saved anything.
     /// </para>
     /// <para>
-    /// The two look in different places for the same thing. From the main list the
-    /// chords belong to the selected row's actions; inside the list the rows are those
-    /// actions, and each carries its own.
+    /// What replaced the guard is narrower and stricter: the two actions that cannot be
+    /// undone ask first, by whichever route they were reached. Closing a window is now
+    /// harder than it was with the guard on, and floating one is eight keystrokes
+    /// easier.
+    /// </para>
+    /// <para>
+    /// The two lookups look in different places for the same thing. From the main list
+    /// the chords belong to the selected row's actions; inside a frame the rows are
+    /// those actions, and each carries its own.
     /// </para>
     /// </remarks>
-    private bool TryChord(VIRTUAL_KEY key, bool control, bool shift)
+    private bool TryChord(VIRTUAL_KEY key, bool control, bool shift, bool alt)
     {
-        if (PaletteInput.ChordFor(key, control, shift) is not { } wanted) return false;
+        if (PaletteInput.ChordFor(key, control, shift, alt) is not { } wanted) return false;
 
-        bool inside = _overlays.Count > 0;
-
-        if (!PaletteInput.ChordActsHere(wanted, inside, _config.ActionGuard)) return false;
-
-        if (inside)
+        if (_overlays.Count > 0)
         {
             // The frame's own rows rather than the filtered ones. A chord names the
             // action, not whatever happens to have survived what is typed in the box.
             PaletteEntry? row = _overlays.Peek().Entries
                 .FirstOrDefault(e => string.Equals(e.Chord, wanted, StringComparison.Ordinal));
 
-            return row is not null && Act(row.Command, row.Explains, row.Primary);
+            return row is not null && Act(row, row.Primary);
         }
 
         if (_model.Selected is not { } selected) return false;
-        if (selected.Entry.Actions is not { Count: > 0 } actions) return false;
-
+        if (selected.Entry.ResolveActions() is not { Count: > 0 } actions) return false;
         if (actions.FirstOrDefault(a => a.Chord == wanted) is not { } action) return false;
 
-        return Act(action.Command, action.Explains, selected.Entry.Primary);
+        return Act(
+            new PaletteEntry(
+                action.Name, action.Description, [], action.Command,
+                Explains: action.Explains, Expands: action.Expands,
+                Destructive: action.Destructive),
+            selected.Entry.Primary);
     }
 
     /// <summary>Does what a chord selected, and says whether anything happened.</summary>
     /// <remarks>
     /// Explaining leaves the palette open, exactly as choosing the same row from the
-    /// list does: the report is fetched and needs somewhere to arrive. Everything else
-    /// closes first, because the command usually raises another window and a palette
-    /// still topmost would cover the thing that was just asked for.
+    /// list does: the report is fetched and needs somewhere to arrive. So does asking
+    /// about something irreversible. Everything else closes first, because the command
+    /// usually raises another window and a palette still topmost would cover the thing
+    /// that was just asked for.
     /// </remarks>
-    private bool Act(string command, long? explains, string leaf)
+    private bool Act(PaletteEntry action, string leaf)
     {
-        if (explains is { } handle)
+        if (action.Explains is { } handle)
         {
             ExplainRequested?.Invoke(handle, Breadcrumb(leaf));
             return true;
         }
 
-        if (command.Length == 0) return false;
+        if (action.Expands is { Length: > 0 } whole)
+        {
+            Expand(whole, Breadcrumb(action.Primary));
+            return true;
+        }
 
-        Close();
-        CommandRequested?.Invoke(command);
+        if (action.Command.Length == 0) return false;
 
+        if (action.Destructive && _config.ConfirmDestructive)
+        {
+            Confirm(action.Primary, action.Command, leaf);
+            return true;
+        }
+
+        Send(action.Command);
         return true;
     }
 
@@ -521,28 +656,35 @@ public sealed class PaletteWindow : IDisposable
     /// from within the actions. A single slot could only ever hold one of the two, and
     /// Escape from the deeper one would have thrown the whole palette away.
     /// </remarks>
-    public void Push(string title, IReadOnlyList<PaletteEntry> entries)
+    public void Push(string title, IReadOnlyList<PaletteEntry> entries) =>
+        Push(title, entries, whole: null, confirms: false);
+
+    private void Push(
+        string title, IReadOnlyList<PaletteEntry> entries, string? whole, bool confirms)
     {
         if (entries.Count == 0) return;
 
-        _overlays.Push(new Overlay(title, _query, entries));
+        _overlays.Push(new Overlay(title, _model.Query, entries, whole, confirms));
 
-        _query = string.Empty;
-        _model.SetQuery(_query);
+        _model.SetQuery(string.Empty);
         _model.SetEntries(entries);
 
-        Repaint();
+        Refreshed();
     }
+
+    /// <summary>Asks whether something irreversible should really happen.</summary>
+    private void Confirm(string what, string command, string subject) =>
+        Push(Breadcrumb(subject), PaletteActions.Confirmation(what, command), whole: null, confirms: true);
 
     /// <summary>
     /// Opens one row's whole text, broken across as many rows as it needs.
     /// </summary>
     /// <remarks>
-    /// The answer to a report row being one clipped line. Rather than teaching the
-    /// palette to wrap - which would mean variable row heights, a measuring layout
-    /// pass and a window that resizes underneath the selection - the text becomes
-    /// several ordinary rows in an ordinary frame, and Escape leaves it exactly the
-    /// way Escape leaves an action list.
+    /// The answer to a report row being one clipped line, and to a composed rule being
+    /// twelve of them. Rather than teaching the palette to wrap - which would mean
+    /// variable row heights, a measuring layout pass and a window that resizes
+    /// underneath the selection - the text becomes several ordinary rows in an ordinary
+    /// frame, and Escape leaves it the way Escape leaves an action list.
     /// </remarks>
     private void Expand(string whole, string title)
     {
@@ -551,20 +693,14 @@ public sealed class PaletteWindow : IDisposable
         // The width a row's text actually gets, which is what it has to be broken to
         // fit. Measured against the same renderer that will draw it.
         PaletteLayout layout = Layout();
-        int width = layout.RowBounds(0).Width - (layout.TextInset * 2);
+        int width = layout.RowBounds(0).Width - layout.RowTextInset - layout.TextInset;
 
         IReadOnlyList<PaletteEntry> lines =
             PaletteEntries.ForWrapped(whole, width, text => renderer.Measure(text, RowFont()).Width);
 
         if (lines.Count == 0) return;
 
-        _overlays.Push(new Overlay(title, _query, lines, whole));
-
-        _query = string.Empty;
-        _model.SetQuery(_query);
-        _model.SetEntries(lines);
-
-        Repaint();
+        Push(title, lines, whole, confirms: false);
     }
 
     /// <summary>
@@ -590,12 +726,45 @@ public sealed class PaletteWindow : IDisposable
         Push(title, PaletteEntries.ForReportFailure(reason));
     }
 
-    /// <summary>Shows what can be done to the selected row.</summary>
+    /// <summary>
+    /// Shows what can be done to the selected row, or to everything marked.
+    /// </summary>
+    /// <remarks>
+    /// Marks win. Somebody who has marked four windows and pressed Ctrl+Enter is asking
+    /// about the four, not about whichever one the selection happens to be resting on -
+    /// and if they were not, the count in the corner has been telling them so since the
+    /// first mark.
+    /// </remarks>
     private void EnterActions()
     {
-        if (_model.Selected?.Entry is not { Actions.Count: > 0 } entry) return;
+        if (_model.MarkedCount > 0)
+        {
+            List<string> targets = [.. _model.Marked.Select(e => e.Target!).Where(t => t is not null)];
 
-        Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.Actions));
+            IReadOnlyList<PaletteAction> bulk = PaletteActions.ForMany(targets, _here, _workspaces);
+            if (bulk.Count == 0) return;
+
+            List<PaletteEntry> rows = [.. PaletteActions.AsEntries(bulk)];
+
+            // The way out. Marks are otherwise cleared only by unmarking each one or by
+            // dismissing the palette, and somebody who has changed their mind about a
+            // set of six should not have to do either.
+            rows.Add(new PaletteEntry(
+                "Clear the marks",
+                "Leave every window alone",
+                [],
+                PaletteEntries.BuiltinClearMarks,
+                Rank: -1));
+
+            string many = targets.Count == 1 ? "1 window" : $"{targets.Count} windows";
+
+            Push(many, rows);
+            return;
+        }
+
+        if (_model.Selected?.Entry is not { HasActions: true } entry) return;
+
+        Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.ResolveActions()));
     }
 
     /// <summary>The title for a list opened from a row, in context.</summary>
@@ -614,18 +783,23 @@ public sealed class PaletteWindow : IDisposable
     /// one out of the palette was to read it off the screen and retype it.
     /// </para>
     /// <para>
-    /// What text that produces is decided by <see cref="PaletteInput.CopyText"/>. The
-    /// palette stays open either way: copying is not choosing, and closing on it would
-    /// take away the list somebody is working through one line at a time.
+    /// A window row is copied with its dim half attached, because the reason to copy
+    /// one is almost always to put its class or its process into a rule and both of
+    /// those live there. Copying the title alone handed over the one attribute
+    /// guaranteed to be the wrong thing to match on.
     /// </para>
     /// </remarks>
     private void Copy(bool everything)
     {
-        string? text = PaletteInput.CopyText(
-            _model.Selected?.Entry,
-            _model.Rows.Select(r => r.Entry),
-            _overlays.Count > 0 ? _overlays.Peek().Whole : null,
-            everything);
+        string? text = everything
+            ? PaletteInput.CopyText(
+                _model.Selected?.Entry,
+                _model.Rows.Select(r => r.Entry),
+                _overlays.Count > 0 ? _overlays.Peek().Whole : null,
+                everything: true)
+            : _model.Selected?.Entry is { } row
+                ? PaletteInput.DescribeForClipboard(row)
+                : null;
 
         if (string.IsNullOrEmpty(text)) return;
 
@@ -646,21 +820,20 @@ public sealed class PaletteWindow : IDisposable
 
         Overlay frame = _overlays.Pop();
 
-        _query = frame.SavedQuery;
-
         if (_overlays.Count > 0)
         {
             _model.SetEntries(_overlays.Peek().Entries);
+            _model.SetQuery(frame.SavedQuery);
         }
         else
         {
             // Back to the mode's own list, which the host owns and restores. The
             // window never kept a copy to go stale.
+            _model.SetQuery(frame.SavedQuery);
             ModeChanged?.Invoke(_model.Mode);
         }
 
-        _model.SetQuery(_query);
-        Repaint();
+        Refreshed();
     }
 
     private void Move(int delta)
@@ -688,7 +861,7 @@ public sealed class PaletteWindow : IDisposable
 
         TrackMouseLeaving();
 
-        (int first, int count) = _model.VisibleWindow(_scaled.VisibleRows);
+        (int first, int count) = _model.VisibleWindow(_rowsShown);
         int slot = Layout().SlotAt(x, y);
 
         if (slot < 0 || slot >= count) return;
@@ -700,7 +873,7 @@ public sealed class PaletteWindow : IDisposable
 
     private void OnClick(int x, int y)
     {
-        (int first, int count) = _model.VisibleWindow(_scaled.VisibleRows);
+        (int first, int count) = _model.VisibleWindow(_rowsShown);
         int slot = Layout().SlotAt(x, y);
 
         // A click on the chrome selects nothing rather than acting on whatever row is
@@ -719,10 +892,7 @@ public sealed class PaletteWindow : IDisposable
     /// separate scroll offset - the visible window is computed from the selection, so
     /// the two can never disagree.
     /// </remarks>
-    private void OnWheel(int delta)
-    {
-        Move(delta > 0 ? -3 : 3);
-    }
+    private void OnWheel(int delta) => Move(delta > 0 ? -3 : 3);
 
     /// <summary>Asks to be told when the pointer leaves, once.</summary>
     private unsafe void TrackMouseLeaving()
@@ -740,48 +910,12 @@ public sealed class PaletteWindow : IDisposable
     }
 
     /// <summary>
-    /// Deletes backwards, by character or by word.
-    /// </summary>
-    /// <remarks>
-    /// A mode prefix is deleted as one thing rather than left behind as a lone
-    /// punctuation mark, which would leave the palette in a mode the user thought
-    /// they had just backed out of.
-    /// </remarks>
-    private void Backspace(bool wholeWord)
-    {
-        if (_query.Length == 0) return;
-
-        if (wholeWord)
-        {
-            int cut = _query.TrimEnd().LastIndexOf(' ');
-            ApplyQuery(cut <= 0 ? string.Empty : _query[..(cut + 1)]);
-            return;
-        }
-
-        ApplyQuery(_query[..^1]);
-    }
-
-    private void CycleMode(bool forward)
-    {
-        PaletteMode[] modes = Enum.GetValues<PaletteMode>();
-        int at = Array.IndexOf(modes, _model.Mode);
-        int next = ((at + (forward ? 1 : -1)) % modes.Length + modes.Length) % modes.Length;
-
-        SwitchTo(modes[next]);
-    }
-
-    /// <summary>
     /// Acts on the selected row.
     /// </summary>
     /// <remarks>
     /// What a row does is decided by <see cref="PaletteInput.Choose"/>, which is where
     /// that reasoning lives and where it is tested. This is the half that needs a
     /// window: sending, opening and closing.
-    /// <para>
-    /// Closed before a command is sent, deliberately. The command usually raises
-    /// another window, and a palette still on screen and still topmost when that
-    /// happens covers the thing the user just asked to see.
-    /// </para>
     /// </remarks>
     private void Choose()
     {
@@ -789,7 +923,15 @@ public sealed class PaletteWindow : IDisposable
 
         PaletteEntry entry = row.Entry;
 
-        switch (PaletteInput.Choose(entry, _model.Mode, _overlays.Count > 0))
+        bool inside = _overlays.Count > 0;
+        bool confirming = inside && _overlays.Peek().Confirms;
+
+        // Not inside the frame that is already asking. Its "yes" row is itself marked
+        // destructive - which is what draws it in the warning colour - so routing it
+        // back through the same test would ask the same question for ever.
+        bool confirm = _config.ConfirmDestructive && !confirming;
+
+        switch (PaletteInput.Choose(entry, _model.Mode, inside, confirm))
         {
             case PaletteChoice.SwitchMode:
                 SwitchTo(entry.SwitchesTo!.Value);
@@ -807,23 +949,51 @@ public sealed class PaletteWindow : IDisposable
                 return;
 
             case PaletteChoice.OpenChildren:
-                Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.Actions!));
+                Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.ResolveActions()));
                 return;
 
             case PaletteChoice.Complete:
-                _query = ">" + entry.Primary + " ";
-                _model.SetQuery(_query);
-                Repaint();
+                _model.SetQuery(">" + entry.Primary + " ");
+                Refreshed();
+                return;
+
+            case PaletteChoice.Confirm:
+                Confirm(entry.Primary, entry.Command, entry.Primary);
                 return;
 
             case PaletteChoice.Run:
-                Close();
-                CommandRequested?.Invoke(entry.Command);
+                Send(entry.Command);
                 return;
 
             default:
                 return;
         }
+    }
+
+    /// <summary>
+    /// Sends a command, or handles the ones the palette answers itself.
+    /// </summary>
+    /// <remarks>
+    /// Closed before a command goes out, deliberately. The command usually raises
+    /// another window, and a palette still on screen and still topmost when that
+    /// happens covers the thing the user just asked to see.
+    /// <para>
+    /// Clearing the marks is the exception that stays open: it is a correction, and
+    /// dismissing the palette because somebody corrected themselves would throw away
+    /// the search that got them there.
+    /// </para>
+    /// </remarks>
+    private void Send(string command)
+    {
+        if (string.Equals(command, PaletteEntries.BuiltinClearMarks, StringComparison.Ordinal))
+        {
+            _model.ClearMarks();
+            Pop();
+            return;
+        }
+
+        Close();
+        CommandRequested?.Invoke(command);
     }
 
     /// <summary>What the search box calls the list currently showing.</summary>
@@ -832,35 +1002,80 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>Changes mode and tells the host to refill the list.</summary>
     private void SwitchTo(PaletteMode mode)
     {
+        // A frame is about one row of the list underneath it. Changing which list that
+        // is while a report or an action list is open would leave the frame describing
+        // something that is no longer there.
+        _overlays.Clear();
+
         _model.SetMode(mode);
-        _query = _model.Query;
 
         ModeChanged?.Invoke(mode);
-        Repaint();
+        Refreshed();
     }
 
     // ---- placement -------------------------------------------------------------
 
     /// <summary>
-    /// How tall the palette needs to be.
+    /// How tall the palette needs to be for a given number of rows.
     /// </summary>
     /// <remarks>
     /// A search row, the results, and a hint bar. The hint bar is not optional: mode
     /// prefixes are punctuation, and punctuation nobody is shown is punctuation nobody
     /// finds.
     /// </remarks>
-    private int RequiredHeight()
+    private int HeightFor(int rows)
     {
         // Asked of a layout rather than assembled here, so the height the window is
         // given and the positions drawn inside it come from the same arithmetic.
         var probe = new PaletteLayout(_scaled, _scale, new Rect(0, 0, _scaled.Width, 0));
 
-        return probe.ListTop + (_scaled.RowHeight * _scaled.VisibleRows) + probe.HintBar;
+        return probe.ListTop + (_scaled.RowHeight * Math.Max(1, rows)) + probe.HintBar;
+    }
+
+    /// <summary>
+    /// Resizes to fit what is being shown, then repaints.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A search that matched two things used to be drawn as two rows above ten rows of
+    /// empty background, which reads as the window having failed to finish drawing.
+    /// </para>
+    /// <para>
+    /// Only when the number of rows has actually changed, which is the whole of the
+    /// cost control: typing narrows the list a row at a time, so this fires perhaps
+    /// four times over a word rather than on every keystroke, and a
+    /// <c>SetWindowPos</c> on a small popup with no move, no z-order change and no
+    /// activation is a few microseconds. The window grows downwards from a fixed top
+    /// edge, so nothing the eye is reading moves.
+    /// </para>
+    /// </remarks>
+    private void Refreshed()
+    {
+        if (_open && _config.ShrinkToFit && !_handle.IsNull)
+        {
+            int rows = _model.RowsToShow(_scaled.VisibleRows);
+
+            if (rows != _rowsShown)
+            {
+                _rowsShown = rows;
+
+                int height = HeightFor(rows);
+                _bounds = new Rect(_bounds.X, _bounds.Y, _bounds.Width, height);
+
+                PInvoke.SetWindowPos(
+                    _handle, HWND.Null, 0, 0, _bounds.Width, height,
+                    SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
+                    SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+                    SET_WINDOW_POS_FLAGS.SWP_NOMOVE);
+            }
+        }
+
+        Repaint();
     }
 
     /// <summary>The layout for the window as it currently stands.</summary>
     private PaletteLayout Layout() =>
-        new(_scaled, _scale, new Rect(0, 0, _bounds.Width, _bounds.Height));
+        new(_scaled, _scale, new Rect(0, 0, _bounds.Width, _bounds.Height), _config.ShowIcons);
 
     /// <summary>The font a row's own text is drawn in.</summary>
     /// <remarks>
@@ -899,7 +1114,7 @@ public sealed class PaletteWindow : IDisposable
 
         // Onto the monitor first, so the DPI read below is that monitor's.
         PInvoke.SetWindowPos(
-            _handle, HWND.Null, work.left + 32, work.top + 32, _scaled.Width, RequiredHeight(),
+            _handle, HWND.Null, work.left + 32, work.top + 32, _scaled.Width, HeightFor(_rowsShown),
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
 
         uint dpi = PInvoke.GetDpiForWindow(_handle);
@@ -912,8 +1127,14 @@ public sealed class PaletteWindow : IDisposable
             FontSize = (int)Math.Round(_config.FontSize * _scale),
         };
 
+        // The full height, whatever is about to be shown in it. The list is filled in
+        // straight afterwards and will shrink the window if it needs to; starting from
+        // the largest size means the top edge is placed once, for the tallest the
+        // window can be, and never moves again.
+        _rowsShown = _scaled.VisibleRows;
+
         int width = Math.Min(_scaled.Width, work.right - work.left - 64);
-        int height = RequiredHeight();
+        int height = HeightFor(_rowsShown);
 
         // A third of the way down rather than centred: the eye goes there first, and
         // it leaves the window being searched for visible underneath.
@@ -989,7 +1210,15 @@ public sealed class PaletteWindow : IDisposable
 
         try
         {
-            PaletteRenderer.Draw(_renderer, _model, _scaled, Layout(), OverlayTitle());
+            PaletteRenderer.Draw(
+                _renderer, _model, _scaled, Layout(),
+                new PaletteChrome(
+                    OverlayTitle(),
+
+                    // A pure dictionary read. Nothing on the paint path is allowed to
+                    // ask another process anything - see WindowIcons.
+                    _config.ShowIcons ? WindowIcons.Get : null,
+                    _config.ShowIcons ? _renderer : null));
         }
         finally
         {
@@ -999,8 +1228,8 @@ public sealed class PaletteWindow : IDisposable
 
     // ---- window plumbing --------------------------------------------------------
 
-    private static string PrefixFor(PaletteMode mode) =>
-        PaletteModel.PrefixFor(mode) is var prefix && prefix != '\0'
+    private string PrefixFor(PaletteMode mode) =>
+        _model.Prefixes.PrefixFor(mode) is var prefix && prefix != '\0'
             ? prefix.ToString()
             : string.Empty;
 

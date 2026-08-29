@@ -6,6 +6,7 @@ using Shubbak.Ui.Rendering;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
+using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Shubbak.Ui.Gdi;
 
@@ -32,7 +33,7 @@ namespace Shubbak.Ui.Gdi;
 /// time any value changes.
 /// </para>
 /// </remarks>
-public sealed class GdiRenderer : IRenderer
+public sealed class GdiRenderer : IRenderer, IIconRenderer
 {
     private readonly HWND _window;
 
@@ -283,6 +284,48 @@ public sealed class GdiRenderer : IRenderer
         {
             PInvoke.SelectObject(_memoryDc, previousFont);
         }
+    }
+
+    // ---- icons -------------------------------------------------------------
+
+    /// <summary>
+    /// Draws an icon into the back buffer, scaled to the rectangle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>DrawIconEx</c> with an explicit size rather than <c>DrawIcon</c>, because the
+    /// latter draws at whatever size the icon happens to be and the palette's rows are
+    /// sized by the user's font. A 32-pixel icon dropped into a 16-pixel square without
+    /// scaling covers the title next to it.
+    /// </para>
+    /// <para>
+    /// <c>DI_NORMAL</c> blends the icon's mask and image, which is what gives a
+    /// transparent background over whatever the row is painted in. The back buffer has
+    /// no alpha channel, so this is the only way the corners come out right.
+    /// </para>
+    /// <para>
+    /// Failure is silent by design. An icon handle can be stale by the time it is
+    /// drawn - the application that owned it may have exited between the list being
+    /// built and the frame being painted - and a missing icon is a cosmetic loss, not
+    /// something worth interrupting a paint over.
+    /// </para>
+    /// </remarks>
+    public void DrawIcon(nint icon, Rect rect)
+    {
+        if (icon == 0 || rect.IsEmpty || _memoryDc.IsNull) return;
+
+        Rect local = ToLocal(rect);
+
+        _ = PInvoke.DrawIconEx(
+            _memoryDc,
+            local.Left,
+            local.Top,
+            new HICON(icon),
+            local.Width,
+            local.Height,
+            0,
+            HBRUSH.Null,
+            DI_FLAGS.DI_NORMAL);
     }
 
     // ---- resources ---------------------------------------------------------

@@ -43,6 +43,23 @@ public readonly record struct MatchResult(int Score, int Matched)
 /// </remarks>
 public static class FuzzyMatcher
 {
+    /// <summary>
+    /// How many matched positions a caller should make room for.
+    /// </summary>
+    /// <remarks>
+    /// A query longer than this still matches and still scores; only the highlighting
+    /// stops being recorded past the limit, because <see cref="Match(ReadOnlySpan{char}, ReadOnlySpan{char}, Span{int})"/>
+    /// writes a position only while there is somewhere to put it. Callers slicing the
+    /// span by <see cref="MatchResult.Matched"/> must clamp to the span they supplied -
+    /// the count is how many characters matched, not how many were written down.
+    /// <para>
+    /// Sized for a search box rather than for a document. Nobody types sixty-four
+    /// characters to find a window, and a stack buffer large enough for somebody who
+    /// pasted a paragraph would be paid for on every candidate on every keystroke.
+    /// </para>
+    /// </remarks>
+    public const int MaxPositions = 64;
+
     // Tuned against the behaviour that annoys rather than against a benchmark.
     // Chosen so that a prefix beats an abbreviation, an abbreviation beats a scatter,
     // and a short candidate beats a long one when both otherwise tie.

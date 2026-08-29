@@ -29,8 +29,8 @@ public sealed class PaletteModelTests
     [Fact]
     public void NoPrefixMeansWindows()
     {
-        Assert.Equal(PaletteMode.Windows, PaletteModel.ModeOf(""));
-        Assert.Equal(PaletteMode.Windows, PaletteModel.ModeOf("chrome"));
+        Assert.Equal(PaletteMode.Windows, PalettePrefixes.Default.ModeOf(""));
+        Assert.Equal(PaletteMode.Windows, PalettePrefixes.Default.ModeOf("chrome"));
     }
 
     [Theory]
@@ -39,7 +39,7 @@ public sealed class PaletteModelTests
     [InlineData("~fib", PaletteMode.Layouts)]
     public void APrefixSelectsAMode(string query, PaletteMode expected)
     {
-        Assert.Equal(expected, PaletteModel.ModeOf(query));
+        Assert.Equal(expected, PalettePrefixes.Default.ModeOf(query));
     }
 
     [Fact]

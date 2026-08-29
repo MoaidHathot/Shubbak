@@ -84,3 +84,13 @@ DPI_AWARENESS_CONTEXT
 GetDpiForWindow
 DwmSetWindowAttribute
 DWMWINDOWATTRIBUTE
+
+// --- application icons ---------------------------------------------------------------
+// Asked for on a background thread and cached, never from the paint path: WM_GETICON is
+// a synchronous cross-process call and a hung application would otherwise stall a frame.
+// See WindowIcons.
+SendMessageTimeout
+SEND_MESSAGE_TIMEOUT_FLAGS
+GetClassLongPtr
+GET_CLASS_LONG_INDEX
+WM_GETICON

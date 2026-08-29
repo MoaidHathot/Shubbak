@@ -26,9 +26,10 @@ public sealed class PaletteEntriesTests
         bool sticky = false,
         bool elevated = false,
         long focusSequence = 0,
-        string? summary = null) =>
+        string? summary = null,
+        string monitor = "\\\\.\\DISPLAY1") =>
         new(handle, title, className, process, 42, elevated, managed, reason, state,
-            concealment, workspace, true, "\\\\.\\DISPLAY1", sticky, false, focusSequence,
+            concealment, workspace, true, monitor, sticky, false, focusSequence,
             Scratchpad: null, Tags: null, ExclusionSummary: summary);
 
     [Fact]
@@ -130,8 +131,8 @@ public sealed class PaletteEntriesTests
             Window(managed: false, workspace: null, summary: "not adopted yet"),
         ]));
 
-        Assert.NotNull(entry.Actions);
-        Assert.Contains(entry.Actions!, a => a.Name == "Manage it");
+        Assert.True(entry.HasActions);
+        Assert.Contains(entry.ResolveActions(), a => a.Name == "Manage it");
     }
 
     [Fact]
@@ -148,9 +149,76 @@ public sealed class PaletteEntriesTests
     [Fact]
     public void RecencyBecomesTheRowsRank()
     {
-        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Window(focusSequence: 17)]));
+        // The most recently focused windows are ranked strictly by recency and above
+        // everything else, so the list is alt-tab before anything has been typed. The
+        // absolute number is not the sequence any more - it is a position - so what
+        // matters is the ordering, and that it beats anything ranked by proximity.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForWindows(
+        [
+            Window(title: "older", handle: 1, focusSequence: 3),
+            Window(title: "newest", handle: 2, focusSequence: 17),
+        ]);
 
-        Assert.Equal(17, entry.Rank);
+        PaletteEntry newest = entries.Single(e => e.Primary == "newest");
+        PaletteEntry older = entries.Single(e => e.Primary == "older");
+
+        Assert.True(newest.Rank > older.Rank);
+    }
+
+    [Fact]
+    public void TheEightMostRecentKeepPureRecencyWhereverTheyAre()
+    {
+        // The window list is used for two things that want opposite orderings.
+        // Switching between the few windows you have been using is alt-tab and wants
+        // recency absolutely; finding one you have lost is a search through everything
+        // else, where recency means nothing because the thing has not been focused.
+        // So only the tail is regrouped by proximity.
+        List<WindowCandidate> windows = [];
+
+        for (int i = 0; i < PaletteEntries.RecentlyFocusedCount; i++)
+        {
+            windows.Add(Window(
+                title: $"recent{i}",
+                handle: 100 + i,
+                focusSequence: 1000 - i,
+                workspace: "elsewhere",
+                monitor: @"\\.\DISPLAY9"));
+        }
+
+        // Right beside the user, and never focused.
+        windows.Add(Window(title: "near", handle: 9, focusSequence: 0, workspace: "here"));
+
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForWindows(
+            windows, focusedWorkspace: "here", focusedMonitor: @"\\.\DISPLAY1");
+
+        long near = entries.Single(e => e.Primary == "near").Rank;
+
+        foreach (PaletteEntry recent in entries.Where(e => e.Primary.StartsWith("recent", StringComparison.Ordinal)))
+            Assert.True(recent.Rank > near, $"{recent.Primary} should outrank a window merely nearby");
+    }
+
+    [Fact]
+    public void BeyondThatTheNearestWindowsComeFirst()
+    {
+        // On a three-monitor desktop the tail of the list used to be ordered by a
+        // recency that is mostly zero, which is to say by nothing at all - so a window
+        // on the screen the user is looking at sat wherever chance put it.
+        List<WindowCandidate> windows = [];
+
+        for (int i = 0; i < PaletteEntries.RecentlyFocusedCount; i++)
+            windows.Add(Window(title: $"recent{i}", handle: 100 + i, focusSequence: 1000 - i));
+
+        windows.Add(Window(title: "far", handle: 1, workspace: "3", monitor: @"\\.\DISPLAY2"));
+        windows.Add(Window(title: "same screen", handle: 2, workspace: "4", monitor: @"\\.\DISPLAY1"));
+        windows.Add(Window(title: "same workspace", handle: 3, workspace: "here", monitor: @"\\.\DISPLAY1"));
+
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForWindows(
+            windows, focusedWorkspace: "here", focusedMonitor: @"\\.\DISPLAY1");
+
+        long Rank(string title) => entries.Single(e => e.Primary == title).Rank;
+
+        Assert.True(Rank("same workspace") > Rank("same screen"));
+        Assert.True(Rank("same screen") > Rank("far"));
     }
 
     [Fact]
@@ -735,5 +803,261 @@ public sealed class PaletteEntriesTests
         // Push refuses an empty frame, so returning nothing would make Enter appear to
         // do nothing at all.
         Assert.Single(PaletteEntries.ForWrapped(string.Empty, 100, Measure));
+    }
+
+    // ---- badges the row can actually afford ------------------------------------------
+
+    [Fact]
+    public void TheBadgesThatExplainWhereAWindowWentComeFirst()
+    {
+        // The order is load-bearing rather than incidental. A row has room for two or
+        // three badges and a window can easily earn six, so some are always dropped -
+        // and the renderer draws this list from the front, pinning the first to the
+        // right-hand edge. It used to draw from the back and give up when it ran out of
+        // width, which dropped "unmanaged" and "minimised" and kept "elevated".
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows(
+        [
+            Window(managed: false, workspace: null, concealment: "minimised", elevated: true),
+        ]));
+
+        Assert.Equal("unmanaged", entry.Badges[0]);
+        Assert.Equal("minimised", entry.Badges[1]);
+        Assert.Equal("elevated", entry.Badges[^1]);
+    }
+
+    [Fact]
+    public void AWindowTaggedOntoEverywhereDoesNotLoseItsOwnName()
+    {
+        // A window can be tagged onto every workspace on the machine, and the author
+        // runs nineteen of them. Unbounded, this badge is wider than the row and takes
+        // the title with it - so the one window that had been made to follow you
+        // everywhere became the one window you could not read the name of.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows(
+            [Tagged("1", "1", "2", "3", "4", "5", "6")]));
+
+        string badge = entry.Badges.Single(b => b.StartsWith("also on", StringComparison.Ordinal));
+
+        Assert.Equal("also on 2, 3 +3", badge);
+    }
+
+    [Fact]
+    public void ACoupleOfWorkspacesAreStillNamedInFull()
+    {
+        // Counting two is less useful than naming them, and there is room.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Tagged("1", "1", "2", "3")]));
+
+        Assert.Contains("also on 2, 3", entry.Badges);
+    }
+
+    // ---- what a row is about ------------------------------------------------------------
+
+    [Fact]
+    public void AWindowRowKnowsHowToAimAtItsOwnWindow()
+    {
+        // Which is what makes it markable. Acting on several rows at once means knowing
+        // how to aim at each of them, one at a time, in one message - and recovering
+        // that by parsing a handle back out of a command string is the kind of thing
+        // that breaks quietly the day the command format changes.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows([Window(handle: 0x100)]));
+
+        Assert.Equal("focus-window 256", entry.Target);
+        Assert.Equal(0x100, entry.IconHandle);
+    }
+
+    [Fact]
+    public void ARowThatIsNotAWindowHasNothingToAimAt()
+    {
+        Assert.Null(PaletteEntries.ForLayouts(["grid"])[0].Target);
+        Assert.Null(PaletteEntries.ForLayouts(["grid"])[0].IconHandle);
+    }
+
+    // ---- saying what a layout does -------------------------------------------------------
+
+    [Fact]
+    public void ALayoutSaysWhatItDoesRatherThanSayingTheWordLayout()
+    {
+        // Eleven rows, one word, the same word, next to a list whose heading already
+        // said it. That is a whole column of the row spent saying nothing, in the one
+        // mode where the row's own name is jargon: nobody who has not read the manual
+        // knows whether they want splith or fibonacci-mirrored.
+        IReadOnlyList<PaletteEntry> entries =
+            PaletteEntries.ForLayouts(["master-left", "monocle", "fibonacci"]);
+
+        Assert.All(entries, e => Assert.NotEqual("layout", e.Secondary));
+        Assert.Contains("stacked right", entries[0].Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ALayoutNobodyHasDescribedYetStillGetsARow()
+    {
+        // Rather than a blank column or a crash the day a twelfth layout is added.
+        Assert.Equal("layout", PaletteEntries.DescribeLayout("something-new"));
+    }
+
+    // ---- verbs that cannot achieve anything right now --------------------------------------
+
+    [Fact]
+    public void AVerbThatCannotApplyIsMarkedRatherThanHidden()
+    {
+        // Hiding it would leave somebody searching for wm-resume and being told by an
+        // empty list that no such command exists - which is both false and the opposite
+        // of helpful, given that the reason they are searching for it is that something
+        // has gone wrong.
+        var running = new WmStatus(Paused: false, BindingMode: null, Suspended: false);
+
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForCommands(
+            [new CommandInfo("wm-resume", "Take the keyboard back", [], [])], running));
+
+        Assert.True(entry.Unavailable);
+        Assert.Contains("not now", entry.Badges);
+        Assert.Contains("already running", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheSameVerbIsOrdinaryWhenItWouldWork()
+    {
+        var suspended = new WmStatus(Paused: false, BindingMode: null, Suspended: true);
+
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForCommands(
+            [new CommandInfo("wm-resume", "Take the keyboard back", [], [])], suspended));
+
+        Assert.False(entry.Unavailable);
+        Assert.DoesNotContain("not now", entry.Badges);
+    }
+
+    [Fact]
+    public void WithNothingKnownAboutTheStateNothingIsMarked()
+    {
+        // A palette that has not heard from the window manager must not start guessing
+        // which of its verbs are pointless.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForCommands(
+            [new CommandInfo("wm-resume", "Take the keyboard back", [], [])]));
+
+        Assert.False(entry.Unavailable);
+    }
+
+    // ---- monitors --------------------------------------------------------------------------
+
+    [Fact]
+    public void AMonitorWithNothingOnItSaysSoAndCannotBeChosen()
+    {
+        // It used to carry no command and fall through to the command box, which typed
+        // the display's own name into it as though `DISPLAY2` were a verb.
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForMonitors([Monitor(showing: null)]));
+
+        Assert.Equal(string.Empty, entry.Command);
+        Assert.True(entry.Unavailable);
+        Assert.Contains("nothing on it", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    // ---- the row that answers before it is asked ---------------------------------------------
+
+    [Fact]
+    public void AnUnmanagedWindowYouWereJustLookingAtOffersToExplainItself()
+    {
+        // The palette knows something the user is about to go looking for. Saying it at
+        // the top of the list costs one row and turns a hunt through the inspect mode
+        // into pressing Enter.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForContext(
+            Window(handle: 0x500, managed: false, workspace: null, summary: "not an Alt+Tab target")));
+
+        Assert.Equal(0x500, entry.Explains);
+        Assert.Contains("not an Alt+Tab target", entry.Secondary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AManagedWindowNeedsNoExplaining()
+    {
+        Assert.Empty(PaletteEntries.ForContext(Window()));
+    }
+
+    [Fact]
+    public void NothingIsSaidAboutAWindowThatIsNotThere()
+    {
+        Assert.Empty(PaletteEntries.ForContext(null));
+    }
+
+    [Fact]
+    public void AnUnmanagedWindowWithNoNameIsNotWorthMentioning()
+    {
+        // A window with nothing identifying about it is usually a shell surface that
+        // was never going to be managed and that nobody is asking about.
+        Assert.Empty(PaletteEntries.ForContext(Window(title: " ", managed: false, workspace: null)));
+    }
+
+    // ---- the palette's own verbs ---------------------------------------------------------------
+
+    [Fact]
+    public void DiagnoseIsOfferedEvenThoughItIsNotAWindowManagerCommand()
+    {
+        // It is a method on the pipe rather than a verb, so it has never appeared in any
+        // command list and could only be reached from a shell - which is exactly
+        // backwards, because a report is wanted at the moment something has gone wrong
+        // on somebody's desktop.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForBuiltins());
+
+        Assert.Equal("diagnose", entry.Primary);
+        Assert.True(PaletteEntries.IsBuiltin(entry.Command));
+    }
+
+    [Fact]
+    public void AnOrdinaryCommandIsNotMistakenForOneOfThePalettesOwn()
+    {
+        Assert.False(PaletteEntries.IsBuiltin("focus --direction left"));
+        Assert.False(PaletteEntries.IsBuiltin(null));
+    }
+    // ---- what a refresh is allowed to cost ---------------------------------------------
+
+    [Fact]
+    public void BuildingTheWindowListDoesNotBuildEveryWindowsActions()
+    {
+        // Measured rather than assumed, and it was worth measuring: building the rows
+        // for 250 windows across 19 workspaces cost 1.1 ms and allocated 3.4 MiB,
+        // almost all of it a dozen action records, two workspace-sized pickers and a
+        // composed rule per window - to answer a question about exactly one of them.
+        // Deferring took it to 0.1 ms and 183 KiB.
+        //
+        // The list is only ever read for the selected row, so this is not a trade
+        // against anything: it is work that had no reader.
+        int built = 0;
+
+        var entry = new PaletteEntry(
+            "a window", string.Empty, [], "focus-window 1",
+            ActionsFactory: () =>
+            {
+                built++;
+                return PaletteActions.For(Window(), "1");
+            });
+
+        Assert.True(entry.HasActions);
+        Assert.Equal(0, built);
+
+        Assert.NotEmpty(entry.ResolveActions());
+        Assert.Equal(1, built);
+    }
+
+    [Fact]
+    public void AWindowRowStillOffersEverythingItUsedTo()
+    {
+        // Deferring must not quietly lose the list. This is the same assertion the
+        // eager version carried, made through the new door.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForWindows(
+            [Window()], focusedWorkspace: "2", workspaces: ["1", "2"]));
+
+        IReadOnlyList<PaletteAction> actions = entry.ResolveActions();
+
+        Assert.Contains(actions, a => a.Name == "Go to it");
+        Assert.Contains(actions, a => a.Name.StartsWith("Bring", StringComparison.Ordinal));
+        Assert.Contains(actions, a => a.Name.StartsWith("Move it to", StringComparison.Ordinal));
+        Assert.Contains(actions, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+        Assert.Contains(actions, a => a.Name == "Close it");
+    }
+
+    [Fact]
+    public void ARowWithNoWindowBehindItHasNoActionsAtAll()
+    {
+        Assert.False(PaletteEntries.ForLayouts(["grid"])[0].HasActions);
+        Assert.Empty(PaletteEntries.ForLayouts(["grid"])[0].ResolveActions());
     }
 }
