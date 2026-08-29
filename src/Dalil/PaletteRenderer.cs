@@ -6,6 +6,21 @@ using Shubbak.Ui.Rendering;
 
 namespace Dalil;
 
+/// <summary>What the palette needs drawn, beyond the model itself.</summary>
+/// <param name="OverlayTitle">The list opened from a row, when one is showing.</param>
+/// <param name="Icons">
+/// How to find a window's application icon, or null to draw none. A function rather
+/// than a cache reference so the renderer stays testable and knows nothing about Win32.
+/// </param>
+/// <param name="IconRenderer">
+/// The renderer's icon capability, when it has one. Null degrades to the layout that
+/// existed before icons did, rather than to a crash or a gap.
+/// </param>
+internal readonly record struct PaletteChrome(
+    string? OverlayTitle = null,
+    Func<long, nint>? Icons = null,
+    IIconRenderer? IconRenderer = null);
+
 /// <summary>
 /// Draws the palette.
 /// </summary>
@@ -30,13 +45,26 @@ internal static class PaletteRenderer
     /// Widths of text that never changes, measured once.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The hint bar names the modes and their prefixes on every repaint, and a repaint
     /// happens on every keystroke. Measured each time that is a dozen
     /// <c>DT_CALCRECT</c> round trips to draw a caption that has never once been
     /// different. Keyed by text and font size so a move to a display at a different
     /// scale simply misses and re-measures.
+    /// </para>
+    /// <para>
+    /// Bounded, which it was not. Badges carry workspace names and the breadcrumb chip
+    /// carries a truncated window title, so arbitrary text was reaching a dictionary
+    /// that only ever grew - a slow leak in a process that is resident for the length
+    /// of a login session. Cleared wholesale when it gets large, because the entries
+    /// that matter are the fixed chrome and those are re-measured on the very next
+    /// frame.
+    /// </para>
     /// </remarks>
     private static readonly Dictionary<(string Text, double Size), Size> s_measured = [];
+
+    /// <summary>How many measurements to remember before starting again.</summary>
+    private const int MeasureCacheCapacity = 512;
 
     /// <summary>Trims a title to fit a chip without a mid-word cut.</summary>
     private static string Shorten(string text, int limit) =>
@@ -47,6 +75,9 @@ internal static class PaletteRenderer
         if (s_measured.TryGetValue((text, font.Size), out Size cached)) return cached;
 
         Size size = renderer.Measure(text, font);
+
+        if (s_measured.Count >= MeasureCacheCapacity) s_measured.Clear();
+
         s_measured[(text, font.Size)] = size;
 
         return size;
@@ -54,7 +85,7 @@ internal static class PaletteRenderer
 
     public static void Draw(
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteLayout layout,
-        string? actionsFor = null)
+        PaletteChrome chrome = default)
     {
         Rect canvas = layout.Canvas;
 
@@ -67,11 +98,14 @@ internal static class PaletteRenderer
             Italic: false);
 
         PaletteTheme theme = PaletteTheme.From(new DalilConfigView(
-            config.Background, config.Foreground, config.Match, config.Secondary, config.Border));
+            config.Background, config.Foreground, config.Match, config.Secondary,
+            config.Border, config.Danger));
 
         renderer.DrawRectangle(canvas, config.Border, 1, cornerRadius: layout.Corner);
 
-        DrawSearchBox(renderer, model, config, theme, layout, canvas, font, small, layout.SearchBox.Y, actionsFor);
+        DrawSearchBox(
+            renderer, model, config, theme, layout, canvas, font, small,
+            layout.SearchBox.Y, chrome.OverlayTitle);
 
         (int first, int count) = model.VisibleWindow(layout.VisibleRows);
 
@@ -84,13 +118,15 @@ internal static class PaletteRenderer
             // Positions come from the layout rather than from a running total, so the
             // rows drawn are exactly the rows the mouse will hit.
             for (int slot = 0; slot < count; slot++)
-                DrawRow(renderer, model, config, theme, layout, canvas, font, small,
-                        first + slot, layout.RowBounds(slot).Y);
+            {
+                DrawRow(
+                    renderer, model, config, theme, layout, canvas, font, small,
+                    first + slot, slot, chrome);
+            }
         }
 
-        DrawHintBar(renderer, model, config, theme, layout, canvas, small, first, count, actionsFor);
+        DrawHintBar(renderer, model, config, theme, layout, canvas, small, first, count, chrome.OverlayTitle);
     }
-
 
     private static void DrawSearchBox(
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteTheme theme,
@@ -108,8 +144,9 @@ internal static class PaletteRenderer
         // The mode has not changed and saying "windows" over a list of verbs would be
         // actively misleading about what Enter is going to do.
         string label = actionsFor is { Length: > 0 } subject
-            ? Shorten(subject, 28)
+            ? Shorten(Leaf(subject), 28)
             : PaletteModel.NameOf(model.Mode);
+
         Size labelSize = Measure(renderer, label, small);
 
         int chipHeight = labelSize.Height + layout[8];
@@ -146,31 +183,100 @@ internal static class PaletteRenderer
         // text stops short of it rather than running underneath.
         int typedRight = DrawStatus(renderer, model, theme, layout, small, box);
 
-        string typed = model.Term;
-
-        renderer.DrawText(
-            // A block for a caret. Drawing a real one means a timer, a blink and a
-            // focus rule, for a field that is never not focused - and a timer is the
-            // one thing that would stop a closed palette costing nothing.
-            typed.Length == 0 ? "\u258F" : typed + "\u258F",
-            new Rect(x, TextTop(box, config), typedRight - x - layout[4], config.FontSize + layout[8]),
-            typed.Length == 0 ? theme.Prompt : config.Foreground,
-            font);
+        DrawTyped(renderer, model, config, theme, font, x, TextTop(box, config), typedRight - layout[4], config);
 
         renderer.FillRectangle(
             new Rect(canvas.X + layout.Padding, box.Bottom + layout[3], canvas.Width - (layout.Padding * 2), 1),
             theme.Rule);
+    }
 
+    /// <summary>
+    /// Draws what was typed, with the caret where it actually is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The caret is a block drawn between two runs of text rather than a real one.
+    /// Drawing a real caret means a timer, a blink and a focus rule, for a field that
+    /// is never not focused - and a timer is the one thing that would stop a closed
+    /// palette costing nothing at all.
+    /// </para>
+    /// <para>
+    /// Scrolled so the caret is always visible. The field used to draw the whole term
+    /// into a fixed rectangle and let GDI clip it, which was invisible while the
+    /// palette was a filter over short queries and became the obvious problem the
+    /// moment commands mode grew arguments: <c>resize --width +5%</c> is longer than
+    /// the box on a narrow window, and what ran off the right-hand end was exactly
+    /// what was being typed.
+    /// </para>
+    /// </remarks>
+    private static void DrawTyped(
+        IRenderer renderer, PaletteModel model, DalilConfig config, PaletteTheme theme,
+        FontStyle font, int x, int y, int right, DalilConfig metrics)
+    {
+        const string Caret = "\u258F";
+
+        string typed = model.Term;
+        int available = Math.Max(0, right - x);
+        int height = metrics.FontSize + 8;
+
+        if (typed.Length == 0)
+        {
+            renderer.DrawText(Caret, new Rect(x, y, available, height), theme.Prompt, font);
+            return;
+        }
+
+        int caret = Math.Clamp(model.TermCaret, 0, typed.Length);
+
+        string before = typed[..caret];
+        string after = typed[caret..];
+
+        // Measured rather than counted: Segoe UI is proportional, so a character count
+        // would put the caret somewhere near the right place and only for text made
+        // entirely of the same letter.
+        int beforeWidth = before.Length == 0 ? 0 : renderer.Measure(before, font).Width;
+        int caretWidth = Measure(renderer, Caret, font).Width;
+        int wholeWidth = beforeWidth + caretWidth +
+            (after.Length == 0 ? 0 : renderer.Measure(after, font).Width);
+
+        // Only ever scrolled far enough to bring the caret back into view, and never
+        // past the start. Keeping the text pinned left whenever it fits means the
+        // common case - a short query - never moves under the reader.
+        int shift = 0;
+
+        if (wholeWidth > available)
+        {
+            int caretRight = beforeWidth + caretWidth;
+
+            if (caretRight > available) shift = caretRight - available;
+        }
+
+        int at = x - shift;
+
+        if (before.Length > 0)
+        {
+            renderer.DrawText(
+                before, new Rect(at, y, beforeWidth + shift + 2, height), config.Foreground, font);
+        }
+
+        at += beforeWidth;
+
+        renderer.DrawText(Caret, new Rect(at, y, caretWidth + 2, height), theme.Prompt, font);
+        at += caretWidth;
+
+        if (after.Length > 0)
+            renderer.DrawText(after, new Rect(at, y, Math.Max(0, right - at), height), config.Foreground, font);
     }
 
     /// <summary>
     /// Says so when the window manager is not behaving normally.
     /// </summary>
     /// <remarks>
-    /// Paused tiling and a swallowing binding mode both look exactly like a crash:
-    /// windows stop being arranged, or the keyboard stops responding. The palette is
-    /// where somebody goes to find out what is wrong, which makes it the last place
-    /// that should stay silent about the two causes it already knows.
+    /// Paused tiling, a swallowing binding mode and a suspended manager all look
+    /// exactly like a crash: windows stop being arranged, or the keyboard stops
+    /// responding. A window manager that cannot be reached at all looks like a slow
+    /// one. The palette is where somebody goes to find out what is wrong, which makes
+    /// it the last place that should stay silent about the four causes it already
+    /// knows.
     /// <para>
     /// In the search box rather than the hint bar, because the hint bar is a list of
     /// things that are always true and this is a thing that is usually not - and
@@ -182,9 +288,18 @@ internal static class PaletteRenderer
         IRenderer renderer, PaletteModel model, PaletteTheme theme,
         PaletteLayout layout, FontStyle small, Rect box)
     {
-        string? label = model.Status.Paused
-            ? "paused"
-            : model.Status.BindingMode is { Length: > 0 } mode ? mode : null;
+        WmStatus status = model.Status;
+
+        // Most alarming first. A palette that cannot reach the window manager is
+        // showing a list that may be minutes old, which matters more than anything the
+        // window manager might have been doing when it was last heard from.
+        (string? label, bool alarming) = !status.Connected
+            ? ("offline", true)
+            : status.Suspended
+                ? ("suspended", true)
+                : status.Paused
+                    ? ("paused", false)
+                    : status.BindingMode is { Length: > 0 } mode ? (mode, false) : (null, false);
 
         if (label is null) return box.Right;
 
@@ -202,12 +317,12 @@ internal static class PaletteRenderer
 
         // The accent, not the pill grey the badges use. This is the one thing on the
         // window that is meant to be noticed without being looked for.
-        renderer.FillRectangle(pill, theme.Accent, cornerRadius: height / 2);
+        renderer.FillRectangle(pill, alarming ? theme.DangerPill : theme.Accent, cornerRadius: height / 2);
 
         renderer.DrawText(
             label,
             new Rect(pill.X + layout.ChipPadding, pill.Y + layout[4], size.Width + 2, size.Height + 2),
-            theme.ChipText,
+            alarming ? theme.Danger : theme.ChipText,
             small);
 
         return x - layout[6];
@@ -223,12 +338,16 @@ internal static class PaletteRenderer
         FontStyle font,
         FontStyle small,
         int index,
-        int y)
+        int slot,
+        PaletteChrome chrome)
     {
         PaletteRow row = model.Rows[index];
-        bool selected = index == model.SelectedIndex;
+        PaletteEntry entry = row.Entry;
 
-        var bounds = new Rect(canvas.X + layout.Padding, y, canvas.Width - (layout.Padding * 2), config.RowHeight);
+        bool selected = index == model.SelectedIndex;
+        bool marked = model.IsMarked(entry);
+
+        Rect bounds = layout.RowBounds(slot);
 
         if (selected)
         {
@@ -244,19 +363,44 @@ internal static class PaletteRenderer
                 cornerRadius: layout.AccentWidth);
         }
 
-        int textY = TextTop(bounds, config);
-        int right = DrawBadges(renderer, config, theme, layout, small, row, bounds, textY);
-        int x = bounds.X + layout.TextInset;
-
-        x = DrawHighlighted(renderer, config, font, row, x, textY, right - layout[12]);
-
-        if (row.Entry.Secondary.Length > 0 && x < right - layout[60])
+        // A marked row keeps its stripe whether or not it is selected, which is the
+        // whole point: the reason to mark six windows is to then move the selection
+        // off them and still know which six they were.
+        if (marked && !selected)
         {
-            renderer.DrawText(
-                row.Entry.Secondary,
-                new Rect(x + layout[10], textY + layout[1], right - x - layout[22], config.FontSize + layout[6]),
-                config.Secondary,
-                small);
+            renderer.FillRectangle(
+                new Rect(bounds.X + layout[2], bounds.Y + layout[5], layout.MarkWidth, bounds.Height - layout[10]),
+                theme.Mark,
+                cornerRadius: layout.MarkWidth);
+        }
+
+        if (layout.IconSize > 0 &&
+            chrome.IconRenderer is { } icons &&
+            chrome.Icons is { } lookup &&
+            entry.IconHandle is { } handle &&
+            lookup(handle) is var icon && icon != 0)
+        {
+            icons.DrawIcon(icon, layout.IconBounds(slot));
+        }
+
+        Colour title = entry.Destructive
+            ? theme.Danger
+            : entry.Unavailable ? theme.Muted : config.Foreground;
+
+        Colour secondary = entry.Unavailable ? theme.Muted : config.Secondary;
+
+        int textY = TextTop(bounds, config);
+        int right = DrawBadges(renderer, theme, layout, small, row, bounds, marked);
+        int x = bounds.X + layout.RowTextInset;
+
+        x = DrawHighlighted(
+            renderer, config, font, entry.Primary, row.Positions, title, x, textY, right - layout[12]);
+
+        if (entry.Secondary.Length > 0 && x < right - layout[60])
+        {
+            _ = DrawHighlighted(
+                renderer, config, small, entry.Secondary, row.SecondaryPositions ?? [],
+                secondary, x + layout[10], textY + layout[1], right - layout[12]);
         }
     }
 
@@ -265,7 +409,7 @@ internal static class PaletteRenderer
         bounds.Y + ((bounds.Height - config.FontSize - (config.FontSize / 3)) / 2);
 
     /// <summary>
-    /// Draws the row's title, colouring the characters that matched.
+    /// Draws text, colouring the characters that matched.
     /// </summary>
     /// <remarks>
     /// One draw call per run rather than per character: a run is a maximal stretch of
@@ -274,19 +418,22 @@ internal static class PaletteRenderer
     /// <para>
     /// This is why the matcher returns positions at all. Highlighting is the only
     /// feedback that explains <em>why</em> a row is in the list, which matters most
-    /// for the abbreviations that look like coincidences.
+    /// for the abbreviations that look like coincidences - and, now, for the rows
+    /// matched on their application rather than their title, which used to appear with
+    /// nothing underlined anywhere and no way to tell why they had.
     /// </para>
     /// </remarks>
     private static int DrawHighlighted(
-        IRenderer renderer, DalilConfig config, FontStyle font, PaletteRow row, int x, int y, int limit)
+        IRenderer renderer, DalilConfig config, FontStyle font, string text,
+        IReadOnlyList<int> positions, Colour colour, int x, int y, int limit)
     {
-        string text = row.Entry.Primary;
-        IReadOnlyList<int> positions = row.Positions;
+        if (text.Length == 0 || x >= limit) return x;
 
         if (positions.Count == 0)
         {
             Size whole = renderer.Measure(text, font);
-            renderer.DrawText(text, new Rect(x, y, Math.Max(0, limit - x), whole.Height + 4), config.Foreground, font);
+            renderer.DrawText(text, new Rect(x, y, Math.Max(0, limit - x), whole.Height + 4), colour, font);
+
             return Math.Min(x + whole.Width, limit);
         }
 
@@ -311,7 +458,7 @@ internal static class PaletteRenderer
             renderer.DrawText(
                 piece,
                 new Rect(x, y, Math.Max(0, limit - x), size.Height + 4),
-                matched ? config.Match : config.Foreground,
+                matched ? config.Match : colour,
                 font);
 
             x += size.Width;
@@ -323,73 +470,111 @@ internal static class PaletteRenderer
     }
 
     /// <summary>
-    /// Draws the row's state markers, right to left.
+    /// Draws the row's state markers, most important first.
     /// </summary>
     /// <returns>Where the title must stop.</returns>
     /// <remarks>
+    /// <para>
     /// Drawn before the title, not after, so the title knows where to be clipped. A
     /// long title used to run under the badges and be overpainted by them, which read
     /// as a rendering fault rather than as a title that did not fit.
+    /// </para>
     /// <para>
-    /// Right to left so the first badge stays nearest the title however many there
-    /// are, and the row does not reflow as state changes.
+    /// The first badge is drawn at the right edge and the rest fill in leftwards, so
+    /// the one that matters most is pinned to a fixed column and the ones that get
+    /// dropped when a row runs out of room are the ones at the end of the list. It
+    /// used to be the other way about: badges were drawn from the end of the list
+    /// backwards and the loop gave up when it ran out of width, so a window that was
+    /// unmanaged, minimised, floating, sticky and tagged onto three workspaces would
+    /// silently omit "unmanaged" and "minimised" - the only two that explained why it
+    /// was not where it had been left.
     /// </para>
     /// </remarks>
     private static int DrawBadges(
-        IRenderer renderer, DalilConfig config, PaletteTheme theme, PaletteLayout layout, FontStyle small,
-        PaletteRow row, Rect bounds, int textY)
+        IRenderer renderer, PaletteTheme theme, PaletteLayout layout, FontStyle small,
+        PaletteRow row, Rect bounds, bool marked)
     {
         int right = bounds.Right - layout.TextInset;
-        if (row.Entry.Badges.Count == 0) return right;
 
-        for (int i = row.Entry.Badges.Count - 1; i >= 0; i--)
+        // A marked row says so in words as well as with its stripe. The stripe is
+        // three pixels wide and this is a list somebody is about to act on the
+        // contents of, so it is worth the room.
+        if (marked)
+            right = DrawBadge(renderer, theme, layout, small, "marked", right, bounds, theme.Mark);
+
+        for (int i = 0; i < row.Entry.Badges.Count; i++)
         {
-            string badge = row.Entry.Badges[i];
-            Size size = Measure(renderer, badge, small);
+            int next = DrawBadge(
+                renderer, theme, layout, small, row.Entry.Badges[i], right, bounds, theme.Pill);
 
-            int width = size.Width + (layout.PillPadding * 2);
-            int height = size.Height + layout[6];
-            int x = right - width;
+            // Out of room. Everything after this is less important than what has
+            // already been drawn, so stopping here loses the least.
+            if (next == right) break;
 
-            // Never at the cost of the title. A row that is all state and no name is
-            // not identifiable, which is the one thing a row has to be.
-            if (x < bounds.X + layout[160]) return right;
-
-            var pill = new Rect(x, bounds.Y + ((bounds.Height - height) / 2), width, height);
-
-            renderer.FillRectangle(pill, theme.Pill, cornerRadius: height / 2);
-
-            renderer.DrawText(
-                badge,
-                new Rect(pill.X + layout.PillPadding, pill.Y + layout[3], size.Width + 2, size.Height + 2),
-                theme.PillText,
-                small);
-
-            right = x - layout[6];
+            right = next;
         }
 
         return right;
     }
 
+    /// <summary>Draws one badge, if it fits, and says where the next one goes.</summary>
+    private static int DrawBadge(
+        IRenderer renderer, PaletteTheme theme, PaletteLayout layout, FontStyle small,
+        string badge, int right, Rect bounds, Colour fill)
+    {
+        Size size = Measure(renderer, badge, small);
+
+        int width = size.Width + (layout.PillPadding * 2);
+        int height = size.Height + layout[6];
+        int x = right - width;
+
+        // Never at the cost of the title. A row that is all state and no name is not
+        // identifiable, which is the one thing a row has to be.
+        if (x < bounds.X + layout[160]) return right;
+
+        var pill = new Rect(x, bounds.Y + ((bounds.Height - height) / 2), width, height);
+
+        renderer.FillRectangle(pill, fill, cornerRadius: height / 2);
+
+        renderer.DrawText(
+            badge,
+            new Rect(pill.X + layout.PillPadding, pill.Y + layout[3], size.Width + 2, size.Height + 2),
+            fill.Equals(theme.Mark) ? theme.ChipText : theme.PillText,
+            small);
+
+        return x - layout[6];
+    }
+
     /// <summary>Says why the list is empty, and what to do about it.</summary>
+    /// <remarks>
+    /// A window manager that cannot be reached says so. It used to suggest that the
+    /// window manager "may still be starting up", which is true for about two seconds
+    /// after a login and misleading for ever afterwards - a daemon that has crashed and
+    /// one that is merely slow produced identical, confidently wrong, advice.
+    /// </remarks>
     private static void DrawEmptyState(
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteLayout layout,
         Rect canvas, FontStyle font, FontStyle small, int y)
     {
         bool searched = model.Term.Length > 0;
+        bool offline = !model.Status.Connected;
 
-        string headline = searched ? "No matches" : "Nothing to show";
+        string headline = offline
+            ? "Can't reach the window manager"
+            : searched ? "No matches" : "Nothing to show";
 
-        string hint = searched
-            ? "Backspace to widen the search, or Tab to look somewhere else"
-            : "The window manager may still be starting up";
+        string hint = offline
+            ? "Is shubbak-wm running? `shubbak status` will say."
+            : searched
+                ? "Backspace to widen the search, or Tab to look somewhere else"
+                : "The window manager may still be starting up";
 
         int x = canvas.X + layout.TextInset + layout[4];
 
         renderer.DrawText(
             headline,
             new Rect(x, y + layout[14], canvas.Width - (layout.TextInset * 2), config.FontSize + layout[8]),
-            config.Foreground,
+            offline ? config.Danger : config.Foreground,
             font);
 
         renderer.DrawText(
@@ -440,18 +625,27 @@ internal static class PaletteRenderer
         // thing that looks like a font problem and is really an arithmetic one.
         int limit = canvas.Right - layout.TextInset;
 
-        if (model.Rows.Count > count)
+        // What is marked outranks where we are in the list. A count of marks is a
+        // thing the user is holding in their head and needs confirmed; a scroll
+        // position is a thing they can see.
+        string? tail = model.MarkedCount > 0
+            ? $"{model.MarkedCount} marked"
+            : model.Rows.Count > count
+                // A count rather than a scrollbar. The palette is driven by the
+                // keyboard, so a bar that cannot be dragged would be decoration;
+                // whether the thing being looked for might be further down is the fact
+                // actually wanted.
+                ? $"{first + 1}\u2013{first + count} of {model.Rows.Count}"
+                : null;
+
+        if (tail is not null)
         {
-            // A count rather than a scrollbar. The palette is driven by the keyboard,
-            // so a bar that cannot be dragged would be decoration; whether the thing
-            // being looked for might be further down is the fact actually wanted.
-            string position = $"{first + 1}\u2013{first + count} of {model.Rows.Count}";
-            Size size = renderer.Measure(position, small);
+            Size size = renderer.Measure(tail, small);
 
             renderer.DrawText(
-                position,
+                tail,
                 new Rect(canvas.Right - size.Width - layout.TextInset, textY, size.Width + 2, size.Height + 4),
-                config.Secondary,
+                model.MarkedCount > 0 ? config.Match : config.Secondary,
                 small);
 
             limit = canvas.Right - size.Width - layout.TextInset - layout[10];
@@ -485,8 +679,8 @@ internal static class PaletteRenderer
         // of detail until one fits. Nothing here needs to know how wide Segoe UI is at
         // this scale, and a wider window or a shorter mode list simply gets a fuller
         // bar without anybody adjusting a number.
-        bool hasActions = model.Selected?.Entry.Actions is { Count: > 0 };
-        HintStyle style = StyleThatFits(renderer, layout, small, x, limit, hasActions);
+        bool hasActions = model.Selected?.Entry.HasActions == true || model.MarkedCount > 0;
+        HintStyle style = StyleThatFits(renderer, model, layout, small, x, limit, hasActions);
 
         // Tab first, because it is the one that needs no memory at all: a user who
         // reads nothing else can still reach every mode by pressing it. Its label is
@@ -500,9 +694,12 @@ internal static class PaletteRenderer
         if (hasActions && style.Actions)
             x = DrawHint(renderer, config, theme, layout, small, "\u2303\u21B5", "actions", x, textY, limit, active: false);
 
-        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        // In jump order, which is the order the digits number and the order the help
+        // screen lists. The bar used to walk the enum, so the caps on screen and the
+        // keys that reach them agreed only by coincidence.
+        foreach (PaletteMode mode in PaletteModel.JumpOrder)
         {
-            char prefix = PaletteModel.PrefixFor(mode);
+            char prefix = model.Prefixes.PrefixFor(mode);
             if (prefix == '\0') continue;
 
             x = DrawHint(
@@ -535,12 +732,12 @@ internal static class PaletteRenderer
 
     /// <summary>The fullest bar that fits, or the plainest when none does.</summary>
     private static HintStyle StyleThatFits(
-        IRenderer renderer, PaletteLayout layout, FontStyle small,
+        IRenderer renderer, PaletteModel model, PaletteLayout layout, FontStyle small,
         int x, int limit, bool hasActions)
     {
         foreach (HintStyle style in s_hintStyles)
         {
-            if (x + HintsWidth(renderer, layout, small, style, hasActions) <= limit)
+            if (x + HintsWidth(renderer, model, layout, small, style, hasActions) <= limit)
                 return style;
         }
 
@@ -549,7 +746,7 @@ internal static class PaletteRenderer
 
     /// <summary>How much room a whole bar of hints needs.</summary>
     private static int HintsWidth(
-        IRenderer renderer, PaletteLayout layout, FontStyle small,
+        IRenderer renderer, PaletteModel model, PaletteLayout layout, FontStyle small,
         HintStyle style, bool hasActions)
     {
         int width = HintWidth(renderer, layout, small, "Tab", style.TabLabel ? "modes" : string.Empty);
@@ -557,9 +754,9 @@ internal static class PaletteRenderer
         if (hasActions && style.Actions)
             width += HintWidth(renderer, layout, small, "\u2303\u21B5", "actions");
 
-        foreach (PaletteMode mode in Enum.GetValues<PaletteMode>())
+        foreach (PaletteMode mode in PaletteModel.JumpOrder)
         {
-            char prefix = PaletteModel.PrefixFor(mode);
+            char prefix = model.Prefixes.PrefixFor(mode);
             if (prefix == '\0') continue;
 
             width += HintWidth(
@@ -601,10 +798,26 @@ internal static class PaletteRenderer
         { SwitchesTo: not null } => "go",
         { Explains: not null } => "inspect",
         { Expands.Length: > 0 } => "read it",
-        { Actions.Count: > 0, Command.Length: 0 } => "open",
+        { HasActions: true, Command.Length: 0 } => "open",
+        { Destructive: true, Command.Length: > 0 } => "ask first",
         { Command.Length: > 0 } => "do it",
         _ => string.Empty,
     };
+
+    /// <summary>The last part of a breadcrumb, which is the part that is about to act.</summary>
+    /// <remarks>
+    /// A chip is a fixed and rather small amount of room, and a breadcrumb three levels
+    /// deep spends all of it on the levels already left behind - so the one name that
+    /// says what Enter is about to do was the one being ellipsised away.
+    /// </remarks>
+    private static string Leaf(string breadcrumb)
+    {
+        int cut = breadcrumb.LastIndexOf('\u203A');
+
+        return cut >= 0 && cut < breadcrumb.Length - 1
+            ? breadcrumb[(cut + 1)..].Trim()
+            : breadcrumb;
+    }
 
     /// <summary>
     /// Draws one key cap and its label, if it fits, and says where the next would go.

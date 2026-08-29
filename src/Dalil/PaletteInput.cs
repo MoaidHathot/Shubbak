@@ -24,6 +24,9 @@ internal enum PaletteChoice
     /// <summary>Put the row's text in the search box to be finished.</summary>
     Complete,
 
+    /// <summary>Ask first, then send the row's command.</summary>
+    Confirm,
+
     /// <summary>Send the row's command.</summary>
     Run,
 }
@@ -41,7 +44,7 @@ internal enum PaletteChoice
 /// </para>
 /// <para>
 /// It stays in the host rather than moving to Dalil.Core: the questions are about the
-/// window's own state - which frame is open, whether the guard is on - and the answers
+/// window's own state - which frame is open, whether marks are set - and the answers
 /// name a key type that only the host knows about.
 /// </para>
 /// </remarks>
@@ -56,87 +59,56 @@ internal static class PaletteInput
     /// <remarks>
     /// Written as the string the action carries rather than as an index, so the two
     /// halves of a chord - the key that produces it and the label that advertises it -
-    /// cannot drift apart without the lookup simply failing to find anything.
+    /// cannot drift apart without the lookup simply failing to find anything. A test
+    /// holds this table against the one the help screen prints.
     /// </remarks>
-    internal static string? ChordFor(VIRTUAL_KEY key, bool control, bool shift) =>
-        (key, control, shift) switch
+    internal static string? ChordFor(VIRTUAL_KEY key, bool control, bool shift, bool alt = false) =>
+        (key, control, shift, alt) switch
         {
-            (VIRTUAL_KEY.VK_F, true, true) => "Ctrl+Shift+F",
-            (VIRTUAL_KEY.VK_S, true, true) => "Ctrl+Shift+S",
-            (VIRTUAL_KEY.VK_M, true, true) => "Ctrl+Shift+M",
-            (VIRTUAL_KEY.VK_A, true, true) => "Ctrl+Shift+A",
-            (VIRTUAL_KEY.VK_W, true, true) => "Ctrl+Shift+W",
-            (VIRTUAL_KEY.VK_I, true, true) => InspectChord,
+            (VIRTUAL_KEY.VK_F, true, true, false) => "Ctrl+Shift+F",
+            (VIRTUAL_KEY.VK_S, true, true, false) => "Ctrl+Shift+S",
+            (VIRTUAL_KEY.VK_M, true, true, false) => "Ctrl+Shift+M",
+            (VIRTUAL_KEY.VK_A, true, true, false) => "Ctrl+Shift+A",
+            (VIRTUAL_KEY.VK_W, true, true, false) => "Ctrl+Shift+W",
+            (VIRTUAL_KEY.VK_I, true, true, false) => InspectChord,
+
+            // Alt+Enter was carried on "Bring it here" from the day that action was
+            // written and was never wired to anything: the chord table had no entry
+            // for it, so the badge beside the row named a key that did nothing at all.
+            (VIRTUAL_KEY.VK_RETURN, false, false, true) => "Alt+Enter",
+
             _ => null,
         };
 
     /// <summary>
-    /// Whether a chord works even with the action guard on.
-    /// </summary>
-    /// <remarks>
-    /// Only inspecting, and for a reason rather than as a convenience. The guard exists
-    /// so that an action cannot be taken by accident, and inspecting takes no action -
-    /// it is the one entry in the list that runs no command at all. Guarding it would
-    /// put the fastest way to ask "why is this window behaving like this" three
-    /// keystrokes behind a door protecting against consequences it does not have.
-    /// </remarks>
-    internal static bool IsExemptFromGuard(string chord) =>
-        string.Equals(chord, InspectChord, StringComparison.Ordinal);
-
-    /// <summary>
-    /// Whether a chord should act, given where it was pressed.
+    /// Which mode a digit jumps to, or null when the key is not a jump.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Inside the action list it always acts. That is the only place a chord is written
-    /// down - each row carries its own as a badge - and a key printed beside the thing
-    /// it does, which then does nothing, is worse than no key at all. It was also the
-    /// only combination that could not work: the guard blocked chords in the main list
-    /// and the list itself blocked them everywhere else, so with the shipped default
-    /// every chord but one was inert in both places while being advertised in one.
+    /// The route into a mode that works on every keyboard on earth. Prefixes are
+    /// faster to type and cannot be typed at all on several layouts - <c>~</c> is a
+    /// dead key on German and on the international layouts, so it produces no
+    /// character until the next keypress and the mode never changes - and Tab is seven
+    /// presses from one end of the ring to the other.
     /// </para>
     /// <para>
-    /// The guard is not weakened by this. It exists to stop an action being taken by
-    /// accident from a list where the keyboard is busy searching; by the time somebody
-    /// has pressed Ctrl+Enter and is looking at a list of verbs, pressing the chord
-    /// printed on one of them is no more accidental than pressing Enter on it.
+    /// The top row rather than the numeric keypad, and both, because a laptop has one
+    /// and a desk has the other. Order matches the hint bar, so the digit is read off
+    /// the screen rather than remembered.
     /// </para>
     /// </remarks>
-    /// <param name="chord">The chord that was pressed.</param>
-    /// <param name="insideActionList">Whether a list opened from a row is showing.</param>
-    /// <param name="guard">The <c>action-guard</c> setting.</param>
-    internal static bool ChordActsHere(string chord, bool insideActionList, bool guard)
+    internal static PaletteMode? JumpFor(VIRTUAL_KEY key, bool control)
     {
-        ArgumentNullException.ThrowIfNull(chord);
+        if (!control) return null;
 
-        return insideActionList || !guard || IsExemptFromGuard(chord);
-    }
+        int digit = key switch
+        {
+            >= VIRTUAL_KEY.VK_1 and <= VIRTUAL_KEY.VK_9 => key - VIRTUAL_KEY.VK_1 + 1,
+            >= VIRTUAL_KEY.VK_NUMPAD1 and <= VIRTUAL_KEY.VK_NUMPAD9 => key - VIRTUAL_KEY.VK_NUMPAD1 + 1,
+            _ => 0,
+        };
 
-    /// <summary>
-    /// The query a typed character produces.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Appending, except when a prefix is typed against a query that has no search term
-    /// in it yet - then it replaces whatever prefix was there. Without that, prefixes
-    /// only ever worked from the window list: in any other mode the query already began
-    /// with one, so typing <c>!</c> produced <c>&gt;!</c>, which is still the command
-    /// list searching for an exclamation mark. Every mode but the first was a one-way
-    /// door reachable again only with Tab or Backspace.
-    /// </para>
-    /// <para>
-    /// Only while the term is empty, so a prefix character stays literal once there is
-    /// something to search. Typing <c>#</c> after <c>&gt;foo</c> is somebody spelling a
-    /// search, not somebody changing their mind about the mode.
-    /// </para>
-    /// </remarks>
-    internal static string Typed(string query, char typed)
-    {
-        ArgumentNullException.ThrowIfNull(query);
-
-        return PaletteModel.Prefixes.ContainsKey(typed) && PaletteModel.TermOf(query).Length == 0
-            ? typed.ToString()
-            : query + typed;
+        return digit == 0 ? null : PaletteModel.ModeAtJump(digit);
     }
 
     /// <summary>
@@ -145,7 +117,9 @@ internal static class PaletteInput
     /// <param name="entry">The selected row.</param>
     /// <param name="mode">Which list is showing.</param>
     /// <param name="insideOverlay">Whether a frame is open on top of that list.</param>
-    internal static PaletteChoice Choose(PaletteEntry entry, PaletteMode mode, bool insideOverlay)
+    /// <param name="confirmDestructive">Whether an irreversible action asks first.</param>
+    internal static PaletteChoice Choose(
+        PaletteEntry entry, PaletteMode mode, bool insideOverlay, bool confirmDestructive = true)
     {
         ArgumentNullException.ThrowIfNull(entry);
 
@@ -169,26 +143,34 @@ internal static class PaletteInput
         }
 
         // Some rows are longer than a row. Opening one shows the whole thing rather
-        // than the part that fit, which is the only way to read a path or the sentence
-        // about elevation without leaving the palette for a shell.
+        // than the part that fit, which is the only way to read a path, the sentence
+        // about elevation, or a composed rule without leaving the palette for a shell.
         if (entry.Expands is { Length: > 0 }) return PaletteChoice.Expand;
 
         // A row carrying its own list opens it instead of running. Only inside an
         // overlay: at the top level a row's list is what Ctrl+Enter is for, and Enter
         // has to keep meaning "go to this window".
-        if (entry.Command.Length == 0 && insideOverlay && entry.Actions is { Count: > 0 })
+        if (entry.Command.Length == 0 && insideOverlay && entry.HasActions)
             return PaletteChoice.OpenChildren;
 
-        if (entry.Command.Length > 0) return PaletteChoice.Run;
+        if (entry.Command.Length > 0)
+        {
+            return entry.Destructive && confirmDestructive
+                ? PaletteChoice.Confirm
+                : PaletteChoice.Run;
+        }
 
         // A verb that needs arguments is offered as text to complete rather than run.
         // Running it bare would be rejected by the parser and read as a broken palette.
-        // A help row that is only a key reference has nothing to run either, and so
-        // does the workspace a window is already on - and both do nothing rather than
-        // pretending.
-        return mode is PaletteMode.Help || insideOverlay
-            ? PaletteChoice.Nothing
-            : PaletteChoice.Complete;
+        //
+        // Only in commands mode, which is the only mode where the search box is a
+        // thing being composed rather than a filter. Everywhere else this was
+        // confidently wrong: choosing a monitor that had no workspace on it put the
+        // display's own name into the command box, as though `\\.\DISPLAY2` were a verb
+        // somebody had started typing.
+        return mode is PaletteMode.Commands && !insideOverlay
+            ? PaletteChoice.Complete
+            : PaletteChoice.Nothing;
     }
 
     /// <summary>
@@ -224,5 +206,25 @@ internal static class PaletteInput
         // the width of the window, and a path with an ellipsis in it is not a path.
         static string Full(PaletteEntry entry) =>
             entry.Expands is { Length: > 0 } expands ? expands : entry.Primary;
+    }
+
+    /// <summary>
+    /// The text a copy should put on the clipboard for a window row.
+    /// </summary>
+    /// <remarks>
+    /// A window row's title is rarely what somebody is copying it for. The reason to
+    /// copy a row out of the window list is to put its class or its process into a
+    /// rule, and both of those live in the dim half - so copying the title alone
+    /// handed over the one attribute that is guaranteed to be wrong to match on.
+    /// </remarks>
+    internal static string DescribeForClipboard(PaletteEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        if (entry.Expands is { Length: > 0 } expands) return expands;
+
+        return entry.Secondary is { Length: > 0 } secondary
+            ? $"{entry.Primary}  \u2014  {secondary}"
+            : entry.Primary;
     }
 }

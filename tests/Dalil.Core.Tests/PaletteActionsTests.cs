@@ -48,9 +48,15 @@ public sealed class PaletteActionsTests
     {
         // Guards the exemption above: if some future action quietly arrived with no
         // command, the loop would stop checking it and nobody would notice.
+        //
+        // Composing a rule is the other kind of row that sends nothing: it produces
+        // text to read and paste rather than anything for the window manager to do, so
+        // it carries no command either and must not be mistaken for one that lost it.
         Assert.All(
             PaletteActions.For(Window(), "2").Where(a => a.Command.Length == 0),
-            a => Assert.NotNull(a.Explains));
+            a => Assert.True(
+                a.Explains is not null || a.Expands is { Length: > 0 } || a.Children is { Count: > 0 },
+                $"'{a.Name}' sends nothing and does nothing else either."));
     }
 
     [Fact]
@@ -128,12 +134,17 @@ public sealed class PaletteActionsTests
     }
 
     [Fact]
-    public void ClosingAndReleasingAreMarkedDestructive()
+    public void OnlyClosingIsMarkedDestructive()
     {
         IReadOnlyList<PaletteAction> actions = PaletteActions.For(Window(), "2");
 
+        // Closing is the one thing here that cannot be undone, and it is now the only
+        // thing marked. Releasing a window used to be marked alongside it and sorted to
+        // the bottom with it, which was wrong twice over: `toggle-managed` is a toggle,
+        // pressing it again puts the desktop back exactly as it was found, and the mark
+        // now means "ask before doing this" rather than merely "sort this last".
         Assert.True(Find(actions, "Close").Destructive);
-        Assert.True(Find(actions, "Stop managing").Destructive);
+        Assert.False(Find(actions, "Stop managing").Destructive);
         Assert.False(Find(actions, "Go to").Destructive);
     }
 
@@ -194,8 +205,8 @@ public sealed class PaletteActionsTests
         PaletteEntry entry = Assert.Single(
             PaletteEntries.ForWindows([Window()], includeUnmanaged: true, focusedWorkspace: "2"));
 
-        Assert.NotNull(entry.Actions);
-        Assert.NotEmpty(entry.Actions);
+        Assert.True(entry.HasActions);
+        Assert.NotEmpty(entry.ResolveActions());
     }
 
     [Fact]
@@ -205,7 +216,7 @@ public sealed class PaletteActionsTests
 
         // Nothing sensible can be done *to* a layout, and offering an empty action
         // list would advertise a key that then does nothing.
-        Assert.True(layout.Actions is null || layout.Actions.Count == 0);
+        Assert.True(!layout.HasActions);
     }
 
     // ---- the tag picker ----------------------------------------------------
@@ -302,8 +313,8 @@ public sealed class PaletteActionsTests
 
         // Carried on the row so the window can push them as the next level, and
         // badged so Enter on it is visibly different from Enter on its neighbours.
-        Assert.NotNull(tags.Actions);
-        Assert.Equal(Spaces.Length, tags.Actions!.Count);
+        Assert.True(tags.HasActions);
+        Assert.Equal(Spaces.Length, tags.ResolveActions().Count);
         Assert.Contains(tags.Badges, b => b.Contains('\u203A'));
     }
 
@@ -338,7 +349,7 @@ public sealed class PaletteActionsTests
         // grew the parameter and went on passing nothing, which compiled without a
         // murmur because the argument is optional with a null default. Every unit test
         // passed and the picker was simply absent on screen.
-        Assert.Contains(entry.Actions!, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+        Assert.Contains(entry.ResolveActions(), a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -350,7 +361,7 @@ public sealed class PaletteActionsTests
         PaletteEntry entry = Assert.Single(
             PaletteEntries.ForScratchpad([stashed], "1", Spaces));
 
-        Assert.Contains(entry.Actions!, a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
+        Assert.Contains(entry.ResolveActions(), a => a.Name.StartsWith("Tags", StringComparison.Ordinal));
     }
 
     /// <summary>

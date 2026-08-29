@@ -3,6 +3,45 @@ using Shubbak.Core.Rendering;
 namespace Dalil.Core;
 
 /// <summary>
+/// A named sequence of commands, offered as one row.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The thing keybindings cannot be. A chord has to be memorised and there are only so
+/// many left once the window manager has taken the obvious ones, so anything done
+/// occasionally never gets bound and is therefore done by hand for ever - four keys to
+/// go to the workspace, three to set the layout, one to equalise, every time.
+/// </para>
+/// <para>
+/// A palette row costs nothing to have and nothing to remember. It is found by typing
+/// roughly what it is called, which is a thing people are good at, rather than by
+/// recalling which modifier it was put behind, which is a thing people are bad at.
+/// </para>
+/// </remarks>
+/// <param name="Name">What it is called, and what is searched for.</param>
+/// <param name="Description">One line, or empty to show the commands themselves.</param>
+/// <param name="Commands">
+/// What to send, already validated against the real parser at load time. Sent as one
+/// newline-separated message, so the window manager runs them in order and stops at
+/// the first refusal rather than half-applying something.
+/// </param>
+/// <param name="Problem">
+/// Why this cannot run, when one of its commands did not parse.
+/// <para>
+/// Kept and shown rather than dropped in silence. A macro that vanished from the list
+/// because of a typo three lines into it is a macro the user will look for, fail to
+/// find, and conclude the feature does not work - whereas a row saying "unknown
+/// direction 'lft'" is the same message the config file would have given and points
+/// straight at the line.
+/// </para>
+/// </param>
+public sealed record PaletteMacro(
+    string Name,
+    string Description,
+    IReadOnlyList<string> Commands,
+    string? Problem = null);
+
+/// <summary>
 /// How the palette looks and where it appears.
 /// </summary>
 /// <remarks>
@@ -50,33 +89,73 @@ public sealed record DalilConfig
     public bool ShowUnmanaged { get; init; } = true;
 
     /// <summary>
-    /// Whether acting on a window requires opening the action list first.
+    /// Whether an action that cannot be undone asks before it happens.
     /// </summary>
     /// <remarks>
-    /// On by default. Closing a window cannot be undone, and the palette is reached
-    /// when somebody is already unsure where things are - which is the worst moment
-    /// for a mistyped chord to act on the wrong row. Ctrl+Enter opens a named list and
-    /// nothing happens until a line in it is chosen.
     /// <para>
-    /// Turn it off and every action gains a direct chord, closing included. That is a
-    /// deliberate trade of a safety net for speed, which is why it is one switch
-    /// rather than a per-action table nobody would finish filling in.
+    /// On by default, and this is what <c>action-guard</c> became. That setting turned
+    /// every direct chord off at once, which is why - with the shipped default - the
+    /// action list printed <c>Ctrl+Shift+F</c> beside "Float it" and pressing it in the
+    /// main list did nothing at all. The safety was real and it was bought by disabling
+    /// eight harmless keys to protect against two dangerous ones.
+    /// </para>
+    /// <para>
+    /// Confirming the two is cheaper and stricter: closing a window now takes a
+    /// deliberate second keystroke whichever route was used to ask for it, including
+    /// the ones the guard never covered, while floating and tiling and minimising are
+    /// a single chord again. <c>action-guard</c> is still accepted and still means
+    /// this, so nobody's configuration breaks.
     /// </para>
     /// </remarks>
-    public bool ActionGuard { get; init; } = true;
+    public bool ConfirmDestructive { get; init; } = true;
 
     /// <summary>Where the palette appears.</summary>
     public PalettePlacement Placement { get; init; } = PalettePlacement.FocusedMonitor;
 
     /// <summary>
+    /// Whether a window row shows its application's icon.
+    /// </summary>
+    /// <remarks>
+    /// On, because an icon is recognised faster than a word is read and the window
+    /// list is scanned rather than read. It costs one non-blocking read of the window
+    /// class per window, cached thereafter, and only for the rows actually on screen.
+    /// </remarks>
+    public bool ShowIcons { get; init; } = true;
+
+    /// <summary>
+    /// Whether the window shrinks to fit a short list.
+    /// </summary>
+    /// <remarks>
+    /// On. A search that matched two things used to be drawn as two rows of text above
+    /// ten rows of empty background, which reads as the palette having failed to draw
+    /// the rest of something.
+    /// </remarks>
+    public bool ShrinkToFit { get; init; } = true;
+
+    /// <summary>
+    /// Which character selects which mode, where the user has said.
+    /// </summary>
+    /// <remarks>
+    /// Empty means the defaults, which is what almost everybody wants. It exists for
+    /// the keyboard layouts on which the defaults cannot be typed at all: <c>~</c> is a
+    /// dead key on several, so the character never arrives and the mode is unreachable
+    /// by prefix no matter how hard somebody presses it.
+    /// </remarks>
+    public IReadOnlyDictionary<PaletteMode, char> Prefixes { get; init; } =
+        new Dictionary<PaletteMode, char>();
+
+    /// <summary>The user's own named command sequences.</summary>
+    public IReadOnlyList<PaletteMacro> Macros { get; init; } = [];
+
+    /// <summary>
     /// The palette's own colours.
     /// </summary>
     /// <remarks>
-    /// Five, not nine. The chip behind the mode name, the pill behind a badge, the
+    /// Six, not ten. The chip behind the mode name, the pill behind a badge, the
     /// accent down the selected row and the hairlines between sections are all
     /// derived from these by blending towards the background, so changing
     /// <c>background</c> and <c>match</c> moves the whole palette together. Asking
-    /// for nine colours would be a good way to have nobody set any of them.
+    /// for ten colours would be a good way to have nobody set any of them.
     /// </remarks>
     public Colour Background { get; init; } = new(0x16, 0x16, 0x1C);
 
@@ -91,6 +170,16 @@ public sealed record DalilConfig
     public Colour SelectionBackground { get; init; } = new(0x24, 0x2C, 0x3E);
 
     public Colour Border { get; init; } = new(0x39, 0x39, 0x48);
+
+    /// <summary>
+    /// The colour of something that cannot be undone.
+    /// </summary>
+    /// <remarks>
+    /// Its own setting because it is the one colour whose job is to be noticed rather
+    /// than to be harmonious, and deriving it from the others would make it agree with
+    /// them - which is exactly what it must not do.
+    /// </remarks>
+    public Colour Danger { get; init; } = new(0xF3, 0x8B, 0xA8);
 
     public string FontFamily { get; init; } = "Segoe UI";
 

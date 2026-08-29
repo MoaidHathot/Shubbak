@@ -447,24 +447,34 @@ on screen. Swapping the renderer means implementing one interface.
 **Dalil** (دليل, *"guide"*) is a fuzzy-search palette for your whole desktop. Bind a
 key to `signal "palette"` and it appears.
 
-Eight modes, each with a prefix:
+Eight modes. Every one has a prefix, and every one has a **Ctrl+digit** that jumps
+straight to it in the order the hint bar draws them — because a prefix is faster and
+`~` is a dead key on several European layouts, where it produces no character at all
+until you press something else:
 
-| Prefix | Mode | |
-|---|---|---|
-| *(none)* | Windows | Every window on the desktop, managed or not, ranked by recency |
-| `>` | Commands | Every verb the WM accepts |
-| `#` | Workspaces | With window count, layout and monitor |
-| `~` | Layouts | Marks the one you're already in |
-| `%` | Monitors | Size, DPI, and what each is showing |
-| `$` | Scratchpad | Everything you've stashed, by slot |
-| `!` | Inspect | Every window Shubbak is **not** managing, and why not |
-| `?` | Help | The palette's keys — **and your own keybindings** |
+| Prefix | Jump | Mode | |
+|---|---|---|---|
+| *(none)* | `Ctrl+1` | Windows | Every window on the desktop, managed or not |
+| `>` | `Ctrl+2` | Commands | Every verb, plus your own named sequences |
+| `#` | `Ctrl+3` | Workspaces | With window count, layout and monitor |
+| `!` | `Ctrl+4` | Inspect | Every window Shubbak is **not** managing, and why not |
+| `$` | `Ctrl+5` | Scratchpad | Everything you've stashed, by slot |
+| `~` | `Ctrl+6` | Layouts | What each one actually does, and the one you're in |
+| `%` | `Ctrl+7` | Monitors | Size, DPI, and what each is showing |
+| `?` | `Ctrl+8` | Help | The palette's keys — **and your own keybindings** |
 
-Three things I'm particularly happy with:
+Prefixes are yours to move: `dalil { prefixes { layouts "l" } }`.
+
+Four things I'm particularly happy with:
 
 **Type a command and it's parsed for real.** Whatever you type becomes a top-ranked
 row, run through the *same* parser your config file uses. So a bad argument gives
 you the same message it would at load time, right there, before you press Enter.
+
+**Mark windows and act on all of them.** `Ctrl+Space` marks; `Ctrl+Enter` then acts
+on the set — move them all to one workspace, float them, close them. Doing that with
+keybindings is six rounds of find-it, focus-it, move-it, with the focus landing
+somewhere different after each one. This is the thing a palette is genuinely *for*.
 
 **`shubbak inspect`, without leaving the palette.** Press **Ctrl+Shift+I** on any
 window and you get the full report — attributes, verdict, which rules matched, which
@@ -473,27 +483,47 @@ with Enter, and Escape or Backspace steps back out. **Ctrl+C** copies the select
 line; **Ctrl+Shift+C** copies the whole report, which is the version that belongs in
 a bug report.
 
-**The `!` mode answers "what is being skipped?"** — the palette's version of
-`shubbak inspect --all`. Every window Shubbak passed over, each one saying why on the
-row itself, with the ones you can do something about (excluded by a rule, not adopted
-yet) sorted to the top. Enter inspects; Ctrl+Enter still reaches "Manage it".
+**And then it writes the rule for you.** "Write a rule for it" composes the KDL that
+would match that window — class, process, the path commented out beside it, the title
+commented out under that — ready to read and paste. It's the step that used to be
+left as an exercise: the report told you exactly what was wrong and then handed you a
+transcription job with one very easy way to get it silently wrong.
 
-**Every row has actions** (Ctrl+Enter): go to it, bring it here, float/tile,
-minimise/restore, make it sticky, edit its tags, close it, start or stop managing it,
-and inspect it.
+**Every row has actions** (Ctrl+Enter): go to it, bring it here, send it to another
+workspace, float/tile, minimise/restore, make it sticky, edit its tags, write a rule
+for it, close it, start or stop managing it, and inspect it. Closing asks first —
+whichever route you reached it by, chord included — and nothing else does, because
+nothing else is irreversible.
 
-Rows carry badges so you can see at a glance what you're looking at: `unmanaged`,
-`minimised`, `cloaked`, `floating`, `fullscreen`, `sticky`, `elevated`, `stashed`,
-`also on <workspace>`. Unmanaged windows also carry the reason in the dim text, so
-you don't have to open anything to find out why. The search box tells you when tiling
-is paused or a binding mode is eating your keys.
+**Name your own sequences.** Keybindings are a scarce resource; palette rows are not.
+
+```kdl
+dalil {
+    action "Dev layout" description="Editor left, terminal right, on 2" {
+        focus --workspace "2"
+        layout --set "master-left"
+        equalise
+    }
+}
+```
+
+They're validated against the real parser at load time, so a typo is reported on the
+row rather than swallowed.
+
+Rows carry the application's icon and badges so you can see at a glance what you're
+looking at: `unmanaged`, `minimised`, `cloaked`, `floating`, `fullscreen`, `sticky`,
+`elevated`, `stashed`, `also on <workspace>`. Unmanaged windows also carry the reason
+in the dim text, so you don't have to open anything to find out why. The search box
+tells you when tiling is paused, when a binding mode is eating your keys, when the
+window manager has suspended itself, and when it can't be reached at all — because
+all four look exactly like a crash from the outside.
 
 Dalil is opened by a **signal**, not by a hard-wired command — which means Shubbak
 doesn't know Dalil exists. That's the same extension point anything else can use.
 
 ## Scripting it
 
-Everything the CLI and the palette do goes over one named pipe, `shubbak-v1-<SID>`,
+Everything the CLI and the palette do goes over one named pipe, `shubbak-v2-<SID>`,
 scoped per user, with the protocol version in the name. Newline-delimited JSON.
 
 ```

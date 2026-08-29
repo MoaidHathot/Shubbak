@@ -7,8 +7,17 @@ namespace Dalil.Core;
 /// <param name="Name">What it is called in the list.</param>
 /// <param name="Description">One line explaining it.</param>
 /// <param name="Command">What to send; newline-separated for a sequence.</param>
-/// <param name="Destructive">Whether doing it by accident would cost something.</param>
-/// <param name="Chord">How it is spelled when direct chords are enabled.</param>
+/// <param name="Destructive">
+/// Whether doing it by accident would cost something.
+/// <para>
+/// Read rather than merely recorded. It used to be neither: the field was set, it was
+/// asserted in a test, and nothing on screen or in the input path had ever looked at
+/// it - so "Close it" was drawn identically to "Float it" and behaved identically to
+/// it too, and the only protection against the difference was a global switch that
+/// disabled every chord including the harmless ones.
+/// </para>
+/// </param>
+/// <param name="Chord">How it is spelled when pressed directly.</param>
 /// <param name="Children">
 /// When present, choosing this opens a list of these rather than running anything.
 /// Mirrors <see cref="PaletteEntry.SwitchesTo"/>, which already means "this row
@@ -18,6 +27,11 @@ namespace Dalil.Core;
 /// When set, choosing this asks the window manager to describe that window instead of
 /// doing anything to it.
 /// </param>
+/// <param name="Expands">
+/// When set, choosing this opens the text rather than running anything - the same
+/// route a report row too long for its line already takes. It is how the palette shows
+/// something it has composed rather than something it has been sent.
+/// </param>
 public sealed record PaletteAction(
     string Name,
     string Description,
@@ -25,7 +39,8 @@ public sealed record PaletteAction(
     bool Destructive = false,
     string? Chord = null,
     IReadOnlyList<PaletteAction>? Children = null,
-    long? Explains = null);
+    long? Explains = null,
+    string? Expands = null);
 
 /// <summary>
 /// What the palette can do to a window, beyond going to it.
@@ -50,6 +65,28 @@ public sealed record PaletteAction(
 /// </remarks>
 public static class PaletteActions
 {
+    /// <summary>The command that aims at one window, whatever kind of window it is.</summary>
+    /// <remarks>
+    /// A stashed window is cloaked, and focusing a cloaked window reveals it without
+    /// unstashing it - so it vanishes again at the next layout pass, which reads as
+    /// the palette having failed. Summoning by slot is the only way to reach one, and
+    /// it focuses the window itself, so it substitutes for the focus prefix rather
+    /// than being an extra step.
+    /// <para>
+    /// Every action is built on this prefix, so getting it wrong here was never
+    /// limited to "Go to it": closing, tagging and un-managing a stashed window were
+    /// all aimed at a window that was about to conceal itself again.
+    /// </para>
+    /// </remarks>
+    public static string TargetOf(WindowCandidate window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        return window.Scratchpad is { Length: > 0 } slot
+            ? $"scratchpad {slot}"
+            : $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}";
+    }
+
     /// <summary>Everything that can be done to one window.</summary>
     /// <param name="window">The window as the manager described it.</param>
     /// <param name="focusedWorkspace">
@@ -57,8 +94,8 @@ public static class PaletteActions
     /// action is not offered rather than being offered and failing.
     /// </param>
     /// <param name="workspaces">
-    /// Every workspace, for the tag picker. Empty leaves the picker out rather than
-    /// offering one with nothing in it.
+    /// Every workspace, for the tag picker and the move picker. Empty leaves both out
+    /// rather than offering a picker with nothing in it.
     /// </param>
     public static IReadOnlyList<PaletteAction> For(
         WindowCandidate window,
@@ -67,20 +104,8 @@ public static class PaletteActions
     {
         ArgumentNullException.ThrowIfNull(window);
 
-        // A stashed window is cloaked, and focusing a cloaked window reveals it
-        // without unstashing it - so it vanishes again at the next layout pass, which
-        // reads as the palette having failed. Summoning by slot is the only way to
-        // reach one, and it focuses the window itself, so it substitutes for the focus
-        // prefix rather than being an extra step.
-        //
-        // Every action below is built on this prefix, so getting it wrong here was not
-        // limited to "Go to it": closing, tagging and un-managing a stashed window
-        // were all aimed at a window that was about to conceal itself again.
         bool stashed = window.Scratchpad is { Length: > 0 };
-
-        string focus = stashed
-            ? $"scratchpad {window.Scratchpad}"
-            : $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}";
+        string focus = TargetOf(window);
 
         List<PaletteAction> actions = [];
 
@@ -115,6 +140,27 @@ public static class PaletteActions
                 $"Move it to workspace {here}",
                 $"{focus}\nmove --workspace {here}",
                 Chord: "Alt+Enter"));
+        }
+
+        // The other direction, which did not exist.
+        //
+        // The palette could bring a window here and could tag it onto a workspace, and
+        // could not send it to one - despite `move --workspace` being a verb the window
+        // manager has always accepted. Tagging is not a substitute: a tag is a
+        // membership that makes the window follow you about, which is a different and
+        // much stranger thing than putting it somewhere and leaving it there.
+        if (!stashed && workspaces is { Count: > 0 })
+        {
+            List<PaletteAction> destinations = MoveChoices(window, focus, workspaces);
+
+            if (destinations.Count > 0)
+            {
+                actions.Add(new PaletteAction(
+                    "Move it to\u2026",
+                    "Send it to another workspace and leave it there",
+                    string.Empty,
+                    Children: destinations));
+            }
         }
 
         actions.Add(window.Concealment is "minimised" || window.State is "minimised"
@@ -160,20 +206,31 @@ public static class PaletteActions
                 "Tags\u2026",
                 "Choose which workspaces this window follows you to",
 
-                // Opens rather than runs. No chord, even when the guard is off: a
-                // chord that produces another list to choose from is an odd pairing,
-                // and tagging is not done in a hurry.
+                // Opens rather than runs. No chord: a chord that produces another list
+                // to choose from is an odd pairing, and tagging is not done in a hurry.
                 string.Empty,
                 Children: TagChoices(window, focus, workspaces)));
         }
 
-        // Adopting a window the user's own rule excluded is a decision, not a
-        // convenience, which is why it is worded as one and marked.
+        // Reversible, and therefore not destructive. It was marked so for years and
+        // sorted to the bottom beside closing, which is the one action here that
+        // genuinely cannot be undone - `toggle-managed` is a toggle, and pressing it
+        // twice leaves the desktop exactly as it was found.
         actions.Add(window.Managed
             ? new PaletteAction("Stop managing it", "Leave it where it is and stop tiling it",
-                $"{focus}\ntoggle-managed", Destructive: true, Chord: "Ctrl+Shift+A")
+                $"{focus}\ntoggle-managed", Chord: "Ctrl+Shift+A")
             : new PaletteAction("Manage it", "Take it under management and tile it",
-                $"{focus}\ntoggle-managed", Destructive: true, Chord: "Ctrl+Shift+A"));
+                $"{focus}\ntoggle-managed", Chord: "Ctrl+Shift+A"));
+
+        // What `shubbak inspect` hands you and then leaves you to type out. The window
+        // manager has always known the class and the process; the user has always had
+        // to transcribe them into KDL by hand, which is a transcription job with one
+        // very easy way to get it silently wrong.
+        actions.Add(new PaletteAction(
+            "Write a rule for it",
+            "Compose the KDL that would match this window, ready to paste",
+            string.Empty,
+            Expands: RuleComposer.Rule(null, window.ClassName, window.ProcessName, window.Title)));
 
         actions.Add(new PaletteAction(
             "Close it",
@@ -199,6 +256,132 @@ public static class PaletteActions
             Explains: window.Handle));
 
         return actions;
+    }
+
+    /// <summary>
+    /// Everything that can be done to several windows at once.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reason a palette is worth having over a keybinding. Moving six windows to
+    /// one workspace by keyboard is six rounds of find-it, focus-it, move-it, with the
+    /// focus landing somewhere different after each one; here it is six marks and one
+    /// choice. Nothing about it needs a new command in the window manager: the pipe has
+    /// always accepted a newline-separated sequence, which is exactly a list of aim
+    /// and act repeated.
+    /// </para>
+    /// <para>
+    /// Deliberately a smaller set than the single-window list. An action that reads a
+    /// window's state to decide its own wording - minimise or restore, float or tile -
+    /// has no honest wording for a mixed selection, so those are offered only as the
+    /// underlying toggle where the toggle makes sense for a set, and left out where it
+    /// does not.
+    /// </para>
+    /// </remarks>
+    /// <param name="targets">The focus command for each marked window, in the order marked.</param>
+    /// <param name="focusedWorkspace">Where "bring them here" means.</param>
+    /// <param name="workspaces">Every workspace, for the move picker.</param>
+    public static IReadOnlyList<PaletteAction> ForMany(
+        IReadOnlyList<string> targets,
+        string? focusedWorkspace,
+        IReadOnlyList<string>? workspaces = null)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+
+        if (targets.Count == 0) return [];
+
+        string many = targets.Count == 1 ? "1 window" : $"{targets.Count} windows";
+
+        List<PaletteAction> actions = [];
+
+        if (focusedWorkspace is { Length: > 0 } here)
+        {
+            actions.Add(new PaletteAction(
+                "Bring them here",
+                $"Move {many} to workspace {here}",
+                Sequence(targets, $"move --workspace {here}")));
+        }
+
+        if (workspaces is { Count: > 0 })
+        {
+            List<PaletteAction> destinations =
+            [
+                .. workspaces
+                    .Where(w => !string.Equals(w, focusedWorkspace, StringComparison.OrdinalIgnoreCase))
+                    .Select(w => new PaletteAction(
+                        w,
+                        $"Send {many} to {w}",
+                        Sequence(targets, $"move --workspace {w}"))),
+            ];
+
+            if (destinations.Count > 0)
+            {
+                actions.Add(new PaletteAction(
+                    "Move them to\u2026",
+                    "Send them all to one workspace",
+                    string.Empty,
+                    Children: destinations));
+            }
+        }
+
+        actions.Add(new PaletteAction(
+            "Float them",
+            $"Take {many} out of the tiling flow",
+            Sequence(targets, "float")));
+
+        actions.Add(new PaletteAction(
+            "Tile them",
+            $"Put {many} back into the tiling flow",
+            Sequence(targets, "tile")));
+
+        actions.Add(new PaletteAction(
+            "Minimise them",
+            $"Put {many} away",
+            Sequence(targets, "toggle-minimized")));
+
+        actions.Add(new PaletteAction(
+            "Close them",
+            $"Ask {many} to close",
+            Sequence(targets, "close"),
+            Destructive: true));
+
+        return actions;
+    }
+
+    /// <summary>Aim and act, once per window, as one message.</summary>
+    /// <remarks>
+    /// The window manager stops a sequence at the first failure, which is the right
+    /// behaviour here and worth knowing about: a window that closed between being
+    /// marked and being acted on stops the rest rather than having the next command
+    /// land on whatever now holds the focus.
+    /// </remarks>
+    private static string Sequence(IReadOnlyList<string> targets, string verb) =>
+        string.Join('\n', targets.Select(t => $"{t}\n{verb}"));
+
+    /// <summary>One row per workspace this window could be sent to.</summary>
+    /// <remarks>
+    /// Its own workspace is left out entirely rather than listed as unavailable. In the
+    /// tag picker the current workspace is shown because tagging is about membership
+    /// and an incomplete list of memberships would read as a bug; moving is about a
+    /// destination, and "move it to where it already is" is not a destination anybody
+    /// is choosing between.
+    /// </remarks>
+    private static List<PaletteAction> MoveChoices(
+        WindowCandidate window, string focus, IReadOnlyList<string> workspaces)
+    {
+        List<PaletteAction> choices = [];
+
+        foreach (string workspace in workspaces)
+        {
+            if (string.Equals(workspace, window.Workspace, StringComparison.OrdinalIgnoreCase)) continue;
+
+            choices.Add(new PaletteAction(
+                workspace,
+                $"Send it to {workspace} and leave it there",
+                $"{focus}\nmove --workspace {workspace}"));
+        }
+
+        return choices;
     }
 
     /// <summary>
@@ -288,13 +471,57 @@ public static class PaletteActions
                 // the same place a window row's actions do.
                 Actions: action.Children,
                 Explains: action.Explains,
+                Expands: action.Expands,
 
                 // And the chord, so the badge beside the row is something the row can
                 // actually be found by. It used to exist only as that caption, which
                 // is why pressing it in the list it was printed in did nothing.
-                Chord: action.Chord));
+                Chord: action.Chord,
+
+                // Drawn in the warning colour, and confirmed before it happens. The
+                // flag was set here and read nowhere, which is how "Close it" came to
+                // look and behave exactly like "Float it".
+                Destructive: action.Destructive));
         }
 
         return entries;
     }
+
+    /// <summary>
+    /// The two rows that stand between a destructive action and its consequences.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is what replaced <c>action-guard</c>. That setting was a single switch over
+    /// every chord at once, and its default made every chord in the palette inert
+    /// except the one that took no action at all - while the action list went on
+    /// printing those chords beside the rows they belonged to. So the keys were
+    /// advertised in the one place they were redundant and disabled in the only place
+    /// they would have saved anything.
+    /// </para>
+    /// <para>
+    /// Confirming the two actions that cannot be undone, rather than disabling the
+    /// eight that can, gets the safety without the cost. Refusing is first and
+    /// selected, so the reflex of pressing Enter twice does not close a window.
+    /// </para>
+    /// </remarks>
+    /// <param name="what">The action being confirmed, named as it was in the list.</param>
+    /// <param name="command">What to send if it is confirmed.</param>
+    public static IReadOnlyList<PaletteEntry> Confirmation(string what, string command) =>
+    [
+        new PaletteEntry(
+            "No, leave it alone",
+            "Go back without doing anything",
+            [],
+            string.Empty,
+            Rank: 2),
+
+        new PaletteEntry(
+            $"Yes \u2014 {what}",
+            "This cannot be undone",
+            ["Enter"],
+            command,
+            Rank: 1,
+            Destructive: true),
+    ];
 }
