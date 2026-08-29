@@ -868,8 +868,28 @@ public sealed class PaletteModel
         // Prepended after sorting rather than sorted in. These rows are not matches
         // and have no score to compare; giving them an enormous one and hoping would
         // work until something else legitimately scored higher.
+        //
+        // Split by whether they can actually do anything. A row that runs what has been
+        // typed belongs above the matches - it is the thing being composed. A row that
+        // only explains why the text will not parse belongs below them, because Enter
+        // lands on the first row and must never land on something inert.
+        //
+        // That distinction is not cosmetic. Every macro with a space in its name -
+        // "Code layout" - put an "unknown command 'Code'" row above itself, so pressing
+        // Enter on what looked like the obvious match did nothing at all, and the
+        // feature appeared not to work. The diagnostic is still there, at the bottom,
+        // and is still the only row when nothing else matched.
         if (Augmenter?.Invoke(Mode, term) is { Count: > 0 } derived)
-            _rows.InsertRange(0, derived.Select(e => new PaletteRow(e, int.MaxValue, [])));
+        {
+            _rows.InsertRange(
+                0,
+                derived.Where(e => e.Command.Length > 0)
+                       .Select(e => new PaletteRow(e, int.MaxValue, [])));
+
+            _rows.AddRange(
+                derived.Where(e => e.Command.Length == 0)
+                       .Select(e => new PaletteRow(e, 0, [])));
+        }
 
         SelectedIndex = _rows.Count == 0 ? -1 : IndexOf(keep);
     }

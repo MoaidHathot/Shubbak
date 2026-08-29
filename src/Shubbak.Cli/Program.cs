@@ -705,17 +705,31 @@ internal static class Program
         foreach (Diagnostic diagnostic in barDiagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
 
+        // And the palette's, for exactly the same reason. Its section name was on the
+        // allow-list and its contents were on nobody's, so `dalil { with-icons #true }`
+        // was accepted in silence and did nothing for ever.
+        (Dalil.Core.DalilConfig palette, IReadOnlyList<Diagnostic> paletteDiagnostics) =
+            Dalil.Core.DalilConfigLoader.Validate(source);
+
+        foreach (Diagnostic diagnostic in paletteDiagnostics)
+            Console.Error.Write(diagnostic.Render(source, path));
+
         int errors = result.Errors.Count() +
-            barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+            barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error) +
+            paletteDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
 
         int warnings = result.Warnings.Count() +
-            barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
+            barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning) +
+            paletteDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
 
         Console.WriteLine(
             errors == 0 && warnings == 0
                 ? $"{path}: ok - {result.Config.Keybindings.Count} keybindings, " +
                   $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules, " +
-                  $"{bar.Profiles.Count} bar profile(s) " +
+                  $"{bar.Profiles.Count} bar profile(s)" +
+                  (palette.Macros.Count == 0
+                      ? " "
+                      : $", {palette.Macros.Count} palette action(s) ") +
                   $"(found via {location.Origin})"
                 : $"{path}: {errors} error(s), {warnings} warning(s)");
 

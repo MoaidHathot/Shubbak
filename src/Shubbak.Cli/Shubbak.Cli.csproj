@@ -26,8 +26,15 @@
       section is in the same config, and a typo in it was reported nowhere at all.
       Taj.Core is the pure model - no drawing, no Win32 - so this costs the CLI
       nothing but the parser it already needed.
+
+      Dalil.Core is here for the same reason and the same shape: the palette's
+      section was on the allow-list by name and checked by nothing, so a misspelt
+      setting was accepted in silence and did nothing for ever. It is also pure -
+      the matcher and the model, no Win32 - and it already depends on
+      Shubbak.Config for the command parser it validates actions with.
     -->
     <ProjectReference Include="..\Taj.Core\Taj.Core.csproj" />
+    <ProjectReference Include="..\Dalil.Core\Dalil.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

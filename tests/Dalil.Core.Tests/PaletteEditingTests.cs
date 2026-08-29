@@ -452,4 +452,57 @@ public sealed class PaletteEditingTests
 
         Assert.Single(model.Rows);
     }
+    // ---- rows derived from the query itself ----------------------------------------
+
+    [Fact]
+    public void ARowThatCanRunWhatWasTypedGoesAboveTheMatches()
+    {
+        // It is the thing being composed, so it is what Enter should be aimed at.
+        var model = new PaletteModel
+        {
+            Augmenter = (_, term) => [new PaletteEntry(term, "run it", [], term)],
+        };
+
+        model.SetEntries([Entry("something")]);
+        model.SetQuery("equalise");
+
+        Assert.Equal("equalise", model.Rows[0].Entry.Primary);
+    }
+
+    [Fact]
+    public void ARowThatCannotRunGoesBelowThem()
+    {
+        // The bug this exists for. Every macro with a space in its name - "Code
+        // layout" - put an "unknown command 'Code'" row above itself, because the
+        // composer emits one for any term containing a space. Enter therefore landed
+        // on a row that does nothing, and the feature looked broken while working
+        // perfectly one row further down.
+        var model = new PaletteModel
+        {
+            Augmenter = (_, _) => [new PaletteEntry("Code lay", "unknown command", [], string.Empty)],
+        };
+
+        model.SetEntries([Entry("Code layout")]);
+        model.SetQuery("Code lay");
+
+        Assert.Equal("Code layout", model.Rows[0].Entry.Primary);
+        Assert.Equal("Code lay", model.Rows[^1].Entry.Primary);
+    }
+
+    [Fact]
+    public void TheDiagnosticIsStillTheOnlyRowWhenNothingMatched()
+    {
+        // Which is the case it was written for: a mistyped verb matches no row in the
+        // command list, and the parser's explanation is the only useful thing on
+        // screen. Pushing it down must not push it away.
+        var model = new PaletteModel
+        {
+            Augmenter = (_, _) => [new PaletteEntry("focuss --direction left", "unknown command", [], string.Empty)],
+        };
+
+        model.SetEntries([Entry("focus")]);
+        model.SetQuery("focuss --direction left");
+
+        Assert.Equal("focuss --direction left", Assert.Single(model.Rows).Entry.Primary);
+    }
 }

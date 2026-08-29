@@ -633,11 +633,25 @@ public sealed class ConfigLoader
 
             int? monitor = null;
 
-            if (child.Property("monitor") is { } m && m.TryAsInt(out int index))
+            if (child.Property("monitor") is { } m)
             {
+                if (!m.TryAsInt(out int index))
+                {
+                    // A device name is the obvious thing to try and has never worked:
+                    // the property is read as an integer, so `monitor="DISPLAY2"` was
+                    // dropped on the floor and the workspace quietly took the primary.
+                    Report(Diagnostic.Error(
+                        "SHB0431",
+                        $"Workspace '{name}' asks for monitor {m.Raw}, which is not a number.",
+                        m.Span,
+                        "Monitors are numbered from 0 in the order Windows reports them, " +
+                        "not by device name. `shubbak query monitors` lists them in that " +
+                        "order, so the second one is monitor=1."));
+                }
+
                 // A negative index is never a monitor, and it would silently fall
                 // through to the primary rather than being reported.
-                if (index < 0)
+                else if (index < 0)
                 {
                     Report(Diagnostic.Error(
                         "SHB0430",
