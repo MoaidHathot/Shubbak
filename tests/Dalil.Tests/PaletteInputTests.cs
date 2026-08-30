@@ -434,7 +434,7 @@ public class PaletteInputTests
         Assert.Equal(
             PaletteChoice.Run,
             PaletteInput.Choose(
-                Entry(command: "focus-window 42\nfloat"),
+                Entry(command: "focus-window 42\ntoggle-floating"),
                 PaletteMode.Windows,
                 insideOverlay: true,
                 confirmDestructive: true));

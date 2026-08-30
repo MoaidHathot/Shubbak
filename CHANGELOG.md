@@ -81,6 +81,20 @@ schedule and breaking either is a different kind of event:
   outstanding - so this is paid just after focus moves rather than on every tick for
   ever. Verified on the running daemon: four re-assertions 48 ms apart, then silence.
 
+- **Dalil's float/tile row could send the verb that was already true, and do nothing.**
+  `Ctrl+Shift+F` floated a window, and pressing it again to tile did nothing at all
+  while Enter on the same row worked. The row chose between `float` and `tile` from the
+  window's state, and that state is a snapshot: the host seeds a reopened palette from
+  its cached read before the fresh one lands and refuses to refresh at all while the
+  palette is closed, a drill-in frame is frozen when it is pushed and deliberately
+  ignores refreshes, and the action itself is resolved from a window captured when the
+  row was built. Any of those can describe a floating window as tiled - and `float` on
+  something already floating returns from `SetWindowStateCore` without an event or an
+  error, so the key looked dead. Both wordings now send `toggle-floating`, exactly as
+  Minimise and Make sticky beside them have always sent one command each and varied
+  only the label. A toggle cannot be stale, and the help screen has always described
+  the chord as one.
+
 - **Clicking another window broke a full-screen video, and leaving full-screen left
   the window in the wrong place.** An application that goes full-screen by itself - a
   browser playing a video, a game in borderless mode - resizes its own window and
