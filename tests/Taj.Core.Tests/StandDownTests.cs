@@ -86,17 +86,19 @@ public sealed class StandDownTests
     {
         int produced = 0;
         var source = new IntervalSource(
-            "counter", TimeSpan.FromMilliseconds(50), () => (++produced).ToString(CultureInfo.InvariantCulture));
+            "counter",
+            TimeSpan.FromMilliseconds(50),
+            () => Interlocked.Increment(ref produced).ToString(CultureInfo.InvariantCulture));
 
         source.Start();
         source.StandDown();
 
-        int atStandDown = produced;
+        int atStandDown = Volatile.Read(ref produced);
         Thread.Sleep(250);
 
         // Several intervals have passed and nothing ran. The first reading, taken by
         // Start, is the only one.
-        Assert.Equal(atStandDown, produced);
+        Assert.Equal(atStandDown, Volatile.Read(ref produced));
     }
 
     [Fact]
@@ -106,22 +108,28 @@ public sealed class StandDownTests
         // it stopped at until its interval next elapses, so a bar returning from a
         // long game would come back showing a stale clock. The due-time on the way up
         // is zero for exactly this.
-        int produced = 0;
+        //
+        // Waited on rather than spun for. SpinWait.SpinUntil burns a core, and the
+        // thing it is waiting for is a timer callback that needs a thread-pool thread
+        // to run on - so on an agent with few cores the spin starves the work it is
+        // waiting for and the test fails for reasons that have nothing to do with the
+        // code. That is exactly how this behaved on CI while passing locally.
+        var produced = new ManualResetEventSlim(false);
+
         var source = new IntervalSource(
-            "counter", TimeSpan.FromSeconds(30), () => (++produced).ToString(CultureInfo.InvariantCulture));
+            "counter", TimeSpan.FromSeconds(30), () => DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture));
 
         source.Start();
         source.StandDown();
 
-        int atStandDown = produced;
+        // Subscribed after the stand-down, so only a reading taken on the way back up
+        // can set it.
+        source.Changed += _ => produced.Set();
+
         source.StandUp();
 
-        // Well inside the thirty-second interval, so anything here is the immediate
-        // reading rather than a scheduled one.
-        SpinWait.SpinUntil(() => produced > atStandDown, TimeSpan.FromSeconds(2));
-
         Assert.True(
-            produced > atStandDown,
+            produced.Wait(TimeSpan.FromSeconds(10)),
             "standing up left the source waiting out its interval, so the bar would show a stale value");
     }
 
