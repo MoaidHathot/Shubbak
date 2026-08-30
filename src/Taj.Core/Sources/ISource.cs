@@ -31,6 +31,46 @@ public interface ISource : IDisposable
 
     /// <summary>Begins producing values.</summary>
     void Start();
+
+    /// <summary>
+    /// Stops producing values, because nothing is on screen to show them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called when the bar stands down: the window manager has been suspended, or a
+    /// full-screen application is covering the bar entirely. A clock polled twice a
+    /// second behind a full-screen game is work nobody can see the result of.
+    /// </para>
+    /// <para>
+    /// Only <b>pull</b> sources have anything to do here. A push source must keep
+    /// running: the window manager's own state arrives that way, and it is what draws
+    /// the indicator saying the bar is stood down and offering the way back.
+    /// </para>
+    /// <para>
+    /// Given a default of doing nothing, so that adding this did not break every
+    /// existing implementation and so that a source written without knowing about it
+    /// goes on working. Standing down is an optimisation; a source that ignores it is
+    /// wasteful, and one that failed to compile would be worse.
+    /// </para>
+    /// </remarks>
+    void StandDown() { }
+
+    /// <summary>
+    /// Begins producing values again, starting immediately.
+    /// </summary>
+    /// <remarks>
+    /// Immediately, not on the next interval, and that is the whole subtlety. A clock
+    /// resumed on its ordinary schedule shows the time it stopped at until its
+    /// interval next elapses, so a bar coming back from a long game would reappear
+    /// showing an hour-old clock for half a second. Whether anyone would catch it is
+    /// not the point; it would be wrong on screen.
+    /// <para>
+    /// Named as a pair with <see cref="StandDown"/> rather than suspend and resume,
+    /// because <c>Resume</c> is a reserved word in other .NET languages and this is a
+    /// public interface.
+    /// </para>
+    /// </remarks>
+    void StandUp() { }
 }
 
 /// <summary>Shared plumbing for sources.</summary>
@@ -48,6 +88,17 @@ public abstract class SourceBase : ISource
     public event Action<ISource>? Changed;
 
     public abstract void Start();
+
+    /// <summary>Does nothing. A source with no timer has nothing to stop.</summary>
+    /// <remarks>
+    /// The default rather than an abstract method on purpose: standing down is an
+    /// optimisation, and a source that has not been taught about it must go on
+    /// working rather than fail to compile or, worse, silently stop.
+    /// </remarks>
+    public virtual void StandDown() { }
+
+    /// <inheritdoc cref="ISource.StandUp"/>
+    public virtual void StandUp() { }
 
     /// <summary>
     /// Publishes a value, notifying subscribers only if it actually differs.
@@ -106,6 +157,12 @@ public sealed class IntervalSource : SourceBase
         Tick(null);
         _timer = new Timer(Tick, null, _interval, _interval);
     }
+
+    /// <inheritdoc/>
+    public override void StandDown() => _timer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+    /// <inheritdoc/>
+    public override void StandUp() => _timer?.Change(TimeSpan.Zero, _interval);
 
     private void Tick(object? _)
     {
@@ -174,6 +231,16 @@ public sealed class ClockSource : SourceBase
         Tick(null);
         _timer = new Timer(Tick, null, _interval, _interval);
     }
+
+    /// <inheritdoc/>
+    public override void StandDown() => _timer?.Change(Timeout.Infinite, Timeout.Infinite);
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// The zero due-time matters most here of anywhere: a clock is the one widget
+    /// whose stale value is obviously wrong to look at.
+    /// </remarks>
+    public override void StandUp() => _timer?.Change(TimeSpan.Zero, _interval);
 
     private void Tick(object? _)
     {

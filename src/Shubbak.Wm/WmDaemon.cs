@@ -552,16 +552,81 @@ public sealed class WmDaemon : IDisposable
         _timerResolution.Release();
         _loop.IsPacingFrames = false;
 
-        // Suspended: nothing is watching the desktop and nothing is pending, so the
-        // only thing that can wake this thread is the resume hotkey or an IPC command
-        // - both of which arrive as messages and interrupt the wait anyway. Waiting
-        // long is what makes a suspended window manager genuinely idle rather than
-        // merely quiet.
-        if (_suspended) return SuspendedInterval;
+        return IdleWait(
+            _suspended,
+            _layoutDirty,
+            _settling.Count > 0,
+            FrameInterval,
+            SettleInterval,
+            IdleInterval);
+    }
 
-        // The wait is the other question, and has a different answer: a pending pass
-        // does want to run promptly.
-        if (_layoutDirty) return FrameInterval;
+    /// <summary>
+    /// How long to wait when nothing is moving.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Separated from <see cref="NextTimeout"/> and made pure so the decision can be
+    /// stated in a test rather than inferred from a running daemon. Everything the
+    /// animation branch needs - the fine timer, the frame clock, the pacing flag - is
+    /// stateful and stays there; this half is arithmetic.
+    /// </para>
+    /// <para>
+    /// <b>Suspended waits forever</b>, and that is a deliberate change from the second
+    /// it used to wait. The old reasoning was that a wait has to end eventually and
+    /// that once a second is free. The first half is not true here and the second was
+    /// never the point: every path that can end a suspension signals the pump.
+    /// <c>InvokeAsync</c> wakes it for anything arriving over the pipe, and
+    /// <c>MessageLoop</c>'s wake handle is an <c>AutoResetEvent</c>, so a signal
+    /// raised while a pass is already running is remembered rather than lost. The
+    /// resume hotkey does not even need that: <c>RegisterHotKey</c> posts to the
+    /// thread's queue, which the wait watches through <c>QS_ALLINPUT</c>, and it is
+    /// the key the user will actually press - so the one recovery that has to work
+    /// cannot be missed.
+    /// </para>
+    /// <para>
+    /// Measured before changing it: a suspended daemon ticked at 1.07 Hz with a median
+    /// tick under five microseconds, so this saves a few microseconds a second and
+    /// nothing else. It is here because "suspended" ought to mean no wake-ups at all
+    /// rather than nearly none, not because the wake-ups cost anything. What is
+    /// genuinely worth knowing is that the bar beside it was spinning at 62.5 Hz for
+    /// the same desktop, which is where the actual saving was.
+    /// </para>
+    /// <para>
+    /// The one thing this gives up: <c>Ticks</c> and the tick-interval histogram stop
+    /// accumulating while suspended, so <c>diagnose</c> reports the loop as it was
+    /// when the suspension began. That is arguably what an idle loop should report,
+    /// but it is a change in what the number means.
+    /// </para>
+    /// </remarks>
+    /// <param name="suspended">Whether the hooks have been released.</param>
+    /// <param name="layoutDirty">
+    /// Whether a pass is owed. Checked <i>before</i> the suspension, because a
+    /// suspended daemon still lays out when a command tells it to, and a wait with no
+    /// end would otherwise leave that pass sitting until something else happened to
+    /// wake the loop. It cannot arise in practice - whatever set the flag woke the
+    /// pump on its way past - but an infinite wait is the wrong place to be relying on
+    /// that.
+    /// </param>
+    /// <param name="settling">Whether a newly adopted window is due another look.</param>
+    /// <param name="frame">One animation frame, for a pass that wants to run now.</param>
+    /// <param name="settle">The gap between looks at a settling window.</param>
+    /// <param name="idle">The ceiling: how stale the world may get on a still desktop.</param>
+    internal static TimeSpan IdleWait(
+        bool suspended,
+        bool layoutDirty,
+        bool settling,
+        TimeSpan frame,
+        TimeSpan settle,
+        TimeSpan idle)
+    {
+        // A pending pass wants to run promptly whatever else is true.
+        if (layoutDirty) return frame;
+
+        // Nothing is watching the desktop and nothing is pending, so there is nothing
+        // for a timeout to discover. Only a message or a signal can matter now, and
+        // both interrupt the wait.
+        if (suspended) return Timeout.InfiniteTimeSpan;
 
         // A window adopted moments ago is due another look. Without this the pump
         // would sleep for the idle interval and the check would happen whenever
@@ -569,7 +634,7 @@ public sealed class WmDaemon : IDisposable
         // is exactly the situation the check exists for.
         //
         // The idle interval is still the ceiling: this only ever shortens the wait.
-        return _settling.Count > 0 ? SettleInterval : IdleInterval;
+        return settling ? settle : idle;
     }
 
     /// <summary>
@@ -582,16 +647,6 @@ public sealed class WmDaemon : IDisposable
     /// opens.
     /// </remarks>
     private static readonly TimeSpan SettleInterval = TimeSpan.FromMilliseconds(100);
-
-    /// <summary>How long to wait when suspended.</summary>
-    /// <remarks>
-    /// A second, not because anything is expected then, but because a wait has to end
-    /// eventually and an idle thread waking once a second is free. Both things that
-    /// can end a suspension - the resume hotkey and an IPC command - arrive as
-    /// messages and cut the wait short, so this is a floor on responsiveness rather
-    /// than a delay anyone experiences.
-    /// </remarks>
-    private static readonly TimeSpan SuspendedInterval = TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Whether the fine timer was held the last time a frame was being paced.

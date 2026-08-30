@@ -50,6 +50,21 @@ public sealed class BarWindow : IDisposable
     /// </remarks>
     public static event Action? RequestShutdown;
 
+    /// <summary>
+    /// Raised when the shell says a full-screen application has opened or closed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Static for the same reason as <see cref="RequestShutdown"/>, and because the
+    /// answer is about the desktop rather than about one bar: a game on one monitor
+    /// covers that bar, and the loop that drives all of them is one loop.
+    /// </para>
+    /// <para>
+    /// True when one opens, false when one closes. Deliberately treated as a hint
+    /// rather than as the truth - see <c>StandDown.StillCovered</c>.
+    /// </para>
+    /// </remarks>
+    public static event Action<bool>? FullScreenAppChanged;
 
     private readonly BarModel _model;
     private readonly int _monitorIndex;
@@ -363,6 +378,10 @@ public sealed class BarWindow : IDisposable
             SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
 
+        // Told once, to the loop, rather than each bar deciding for itself. A bar that
+        // is completely covered has nothing to poll for and nothing to redraw, and the
+        // loop is where that is acted on.
+        FullScreenAppChanged?.Invoke(opening);
     }
 
     /// <summary>

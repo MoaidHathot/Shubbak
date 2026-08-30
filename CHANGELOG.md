@@ -15,6 +15,57 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Changed
+
+- **Taj waits instead of spinning.** The bar's message loop ran every 16 ms - sixty-two
+  passes a second, forever - and almost every one found nothing had changed and did
+  nothing. That poll existed only to notice a dirty flag being set from a timer or the
+  pipe, which is what a wait handle is for, and the palette next door had been doing it
+  properly all along. The model now says when it changes and the loop waits for that,
+  with a one-second ceiling as a safety net so a signal nobody wires up later shows as
+  a second of staleness rather than a bar that has quietly stopped. Loop passes per
+  second, counted in the loop itself: **62.5 before, 1 after** while visible, and 4
+  while stood down - the latter being the rate at which a full-screen stand-down is
+  re-confirmed, so it stays a quarter of a second.
+
+  Measured as an A/B on one machine, same method, 150 seconds each, bar visible and
+  untouched: **5.208 ms/s before, 2.708 ms/s after - 1.9x**. The loop was about half of
+  what the bar spent; the rest is its pipe connections and its timer callbacks, which
+  are unchanged.
+
+- **Suspending now means no wake-ups at all, rather than nearly none.** The loop woke
+  once a second while suspended, on the reasoning that a wait has to end eventually
+  and that an idle thread waking once a second is free. The second half was true and
+  the first was not: every path that can end a suspension signals the pump - an IPC
+  request wakes it explicitly, and the resume hotkey arrives as a thread message the
+  wait already watches for - and the wake handle is an `AutoResetEvent`, so a signal
+  raised while a pass is running is remembered rather than lost. Measured: **32 ticks
+  in 30 seconds before, 1 after**, and that one was caused by the diagnostic call
+  taking the measurement. `diagnose` no longer accumulates loop statistics while
+  suspended, which is the one thing given up.
+
+- **Taj stands down when nothing on screen is showing it.** It kept polling and
+  rebuilding behind a full-screen game, and while the window manager was suspended -
+  which is what someone does *before* playing one. It now stops its interval and clock
+  sources and widens its wait whenever either holds. Messages are still pumped, so the
+  indicator saying why it stopped stays clickable, which is the way back that does not
+  need the keyboard.
+
+  The full-screen half deliberately does not trust `ABN_FULLSCREENAPP` alone, because
+  it reports an opening and a closing rather than what is in front; the shell is asked
+  again through `SHQueryUserNotificationState` on every slow pass, so a mistaken
+  stand-down lasts a quarter of a second rather than until the application closes.
+  Sources restart by taking a reading immediately rather than waiting out their
+  interval, so a bar returning from a long game does not come back showing a stale
+  clock.
+
+  Together, measured over 150 seconds with the window manager suspended:
+
+  | | before | suspended, after |
+  |---|---|---|
+  | `taj` | 5.208 ms/s | **0.104 ms/s** |
+  | `shubbak-wm` | — | **0.000 ms/s** |
+
 ### Fixed
 
 - **Clicking another window broke a full-screen video, and leaving full-screen left

@@ -82,12 +82,16 @@ public sealed class BarModel : IDisposable
         {
             ArgumentNullException.ThrowIfNull(value);
 
+            bool woke;
+
             lock (_gate)
             {
                 if (ReferenceEquals(_profile, value)) return;
                 _profile = value;
-                _dirty = true;
+                woke = MarkDirty();
             }
+
+            if (woke) Dirtied?.Invoke();
         }
     }
 
@@ -95,6 +99,42 @@ public sealed class BarModel : IDisposable
     public bool IsDirty
     {
         get { lock (_gate) return _dirty; }
+    }
+
+    /// <summary>
+    /// Raised when the model becomes dirty, so a waiting loop can stop waiting.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Sources publish from thread-pool timers and from the pipe, and the loop that
+    /// redraws is a message loop on another thread. Without this the loop has no way
+    /// to learn that anything happened except by asking, which is what it used to do -
+    /// sixty-two times a second, forever, and almost always to be told nothing had.
+    /// </para>
+    /// <para>
+    /// Raised <b>after</b> the lock is released. Every subscriber will be a wake
+    /// handle, but raising an arbitrary callback while holding the lock that every
+    /// publish needs is how a bar deadlocks itself on its own clock.
+    /// </para>
+    /// <para>
+    /// Edge-triggered on the transition into dirty, not on every set. A model already
+    /// dirty has already woken whoever cares, and they have not looked yet.
+    /// </para>
+    /// </remarks>
+    public event Action? Dirtied;
+
+    /// <summary>
+    /// Marks the model dirty and returns whether that was a change.
+    /// </summary>
+    /// <remarks>
+    /// Called with <see cref="_gate"/> held. The notification cannot be raised from
+    /// here for that reason; the caller does it once it has let go.
+    /// </remarks>
+    private bool MarkDirty()
+    {
+        bool wasClean = !_dirty;
+        _dirty = true;
+        return wasClean;
     }
 
     /// <summary>Registers a source and begins listening to it.</summary>
@@ -111,6 +151,39 @@ public sealed class BarModel : IDisposable
         source.Start();
 
         OnSourceChanged(source);
+    }
+
+    /// <summary>
+    /// Stops every source that polls, because nothing on screen is showing them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Idempotent, so the caller may say it on every pass rather than tracking edges.
+    /// A timer already stopped is stopped again for free.
+    /// </para>
+    /// <para>
+    /// The array is taken under the lock and the sources are told outside it. Each
+    /// one touches a timer, and holding a lock across that while a timer callback on
+    /// another thread is trying to publish - which takes the same lock - is the shape
+    /// of a deadlock.
+    /// </para>
+    /// </remarks>
+    public void StandDown()
+    {
+        ISource[] sources;
+        lock (_gate) sources = [.. _sources.Values];
+
+        foreach (ISource source in sources) source.StandDown();
+    }
+
+    /// <summary>Starts every source polling again, each taking a reading at once.</summary>
+    /// <remarks>Idempotent, and locked in the same way as <see cref="StandDown"/>.</remarks>
+    public void StandUp()
+    {
+        ISource[] sources;
+        lock (_gate) sources = [.. _sources.Values];
+
+        foreach (ISource source in sources) source.StandUp();
     }
 
     /// <summary>
@@ -149,6 +222,8 @@ public sealed class BarModel : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
 
+        bool woke;
+
         lock (_gate)
         {
             if (_values.TryGetValue(name, out string? existing) &&
@@ -158,8 +233,10 @@ public sealed class BarModel : IDisposable
             }
 
             _values[name] = value;
-            _dirty = true;
+            woke = MarkDirty();
         }
+
+        if (woke) Dirtied?.Invoke();
     }
 
     /// <summary>The current value of a source.</summary>
@@ -170,6 +247,8 @@ public sealed class BarModel : IDisposable
 
     private void OnSourceChanged(ISource source)
     {
+        bool woke;
+
         lock (_gate)
         {
             _values[source.Name] = source.Value;
@@ -177,8 +256,10 @@ public sealed class BarModel : IDisposable
             // Rebuild only if some widget actually depends on this source. A source
             // nothing displays - left over after a profile switch, say - must not
             // cost a redraw.
-            _dirty = true;
+            woke = MarkDirty();
         }
+
+        if (woke) Dirtied?.Invoke();
     }
 
     /// <summary>
