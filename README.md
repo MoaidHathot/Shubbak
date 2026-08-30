@@ -626,7 +626,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1358 test methods**, around 700 ms to run. Everything except the platform layer
+**1544 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -686,7 +686,7 @@ src/
   Taj/              bar host
   Dalil.Core/       fuzzy matching, palette model                     — no Win32
   Dalil/            the palette
-tests/              1358 test methods across 9 projects
+tests/              1544 test methods across 9 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```
