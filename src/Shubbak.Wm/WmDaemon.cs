@@ -556,10 +556,8 @@ public sealed class WmDaemon : IDisposable
             _suspended,
             _layoutDirty,
             _settling.Count > 0,
-            _borderSettleRemaining > 0,
             FrameInterval,
             SettleInterval,
-            BorderSettleInterval,
             IdleInterval);
     }
 
@@ -611,22 +609,15 @@ public sealed class WmDaemon : IDisposable
     /// that.
     /// </param>
     /// <param name="settling">Whether a newly adopted window is due another look.</param>
-    /// <param name="borderSettling">
-    /// Whether focus has just landed and the new window's border is still being
-    /// re-asserted. See <see cref="MaybeSettleFocusBorder"/>.
-    /// </param>
     /// <param name="frame">One animation frame, for a pass that wants to run now.</param>
     /// <param name="settle">The gap between looks at a settling window.</param>
-    /// <param name="borderSettle">The gap between re-assertions of a new border.</param>
     /// <param name="idle">The ceiling: how stale the world may get on a still desktop.</param>
     internal static TimeSpan IdleWait(
         bool suspended,
         bool layoutDirty,
         bool settling,
-        bool borderSettling,
         TimeSpan frame,
         TimeSpan settle,
-        TimeSpan borderSettle,
         TimeSpan idle)
     {
         // A pending pass wants to run promptly whatever else is true.
@@ -636,13 +627,6 @@ public sealed class WmDaemon : IDisposable
         // for a timeout to discover. Only a message or a signal can matter now, and
         // both interrupt the wait.
         if (suspended) return Timeout.InfiniteTimeSpan;
-
-        // Focus has just moved and the window it moved to is about to repaint itself,
-        // which for some applications means clearing the border Shubbak just gave it.
-        // The shortest wait of the three, because this is a race with a repaint rather
-        // than a period of housekeeping - and the briefest, since it stops of its own
-        // accord after a handful of passes.
-        if (borderSettling) return borderSettle;
 
         // A window adopted moments ago is due another look. Without this the pump
         // would sleep for the idle interval and the check would happen whenever
@@ -876,7 +860,6 @@ public sealed class WmDaemon : IDisposable
                 SettleArrivedWindows(now);
                 MaybeDetectNativeFullscreen(now);
                 MaybeSyncMonitors(now);
-                MaybeSettleFocusBorder(now);
                 MaybeRefreshFocusBorder(now);
                 MaybeSaveSession(now);
             }
@@ -4398,18 +4381,7 @@ public sealed class WmDaemon : IDisposable
         {
             // Same window, but it may have just been resized out of its border.
             if (geometryChanged && focused is not null)
-            {
                 ApplyBorder(focused, ColourFor(focused, focused: true));
-
-                // And a resize is worse than a focus change, not better. Measured on a
-                // Windows Terminal going from full width to half when another window
-                // joined its workspace: the border was cleared and re-cleared for over
-                // two seconds, because a terminal re-laying out its character grid
-                // repaints far longer than one activation. Restarting the watch here is
-                // what covers that; without it only the focus change was covered and
-                // the later clears fell through to the healing timer.
-                WatchFocusBorder();
-            }
 
             return;
         }
@@ -4420,11 +4392,6 @@ public sealed class WmDaemon : IDisposable
         if (focused is not null) ApplyBorder(focused, ColourFor(focused, focused: true));
 
         _borderedWindow = focused;
-
-        // Focus has landed somewhere new, so the window is about to activate and
-        // repaint - and some of them clear the border on the way past. See
-        // MaybeSettleFocusBorder.
-        if (focused is not null) WatchFocusBorder();
     }
 
     /// <summary>
@@ -4457,117 +4424,6 @@ public sealed class WmDaemon : IDisposable
         if (!DueEvery(200, now, ref _lastBorderRefreshTicks)) return;
 
         ReassertFocusBorder();
-    }
-
-    /// <summary>
-    /// How many extra times a newly focused window's border is put back.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Sized from measurement, twice, because it was guessed once and the guess was far
-    /// too small. Sampling the border pixels of a Windows Terminal:
-    /// </para>
-    /// <para>
-    /// On a plain focus change it is cleared 29-60 ms in and stays cleared for 250 ms
-    /// on one attempt and 535 ms on the next - and on a third it never clears at all,
-    /// which is what makes this intermittent. Four checks spanning 145 ms could not
-    /// cover that; twenty spanning 800 ms could.
-    /// </para>
-    /// <para>
-    /// But a focus change that also <i>resizes</i> the window is a different order of
-    /// problem. Moving another window onto its workspace takes the terminal from full
-    /// width to half, and it then cleared and re-cleared its border repeatedly for over
-    /// two seconds, because re-laying out a character grid repaints for far longer than
-    /// one activation does. Sixty checks span two and a half seconds, which covers the
-    /// worst of that - and the watch now restarts on a geometry change as well as on a
-    /// focus change, so a resize is covered from where it starts rather than from
-    /// whenever focus last moved.
-    /// </para>
-    /// <para>
-    /// Bounded, for the same reason the drift watch is bounded: an unbounded one is a
-    /// window manager arguing with an application for as long as both are running. The
-    /// healing timer stays as the backstop for anything later still.
-    /// </para>
-    /// <para>
-    /// The cost, since this is a poll and the day it was written was spent removing
-    /// one: 331 ns per <c>DwmSetWindowAttribute</c>, so about 20 us spread across the
-    /// two and a half seconds, plus up to sixty extra loop wake-ups 40 ms apart. It
-    /// stops on its own, and it only starts when something moved.
-    /// </para>
-    /// </remarks>
-    private const int BorderSettleChecks = 60;
-
-    /// <summary>The gap between those.</summary>
-    private static readonly TimeSpan BorderSettleInterval = TimeSpan.FromMilliseconds(40);
-
-    private int _borderSettleRemaining;
-    private long _lastBorderSettleTicks;
-
-    /// <summary>
-    /// Puts a newly focused window's border back for a moment after focus lands.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Reported as the border flickering on the window being moved <i>to</i>, with
-    /// Windows Terminal and nothing else. Shubbak sets the border when focus arrives,
-    /// the application then activates and repaints, and a WinUI repaint resets
-    /// <c>DWMWA_BORDER_COLOR</c> - which <see cref="MaybeRefreshFocusBorder"/> already
-    /// says in as many words. The border is set, cleared by the window, and healed, and
-    /// all three are visible.
-    /// </para>
-    /// <para>
-    /// Established by elimination and then by measurement, because the obvious reading
-    /// was wrong twice. The border is write-only - <c>DwmGetWindowAttribute</c> refuses
-    /// <c>DWMWA_BORDER_COLOR</c> - so the screen is the only witness, and a pixel
-    /// sampled during the gap came back a grey close enough to the configured
-    /// unfocused colour to look like Shubbak painting it. Running with the unfocused
-    /// colour temporarily set to bright green settled it: the flash is never green, so
-    /// nothing here writes it. What is on screen during the gap is Windows' own default
-    /// border, which is what a cleared attribute looks like.
-    /// </para>
-    /// <para>
-    /// The healing timer cannot be what fixes this. It asks every 200 ms, but the loop
-    /// sleeps for 250 ms when nothing is happening, so in practice it runs once per
-    /// idle wait - and if the application clears the border again straight after a
-    /// heal, the next one is another wait away. Measured at 250 ms and 535 ms on two
-    /// consecutive attempts. Shortening the idle interval would pay for this on every
-    /// tick forever; this pays only just after focus moves, which is the only time the
-    /// race exists.
-    /// </para>
-    /// <para>
-    /// Re-asserting rather than checking, because there is nothing to check. Setting
-    /// the same colour again costs one compositor call and is the only way to know it
-    /// is set.
-    /// </para>
-    /// </remarks>
-    private void MaybeSettleFocusBorder(long now)
-    {
-        if (_borderSettleRemaining <= 0) return;
-
-        if (!_config.Effects.Enabled)
-        {
-            _borderSettleRemaining = 0;
-            return;
-        }
-
-        if (!DueEvery(BorderSettleInterval.TotalMilliseconds, now, ref _lastBorderSettleTicks))
-            return;
-
-        _borderSettleRemaining--;
-
-        // Does nothing unless Shubbak's idea of focus still matches the window wearing
-        // the border, so focus moving again mid-watch cannot paint the old one.
-        ReassertFocusBorder();
-    }
-
-    /// <summary>Starts the short watch after focus has landed somewhere new.</summary>
-    private void WatchFocusBorder()
-    {
-        _borderSettleRemaining = BorderSettleChecks;
-
-        // Zeroed so the first re-assertion is due immediately rather than an interval
-        // after whenever the last watch happened to end.
-        _lastBorderSettleTicks = 0;
     }
 
     /// <summary>

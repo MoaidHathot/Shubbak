@@ -68,32 +68,6 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
-- **The focus border flickered on the window being moved to.** Reported on Windows
-  Terminal and nothing else. Shubbak sets the border when focus arrives; the
-  application then repaints and resets `DWMWA_BORDER_COLOR`, and the healing timer puts
-  it back up to a quarter of a second later - so the border is set, cleared, and healed,
-  and all three are visible. That timer cannot close the gap on its own: it asks every
-  200 ms but the loop sleeps for 250 ms when nothing is pending, so it runs about once
-  per idle wait. The border is now re-asserted every 40 ms for two and a half seconds
-  after focus lands *or* after the window is resized, and the loop shortens its wait
-  only while that is outstanding - so this is paid just after something moved rather
-  than on every tick for ever.
-
-  Sized by measurement, after two wrong guesses. `DWMWA_BORDER_COLOR` is write-only -
-  `DwmGetWindowAttribute` refuses it - so the screen is the only witness, and a pixel
-  sampled during the gap came back a grey close enough to the configured unfocused
-  colour to look like Shubbak painting it. Running with the unfocused colour
-  temporarily set to bright green settled that: the flash is never green, so nothing
-  here writes it, and what shows during the gap is Windows' own default border, which
-  is what a cleared attribute looks like. A plain focus change loses the border for
-  250-535 ms. A focus change that also *resizes* the window - moving another window
-  onto its workspace takes the terminal from full width to half - clears and re-clears
-  it for over two seconds, because re-laying out a character grid repaints far longer
-  than one activation does. Twelve of twelve runs of that sequence now reach the
-  focused colour in 16-47 ms and hold it.
-
-  Not a regression: it reproduces identically on a build from before any of this work.
-
 - **Dalil's float/tile row could send the verb that was already true, and do nothing.**
   `Ctrl+Shift+F` floated a window, and pressing it again to tile did nothing at all
   while Enter on the same row worked. The row chose between `float` and `tile` from the

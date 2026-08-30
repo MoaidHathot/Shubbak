@@ -24,16 +24,10 @@ public sealed class IdleWaitTests
 {
     private static readonly TimeSpan Frame = TimeSpan.FromMilliseconds(17);
     private static readonly TimeSpan Settle = TimeSpan.FromMilliseconds(100);
-    private static readonly TimeSpan Border = TimeSpan.FromMilliseconds(40);
     private static readonly TimeSpan Idle = TimeSpan.FromMilliseconds(250);
 
-    private static TimeSpan Wait(
-        bool suspended,
-        bool layoutDirty = false,
-        bool settling = false,
-        bool borderSettling = false) =>
-        WmDaemon.IdleWait(
-            suspended, layoutDirty, settling, borderSettling, Frame, Settle, Border, Idle);
+    private static TimeSpan Wait(bool suspended, bool layoutDirty = false, bool settling = false) =>
+        WmDaemon.IdleWait(suspended, layoutDirty, settling, Frame, Settle, Idle);
 
     [Fact]
     public void ASuspendedLoopWaitsForever()
@@ -75,45 +69,6 @@ public sealed class IdleWaitTests
     public void AStillDesktopWaitsTheIdleInterval()
     {
         Assert.Equal(Idle, Wait(suspended: false));
-    }
-
-    [Fact]
-    public void FocusJustLandingShortensTheWaitFurtherStill()
-    {
-        // The window focus moved to is about to activate and repaint, and a WinUI
-        // repaint clears the border Shubbak has just given it. The healing timer asks
-        // every 200 ms but the loop sleeps for 250, so it runs about once per idle
-        // wait - which is long enough for the clearing and the healing to be two
-        // separate things to look at. That is the flicker, reported on Windows
-        // Terminal and on the window being moved to rather than away from.
-        Assert.Equal(Border, Wait(suspended: false, borderSettling: true));
-    }
-
-    [Fact]
-    public void ABorderJustSetIsMoreUrgentThanASettlingWindow()
-    {
-        // Both can be true just after a new window opens and takes focus. The border
-        // is racing a repaint that happens within a frame or two; the settle check is
-        // watching for an application repositioning itself over hundreds of
-        // milliseconds. The shorter wait serves both.
-        Assert.Equal(Border, Wait(suspended: false, settling: true, borderSettling: true));
-    }
-
-    [Fact]
-    public void APendingPassStillBeatsABorderJustSet()
-    {
-        // A pass repaints the border itself when it finishes, so there is nothing to
-        // gain by going round sooner for the border's sake.
-        Assert.Equal(Frame, Wait(suspended: false, layoutDirty: true, borderSettling: true));
-    }
-
-    [Fact]
-    public void SuspensionBeatsABorderJustSet()
-    {
-        // Suspending releases the hooks, so focus is not being tracked and no border
-        // is being maintained. A watch left over from just before must not be what
-        // keeps a suspended daemon awake.
-        Assert.Equal(Timeout.InfiniteTimeSpan, Wait(suspended: true, borderSettling: true));
     }
 
     [Fact]
