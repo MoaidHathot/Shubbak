@@ -171,11 +171,33 @@ public static class PaletteActions
 
         if (window.Managed)
         {
+            // `toggle-floating` from both, exactly as Minimise and Make sticky above
+            // send one command each and vary only the wording. Sending `float` or
+            // `tile` instead - which this did - makes the row's effect depend on the
+            // state it was built from, and that state is a snapshot.
+            //
+            // Every path here can hand over a stale one. The host seeds a reopened
+            // palette from its cached read before the fresh one lands, and refuses to
+            // refresh at all while the palette is closed; a drill-in frame is frozen
+            // when it is pushed and deliberately ignores refreshes so rows cannot move
+            // under the user's finger; and the actions themselves are resolved from a
+            // WindowCandidate captured when the row was built. So a window floated a
+            // moment ago could still be described as tiled.
+            //
+            // The consequence was invisible rather than wrong. `float` on a window
+            // that is already floating reaches SetWindowStateCore, which returns at
+            // once when the state already matches - no event, no error, nothing on
+            // screen. The key appeared dead while Enter on the same row worked,
+            // because by then the refresh had landed and the row had become the other
+            // verb.
+            //
+            // A toggle cannot be stale. The chord has always been documented as one:
+            // the help screen calls it "float the selected window, or tile it".
             actions.Add(window.State is "floating"
-                ? new PaletteAction("Tile it", "Put it back into the tiling flow", $"{focus}\ntile",
-                    Chord: "Ctrl+Shift+F")
-                : new PaletteAction("Float it", "Take it out of the tiling flow", $"{focus}\nfloat",
-                    Chord: "Ctrl+Shift+F"));
+                ? new PaletteAction("Tile it", "Put it back into the tiling flow",
+                    $"{focus}\ntoggle-floating", Chord: "Ctrl+Shift+F")
+                : new PaletteAction("Float it", "Take it out of the tiling flow",
+                    $"{focus}\ntoggle-floating", Chord: "Ctrl+Shift+F"));
 
             actions.Add(window.Sticky
                 ? new PaletteAction("Unstick", "Stop showing it on every workspace", $"{focus}\nsticky",

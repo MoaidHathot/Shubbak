@@ -113,6 +113,47 @@ public sealed class PaletteActionsTests
     }
 
     [Fact]
+    public void FloatingAndTilingSendTheSameToggleWhicheverWayRoundTheRowIsWorded()
+    {
+        // The wording is a guess about a state that may be out of date; the command
+        // must not be. Every route to this row can carry a stale snapshot - a reopened
+        // palette seeded from the previous read, a drill-in frame frozen when it was
+        // pushed, an action closure holding the window as it was when the row was
+        // built - and a verb chosen from a stale state is the verb that is already
+        // true. `float` on a window that is already floating returns from
+        // SetWindowStateCore without an event or an error, so the key looks dead while
+        // Enter on the same row, pressed a moment later once the refresh has landed,
+        // works.
+        //
+        // Minimise and Make sticky beside it have always sent one command each and
+        // varied only the label. This is that, and the help screen has always
+        // described the chord as a toggle: "float the selected window, or tile it".
+        PaletteAction tiled = PaletteActions.For(Window(state: "tiling"), "1")
+            .Single(a => a.Name == "Float it");
+
+        PaletteAction floating = PaletteActions.For(Window(state: "floating"), "1")
+            .Single(a => a.Name == "Tile it");
+
+        Assert.EndsWith("\ntoggle-floating", tiled.Command, StringComparison.Ordinal);
+        Assert.EndsWith("\ntoggle-floating", floating.Command, StringComparison.Ordinal);
+
+        // Same chord either way round, so the lookup cannot lose the row when the
+        // wording flips.
+        Assert.Equal(tiled.Chord, floating.Chord);
+    }
+
+    [Fact]
+    public void TheToggleActsOnTheRowsOwnWindowRatherThanWhateverHasFocus()
+    {
+        // The command is a sequence: focus that window, then toggle. Losing the first
+        // half would silently float whichever window happened to be in front.
+        PaletteAction action = PaletteActions.For(Window(handle: 4242, state: "tiling"), "1")
+            .Single(a => a.Name == "Float it");
+
+        Assert.Equal("focus-window 4242\ntoggle-floating", action.Command);
+    }
+
+    [Fact]
     public void AStickyWindowIsOfferedUnstick()
     {
         Assert.Contains(PaletteActions.For(Window(sticky: true), "1"), a => a.Name == "Unstick");
