@@ -87,6 +87,36 @@ public sealed class WindowNode : Node
     public bool IsAlwaysOnTop { get; set; }
 
     /// <summary>
+    /// True while the application has taken this window full-screen by itself.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An observation, not a state. A browser playing a video full-screen resizes its
+    /// own window to the monitor and tells nobody: the only event that reports it is
+    /// <c>EVENT_OBJECT_LOCATIONCHANGE</c>, which Shubbak deliberately does not
+    /// subscribe to, so it is noticed by looking. See <c>NativeFullscreen</c>.
+    /// </para>
+    /// <para>
+    /// Deliberately not a <see cref="WindowState"/>. The window keeps its tile: only
+    /// the rectangle it is given is substituted, so nothing else on the workspace
+    /// moves while the video plays and leaving full-screen is a return to a tile that
+    /// was never given away. Turning it into a state would take the window out of the
+    /// tiling flow, and the siblings would then expand to fill the gap and shrink
+    /// back afterwards - the whole workspace rearranging itself twice because a video
+    /// was watched. GlazeWM does exactly that, and needs a special case on the way
+    /// out to work out where the window belongs; there is nothing to work out here.
+    /// </para>
+    /// <para>
+    /// Only ever set for a window in <see cref="WindowState.Tiling"/> or
+    /// <see cref="WindowState.Floating"/>. The test that sets it is geometric - does
+    /// the window cover its monitor - and that description fits Shubbak's own
+    /// <see cref="WindowState.MonitorFullscreen"/> exactly, so the question is never
+    /// asked of a window Shubbak put there itself.
+    /// </para>
+    /// </remarks>
+    public bool IsNativeFullscreen { get; set; }
+
+    /// <summary>
     /// When this window last had focus, as a counter rather than a clock.
     /// </summary>
     /// <remarks>

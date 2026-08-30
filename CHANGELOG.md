@@ -17,6 +17,39 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Clicking another window broke a full-screen video, and leaving full-screen left
+  the window in the wrong place.** An application that goes full-screen by itself - a
+  browser playing a video, a game in borderless mode - resizes its own window and
+  tells nobody: the only event that reports it is `EVENT_OBJECT_LOCATIONCHANGE`, which
+  Shubbak deliberately does not subscribe to. So the tree still said *tiling*, and
+  since a focus change re-runs the layout, the first click elsewhere dragged the
+  browser back into its tile while the browser still believed it was full-screen -
+  Taj reappearing over a window that was now neither. Leaving full-screen was worse:
+  the application restored its own geometry, the committer skipped the window as
+  already where it was put, and it stayed wrong until something changed its target
+  rectangle - which is why moving *another* window onto the workspace healed it.
+  Shubbak now notices both by looking, at the top of every layout pass and on the
+  loop's existing idle tick, and gives such a window the whole monitor without taking
+  its tile away, so nothing else on the workspace moves while the video plays.
+
+- **`Unmaximise` put the window a bar's height too low.** `WINDOWPLACEMENT` is
+  expressed in workspace coordinates, not screen ones, and `rcNormalPosition` was
+  being handed a screen rectangle - the documented mistake whose documented symptom is
+  a window that creeps down the display. Measured with Taj on the top edge, a window
+  asked to restore to `y=400` arrived at `y=434`. The damage was bounded, because the
+  `SetWindowPos` that follows corrected both the position and the stored rectangle, so
+  what was left was a single frame of the window drawn too low - which is precisely
+  the visible jump this call carries a rectangle in order to avoid. Invisible on a
+  desktop with nothing docked at the top or the left, which is why it survived.
+
+- **Taj registered an appbar callback and never listened to it.** The shell had been
+  telling the bar that the taskbar had moved, been resized or been hidden
+  (`ABN_POSCHANGED`), and that a full-screen application had opened or closed
+  (`ABN_FULLSCREENAPP`), into a window procedure with no case for either. The bar now
+  re-asserts its reservation on the first, so the work area Shubbak tiles into cannot
+  drift away from where the bar actually is, and drops to the bottom of the z-order
+  for the second, as the taskbar does.
+
 - **A config that would not parse silently replaced your bar and your palette with
   stock ones.** On reload, `TajConfigLoader` answers an unparseable file with
   `CreateDefault()` and Dalil's loader answered with plain defaults — correct at

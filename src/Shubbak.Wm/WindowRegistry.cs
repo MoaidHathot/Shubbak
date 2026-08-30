@@ -68,6 +68,22 @@ internal sealed class WindowRegistry
     public nint[] HandlesSnapshot() => [.. _managed.Keys];
 
     /// <summary>
+    /// Every managed window, paired with its handle.
+    /// </summary>
+    /// <remarks>
+    /// Returns the dictionary's own struct enumerator rather than an interface, so a
+    /// <c>foreach</c> over the registry allocates nothing. That matters because this
+    /// is walked from the tick, which may not allocate
+    /// (docs/adr/0001-language-choice.md, constraint 2) - going through
+    /// <see cref="Handles"/> would box an enumerator on every pass.
+    /// <para>
+    /// The dictionary must not be modified during the walk. Callers that release
+    /// windows want <see cref="HandlesSnapshot"/> instead.
+    /// </para>
+    /// </remarks>
+    public Dictionary<nint, WindowNode>.Enumerator GetEnumerator() => _managed.GetEnumerator();
+
+    /// <summary>
     /// Whether a verdict has already been reached about this window.
     /// </summary>
     /// <remarks>

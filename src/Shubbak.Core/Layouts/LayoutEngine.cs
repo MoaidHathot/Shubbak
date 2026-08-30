@@ -143,7 +143,7 @@ public sealed class LayoutEngine
         workspace.Rect = area;
 
         LayoutOptions layoutOptions = options.ToLayoutOptions();
-        ArrangeContainer(workspace, area, visible, layoutOptions);
+        ArrangeContainer(workspace, area, monitorBounds, visible, layoutOptions);
 
         // Floating, fullscreen, maximised and minimised windows sit outside the
         // tiling flow but still belong to the workspace, so they are emitted here
@@ -152,7 +152,11 @@ public sealed class LayoutEngine
     }
 
     private void ArrangeContainer(
-        ContainerNode container, Rect area, bool visible, in LayoutOptions options)
+        ContainerNode container,
+        Rect area,
+        Rect monitorBounds,
+        bool visible,
+        in LayoutOptions options)
     {
         container.Rect = area;
 
@@ -188,16 +192,27 @@ public sealed class LayoutEngine
             switch (tiled[i])
             {
                 case WindowNode window:
-                    window.Rect = rects[i];
+                {
+                    // A window the application has taken full-screen keeps its slot -
+                    // the rectangle above was computed for it and its siblings were
+                    // divided around it - and is simply given the monitor instead. So
+                    // nothing else moves while it is full-screen, and when it stops
+                    // being full-screen it returns to a tile that was never
+                    // reallocated. See WindowNode.IsNativeFullscreen.
+                    bool native = window.IsNativeFullscreen;
+                    Rect rect = native ? monitorBounds : rects[i];
+
+                    window.Rect = rect;
                     _placements.Add(new Placement(
                         window,
-                        rects[i],
+                        rect,
                         visible,
-                        Raise: overlapping && ReferenceEquals(window, _focused)));
+                        Raise: native || (overlapping && ReferenceEquals(window, _focused))));
                     break;
+                }
 
                 case ContainerNode child:
-                    ArrangeContainer(child, rects[i], visible, in options);
+                    ArrangeContainer(child, rects[i], monitorBounds, visible, in options);
                     break;
             }
         }
@@ -241,9 +256,18 @@ public sealed class LayoutEngine
                     // Position is the user's, not ours; the engine only decides
                     // visibility. Falling back to the last computed rect keeps a
                     // window that has just been un-tiled exactly where it was.
-                    Rect floating = window.FloatingRect ?? window.Rect;
+                    //
+                    // Unless the application has taken it full-screen, which it is as
+                    // free to do from a floating window as from a tiled one. Its
+                    // remembered position is left untouched, so it comes back to
+                    // exactly where the user had put it.
+                    Rect floating = window.IsNativeFullscreen
+                        ? monitorBounds
+                        : window.FloatingRect ?? window.Rect;
+
                     window.Rect = floating;
-                    _placements.Add(new Placement(window, floating, visible));
+                    _placements.Add(new Placement(
+                        window, floating, visible, Raise: window.IsNativeFullscreen));
                     break;
                 }
 

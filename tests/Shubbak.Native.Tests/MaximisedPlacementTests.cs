@@ -112,6 +112,14 @@ public sealed class MaximisedPlacementTests
         // The mechanism on its own, away from the committer, because the committer
         // expands the rectangle by the shadow margins before handing it over and that
         // arithmetic would otherwise be the only thing under test here.
+        //
+        // Note what this does and does not catch. WINDOWPLACEMENT is expressed in
+        // workspace coordinates, so the conversion this now performs is the identity
+        // on a desktop with nothing docked at the top or the left - which is most
+        // build agents, and is why the missing conversion went unnoticed for as long
+        // as it did. Run the same test with Taj on the top edge and the window used to
+        // arrive a bar's height low. The arithmetic itself is pinned below, where it
+        // does not depend on what the machine happens to have docked.
         using var window = new TestWindow();
 
         Maximise(window);
@@ -124,6 +132,44 @@ public sealed class MaximisedPlacementTests
 
         Assert.False(Win32Window.IsMaximised(window.Handle));
         Assert.Equal(target, Win32Window.GetBounds(window.Handle));
+    }
+
+    [Fact]
+    public void AScreenRectangleIsConvertedToWorkspaceCoordinates()
+    {
+        // Measured, not guessed: with Taj reserving 34 pixels along the top, a window
+        // asked through SetWindowPlacement to restore to y=400 arrived at y=434.
+        // rcNormalPosition is not in screen coordinates, and the documented symptom of
+        // pretending otherwise is a window that creeps down the screen.
+        var screen = new Core.Geometry.Rect(500, 400, 600, 400);
+
+        Assert.Equal(
+            new Core.Geometry.Rect(500, 366, 600, 400),
+            WindowActions.ToWorkspace(screen, (0, 34)));
+    }
+
+    [Fact]
+    public void ConvertingMovesTheOriginAndNothingElse()
+    {
+        // Size is untouched: the offset is where workspace (0,0) sits, not a scale.
+        var screen = new Core.Geometry.Rect(100, 100, 640, 480);
+        Core.Geometry.Rect converted = WindowActions.ToWorkspace(screen, (12, 34));
+
+        Assert.Equal(640, converted.Width);
+        Assert.Equal(480, converted.Height);
+        Assert.Equal(88, converted.X);
+        Assert.Equal(66, converted.Y);
+    }
+
+    [Fact]
+    public void ADesktopWithNothingDockedConvertsToItself()
+    {
+        // The common case, and the reason this was invisible: a taskbar along the
+        // bottom leaves workspace (0,0) at screen (0,0), so the conversion is the
+        // identity and a missing one costs nothing.
+        var screen = new Core.Geometry.Rect(240, 180, 720, 540);
+
+        Assert.Equal(screen, WindowActions.ToWorkspace(screen, (0, 0)));
     }
 
     [Fact]

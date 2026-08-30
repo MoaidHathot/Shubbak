@@ -148,11 +148,15 @@ public static class WindowActions
     /// be worse than leaving it maximised, and blocking the whole layout pass on one
     /// stuck application is what the committer already refuses to do elsewhere.
     /// </para>
+    /// <para>
+    /// The rectangle is converted on the way in, because <c>WINDOWPLACEMENT</c> does
+    /// not hold screen coordinates. See <see cref="ToWorkspace"/>.
+    /// </para>
     /// </remarks>
     /// <param name="handle">The window.</param>
     /// <param name="restored">
-    /// Where it should sit once restored, as a window rectangle - shadow included,
-    /// because that is what Windows stores and what <c>SetWindowPos</c> is given.
+    /// Where it should sit once restored, as a window rectangle in screen coordinates
+    /// - shadow included, because that is what <c>SetWindowPos</c> is given.
     /// </param>
     /// <returns>Whether the flag was cleared synchronously.</returns>
     public static unsafe bool Unmaximise(nint handle, Rect restored)
@@ -167,20 +171,90 @@ public static class WindowActions
             return false;
         }
 
+        Rect workspace = ToWorkspace(restored, WorkspaceOrigin());
+
         var placement = new WINDOWPLACEMENT
         {
             length = (uint)sizeof(WINDOWPLACEMENT),
             showCmd = SHOW_WINDOW_CMD.SW_SHOWNORMAL,
             rcNormalPosition = new RECT
             {
-                left = restored.X,
-                top = restored.Y,
-                right = restored.X + restored.Width,
-                bottom = restored.Y + restored.Height,
+                left = workspace.X,
+                top = workspace.Y,
+                right = workspace.X + workspace.Width,
+                bottom = workspace.Y + workspace.Height,
             },
         };
 
         return PInvoke.SetWindowPlacement(hwnd, in placement);
+    }
+
+    /// <summary>
+    /// Converts a screen rectangle to the workspace coordinates
+    /// <c>WINDOWPLACEMENT</c> is expressed in.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>rcNormalPosition</c> is not in screen coordinates, and passing screen
+    /// coordinates to it is a documented mistake with a name: the window "creeps" by
+    /// the height of whatever is docked at the top of the display, every time it is
+    /// restored. Measured here with Taj on the top edge, a window asked to restore to
+    /// y=400 arrived at y=434 - the bar's 34 pixels, exactly.
+    /// </para>
+    /// <para>
+    /// The damage was limited, which is why this survived: the committer moves the
+    /// window with <c>SetWindowPos</c> immediately afterwards, and that both corrects
+    /// the position and rewrites <c>rcNormalPosition</c> properly, so the window ends
+    /// up in the right place and later restores work. What was left was a single frame
+    /// of the window drawn a bar's height too low, which is precisely the visible jump
+    /// this call carries a rectangle in order to avoid.
+    /// </para>
+    /// <para>
+    /// Kept separate from the call so the arithmetic can be tested without a window
+    /// and without a desktop that happens to have something docked at the top.
+    /// </para>
+    /// </remarks>
+    /// <param name="screen">The rectangle in screen coordinates.</param>
+    /// <param name="origin">
+    /// The upper-left corner of the workspace area, in screen coordinates.
+    /// </param>
+    public static Rect ToWorkspace(Rect screen, (int X, int Y) origin) =>
+        screen.Translate(-origin.X, -origin.Y);
+
+    /// <summary>
+    /// Where workspace coordinate (0,0) is, in screen coordinates.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>SPI_GETWORKAREA</c> rather than the work area of the monitor the window is
+    /// on. The documentation describes a single workspace origin - "the upper-left
+    /// corner of the workspace area, the area of the screen not being used by
+    /// application toolbars" - not one per display, and this is the call that reports
+    /// it. Measured against a real placement it agreed exactly.
+    /// </para>
+    /// <para>
+    /// Should a future Windows turn out to apply this per monitor, a machine whose
+    /// displays reserve different amounts at the top would be wrong here by the
+    /// difference. It would still be less wrong than not converting at all, which is
+    /// wrong by the whole reservation on every machine that has one.
+    /// </para>
+    /// <para>
+    /// Read each time rather than cached. A bar starting, stopping or changing height
+    /// moves it, and this runs only for a window that is both maximised and being
+    /// placed - rare enough that one system call costs nothing.
+    /// </para>
+    /// </remarks>
+    private static unsafe (int X, int Y) WorkspaceOrigin()
+    {
+        RECT area = default;
+
+        bool ok = PInvoke.SystemParametersInfo(
+            SYSTEM_PARAMETERS_INFO_ACTION.SPI_GETWORKAREA, 0, &area, 0);
+
+        // A failure means the question could not be asked. Treating the origin as the
+        // top-left of the screen is what the old code did unconditionally, so falling
+        // back to it cannot make anything worse than it already was.
+        return ok ? (area.left, area.top) : (0, 0);
     }
 
     /// <summary>Adds or removes the always-on-top band.</summary>
