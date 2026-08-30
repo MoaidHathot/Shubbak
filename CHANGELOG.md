@@ -68,6 +68,19 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **The focus border flickered on the window being moved to.** Reported on Windows
+  Terminal and nothing else, which is the clue: Shubbak sets the border when focus
+  arrives, and the window then activates and repaints - and a WinUI repaint resets
+  `DWMWA_BORDER_COLOR`, which the healing timer beside it has always said in as many
+  words. So the border was set, cleared by the window a frame later, and put back by
+  the timer, and all three were visible. The timer could not be what fixed it: it asks
+  every 200 ms but the loop sleeps for 250 when nothing is happening, so it runs about
+  once per idle wait, and a border cleared just after focus arrived stayed cleared for
+  the rest of that wait. It is now re-asserted four times at 40 ms intervals after
+  focus lands, covering the repaint, and the loop shortens its wait only while that is
+  outstanding - so this is paid just after focus moves rather than on every tick for
+  ever. Verified on the running daemon: four re-assertions 48 ms apart, then silence.
+
 - **Clicking another window broke a full-screen video, and leaving full-screen left
   the window in the wrong place.** An application that goes full-screen by itself - a
   browser playing a video, a game in borderless mode - resizes its own window and
