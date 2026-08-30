@@ -50,6 +50,7 @@ public sealed class BarWindow : IDisposable
     /// </remarks>
     public static event Action? RequestShutdown;
 
+
     private readonly BarModel _model;
     private readonly int _monitorIndex;
 
@@ -298,6 +299,72 @@ public sealed class BarWindow : IDisposable
         _appbarRegistered = false;
     }
 
+    /// <summary>What the shell can tell a registered appbar.</summary>
+    /// <remarks>
+    /// These arrive as <c>wParam</c> of <see cref="AppbarCallbackMessage"/>, which is
+    /// the message handed to the shell in <see cref="RegisterAppbar"/>. Registering a
+    /// callback message and then never listening to it is registering to be told
+    /// nothing, which is what this used to do.
+    /// </remarks>
+    private static class AppbarNotification
+    {
+        /// <summary>
+        /// Something happened that may have moved the bar's strip: the taskbar was
+        /// resized, moved or hidden, or another appbar appeared on the same edge.
+        /// </summary>
+        public const nuint PositionChanged = 0x00000001;
+
+        /// <summary>A full-screen application opened or closed.</summary>
+        public const nuint FullScreenApp = 0x00000002;
+    }
+
+    /// <summary>
+    /// Re-asserts the reservation after the shell says the layout of docked windows
+    /// has changed.
+    /// </summary>
+    /// <remarks>
+    /// Without this, the taskbar being moved to the top, resized, or switched to
+    /// auto-hide leaves the bar's reservation describing a strip that is no longer
+    /// where the bar is - and Shubbak tiles into the work area that reservation
+    /// produced, so the error lands on every window rather than on the bar.
+    /// </remarks>
+    private void OnAppbarPositionChanged()
+    {
+        if (!_appbarRegistered) return;
+
+        RegisterAppbar();
+    }
+
+    /// <summary>
+    /// Steps out of the way of a full-screen application, and back afterwards.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The documented contract for an appbar: drop to the bottom of the z-order while
+    /// a full-screen application is up, and return afterwards. The taskbar does the
+    /// same thing, which is why it disappears under a full-screen video and comes back
+    /// when the video ends.
+    /// </para>
+    /// <para>
+    /// The reservation is deliberately left alone. Un-reserving would shrink the work
+    /// area away from underneath every tiled window and lay the whole workspace out
+    /// again, twice, for the sake of one window that is already covering the bar. The
+    /// z-order is the entire mechanism, and the entire fix.
+    /// </para>
+    /// </remarks>
+    private void OnFullScreenApp(bool opening)
+    {
+        // HWND_BOTTOM = 1, HWND_TOP = 0. Sentinels rather than real handles.
+        var band = new HWND(opening ? 1 : 0);
+
+        PInvoke.SetWindowPos(
+            _handle, band, 0, 0, 0, 0,
+            SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
+            SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
+
+    }
+
     /// <summary>
     /// Asks the compositor for a system backdrop.
     /// </summary>
@@ -382,6 +449,23 @@ public sealed class BarWindow : IDisposable
 
                     case PInvoke.WM_MOUSELEAVE:
                         window.OnMouseLeave();
+                        return new LRESULT(0);
+
+                    case AppbarCallbackMessage:
+                        switch ((nuint)wParam.Value)
+                        {
+                            case AppbarNotification.PositionChanged:
+                                window.OnAppbarPositionChanged();
+                                break;
+
+                            case AppbarNotification.FullScreenApp:
+                                window.OnFullScreenApp(lParam.Value != 0);
+                                break;
+
+                            default:
+                                break;
+                        }
+
                         return new LRESULT(0);
 
                     case PInvoke.WM_CLOSE:

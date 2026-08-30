@@ -1475,6 +1475,15 @@ public sealed class WindowManager
         if (previous == WindowState.Tiling && state != WindowState.Tiling)
             window.FloatingRect ??= window.Rect;
 
+        // Any deliberate state change ends the observation. It was only ever an
+        // observation about a tiled or floating window, and once the user has said
+        // what this window should be, the layout follows that instead. Leaving it set
+        // would hand the monitor to a window that had since been asked to be
+        // something else - and the watch re-reads the rectangle within a fraction of
+        // a second, so an application that really is still full-screen is noticed
+        // again immediately.
+        window.IsNativeFullscreen = false;
+
         window.State = state;
         Emit(new WindowStateChanged(window, previous, state));
 

@@ -80,15 +80,30 @@ public sealed class WinEventSource : IDisposable
         // Nothing downstream wants it. MoveSizeEnd is the event that carries intent.
         //
         // What this costs, and where that is paid: a window that moves *itself* -
-        // a browser restoring its remembered geometry a moment after it opens -
-        // announces it through this event and no other, so Shubbak cannot be told
-        // about it. It is noticed by looking instead, in WindowCommitter's skip check
-        // and in the daemon's settle check for newly adopted windows. Both use
-        // PlacementDrift, which asks the question coarsely enough that an application
-        // rounding its own size cannot start the fight this removal was avoiding.
+        // a browser restoring its remembered geometry a moment after it opens, or
+        // taking itself full-screen to play a video - announces it through this event
+        // and no other, so Shubbak cannot be told about it. It is noticed by looking
+        // instead, in three places: WindowCommitter's skip check, the daemon's settle
+        // check for newly adopted windows, and the daemon's full-screen watch. The
+        // first two use PlacementDrift, which asks the question coarsely enough that
+        // an application rounding its own size cannot start the fight this removal was
+        // avoiding; the third uses NativeFullscreen, which asks a different question
+        // and can afford to be exact.
         //
-        // Neither GlazeWM nor komorebi does better here, for the record: both subscribe
-        // to this event and both discard it for tiling windows.
+        // For the record, since this comment used to claim otherwise: the two obvious
+        // comparisons do not agree with each other. komorebi hooks the whole event
+        // range and then drops this one on the floor - window_manager_event.rs maps it
+        // to None - and carries the consequences, several of which are open issues
+        // about browser video refusing to go full-screen. GlazeWM subscribes to it and
+        // builds its entire full-screen and self-maximise handling on top of it; it
+        // ignores the event only for an ordinary tiling window that moved itself,
+        // which is the same conclusion reached here by a different route.
+        //
+        // GlazeWM can afford the subscription because of two differences that are not
+        // available cheaply here. Its hook runs on a dispatcher thread and forwards
+        // through a channel, so the echo does not wake the loop that produced it; and
+        // it has no animation engine, so a layout is one commit rather than one commit
+        // per frame. Both are exactly what turned the echo into a spin above.
         (PInvoke.EVENT_OBJECT_CLOAKED, WinEventKind.Cloaked),
         (PInvoke.EVENT_OBJECT_UNCLOAKED, WinEventKind.Uncloaked),
         (PInvoke.EVENT_SYSTEM_FOREGROUND, WinEventKind.Foreground),

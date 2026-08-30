@@ -803,6 +803,7 @@ public sealed class WmDaemon : IDisposable
             if (!_suspended)
             {
                 SettleArrivedWindows(now);
+                MaybeDetectNativeFullscreen(now);
                 MaybeSyncMonitors(now);
                 MaybeRefreshFocusBorder(now);
                 MaybeSaveSession(now);
@@ -2944,6 +2945,29 @@ public sealed class WmDaemon : IDisposable
 
     private void ApplyLayout()
     {
+        // Before the rectangles are computed, not after, because what this decides is
+        // one of the inputs: a window the application has taken full-screen is given
+        // the monitor instead of its tile. Doing it here as well as on the timer is
+        // what makes entering full-screen exact - the pass that would otherwise drag
+        // the window back into its tile is the pass that first asks the question.
+        //
+        // Nothing is marked dirty from here. A pass is already under way, and the
+        // answer is consulted by the very next line.
+        //
+        // The timer is stamped so the poll does not repeat work this pass has just
+        // done. On a busy desktop layouts arrive faster than the poll interval and it
+        // never fires at all, which is correct: every one of those passes asked.
+        //
+        // Unlike the poll, this is not withheld while suspended, because it follows the
+        // layout rather than the clock and a suspended daemon still lays out when it is
+        // told to - the promise suspension makes is about the hooks and the periodic
+        // work, not about refusing instructions. Measured: `wm-redraw` while suspended
+        // runs a pass. Which is the case that wants this most, since the window that
+        // would otherwise be dragged out of full-screen by that pass is very likely the
+        // game the user suspended for.
+        DetectNativeFullscreen();
+        _lastNativeFullscreenTicks = Stopwatch.GetTimestamp();
+
         IReadOnlyList<Placement> placements = _wm.ComputePlacements();
 
         // Taken once and reset here rather than at the end, so a pass that throws does
@@ -3794,6 +3818,166 @@ public sealed class WmDaemon : IDisposable
     /// its own afterwards. The second is for applications that take longer to settle.
     /// </remarks>
     private static readonly double[] s_settleChecksMs = [300, 900];
+
+    /// <summary>
+    /// How often the desktop is checked for a window that has taken itself
+    /// full-screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the <i>leaving</i> case needs this. Entering is caught exactly, by the
+    /// check at the top of every layout pass, because entering only matters when a
+    /// layout is about to move the window - and that is the one moment the check is
+    /// guaranteed to have just run. Leaving has no such moment: an application
+    /// restores its own frame and nothing else happens, so without a poll the window
+    /// sits at whatever size it restored to until something unrelated triggers a
+    /// pass. That was the reported symptom, and the reason it healed when a different
+    /// window was moved onto the workspace: that changes the target rectangle, which
+    /// is the one thing the committer's skip check cannot ignore.
+    /// </para>
+    /// <para>
+    /// Deliberately shorter than <see cref="IdleInterval"/>, and that is the whole
+    /// choice. This adds no wake-ups: it is a due-check riding a tick the loop was
+    /// going to take anyway, like the monitor sync and the border refresh beside it.
+    /// So the real question is not how often to poll but whether the check survives
+    /// the tick it is offered - and an interval equal to the idle wait does not. The
+    /// wait is <i>at least</i> a quarter of a second, so it usually passes, but any
+    /// event that wakes the pump early restarts the wait and the check misses that
+    /// tick entirely, putting the worst case at two idle intervals rather than one.
+    /// Two hundred clears it every time, which is why the border refresh beside it
+    /// uses the same figure against the same tick.
+    /// </para>
+    /// <para>
+    /// Each pass is one <c>GetWindowRect</c> per window on a displayed workspace,
+    /// measured at eight nanoseconds apiece - a tenth of a microsecond for a
+    /// workspace-full of windows, against a frame of nearly seventeen thousand - and
+    /// none at all while suspended, paused, or animating.
+    /// </para>
+    /// </remarks>
+    private const double NativeFullscreenPollMs = 200;
+
+    private long _lastNativeFullscreenTicks;
+
+    /// <summary>
+    /// Notices a window the application has taken full-screen, and one that has
+    /// stopped being.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The replacement for the <c>EVENT_OBJECT_LOCATIONCHANGE</c> subscription that
+    /// <see cref="WinEventSource"/> explains at length is not worth its cost here. It
+    /// is the same trade the drift watch and the monitor sync already make: notice by
+    /// looking, on a timer, instead of by being told, at whatever rate the desktop
+    /// feels like telling.
+    /// </para>
+    /// <para>
+    /// Asked only of tiled and floating windows. A window Shubbak has itself put on
+    /// the whole monitor answers yes to the same question, so it is never asked - see
+    /// <see cref="NativeFullscreen"/>.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether any window changed, and so whether a pass is owed.</returns>
+    private bool DetectNativeFullscreen()
+    {
+        if (_wm.IsPaused) return false;
+
+        bool changed = false;
+
+        foreach ((nint handle, WindowNode window) in _windows)
+        {
+            // Only what Shubbak has not itself placed on the monitor. Fullscreen,
+            // monitor-fullscreen and maximised windows all match the geometric test by
+            // construction, and minimised ones have no rectangle worth reading.
+            if (window.State is not (WindowState.Tiling or WindowState.Floating)) continue;
+
+            // Off screen, so its rectangle says nothing about what the user can see -
+            // and a concealed window is parked deliberately.
+            if (!window.IsOnADisplayedWorkspace) continue;
+            if (window.Monitor is not { } monitor) continue;
+
+            // Mid-flight. The animation owns the rectangle until it lands, and while a
+            // window is travelling to or from the monitor's edge it will pass through
+            // every answer this asks for.
+            if (_animation.TryGetCurrent(window.Handle, out _)) continue;
+
+            bool covers = NativeFullscreen.CoversMonitor(
+                Win32Window.GetBounds(handle), monitor.Bounds);
+
+            // A maximised window is not a full-screen one, however much it looks like
+            // one from here. The compositor draws it deliberately oversized - the
+            // frame is put off the edge of the screen, which on this desktop is eleven
+            // pixels a side - so it overhangs the work area, and on a display with an
+            // auto-hiding taskbar and nothing docked at the top the work area is the
+            // whole panel. The rectangle then covers the monitor exactly and the
+            // geometric test alone says full-screen.
+            //
+            // Asked second, and only of a window that has already answered yes, so the
+            // common case pays nothing. Windows that really are maximised keep the
+            // treatment they already had: the committer clears the flag and tiles
+            // them.
+            if (covers && Win32Window.IsMaximised(handle)) covers = false;
+
+            if (covers == window.IsNativeFullscreen) continue;
+
+            // A floating window is given back the position the user chose, so it has
+            // to have one recorded before the monitor is handed to it. Tiled windows
+            // keep their slot in the tree and need nothing.
+            if (covers && window.State == WindowState.Floating)
+                window.FloatingRect ??= window.Rect;
+
+            window.IsNativeFullscreen = covers;
+
+            // Both transitions, and for two reasons at once.
+            //
+            // The cached target has to go, or the committer skips the window as
+            // already where it was put - the placement is new, but Forget is what
+            // makes the *next* pass act rather than this one, exactly as the drift
+            // watch uses it.
+            //
+            // The cached shadow margins have to go as well, and that is the less
+            // obvious half. A window that has gone full-screen has dropped its frame,
+            // so its shadow really is nothing; one that has come back really has a
+            // shadow again. Keeping the old measurement means every rectangle is
+            // expanded or shrunk by a frame that is not there, which is about eight
+            // pixels - just enough to clear the animation engine's negligible-distance
+            // threshold, so the window would twitch by the width of its own missing
+            // shadow on every focus change.
+            _committer.Forget(handle);
+
+            changed = true;
+
+            Log.Debug(
+                LogCategory.Layout,
+                covers
+                    ? $"0x{handle:X} took itself full-screen; leaving it the monitor"
+                    : $"0x{handle:X} left full-screen; putting it back in its tile");
+        }
+
+        return changed;
+    }
+
+    /// <summary>Re-reads the desktop for full-screen changes on a timer.</summary>
+    /// <remarks>
+    /// Never while anything is moving. A window travelling to or from the edge of the
+    /// display passes through every answer this asks for, and the rectangle belongs to
+    /// the animation until it lands.
+    /// </remarks>
+    private void MaybeDetectNativeFullscreen(long now)
+    {
+        // Before the due-check, not after, and the order is the point. A motion is
+        // driven at frame rate, so an interval expiring in the middle of one would
+        // otherwise consume the slot and do nothing - stamping the timer on the way
+        // past and pushing the first real look a whole interval further out. Which is
+        // exactly the common path: a focus change lays out, the layout starts a
+        // motion, and the window the user is about to take out of full-screen is on
+        // the other side of it. Asked first, the check simply waits, and runs on the
+        // first tick after the desktop is still again.
+        if (_animation.IsAnimating) return;
+
+        if (!DueEvery(NativeFullscreenPollMs, now, ref _lastNativeFullscreenTicks)) return;
+
+        if (DetectNativeFullscreen()) _layoutDirty = true;
+    }
 
     /// <summary>
     /// Re-places any newly adopted window that has since moved itself.
