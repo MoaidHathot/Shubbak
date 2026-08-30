@@ -32,6 +32,12 @@ TranslateMessage
 DispatchMessage
 PostThreadMessage
 GetCurrentThreadId
+
+// The loop waits rather than sleeping. Woken by a message, or by the model's own
+// handle when a source publishes something the bar displays.
+MsgWaitForMultipleObjectsEx
+QUEUE_STATUS_FLAGS
+MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS
 WM_QUIT
 WM_PAINT
 WM_DESTROY

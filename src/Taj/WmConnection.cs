@@ -360,7 +360,22 @@ public sealed class WmConnection : IAsyncDisposable
         _model.SetValue("suspended", WindowManagerStatus.SuspendedLabel(_suspended));
         _model.SetValue("paused", WindowManagerStatus.PausedLabel(_paused));
         _model.SetValue("status", WindowManagerStatus.Combined(_suspended, _paused));
+
+        // Announced as well as displayed. A suspended window manager means nobody is
+        // arranging windows, which in practice means a game - so the loop stops
+        // polling sources nothing is going to read. Raised on every publish rather
+        // than on a change, because the loop treats it as a level and not an edge.
+        SuspendedChanged?.Invoke(_suspended);
     }
+
+    /// <summary>
+    /// Raised with the window manager's suspension state whenever it is republished.
+    /// </summary>
+    /// <remarks>
+    /// A level, not an edge: the current state each time, so a listener that missed
+    /// one is corrected by the next rather than left inverted.
+    /// </remarks>
+    public event Action<bool>? SuspendedChanged;
 
     private void UpdateFocusedWindow(string json)
     {

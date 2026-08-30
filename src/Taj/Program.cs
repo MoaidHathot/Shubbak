@@ -43,6 +43,28 @@ internal static class Program
 
     private static volatile bool s_running = true;
 
+    /// <summary>
+    /// Whether the window manager has released its hooks.
+    /// </summary>
+    /// <remarks>
+    /// Written from a connection's pump thread and read by the message loop, so
+    /// volatile for the same reason <see cref="s_reloadRequested"/> is.
+    /// </remarks>
+    private static volatile bool s_wmSuspended;
+
+    /// <summary>
+    /// Whether the shell has said a full-screen application is up.
+    /// </summary>
+    /// <remarks>
+    /// A hint rather than the truth. <c>ABN_FULLSCREENAPP</c> reports an opening and a
+    /// closing, not what is in front right now, so this starts a stand-down and
+    /// <c>StandDown.StillCovered</c> is what keeps it going.
+    /// </remarks>
+    private static volatile bool s_fullScreenApp;
+
+    /// <summary>Whether the bar is currently stood down.</summary>
+    private static bool s_stoodDown;
+
     private static int Main(string[] args)
     {
         // Taj is a GUI-subsystem binary, so it starts with no console and every write
@@ -230,6 +252,10 @@ internal static class Program
             // connection's pump thread, and the windows belong to the message loop.
             connection.WindowManagerStopped += () => s_running = false;
 
+            // A level rather than an edge, and set rather than or-ed, because every
+            // connection talks to the same daemon and so reports the same answer.
+            connection.SuspendedChanged += suspended => s_wmSuspended = suspended;
+
             connection.WindowManagerTimeout = config.WindowManagerTimeout;
 
             bar.CommandRequested += command => _ = connection.SendCommandAsync(command);
@@ -357,11 +383,37 @@ internal static class Program
         counts.Any ? $"config: {counts.Describe()}" : string.Empty;
 
     /// <summary>
+    /// Signalled when any bar's model goes dirty, so the loop stops waiting.
+    /// </summary>
+    /// <remarks>
+    /// Auto-reset: a signal raised while the loop is already awake and working is
+    /// remembered rather than lost, so a source publishing during a redraw cannot
+    /// leave its value unpainted until something else happens.
+    /// </remarks>
+    private static readonly AutoResetEvent s_wake = new(false);
+
+    /// <summary>
     /// Pumps messages and updates the bars.
     /// </summary>
     /// <remarks>
-    /// A 16 ms tick, but a bar only repaints when its model reports a change. The
-    /// tick exists to poll for those changes, not to drive redraws.
+    /// <para>
+    /// The loop waits; it does not sleep. It used to run every 16 ms whatever was
+    /// happening - sixty-two passes a second, almost all of which found the model
+    /// unchanged and did nothing. That was the largest single consumer in the three
+    /// processes: measured over 25 seconds of an idle desktop, the bar spent more CPU
+    /// than the window manager it reports on.
+    /// </para>
+    /// <para>
+    /// So the model says when it changes and this waits for that, exactly as the
+    /// palette next door already did and the daemon's own pump has always done. A
+    /// ceiling is still applied, because the cost of a missed signal is a bar that
+    /// looks frozen and the cost of the ceiling is one wake a second.
+    /// </para>
+    /// <para>
+    /// Standing down widens the ceiling and stops the sources; see
+    /// <see cref="ApplyStandDown"/>. Messages are pumped either way, which is what
+    /// keeps the indicator clickable.
+    /// </para>
     /// </remarks>
     private static void RunMessageLoop()
     {
@@ -369,12 +421,25 @@ internal static class Program
         {
             e.Cancel = true;
             s_running = false;
+            s_wake.Set();
         };
 
         // Closing any bar window closes the bar. Reaches here from `shubbak taj-exit`,
         // from Task Manager's "End task", and from anything else that politely asks a
         // window to go.
-        BarWindow.RequestShutdown += () => s_running = false;
+        BarWindow.RequestShutdown += () =>
+        {
+            s_running = false;
+            s_wake.Set();
+        };
+
+        BarWindow.FullScreenAppChanged += up =>
+        {
+            s_fullScreenApp = up;
+            s_wake.Set();
+        };
+
+        foreach (BarModel model in s_models) model.Dirtied += Wake;
 
         while (s_running)
         {
@@ -396,11 +461,128 @@ internal static class Program
                 ReloadConfig();
             }
 
-            foreach (BarWindow bar in s_bars) bar.Update();
+            ApplyStandDown();
 
-            Thread.Sleep(16);
+            if (!s_stoodDown) foreach (BarWindow bar in s_bars) bar.Update();
+
+            if (!s_running) break;
+
+            Wait(s_stoodDown ? StoodDownCeilingMs : ActiveCeilingMs);
         }
     }
+
+    /// <summary>Wakes the loop. Handed to every model and to anything else that changes state.</summary>
+    private static void Wake() => s_wake.Set();
+
+    /// <summary>
+    /// Waits for a message, a signal, or the ceiling, whichever comes first.
+    /// </summary>
+    /// <remarks>
+    /// <c>QS_ALLINPUT</c> so that paints, clicks and the appbar's own notifications
+    /// end the wait as promptly as a source publishing does, and
+    /// <c>MWMO_INPUTAVAILABLE</c> so a message that arrived between the peek loop
+    /// above and this call is not slept through.
+    /// </remarks>
+    private static void Wait(uint milliseconds)
+    {
+        PInvoke.MsgWaitForMultipleObjectsEx(
+            [(HANDLE)s_wake.SafeWaitHandle.DangerousGetHandle()],
+            milliseconds,
+            QUEUE_STATUS_FLAGS.QS_ALLINPUT,
+            MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
+    }
+
+    /// <summary>
+    /// The longest the loop will wait when the bar is visible, absent any signal.
+    /// </summary>
+    /// <remarks>
+    /// A safety net rather than a schedule. Every path that changes what the bar shows
+    /// signals, so in practice this expires only on a desktop where genuinely nothing
+    /// is happening. It exists because the failure it guards against - a signal added
+    /// later that nobody wires up - would show as a bar that has quietly stopped, and
+    /// a second of staleness is a much better symptom than that.
+    /// </remarks>
+    private const uint ActiveCeilingMs = 1000;
+
+    /// <summary>
+    /// The longest it waits while stood down.
+    /// </summary>
+    /// <remarks>
+    /// Shorter than the active ceiling, which looks backwards until you remember what
+    /// runs here: this is also the rate at which a stand-down caused by a full-screen
+    /// application is re-confirmed, and that check is what ends one. A quarter of a
+    /// second is therefore the longest a mistaken stand-down can last.
+    /// </remarks>
+    private const uint StoodDownCeilingMs = 250;
+
+    /// <summary>
+    /// Starts or ends a stand-down, and stops or starts the sources with it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The transition is done here rather than where the signals arrive, because both
+    /// of them arrive on other threads - a connection's pump and the window procedure -
+    /// and the sources belong to the loop.
+    /// </para>
+    /// <para>
+    /// The shell is asked only while it has claimed a full-screen application, so an
+    /// ordinary desktop makes no system call at all. And a claim the shell will not
+    /// confirm is <i>dropped</i> rather than merely disbelieved: leaving it set would
+    /// mean asking again on every pass, which at the active tick rate is sixty-two
+    /// system calls a second to keep answering the same question. The shell says so
+    /// again if a full-screen application really does come back.
+    /// </para>
+    /// </remarks>
+    private static void ApplyStandDown()
+    {
+        if (s_fullScreenApp && !StandDown.StillCovered(CurrentActivity()))
+        {
+            // The edge has outlived what it described. ABN_FULLSCREENAPP reports an
+            // opening and a closing, not what is in front, so this is expected rather
+            // than exceptional.
+            s_fullScreenApp = false;
+        }
+
+        bool wanted = StandDown.ShouldStandDown(s_wmSuspended, s_fullScreenApp, confirmed: true);
+
+        if (wanted == s_stoodDown) return;
+
+        s_stoodDown = wanted;
+
+        foreach (BarModel model in s_models)
+        {
+            if (wanted) model.StandDown();
+            else model.StandUp();
+        }
+
+        if (wanted)
+        {
+            // Drawn once more before going quiet, so the bar is left showing the state
+            // that stopped it rather than whatever it happened to be showing a frame
+            // earlier.
+            foreach (BarWindow bar in s_bars) bar.Update();
+        }
+
+        Log.Info(LogCategory.Wm, wanted
+            ? "standing down: nothing on screen is showing the bar"
+            : "standing up: the bar is visible again");
+    }
+
+    /// <summary>
+    /// Asks the shell what the user is doing, in the terms <c>Taj.Core</c> uses.
+    /// </summary>
+    /// <remarks>
+    /// The mapping lives here because <c>Taj.Core</c> is deliberately free of Win32,
+    /// which is what lets the rule that consumes this be tested without a desktop.
+    /// </remarks>
+    private static UserActivityKind CurrentActivity() => DisplayPreferences.CurrentActivity() switch
+    {
+        UserActivity.FullScreenGame => UserActivityKind.FullScreenGame,
+        UserActivity.FullScreenApp => UserActivityKind.FullScreenApp,
+        UserActivity.Presenting => UserActivityKind.Presenting,
+        UserActivity.Ordinary => UserActivityKind.Ordinary,
+        _ => UserActivityKind.Unknown,
+    };
 
     private static unsafe List<Rect> EnumerateMonitors()
     {
