@@ -142,7 +142,7 @@ public sealed class BarModelDirtiedTests
         var source = new IntervalSource(
             "counter",
             TimeSpan.FromMilliseconds(50),
-            () => (++produced).ToString(CultureInfo.InvariantCulture));
+            () => Interlocked.Increment(ref produced).ToString(CultureInfo.InvariantCulture));
 
         model.AddSource(source);
         Settle(model);
