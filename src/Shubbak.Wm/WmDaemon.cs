@@ -4398,7 +4398,18 @@ public sealed class WmDaemon : IDisposable
         {
             // Same window, but it may have just been resized out of its border.
             if (geometryChanged && focused is not null)
+            {
                 ApplyBorder(focused, ColourFor(focused, focused: true));
+
+                // And a resize is worse than a focus change, not better. Measured on a
+                // Windows Terminal going from full width to half when another window
+                // joined its workspace: the border was cleared and re-cleared for over
+                // two seconds, because a terminal re-laying out its character grid
+                // repaints far longer than one activation. Restarting the watch here is
+                // what covers that; without it only the focus change was covered and
+                // the later clears fell through to the healing timer.
+                WatchFocusBorder();
+            }
 
             return;
         }
@@ -4453,21 +4464,38 @@ public sealed class WmDaemon : IDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Sized from measurement rather than guessed, after a first attempt at four was
-    /// guessed and did not work. Sampling the border pixels of a Windows Terminal
-    /// across repeated focus changes: cleared 29-60 ms after focus arrived, and not
-    /// blue again for <b>250 ms in one round and 535 ms in another</b> - and on a third
-    /// round it never cleared at all, which is what makes it intermittent. Twenty
-    /// checks forty milliseconds apart span eight hundred, which covers the worst
-    /// observed case with room over it.
+    /// Sized from measurement, twice, because it was guessed once and the guess was far
+    /// too small. Sampling the border pixels of a Windows Terminal:
     /// </para>
     /// <para>
-    /// Bounded for the same reason the drift watch is bounded: an unbounded one is a
-    /// window manager arguing with an application several times a second for as long as
-    /// both are running. The healing timer stays as the backstop for anything later.
+    /// On a plain focus change it is cleared 29-60 ms in and stays cleared for 250 ms
+    /// on one attempt and 535 ms on the next - and on a third it never clears at all,
+    /// which is what makes this intermittent. Four checks spanning 145 ms could not
+    /// cover that; twenty spanning 800 ms could.
+    /// </para>
+    /// <para>
+    /// But a focus change that also <i>resizes</i> the window is a different order of
+    /// problem. Moving another window onto its workspace takes the terminal from full
+    /// width to half, and it then cleared and re-cleared its border repeatedly for over
+    /// two seconds, because re-laying out a character grid repaints for far longer than
+    /// one activation does. Sixty checks span two and a half seconds, which covers the
+    /// worst of that - and the watch now restarts on a geometry change as well as on a
+    /// focus change, so a resize is covered from where it starts rather than from
+    /// whenever focus last moved.
+    /// </para>
+    /// <para>
+    /// Bounded, for the same reason the drift watch is bounded: an unbounded one is a
+    /// window manager arguing with an application for as long as both are running. The
+    /// healing timer stays as the backstop for anything later still.
+    /// </para>
+    /// <para>
+    /// The cost, since this is a poll and the day it was written was spent removing
+    /// one: 331 ns per <c>DwmSetWindowAttribute</c>, so about 20 us spread across the
+    /// two and a half seconds, plus up to sixty extra loop wake-ups 40 ms apart. It
+    /// stops on its own, and it only starts when something moved.
     /// </para>
     /// </remarks>
-    private const int BorderSettleChecks = 20;
+    private const int BorderSettleChecks = 60;
 
     /// <summary>The gap between those.</summary>
     private static readonly TimeSpan BorderSettleInterval = TimeSpan.FromMilliseconds(40);
