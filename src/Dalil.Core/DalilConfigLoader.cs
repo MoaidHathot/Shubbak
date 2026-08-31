@@ -347,6 +347,17 @@ public static class DalilConfigLoader
     /// }
     /// </code>
     /// <para>
+    /// A <c>param</c> turns one row into a question. The placeholder is substituted at
+    /// the moment the value is chosen, which is what makes a single row stand in for
+    /// one per workspace:
+    /// </para>
+    /// <code>
+    /// action "Send it to..." {
+    ///     param "ws" from="workspaces"
+    ///     move --workspace "{ws}"
+    /// }
+    /// </code>
+    /// <para>
     /// Validated here with the real parser rather than sent hopefully down the pipe.
     /// The palette already does this for what the user types in commands mode, and for
     /// the same reason: a mistake should be reported in the words the config file would
@@ -380,6 +391,13 @@ public static class DalilConfigLoader
                     "Two rows with the same name cannot be told apart in the list."));
             }
 
+            // Read first, because a command cannot be checked until its placeholders
+            // have something in them. Everything the commands need to know about the
+            // questions is known before the first command is looked at.
+            List<MacroParam> parameters = ReadParams(action, name, diagnostics);
+            HashSet<string> declared = new(parameters.Select(p => p.Name), StringComparer.Ordinal);
+            HashSet<string> used = new(StringComparer.Ordinal);
+
             List<string> commands = [];
             string? problem = null;
 
@@ -388,6 +406,11 @@ public static class DalilConfigLoader
                 // The description can be written as a child rather than a property,
                 // like every other setting in this file, so it is not a command.
                 if (string.Equals(child.Name, "description", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                // Nor is a question. Read above, and skipped here so it is not offered
+                // to the parser as a verb it has never heard of.
+                if (string.Equals(child.Name, "param", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 // Tokens are passed through directly rather than rebuilt into a string
@@ -400,8 +423,40 @@ public static class DalilConfigLoader
 
                 string display = string.Join(' ', tokens);
 
+                // A placeholder nobody declared is the failure this whole feature is
+                // most likely to produce, and the one the parser cannot catch: `focus
+                // --workspace "{wsp}"` is a perfectly valid request to focus a
+                // workspace literally named "{wsp}", so it parses, loads, runs, and is
+                // refused by the window manager at the far end of a keystroke.
+                foreach (string placeholder in Placeholders(display))
+                {
+                    if (declared.Contains(placeholder))
+                    {
+                        used.Add(placeholder);
+                        continue;
+                    }
+
+                    diagnostics?.Add(Diagnostic.Error(
+                        "DAL0013",
+                        $"Palette action '{name}': nothing declares '{{{placeholder}}}'.",
+                        child.Span,
+                        $"Add param \"{placeholder}\" from=\"workspaces\" to the action, " +
+                        "or remove the braces if the value was meant literally."));
+
+                    problem ??= $"nothing declares '{{{placeholder}}}'";
+                }
+
+                // Placeholders are answered with something the parser will accept
+                // before it is asked, because a line is only checkable once it is a
+                // command. `focus --direction "{d}"` is not a direction and never will
+                // be; `focus --direction left` is the same line with the question
+                // answered, and checking that checks everything about the line except
+                // the value the user is going to supply.
+                List<string> probed = [.. tokens.Select(t => Probe(t, parameters))];
+
                 if (CommandParser.TryParseTokens(
-                        tokens, display, child.Span, out WmCommand? _, out Diagnostic? error))
+                        probed, string.Join(' ', probed), child.Span,
+                        out WmCommand? _, out Diagnostic? error))
                 {
                     commands.Add(display);
                     continue;
@@ -426,6 +481,20 @@ public static class DalilConfigLoader
                     : wrong.Message;
             }
 
+            // A question nothing asks is a question that will be asked anyway: the row
+            // stops to collect a value and then runs a sequence that ignores it, which
+            // reads as the palette having lost the answer.
+            foreach (MacroParam parameter in parameters)
+            {
+                if (used.Contains(parameter.Name)) continue;
+
+                diagnostics?.Add(Diagnostic.Warning(
+                    "DAL0014",
+                    $"Palette action '{name}' asks for '{parameter.Name}' and never uses it.",
+                    action.Span,
+                    $"Write {parameter.Placeholder} in one of its commands, or remove the param."));
+            }
+
             if (commands.Count == 0 && problem is null)
             {
                 diagnostics?.Add(Diagnostic.Warning(
@@ -442,11 +511,183 @@ public static class DalilConfigLoader
                     action.Child("description")?.Argument(0)?.AsString() ??
                     string.Empty,
                 commands,
-                problem));
+                problem,
+
+                // Only the ones that are actually referred to. Keeping an unused
+                // parameter would make the row stop and ask a question whose answer
+                // provably goes nowhere, which is worse than the warning above.
+                [.. parameters.Where(p => used.Contains(p.Name))]));
         }
 
         return macros;
     }
+
+    /// <summary>Every source a <c>param</c> can draw its choices from.</summary>
+    /// <remarks>
+    /// Listed rather than derived from the enum, because the names here are the
+    /// plural, hyphenated ones a user writes and the enum members are neither.
+    /// </remarks>
+    private static readonly string[] s_paramSources =
+        ["workspaces", "layouts", "binding-modes", "scratchpads", "directions"];
+
+    /// <summary>
+    /// Reads the questions an action asks before it runs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A source name rather than a query, because the point of the feature is that
+    /// nobody should have to know how the palette gets its workspace list. All five
+    /// lists are ones the palette already holds for argument completion, so a prompt
+    /// is a lookup into something already in memory.
+    /// </para>
+    /// <para>
+    /// <c>values=</c> is the escape hatch for a set the window manager does not know:
+    /// a pair of layouts you actually alternate between, three scratchpad slots you
+    /// have decided on. It wins over <c>from=</c> because writing the values out is an
+    /// explicit statement of the whole set, and nothing discovered could add to it.
+    /// </para>
+    /// </remarks>
+    private static List<MacroParam> ReadParams(
+        KdlNode action, string macro, List<Diagnostic>? diagnostics)
+    {
+        List<MacroParam> parameters = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+
+        foreach (KdlNode child in action.ChildrenNamed("param"))
+        {
+            if (child.Argument(0)?.AsString() is not { Length: > 0 } name)
+            {
+                diagnostics?.Add(Diagnostic.Error(
+                    "DAL0015",
+                    $"Palette action '{macro}': a param must be given a name.",
+                    child.Span,
+                    "Write param \"ws\" from=\"workspaces\", then use {ws} in the commands."));
+
+                continue;
+            }
+
+            if (!seen.Add(name))
+            {
+                diagnostics?.Add(Diagnostic.Warning(
+                    "DAL0016",
+                    $"Palette action '{macro}' declares '{name}' more than once; the first will be used.",
+                    child.Span));
+
+                continue;
+            }
+
+            if (ReadValues(child) is { Count: > 0 } literals)
+            {
+                parameters.Add(new MacroParam(name, MacroParamSource.Literals, literals));
+                continue;
+            }
+
+            string from =
+                child.Property("from")?.AsString() ??
+                child.Child("from")?.Argument(0)?.AsString() ??
+                "workspaces";
+
+            if (SourceNamed(from) is not { } source)
+            {
+                diagnostics?.Add(Diagnostic.Error(
+                    "DAL0017",
+                    $"Palette action '{macro}': '{from}' is not a list to choose from.",
+                    child.Span,
+                    Suggestion.Closest(from, s_paramSources) is { } guess
+                        ? $"Did you mean '{guess}'?"
+                        : $"Available: {string.Join(", ", s_paramSources)}. " +
+                          "Or write the choices out with values=\"a b c\"."));
+
+                continue;
+            }
+
+            parameters.Add(new MacroParam(name, source, []));
+        }
+
+        return parameters;
+    }
+
+    /// <summary>Choices written out beside the parameter, in either shape.</summary>
+    /// <remarks>
+    /// The property form is the short one and covers everything without a space in it,
+    /// which is every workspace, layout and slot name there is. The child form exists
+    /// for the value that does contain one, so the feature does not have a hole in it
+    /// the first time somebody names something "Second Monitor".
+    /// </remarks>
+    private static IReadOnlyList<string> ReadValues(KdlNode param)
+    {
+        if (param.Child("values") is { } block && block.Arguments.Count > 0)
+            return [.. block.Arguments.Select(a => a.AsString())];
+
+        if (param.Property("values")?.AsString() is { Length: > 0 } inline)
+            return [.. inline.Split(' ', StringSplitOptions.RemoveEmptyEntries)];
+
+        return [];
+    }
+
+    /// <summary>The singular is accepted too, because both readings are natural.</summary>
+    private static MacroParamSource? SourceNamed(string name) => name.ToLowerInvariant() switch
+    {
+        "workspaces" or "workspace" => MacroParamSource.Workspaces,
+        "layouts" or "layout" => MacroParamSource.Layouts,
+        "binding-modes" or "binding-mode" or "modes" or "mode" => MacroParamSource.BindingModes,
+        "scratchpads" or "scratchpad" or "slots" => MacroParamSource.Scratchpads,
+        "directions" or "direction" => MacroParamSource.Directions,
+        _ => null,
+    };
+
+    /// <summary>Every <c>{name}</c> in a line, in the order they appear.</summary>
+    private static IEnumerable<string> Placeholders(string text)
+    {
+        int at = 0;
+
+        while (at < text.Length)
+        {
+            int open = text.IndexOf('{', at);
+            if (open < 0) yield break;
+
+            int close = text.IndexOf('}', open + 1);
+            if (close < 0) yield break;
+
+            if (close > open + 1) yield return text[(open + 1)..close];
+
+            at = close + 1;
+        }
+    }
+
+    /// <summary>Fills a token's placeholders in, so the parser has something to judge.</summary>
+    private static string Probe(string token, List<MacroParam> parameters)
+    {
+        if (parameters.Count == 0 || !token.Contains('{', StringComparison.Ordinal)) return token;
+
+        string probed = token;
+
+        foreach (MacroParam parameter in parameters)
+            probed = probed.Replace(parameter.Placeholder, ProbeValue(parameter), StringComparison.Ordinal);
+
+        return probed;
+    }
+
+    /// <summary>
+    /// A stand-in value of the right shape.
+    /// </summary>
+    /// <remarks>
+    /// Directions are the one kind with a closed set the parser enforces, so they get a
+    /// real one. Everything else is a name the parser takes as written and the window
+    /// manager judges later, so any word stands in for it and the check is about the
+    /// shape of the line rather than the value.
+    /// <para>
+    /// Written-out choices probe with the first of them, which means a list containing
+    /// something the parser will refuse is refused here - at the line that declared it,
+    /// rather than at a keystroke a fortnight later.
+    /// </para>
+    /// </remarks>
+    private static string ProbeValue(MacroParam parameter) => parameter.Source switch
+    {
+        MacroParamSource.Directions => "left",
+        MacroParamSource.Literals when parameter.Literals.Count > 0 => parameter.Literals[0],
+        _ => "x",
+    };
 
     private static PalettePlacement? ParsePlacement(KdlNode node, List<Diagnostic>? diagnostics)
     {

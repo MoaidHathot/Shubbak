@@ -261,4 +261,139 @@ public sealed class DalilValidationTests
         Assert.NotNull(macro.Problem);
         Assert.Contains("sideways", macro.Problem!, StringComparison.Ordinal);
     }
+
+    // ---- questions an action asks before it runs -------------------------------------
+
+    [Fact]
+    public void AParameterisedActionWithNothingWrongWithItSaysNothing()
+    {
+        Assert.Empty(Check("""
+            dalil {
+                action "Send it to..." {
+                    param "ws" from="workspaces"
+                    move --workspace "{ws}"
+                }
+            }
+            """));
+    }
+
+    [Fact]
+    public void APlaceholderInADirectionIsCheckedWithARealDirection()
+    {
+        // `focus --direction "{d}"` is not a direction and never will be, so the line
+        // can only be checked once the question has been answered. Probing it with a
+        // real one checks everything about the line except the value the user supplies.
+        Assert.Empty(Check("""
+            dalil {
+                action "Shove it..." {
+                    param "d" from="directions"
+                    move --direction "{d}"
+                }
+            }
+            """));
+    }
+
+    [Fact]
+    public void AWrittenOutChoiceThatTheParserWillRefuseIsRefusedHere()
+    {
+        // The probe uses the first written value, so a list containing something the
+        // parser cannot accept is caught at the line that declared it rather than at a
+        // keystroke a fortnight later.
+        Diagnostic wrong = Single("""
+            dalil {
+                action "Shove it..." {
+                    param "d" values="sideways left"
+                    move --direction "{d}"
+                }
+            }
+            """, "DAL0007");
+
+        Assert.Contains("sideways", wrong.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void APlaceholderNobodyDeclaredIsReported()
+    {
+        // The one mistake the parser cannot catch: `focus --workspace "{wsp}"` is a
+        // perfectly valid request to focus a workspace literally called "{wsp}", so it
+        // parses, loads, runs, and is refused at the far end of a keystroke.
+        Diagnostic wrong = Single("""
+            dalil {
+                action "Send it to..." {
+                    param "ws" from="workspaces"
+                    move --workspace "{wsp}"
+                }
+            }
+            """, "DAL0013");
+
+        Assert.Contains("{wsp}", wrong.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AQuestionNothingAsksIsReported()
+    {
+        Diagnostic wrong = Single("""
+            dalil {
+                action "Tidy" {
+                    param "ws" from="workspaces"
+                    equalise
+                }
+            }
+            """, "DAL0014");
+
+        Assert.Equal(DiagnosticSeverity.Warning, wrong.Severity);
+        Assert.Contains("never uses it", wrong.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnUnusedQuestionIsDroppedSoTheRowDoesNotStopToAskIt()
+    {
+        // The warning is not enough on its own. A row that collects a value and then
+        // runs a sequence which ignores it reads as the palette having lost the answer.
+        DalilConfig config = DalilConfigLoader.Load("""
+            dalil {
+                action "Tidy" {
+                    param "ws" from="workspaces"
+                    equalise
+                }
+            }
+            """);
+
+        Assert.False(Assert.Single(config.Macros).Asks);
+    }
+
+    [Fact]
+    public void AParamWithNoNameIsReported()
+    {
+        Single("""dalil { action "Go" { param; focus --workspace "1" } }""", "DAL0015");
+    }
+
+    [Fact]
+    public void AParamDeclaredTwiceIsReported()
+    {
+        Single("""
+            dalil {
+                action "Go" {
+                    param "ws" from="workspaces"
+                    param "ws" from="layouts"
+                    focus --workspace "{ws}"
+                }
+            }
+            """, "DAL0016");
+    }
+
+    [Fact]
+    public void AListNobodyHasIsReportedWithASuggestion()
+    {
+        Diagnostic wrong = Single("""
+            dalil {
+                action "Go" {
+                    param "l" from="layout s"
+                    layout --set "{l}"
+                }
+            }
+            """, "DAL0017");
+
+        Assert.Contains("layouts", wrong.Hint!, StringComparison.Ordinal);
+    }
 }

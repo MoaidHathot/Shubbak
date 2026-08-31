@@ -150,7 +150,12 @@ internal static class PaletteInput
         // A row carrying its own list opens it instead of running. Only inside an
         // overlay: at the top level a row's list is what Ctrl+Enter is for, and Enter
         // has to keep meaning "go to this window".
-        if (entry.Command.Length == 0 && insideOverlay && entry.HasActions)
+        //
+        // Unless the row exists in order to ask. A prompting macro has no command
+        // until a value has been chosen, so there is nothing else Enter could mean -
+        // and leaving the question behind Ctrl+Enter would hide it behind a key
+        // nobody has a reason to press on a row that looks like every other macro.
+        if (entry.Command.Length == 0 && (insideOverlay || entry.Prompts) && entry.HasActions)
             return PaletteChoice.OpenChildren;
 
         if (entry.Command.Length > 0)

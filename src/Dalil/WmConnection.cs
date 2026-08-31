@@ -255,18 +255,36 @@ public sealed class WmConnection : IAsyncDisposable
             IReadOnlyList<string> names = [.. workspaces.Select(w => w.Name)];
             bool several = monitors.Count > 1;
 
+            // What each workspace is called, for the pickers a prompting action opens.
+            // A list reading "3", "\" and "'" is one nobody can choose from; the same
+            // list reading "3 - Code" is the whole difference between the feature
+            // working and it being a puzzle.
+            Dictionary<string, string> labels = new(StringComparer.Ordinal);
+
+            foreach (WorkspaceInfo workspace in workspaces)
+                labels[workspace.Name] = workspace.DisplayName;
+
             var status = new WmStatus(
                 state?.Paused ?? false,
                 state?.BindingMode,
                 state?.Suspended ?? false,
                 Connected: true);
 
+            var completions = new CompletionSources(
+                names,
+                layouts,
+                [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
+                [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]);
+
+            IReadOnlyList<PaletteEntry> ownActions =
+                PaletteEntries.ForMacros(macros ?? [], completions, labels);
+
             // The palette's own verbs and the user's own sequences sit above the window
             // manager's, because somebody who named a thing is looking for the name.
             List<PaletteEntry> everyCommand =
             [
-                .. PaletteEntries.ForMacros(macros ?? []),
-                .. PaletteEntries.ForBuiltins(configProblems),
+                .. ownActions,
+                .. PaletteEntries.ForBuiltins(configProblems, ownActions.Count),
                 .. PaletteEntries.ForCommands(commands, status),
             ];
 
@@ -278,11 +296,7 @@ public sealed class WmConnection : IAsyncDisposable
                 PaletteEntries.ForMonitors(monitors),
                 PaletteEntries.ForScratchpad(windows, here, names),
                 PaletteEntries.ForHelp(bindings),
-                new CompletionSources(
-                    names,
-                    layouts,
-                    [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
-                    [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]),
+                completions,
                 status,
 
                 // Deliberately built from the same unfiltered list, ignoring
@@ -294,7 +308,8 @@ public sealed class WmConnection : IAsyncDisposable
                 here,
                 names,
                 [.. windows.Select(w => w.Handle)],
-                PaletteEntries.ForContext(windows.FirstOrDefault(w => w.Handle == foreground)));
+                PaletteEntries.ForContext(windows.FirstOrDefault(w => w.Handle == foreground)),
+                labels);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -506,6 +521,10 @@ public sealed class WmConnection : IAsyncDisposable
 /// The row that answers a question before it is asked, or empty when there is nothing
 /// worth saying.
 /// </param>
+/// <param name="WorkspaceLabels">
+/// What each workspace is called, keyed by its name, for the pickers a prompting
+/// action opens. A choice reading <c>\</c> is not one anybody can make.
+/// </param>
 public sealed record PaletteSources(
     IReadOnlyList<PaletteEntry> Windows,
     IReadOnlyList<PaletteEntry> Commands,
@@ -520,7 +539,8 @@ public sealed record PaletteSources(
     string? FocusedWorkspace = null,
     IReadOnlyList<string>? WorkspaceNames = null,
     IReadOnlyList<long>? WindowHandles = null,
-    IReadOnlyList<PaletteEntry>? Context = null)
+    IReadOnlyList<PaletteEntry>? Context = null,
+    IReadOnlyDictionary<string, string>? WorkspaceLabels = null)
 {
     /// <summary>
     /// Before anything has been read.

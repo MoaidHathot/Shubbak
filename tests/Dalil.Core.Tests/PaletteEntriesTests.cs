@@ -995,10 +995,78 @@ public sealed class PaletteEntriesTests
         // command list and could only be reached from a shell - which is exactly
         // backwards, because a report is wanted at the moment something has gone wrong
         // on somebody's desktop.
-        PaletteEntry entry = Assert.Single(PaletteEntries.ForBuiltins());
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForBuiltins(), e => e.Primary == "diagnose");
 
-        Assert.Equal("diagnose", entry.Primary);
         Assert.True(PaletteEntries.IsBuiltin(entry.Command));
+    }
+
+    [Fact]
+    public void TheKeyReferenceIsReachableByNameAndNotOnlyByPunctuation()
+    {
+        // "?" and Ctrl+8 both reach it, and both have to be known first. A row is the
+        // one route that can be found by searching for the thing rather than by having
+        // already been told which character leads to it.
+        PaletteEntry entry = Assert.Single(PaletteEntries.ForBuiltins(), e => e.Primary == "keys");
+
+        Assert.Equal(PaletteMode.Help, entry.SwitchesTo);
+
+        // Nothing is sent. Switching mode is not a command, and giving it one would put
+        // "dalil:keys" down the pipe the first time somebody pressed Enter on it.
+        Assert.Empty(entry.Command);
+    }
+
+    [Fact]
+    public void ThePathOfTheConfigurationInEffectCanBeCopied()
+    {
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForBuiltins(), e => e.Primary == "config path");
+
+        Assert.Equal(PaletteEntries.BuiltinConfigPath, entry.Command);
+        Assert.True(PaletteEntries.IsBuiltin(entry.Command));
+    }
+
+    [Fact]
+    public void ThePaletteCanBeToldToRereadItsOwnSectionAlone()
+    {
+        // The window manager announces a reload only when it accepted one, so a mistake
+        // anywhere else in the file leaves the palette running on settings the file no
+        // longer contains - with nothing anywhere to say so.
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForBuiltins(), e => e.Primary == "reload palette");
+
+        Assert.Equal(PaletteEntries.BuiltinReload, entry.Command);
+    }
+
+    [Fact]
+    public void ActionsAreNotListedSeparatelyWhenThereAreNone()
+    {
+        // A row promising to list something and then listing nothing is a row that
+        // teaches you to ignore it.
+        Assert.DoesNotContain(PaletteEntries.ForBuiltins(0, 0), e => e.Primary == "actions");
+    }
+
+    [Fact]
+    public void ActionsGetTheirOwnRowWhenThereAreSome()
+    {
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForBuiltins(0, 3), e => e.Primary == "actions");
+
+        Assert.Equal(PaletteEntries.BuiltinActions, entry.Command);
+        Assert.Contains("3 actions", entry.Secondary, StringComparison.Ordinal);
+
+        // Above the window manager's verbs, because somebody looking for a thing they
+        // named is not looking for the primitive it happens to start with.
+        Assert.True(entry.Rank > 10);
+    }
+
+    [Fact]
+    public void OneActionIsCountedInTheSingular()
+    {
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForBuiltins(0, 1), e => e.Primary == "actions");
+
+        Assert.Contains("The 1 action", entry.Secondary, StringComparison.Ordinal);
     }
 
     [Fact]

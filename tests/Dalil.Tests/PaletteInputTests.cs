@@ -22,8 +22,10 @@ public class PaletteInputTests
         PaletteMode? switchesTo = null,
         IReadOnlyList<PaletteAction>? actions = null,
         long? explains = null,
-        string? expands = null) =>
-        new(primary, secondary, [], command, 0, switchesTo, actions, explains, expands);
+        string? expands = null,
+        bool prompts = false) =>
+        new(primary, secondary, [], command, 0, switchesTo, actions, explains, expands,
+            Prompts: prompts);
 
     // ---- chords ------------------------------------------------------------------
 
@@ -359,6 +361,44 @@ public class PaletteInputTests
         Assert.NotEqual(
             PaletteChoice.OpenChildren,
             PaletteInput.Choose(entry, PaletteMode.Windows, insideOverlay: false));
+    }
+
+    [Fact]
+    public void ARowThatExistsInOrderToAskOpensItsListWhereverItIs()
+    {
+        // A prompting macro has no command until a value has been chosen, so there is
+        // nothing else Enter could mean - and leaving the question behind Ctrl+Enter
+        // would hide it behind a key nobody has a reason to press on a row that looks
+        // like every other macro in the list.
+        PaletteEntry entry = Entry(
+            "Send it to\u2026",
+            command: "",
+            actions: [new PaletteAction("3", "Send it to 3", "move --workspace 3")],
+            prompts: true);
+
+        Assert.Equal(
+            PaletteChoice.OpenChildren,
+            PaletteInput.Choose(entry, PaletteMode.Commands, insideOverlay: false));
+
+        Assert.Equal(
+            PaletteChoice.OpenChildren,
+            PaletteInput.Choose(entry, PaletteMode.Commands, insideOverlay: true));
+    }
+
+    [Fact]
+    public void APromptingRowDoesNotPutItsOwnNameInTheSearchBox()
+    {
+        // Without the case above it falls through to "a verb needing arguments", which
+        // in commands mode rewrites the query - so pressing Enter on "Send it to..."
+        // replaced the search with its own name and did nothing else.
+        Assert.NotEqual(
+            PaletteChoice.Complete,
+            PaletteInput.Choose(
+                Entry("Send it to\u2026", command: "",
+                    actions: [new PaletteAction("3", "there", "move --workspace 3")],
+                    prompts: true),
+                PaletteMode.Commands,
+                insideOverlay: false));
     }
 
     [Fact]
