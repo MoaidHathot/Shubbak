@@ -227,6 +227,59 @@ internal static class Program
             return;
         }
 
+        if (string.Equals(command, PaletteEntries.BuiltinConfigPath, StringComparison.Ordinal))
+        {
+            string path = ConfigPathResolver.Resolve(s_configPath).Path ??
+                "no configuration file was found";
+
+            if (s_palette is { } showing)
+            {
+                showing.Open(PaletteMode.Commands);
+
+                // Copied and then shown, rather than copied in silence. A clipboard is
+                // the one place a program can put something with no way for anybody to
+                // tell whether it worked, and the row that says which path went there
+                // is also the row that answers "which file is in effect".
+                showing.CopyToClipboard(path);
+                showing.ShowReportFailure("config path", path);
+            }
+
+            return;
+        }
+
+        if (string.Equals(command, PaletteEntries.BuiltinReload, StringComparison.Ordinal))
+        {
+            ReloadConfig();
+
+            if (s_palette is { } showing)
+            {
+                showing.Open(PaletteMode.Commands);
+
+                showing.ShowReportFailure(
+                    "reload palette",
+                    s_problems.Errors + s_problems.Warnings == 0
+                        ? "The dalil section was re-read and had nothing wrong with it."
+                        : $"The dalil section was re-read; {Describe(s_problems)}. Choose 'config' to read them.");
+            }
+
+            return;
+        }
+
+        if (string.Equals(command, PaletteEntries.BuiltinActions, StringComparison.Ordinal))
+        {
+            if (s_palette is { } showing)
+            {
+                showing.Open(PaletteMode.Commands);
+
+                // Built from the same sources the command list uses, so a prompting
+                // action opened from here asks exactly what it asks from there.
+                showing.Push("actions", PaletteEntries.ForMacros(
+                    s_config.Macros, s_completions, s_sources.WorkspaceLabels));
+            }
+
+            return;
+        }
+
         if (string.Equals(command, PaletteEntries.BuiltinDiagnose, StringComparison.Ordinal))
         {
             _ = Task.Run(async () =>
@@ -257,6 +310,20 @@ internal static class Program
         }
 
         Log.Warn(LogCategory.Wm, $"nothing here answers '{command}'");
+    }
+
+    /// <summary>How many things were wrong, in words rather than in two numbers.</summary>
+    private static string Describe(DiagnosticCounts counts)
+    {
+        List<string> parts = [];
+
+        if (counts.Errors > 0)
+            parts.Add(counts.Errors == 1 ? "1 error" : $"{counts.Errors} errors");
+
+        if (counts.Warnings > 0)
+            parts.Add(counts.Warnings == 1 ? "1 warning" : $"{counts.Warnings} warnings");
+
+        return string.Join(" and ", parts);
     }
 
     /// <summary>
@@ -381,10 +448,99 @@ internal static class Program
             return;
         }
 
+        if (RunRequested(signal.Arguments)) return;
+
         PaletteMode mode = ModeFrom(signal.Arguments);
         Log.Debug(LogCategory.Wm, $"opening in {PaletteModel.NameOf(mode)} mode");
 
         Post(() => Open(mode));
+    }
+
+    /// <summary>
+    /// Runs a named action outright, without showing anything.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bridge between the two halves of the configuration. An <c>action</c> is a
+    /// sequence of commands with a name, and a keybinding is a sequence of commands
+    /// with a key - so the same three lines had to be written twice by anybody who
+    /// wanted both, and the two copies then drifted. There is no verb for this and
+    /// deliberately never will be: the window manager has no idea what an action is,
+    /// carries the name without reading it, and this is the process that knows.
+    /// </para>
+    /// <para>
+    /// Nothing is shown on success. The point of putting an action on a key is that it
+    /// happens; opening the palette to announce that it happened would put a window in
+    /// front of the arrangement it just made.
+    /// </para>
+    /// <para>
+    /// A name that matches nothing does open the palette, at the command list, for the
+    /// same reason an unrecognised mode name does: the key has already been pressed and
+    /// silence is indistinguishable from the palette being dead.
+    /// </para>
+    /// </remarks>
+    private static bool RunRequested(IReadOnlyList<string> arguments)
+    {
+        if (arguments.Count == 0 ||
+            !string.Equals(arguments[0], "run", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (arguments.Count < 2 || arguments[1].Length == 0)
+        {
+            Log.Warn(LogCategory.Wm, "signal \"run\" did not say which action to run");
+            Post(() => Open(PaletteMode.Commands));
+            return true;
+        }
+
+        // Joined with a space, so a name written as several bare words works as well as
+        // a quoted one. `signal "palette" "run" "Code layout"` and
+        // `signal "palette" "run" Code layout` are the same request, and somebody who
+        // forgot the quotes has not made a mistake worth punishing.
+        string name = string.Join(' ', arguments.Skip(1));
+
+        PaletteMacro? macro = s_config.Macros.FirstOrDefault(
+            m => string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase));
+
+        if (macro is null)
+        {
+            Log.Warn(LogCategory.Wm, $"no action is called \"{name}\"");
+            Post(() => Open(PaletteMode.Commands));
+            return true;
+        }
+
+        // Refused for the same reason its row carries no command: the sequence did not
+        // parse, and sending it anyway would have the window manager reject it one line
+        // at a time into a log nobody is reading.
+        if (macro.Problem is { Length: > 0 } wrong)
+        {
+            Log.Warn(LogCategory.Wm, $"action \"{macro.Name}\" cannot run: {wrong}");
+            Post(() => Open(PaletteMode.Commands));
+            return true;
+        }
+
+        // A question cannot be asked without somewhere to ask it. The palette opens at
+        // the command list with the name already typed, so the row is under the
+        // selection and Enter is the next key either way.
+        if (macro.Asks)
+        {
+            Log.Debug(LogCategory.Wm, $"action \"{macro.Name}\" asks first; opening the palette");
+            Post(() => OpenAt(macro.Name));
+            return true;
+        }
+
+        Log.Debug(LogCategory.Wm, $"running action \"{macro.Name}\"");
+        Post(() => OnCommand(string.Join('\n', macro.Commands)));
+
+        return true;
+    }
+
+    /// <summary>Opens the command list with something already typed into it.</summary>
+    private static void OpenAt(string term)
+    {
+        Open(PaletteMode.Commands);
+        s_palette?.Prefill(term);
     }
 
     /// <summary>

@@ -165,6 +165,16 @@ public enum PaletteMode
 /// the state the window manager is currently in. Still listed, because hiding it would
 /// leave somebody searching for a verb the palette denies exists.
 /// </param>
+/// <param name="Prompts">
+/// Whether Enter should open this row's own list rather than doing nothing.
+/// <para>
+/// A row with no command normally cannot be run, and at the top level its list is what
+/// Ctrl+Enter is for - Enter has to keep meaning "go to this window". This is the
+/// exception: a row that exists in order to ask a question has nothing else Enter could
+/// mean, and requiring Ctrl+Enter to reach the question would hide the answer behind a
+/// key nobody has a reason to try.
+/// </para>
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -180,7 +190,8 @@ public sealed record PaletteEntry(
     long? IconHandle = null,
     bool Destructive = false,
     bool Unavailable = false,
-    Func<IReadOnlyList<PaletteAction>>? ActionsFactory = null)
+    Func<IReadOnlyList<PaletteAction>>? ActionsFactory = null,
+    bool Prompts = false)
 {
     /// <summary>Whether there is anything Ctrl+Enter could show, without working out what.</summary>
     public bool HasActions => Actions is { Count: > 0 } || ActionsFactory is not null;

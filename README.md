@@ -521,6 +521,48 @@ dalil {
 They're validated against the real parser at load time, so a typo is reported on the
 row rather than swallowed.
 
+**And a row can ask.** A `param` turns one row into a question, so a single entry
+stands in for one per workspace — nineteen of them, in my config, each of which would
+otherwise need its own name to invent and its own line to keep:
+
+```kdl
+dalil {
+    action "Send it to..." description="Move it there and stay where you are" {
+        param "ws" from="workspaces"
+        move --workspace "{ws}"
+    }
+
+    action "Arrange..." description="Go somewhere and lay it out, in one gesture" {
+        param "ws" from="workspaces"
+        param "l"  from="layouts"
+        focus --workspace "{ws}"
+        layout --set "{l}"
+        equalise
+    }
+}
+```
+
+Enter opens the picker; Escape goes back one question rather than dismissing. Choices
+come `from=` a list the palette already holds — `workspaces`, `layouts`,
+`binding-modes`, `scratchpads`, `directions` — or from `values="a b c"` when you want
+a set the window manager doesn't know. Workspaces are shown as `3 — Code`, because a
+picker reading `\` is not one anybody can choose from.
+
+The checking is real: a placeholder nothing declares is an error with a line and a
+caret, a question no command asks is a warning, and `move --direction "{d}"` is probed
+with an actual direction before the parser sees it rather than waved through.
+
+**Put an action on a key without writing it twice.** `signal "palette" "run" "<name>"`
+runs a named action outright and shows nothing:
+
+```kdl
+bind "alt+ctrl+d" { signal "palette" "run" "Deep work" }
+```
+
+Shubbak still has no idea what an action is — it carries the name without reading it,
+and the palette is what knows. An action that *asks* can't be answered by a key, so
+those open the palette with the name already typed and the picker one Enter away.
+
 Rows carry the application's icon and badges so you can see at a glance what you're
 looking at: `unmanaged`, `minimised`, `cloaked`, `floating`, `fullscreen`, `sticky`,
 `elevated`, `stashed`, `also on <workspace>`. Unmanaged windows also carry the reason
@@ -626,7 +668,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1540 test methods**, around 700 ms to run. Everything except the platform layer
+**1567 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -686,7 +728,7 @@ src/
   Taj/              bar host
   Dalil.Core/       fuzzy matching, palette model                     — no Win32
   Dalil/            the palette
-tests/              1540 test methods across 9 projects
+tests/              1567 test methods across 9 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```

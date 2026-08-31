@@ -15,7 +15,80 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Added
+
+- **A palette action can ask a question.** A `param` turns one row into a picker, so a
+  single entry stands in for one per workspace. Nineteen workspaces meant nineteen
+  actions to name, write and scroll past - or, in practice, none of them, because
+  nobody writes nineteen of anything for a thing they do twice a week.
+
+  ```kdl
+  action "Send it to..." {
+      param "ws" from="workspaces"
+      move --workspace "{ws}"
+  }
+  ```
+
+  Choices come `from=` a list the palette already holds for its own argument
+  completion - `workspaces`, `layouts`, `binding-modes`, `scratchpads`, `directions` -
+  so a prompt costs a lookup rather than a round trip. `values="a b c"` writes them out
+  instead, which is the right answer for stashing: the list the window manager knows is
+  the slots *currently holding a window*, and the slot you want is the empty one.
+
+  Several `param`s are asked one after the other, each picker opening the next. That
+  needed no new mechanism: a row with no command and children of its own is exactly
+  what an action-list row already is, so the frame stack, Escape-goes-back and the
+  breadcrumb all worked unchanged.
+
+  Workspaces are labelled `3 — Code`. A picker reading `1`, `\`, `'` and `;` is not one
+  anybody can choose from, and the display names were already being fetched.
+
+  Checked at load time, in the config file's own words. A placeholder nothing declares
+  is an error with a line and a caret - and it is the one mistake the parser cannot
+  catch on its own, because `focus --workspace "{wsp}"` is a perfectly valid request to
+  focus a workspace literally called `{wsp}`: it parses, loads, runs, and is refused at
+  the far end of a keystroke. A question no command asks is a warning, and the unused
+  parameter is then dropped rather than left to stop the row and collect an answer that
+  provably goes nowhere. Directions are probed with a real direction before the parser
+  sees them, so `move --direction "{d}"` is checked rather than waved through.
+
+- **`signal "palette" "run" "<name>"` runs an action from a key.** The two halves of the
+  configuration could not refer to each other: an `action` is a sequence of commands
+  with a name and a `bind` is a sequence of commands with a key, so anybody who wanted
+  both wrote the same three lines twice and the two copies then drifted.
+
+  ```kdl
+  bind "alt+ctrl+d" { signal "palette" "run" "Deep work" }
+  ```
+
+  Nothing is shown on success - the point of putting an action on a key is that it
+  happens, and opening the palette to announce it would put a window in front of the
+  arrangement it just made. There is deliberately no verb for this and never will be:
+  the window manager has no idea what an action is, carries the name without reading it,
+  and this is the process that knows. An action that *asks* cannot be answered by a key,
+  so those open the palette with the name already typed and the picker one Enter away;
+  a name matching nothing opens the command list rather than doing nothing, because the
+  key has already been pressed and silence is indistinguishable from a dead palette.
+
+- **Four more rows the palette answers itself.** `keys` reaches the key reference, which
+  was previously behind `?` and `Ctrl+8` and therefore behind already knowing about them
+  - a row is the one route that can be found by searching for the thing you want.
+  `config path` copies the path of the file actually in effect. `actions` lists your own
+  sequences on their own, away from the thirty-three verbs. And `reload palette`
+  re-reads the `dalil` section alone, which matters precisely when the window manager
+  refused the file: it announces a reload only when it *accepted* one, so a mistake
+  anywhere else left the palette running on settings the file no longer contained, with
+  nothing anywhere to say so.
+
 ### Changed
+
+- **Enter opens a prompting row's list.** A row with no command has always had its list
+  behind `Ctrl+Enter` at the top level, because Enter there has to keep meaning "go to
+  this window". A row that exists in order to ask is the exception: there is nothing
+  else Enter could mean, and requiring `Ctrl+Enter` would hide the question behind a key
+  nobody has a reason to press on a row that looks like every other macro. Without this
+  it fell through to the "verb needing arguments" case and replaced the search with its
+  own name.
 
 - **Taj waits instead of spinning.** The bar's message loop ran every 16 ms - sixty-two
   passes a second, forever - and almost every one found nothing had changed and did

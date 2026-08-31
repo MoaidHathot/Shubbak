@@ -238,6 +238,23 @@ public sealed class PaletteWindow : IDisposable
         if (_open) Refreshed();
     }
 
+    /// <summary>
+    /// Types something into an open palette, as though it had been typed.
+    /// </summary>
+    /// <remarks>
+    /// For a key that asked for an action which turns out to want an answer first. The
+    /// name goes into the box so the row is already under the selection, which makes
+    /// Enter the next key whether the action asked or not - the same gesture either
+    /// way, rather than one that sometimes finishes and sometimes leaves you searching.
+    /// </remarks>
+    public void Prefill(string term)
+    {
+        if (!_open || _overlays.Count > 0) return;
+
+        _model.SetQuery(_model.Query + term);
+        Refreshed();
+    }
+
     /// <summary>Applies a reloaded configuration.</summary>
     public void Reconfigure(DalilConfig config)
     {
@@ -805,6 +822,15 @@ public sealed class PaletteWindow : IDisposable
 
         _ = Clipboard.SetText(text, Handle);
     }
+
+    /// <summary>Puts text on the clipboard, on behalf of the host.</summary>
+    /// <remarks>
+    /// The window is the owner because a clipboard needs one, and the host does not
+    /// have a window. Everything the palette itself copies goes through
+    /// <see cref="Copy"/>; this is for the rows the host answers, where the thing worth
+    /// copying - the path of the file in effect - is something only the host knows.
+    /// </remarks>
+    public bool CopyToClipboard(string text) => Clipboard.SetText(text, Handle);
 
     /// <summary>
     /// Goes back one level, or closes when there is nowhere left to go.

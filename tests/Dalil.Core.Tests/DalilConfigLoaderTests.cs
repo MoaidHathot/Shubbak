@@ -320,4 +320,215 @@ public sealed class DalilConfigLoaderTests
     {
         Assert.True(new DalilConfig().ConfirmDestructive);
     }
+
+    // ---- actions that ask before they run --------------------------------------------
+
+    private static readonly CompletionSources s_desktop = new(
+        ["1", "2", "\\"],
+        ["splith", "monocle"],
+        ["resize"],
+        ["notes"]);
+
+    private static PaletteMacro Macro(string source) =>
+        Assert.Single(DalilConfigLoader.Load(source).Macros);
+
+    [Fact]
+    public void AParamIsReadAsAQuestionRatherThanAsACommand()
+    {
+        PaletteMacro macro = Macro("""
+            dalil {
+                action "Send it to..." {
+                    param "ws" from="workspaces"
+                    move --workspace "{ws}"
+                }
+            }
+            """);
+
+        Assert.True(macro.Asks);
+
+        MacroParam prompt = Assert.Single(macro.Prompts);
+        Assert.Equal("ws", prompt.Name);
+        Assert.Equal(MacroParamSource.Workspaces, prompt.Source);
+        Assert.Equal("{ws}", prompt.Placeholder);
+
+        // And it is not mistaken for a verb the parser has never heard of.
+        Assert.Equal("move --workspace {ws}", Assert.Single(macro.Commands));
+    }
+
+    [Fact]
+    public void WrittenOutChoicesWinOverAList()
+    {
+        // Writing the values out is a statement of the whole set, and nothing the
+        // window manager could report would add to it.
+        MacroParam prompt = Assert.Single(Macro("""
+            dalil {
+                action "Layout" {
+                    param "l" from="workspaces" values="monocle grid"
+                    layout --set "{l}"
+                }
+            }
+            """).Prompts);
+
+        Assert.Equal(MacroParamSource.Literals, prompt.Source);
+        Assert.Equal(["monocle", "grid"], prompt.Literals);
+    }
+
+    [Fact]
+    public void ChoicesWithASpaceInThemCanBeWrittenAsAChild()
+    {
+        MacroParam prompt = Assert.Single(Macro("""
+            dalil {
+                action "Layout" {
+                    param "l" { values "master left" "master right" }
+                    layout --set "{l}"
+                }
+            }
+            """).Prompts);
+
+        Assert.Equal(["master left", "master right"], prompt.Literals);
+    }
+
+    [Fact]
+    public void TheSingularNameOfAListIsAcceptedToo()
+    {
+        Assert.Equal(
+            MacroParamSource.Layouts,
+            Assert.Single(Macro("""
+                dalil { action "L" { param "l" from="layout"; layout --set "{l}" } }
+                """).Prompts).Source);
+    }
+
+    [Fact]
+    public void AskingTurnsOneRowIntoAPickerRatherThanIntoNineteen()
+    {
+        PaletteEntry row = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""
+                dalil {
+                    action "Send it to..." {
+                        param "ws" from="workspaces"
+                        move --workspace "{ws}"
+                    }
+                }
+                """)],
+            s_desktop,
+            labels: null));
+
+        // Nothing to run until something has been chosen, and Enter has to reach the
+        // question rather than falling through to "a verb needing arguments".
+        Assert.Empty(row.Command);
+        Assert.True(row.Prompts);
+        Assert.True(row.HasActions);
+        Assert.Contains("asks ws", row.Badges);
+
+        Assert.Equal(
+            ["move --workspace 1", "move --workspace 2", "move --workspace \\"],
+            row.ResolveActions().Select(a => a.Command));
+    }
+
+    [Fact]
+    public void EveryCommandInTheSequenceGetsTheAnswer()
+    {
+        PaletteEntry row = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""
+                dalil {
+                    action "Send and follow..." {
+                        param "ws" from="workspaces"
+                        move --workspace "{ws}"
+                        focus --workspace "{ws}"
+                    }
+                }
+                """)],
+            s_desktop,
+            labels: null));
+
+        Assert.Equal(
+            "move --workspace 2\nfocus --workspace 2",
+            row.ResolveActions().Single(a => a.Name == "2").Command);
+    }
+
+    [Fact]
+    public void AWorkspaceIsShownByItsNameAndByWhatItIsCalled()
+    {
+        // A picker reading "1", "2" and "\" is one nobody can choose from.
+        IReadOnlyList<PaletteAction> choices = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""
+                dalil { action "Go..." { param "ws" from="workspaces"; focus --workspace "{ws}" } }
+                """)],
+            s_desktop,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["1"] = "Firefox",
+                ["\\"] = "Presentation",
+                ["2"] = "2",
+            })).ResolveActions();
+
+        Assert.Equal("1  \u2014  Firefox", choices[0].Name);
+
+        // A display name that only repeats the name adds nothing and is left off.
+        Assert.Equal("2", choices[1].Name);
+        Assert.Equal("\\  \u2014  Presentation", choices[2].Name);
+    }
+
+    [Fact]
+    public void AQuestionWithNothingToOfferSaysSoRatherThanOpeningAnEmptyList()
+    {
+        // Otherwise it is a row that looks ordinary, stops when chosen, and shows
+        // nothing - which reads as the palette having failed rather than as there being
+        // nothing to choose.
+        PaletteEntry row = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""
+                dalil { action "Stash..." { param "s" from="scratchpads"; scratchpad --name "{s}" } }
+                """)],
+            new CompletionSources(["1"], ["splith"], [], []),
+            labels: null));
+
+        Assert.True(row.Unavailable);
+        Assert.Empty(row.Command);
+        Assert.False(row.Prompts);
+        Assert.Contains("cannot run", row.Badges);
+    }
+
+    [Fact]
+    public void TwoQuestionsAreAskedOneAfterTheOther()
+    {
+        PaletteEntry row = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""
+                dalil {
+                    action "Arrange..." {
+                        param "ws" values="1 2"
+                        param "l"  values="monocle grid"
+                        focus --workspace "{ws}"
+                        layout --set "{l}"
+                    }
+                }
+                """)],
+            s_desktop,
+            labels: null));
+
+        Assert.Contains("asks ws, l", row.Badges);
+
+        PaletteAction first = row.ResolveActions().Single(a => a.Name == "2");
+
+        // Nothing to run yet, and children to open instead - which is exactly what a
+        // row in an action list already means, so nothing downstream needed a case.
+        Assert.Empty(first.Command);
+        Assert.Equal("then choose a l", first.Description);
+
+        Assert.Equal(
+            "focus --workspace 2\nlayout --set grid",
+            first.Children!.Single(a => a.Name == "grid").Command);
+    }
+
+    [Fact]
+    public void AnActionThatAsksNothingStillRunsOnEnter()
+    {
+        PaletteEntry row = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""dalil { action "Tidy" { equalise; wm-redraw } }""")],
+            s_desktop,
+            labels: null));
+
+        Assert.Equal("equalise\nwm-redraw", row.Command);
+        Assert.False(row.Prompts);
+        Assert.Contains("macro", row.Badges);
+    }
 }

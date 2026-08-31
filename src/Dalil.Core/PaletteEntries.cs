@@ -337,32 +337,204 @@ public static class PaletteEntries
     /// thing they named rather than for the primitive it happens to start with.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<PaletteEntry> ForMacros(IEnumerable<PaletteMacro> macros)
+    public static IReadOnlyList<PaletteEntry> ForMacros(IEnumerable<PaletteMacro> macros) =>
+        ForMacros(macros, CompletionSources.None, labels: null);
+
+    /// <summary>
+    /// Describes the user's own named sequences as rows, prompts included.
+    /// </summary>
+    /// <param name="macros">What the configuration declared.</param>
+    /// <param name="sources">
+    /// The lists a prompt draws its choices from - the same ones argument completion
+    /// already uses, so a prompt costs a lookup rather than a round trip.
+    /// </param>
+    /// <param name="labels">
+    /// Workspace display names, keyed by workspace name. A picker showing <c>3</c> and
+    /// <c>\</c> and <c>'</c> is a picker nobody can choose from; showing "3  Code"
+    /// beside it is the whole difference between a list and a riddle.
+    /// </param>
+    public static IReadOnlyList<PaletteEntry> ForMacros(
+        IEnumerable<PaletteMacro> macros,
+        CompletionSources sources,
+        IReadOnlyDictionary<string, string>? labels)
     {
         ArgumentNullException.ThrowIfNull(macros);
+        ArgumentNullException.ThrowIfNull(sources);
 
-        return
-        [
-            .. macros.Select(m => new PaletteEntry(
-                m.Name,
+        List<PaletteEntry> entries = [];
 
-                m.Problem is { Length: > 0 } wrong
-                    ? wrong
-                    : m.Description is { Length: > 0 } said
-                        ? said
-                        : string.Join("  \u00B7  ", m.Commands),
+        foreach (PaletteMacro macro in macros)
+        {
+            // Nothing to send when it did not parse. Enter does nothing rather than
+            // posting something the window manager will only refuse again, one command
+            // at a time, into a log nobody is reading.
+            if (macro.Problem is { Length: > 0 } wrong)
+            {
+                entries.Add(new PaletteEntry(
+                    macro.Name, wrong, ["cannot run"], string.Empty, Rank: 10, Unavailable: true));
 
-                m.Problem is { Length: > 0 } ? ["cannot run"] : ["macro"],
+                continue;
+            }
 
-                // Nothing to send when it did not parse. Enter does nothing rather
-                // than posting something the window manager will only refuse again,
-                // one command at a time, into a log nobody is reading.
-                m.Problem is { Length: > 0 } ? string.Empty : string.Join('\n', m.Commands),
+            string said = macro.Description is { Length: > 0 } description
+                ? description
+                : string.Join("  \u00B7  ", macro.Commands);
 
+            if (!macro.Asks)
+            {
+                entries.Add(new PaletteEntry(
+                    macro.Name, said, ["macro"], string.Join('\n', macro.Commands), Rank: 10));
+
+                continue;
+            }
+
+            // Checked before the row is built rather than when it is opened. A prompt
+            // whose list is empty would otherwise be a row that looks ordinary, stops
+            // when chosen, and shows nothing - which reads as the palette having
+            // failed rather than as there being nothing to choose.
+            if (macro.Prompts.FirstOrDefault(p => ValuesFor(p, sources).Count == 0) is { } barren)
+            {
+                entries.Add(new PaletteEntry(
+                    macro.Name,
+                    $"nothing to offer for {barren.Placeholder} - no {NameOf(barren.Source)} to choose from",
+                    ["cannot run"],
+                    string.Empty,
+                    Rank: 10,
+                    Unavailable: true));
+
+                continue;
+            }
+
+            entries.Add(new PaletteEntry(
+                macro.Name,
+                said,
+                ["macro", Asked(macro)],
+                string.Empty,
                 Rank: 10,
-                Unavailable: m.Problem is { Length: > 0 })),
-        ];
+
+                // Deferred, so a configuration with twenty prompting actions builds
+                // twenty closures rather than twenty complete choice lists on every
+                // keystroke - and a nested prompt does not expand the whole tree of
+                // combinations for a row nobody opened.
+                ActionsFactory: () => Choices(
+                    macro, depth: 0, new Dictionary<string, string>(StringComparer.Ordinal), sources, labels),
+
+                // Enter asks the question. Without this the row falls through to the
+                // "verb needing arguments" case and puts its own name in the search
+                // box, which is confidently wrong.
+                Prompts: true));
+        }
+
+        return entries;
     }
+
+    /// <summary>What the row's badge says it will want.</summary>
+    private static string Asked(PaletteMacro macro) =>
+        macro.Prompts.Count == 1
+            ? $"asks {macro.Prompts[0].Name}"
+            : $"asks {string.Join(", ", macro.Prompts.Select(p => p.Name))}";
+
+    /// <summary>
+    /// One row per value, and one more level of them per question still outstanding.
+    /// </summary>
+    /// <remarks>
+    /// Recursive because the frame stack already is. A row carrying children is pushed
+    /// as the next frame by the same code that pushes a window's action list, Escape
+    /// goes back one question rather than dismissing the palette, and none of that
+    /// needed anything new - so a second question costs a recursion rather than a
+    /// mechanism.
+    /// </remarks>
+    private static List<PaletteAction> Choices(
+        PaletteMacro macro,
+        int depth,
+        IReadOnlyDictionary<string, string> chosen,
+        CompletionSources sources,
+        IReadOnlyDictionary<string, string>? labels)
+    {
+        MacroParam prompt = macro.Prompts[depth];
+        bool last = depth == macro.Prompts.Count - 1;
+
+        List<PaletteAction> choices = [];
+
+        foreach (string value in ValuesFor(prompt, sources))
+        {
+            Dictionary<string, string> answers = new(chosen, StringComparer.Ordinal)
+            {
+                [prompt.Name] = value,
+            };
+
+            choices.Add(last
+                ? new PaletteAction(
+                    Label(prompt, value, labels),
+                    Describe(macro, answers),
+                    Substitute(macro.Commands, answers))
+
+                // Nothing to run yet, and children to open instead. That combination
+                // is exactly what an action list row already means, so this needs no
+                // special case anywhere downstream.
+                : new PaletteAction(
+                    Label(prompt, value, labels),
+                    $"then choose a {macro.Prompts[depth + 1].Name}",
+                    string.Empty,
+                    Children: Choices(macro, depth + 1, answers, sources, labels)));
+        }
+
+        return choices;
+    }
+
+    /// <summary>The value, and what it is called when that is not the same thing.</summary>
+    private static string Label(
+        MacroParam prompt, string value, IReadOnlyDictionary<string, string>? labels)
+    {
+        if (prompt.Source is not MacroParamSource.Workspaces || labels is null) return value;
+
+        return labels.TryGetValue(value, out string? display) &&
+               display is { Length: > 0 } &&
+               !string.Equals(display, value, StringComparison.Ordinal)
+            ? $"{value}  \u2014  {display}"
+            : value;
+    }
+
+    /// <summary>What the last row of a picker promises, with every answer filled in.</summary>
+    private static string Describe(PaletteMacro macro, IReadOnlyDictionary<string, string> answers) =>
+        string.Join("  \u00B7  ", macro.Commands.Select(c => Fill(c, answers)));
+
+    private static string Substitute(
+        IReadOnlyList<string> commands, IReadOnlyDictionary<string, string> answers) =>
+        string.Join('\n', commands.Select(c => Fill(c, answers)));
+
+    private static string Fill(string command, IReadOnlyDictionary<string, string> answers)
+    {
+        string filled = command;
+
+        foreach ((string name, string value) in answers)
+            filled = filled.Replace($"{{{name}}}", value, StringComparison.Ordinal);
+
+        return filled;
+    }
+
+    /// <summary>The choices a prompt offers, from whichever list it named.</summary>
+    private static IReadOnlyList<string> ValuesFor(MacroParam prompt, CompletionSources sources) =>
+        prompt.Source switch
+        {
+            MacroParamSource.Workspaces => sources.Workspaces,
+            MacroParamSource.Layouts => sources.Layouts,
+            MacroParamSource.BindingModes => sources.BindingModes,
+            MacroParamSource.Scratchpads => sources.ScratchpadSlots,
+            MacroParamSource.Directions => ["left", "right", "up", "down"],
+            _ => prompt.Literals,
+        };
+
+    /// <summary>The source's name, as the config file spells it.</summary>
+    private static string NameOf(MacroParamSource source) => source switch
+    {
+        MacroParamSource.Workspaces => "workspaces",
+        MacroParamSource.Layouts => "layouts",
+        MacroParamSource.BindingModes => "binding modes",
+        MacroParamSource.Scratchpads => "occupied scratchpad slots",
+        MacroParamSource.Directions => "directions",
+        _ => "values",
+    };
 
     /// <summary>
     /// The things the palette itself can do, which are not window manager verbs.
@@ -391,7 +563,22 @@ public static class PaletteEntries
     /// out altogether: a clean configuration is the ordinary case and should cost
     /// nothing to look at.
     /// </param>
-    public static IReadOnlyList<PaletteEntry> ForBuiltins(int problems)
+    public static IReadOnlyList<PaletteEntry> ForBuiltins(int problems) =>
+        ForBuiltins(problems, macros: 0);
+
+    /// <summary>
+    /// The things the palette itself can do, with the rows that only sometimes apply.
+    /// </summary>
+    /// <param name="problems">
+    /// How many things are wrong with the palette's own section. Zero leaves the row
+    /// out altogether: a clean configuration is the ordinary case and should cost
+    /// nothing to look at.
+    /// </param>
+    /// <param name="macros">
+    /// How many named sequences the configuration declares. Zero leaves the row that
+    /// lists them out, for the same reason.
+    /// </param>
+    public static IReadOnlyList<PaletteEntry> ForBuiltins(int problems, int macros)
     {
         List<PaletteEntry> entries =
         [
@@ -401,7 +588,55 @@ public static class PaletteEntries
                 ["dalil"],
                 BuiltinDiagnose,
                 Rank: 5),
+
+            // Reachable by "?" and by Ctrl+8, and by neither if you have not been told.
+            // A row is the one route that can be found by searching for the thing you
+            // want rather than by already knowing the punctuation that leads to it.
+            new PaletteEntry(
+                "keys",
+                "Every key the palette answers, and every key you have bound",
+                ["dalil"],
+                string.Empty,
+                Rank: 4,
+                SwitchesTo: PaletteMode.Help),
+
+            // The path, not the file. Opening an editor from here would mean deciding
+            // which editor, which is a decision this program has no business making;
+            // putting the path on the clipboard works with whichever one you use.
+            new PaletteEntry(
+                "config path",
+                "Copy the path of the configuration file in effect",
+                ["dalil"],
+                BuiltinConfigPath,
+                Rank: 3),
+
+            // Not the same as reloading the window manager, and worth having precisely
+            // when it is not. The palette re-reads its section when the manager
+            // announces a reload - and the manager announces one only when it accepted
+            // it, so a mistake anywhere else in the file leaves the palette running on
+            // settings the file no longer contains, with nothing to say so.
+            new PaletteEntry(
+                "reload palette",
+                "Re-read the dalil section on its own, even if the window manager refused the file",
+                ["dalil"],
+                BuiltinReload,
+                Rank: 2),
         ];
+
+        if (macros > 0)
+        {
+            entries.Add(new PaletteEntry(
+                "actions",
+                macros == 1
+                    ? "The 1 action you have written"
+                    : $"The {macros.ToString(CultureInfo.InvariantCulture)} actions you have written",
+                ["dalil"],
+                BuiltinActions,
+
+                // Above the verbs. Somebody looking for something they named is not
+                // looking for the primitive it happens to start with.
+                Rank: 12));
+        }
 
         // Only when there is something to read. A row promising to list problems and
         // then listing none is a row that teaches you to ignore it.
@@ -428,6 +663,15 @@ public static class PaletteEntries
 
     /// <summary>The command that lists what is wrong with the palette's own settings.</summary>
     public const string BuiltinConfig = "dalil:config";
+
+    /// <summary>The command that puts the configuration file's path on the clipboard.</summary>
+    public const string BuiltinConfigPath = "dalil:config-path";
+
+    /// <summary>The command that re-reads the palette's own section.</summary>
+    public const string BuiltinReload = "dalil:reload";
+
+    /// <summary>The command that lists the user's own named sequences on their own.</summary>
+    public const string BuiltinActions = "dalil:actions";
 
     /// <summary>The command that forgets every mark.</summary>
     /// <remarks>

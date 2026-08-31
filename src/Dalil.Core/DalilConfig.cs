@@ -3,6 +3,70 @@ using Shubbak.Core.Rendering;
 namespace Dalil.Core;
 
 /// <summary>
+/// Where a macro's prompt gets the values it offers.
+/// </summary>
+/// <remarks>
+/// Named after the thing being chosen rather than after the query that fetches it,
+/// because the name is what somebody writes in the config file and "workspaces" is
+/// what they are choosing between. The palette already holds every one of these lists
+/// for its own argument completion, so a prompt costs a lookup rather than a round
+/// trip - and a prompt whose list is empty can be told apart from one that failed.
+/// </remarks>
+public enum MacroParamSource
+{
+    /// <summary>Every workspace the window manager knows, by name.</summary>
+    Workspaces,
+
+    /// <summary>Every layout in the registry.</summary>
+    Layouts,
+
+    /// <summary>Binding modes declared in the configuration.</summary>
+    BindingModes,
+
+    /// <summary>Scratchpad slots currently holding a window.</summary>
+    Scratchpads,
+
+    /// <summary>The four compass directions, which are the same everywhere.</summary>
+    Directions,
+
+    /// <summary>Exactly what was written beside the parameter, and nothing else.</summary>
+    Literals,
+}
+
+/// <summary>
+/// A value a macro asks for before it can run.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The difference between nineteen rows and one. Without this, "send this window to
+/// the Notes workspace" is a macro, and so are the eighteen others - each with its own
+/// name to invent, its own line to maintain, and its own place in a list that has to
+/// be scrolled past. With it there is one row that asks which.
+/// </para>
+/// <para>
+/// Deliberately a choice rather than free text. Every argument worth prompting for is
+/// drawn from a list the palette already has, and a list can be searched, ranked and
+/// shown with what each value means - whereas a text box would have to be typed into
+/// blind and would accept a workspace that does not exist as readily as one that does.
+/// </para>
+/// </remarks>
+/// <param name="Name">What the placeholder is called, without the braces.</param>
+/// <param name="Source">Which list the choices come from.</param>
+/// <param name="Literals">The choices themselves, when they were written out.</param>
+public sealed record MacroParam(
+    string Name,
+    MacroParamSource Source,
+    IReadOnlyList<string> Literals)
+{
+    /// <summary>The token that stands for this value in the commands.</summary>
+    /// <remarks>
+    /// The same <c>{name}</c> spelling <c>for-each</c> uses in the keybindings section,
+    /// so there is one substitution syntax in this file rather than two.
+    /// </remarks>
+    public string Placeholder => $"{{{Name}}}";
+}
+
+/// <summary>
 /// A named sequence of commands, offered as one row.
 /// </summary>
 /// <remarks>
@@ -35,11 +99,27 @@ namespace Dalil.Core;
 /// straight at the line.
 /// </para>
 /// </param>
+/// <param name="Parameters">
+/// Values to be chosen before it runs, in the order they are asked for.
+/// <para>
+/// Last, and defaulted, so that every macro written before prompts existed still
+/// constructs exactly as it did. An empty list is the ordinary case and means the row
+/// runs the moment Enter reaches it.
+/// </para>
+/// </param>
 public sealed record PaletteMacro(
     string Name,
     string Description,
     IReadOnlyList<string> Commands,
-    string? Problem = null);
+    string? Problem = null,
+    IReadOnlyList<MacroParam>? Parameters = null)
+{
+    /// <summary>The values this macro asks for, in order.</summary>
+    public IReadOnlyList<MacroParam> Prompts => Parameters ?? [];
+
+    /// <summary>Whether anything has to be chosen before this can run.</summary>
+    public bool Asks => Parameters is { Count: > 0 };
+}
 
 /// <summary>
 /// How the palette looks and where it appears.

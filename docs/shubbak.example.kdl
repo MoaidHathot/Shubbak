@@ -292,8 +292,18 @@ keybindings {
     //
     // Nothing happens if no client is listening - the log says so, at info.
     //
-    //   bind "alt+space" { signal "palette" }
-    //   bind "alt+shift+space" { signal "palette" "commands" }
+    //     bind "alt+space" { signal "palette" }
+    //     bind "alt+shift+space" { signal "palette" "commands" }
+    //
+    // And one more shape, which runs a named action outright without showing
+    // anything - the bridge between an `action` below and a key up here, so the
+    // same sequence does not have to be written twice:
+    //
+    //     bind "alt+ctrl+d" { signal "palette" "run" "Deep work" }
+    //
+    // Shubbak still has no idea what an action is. It carries the name without
+    // reading it and the palette is what knows, which is the same arrangement
+    // that keeps the palette out of the window manager in the first place.
 
     // Move the focused window.
     bind "alt+shift+h" { move --direction left }
@@ -709,6 +719,47 @@ dalil {
     //     equalise
     //     wm-redraw
     // }
+
+    // A `param` turns one row into a question. The placeholder is filled in at
+    // the moment the value is chosen, which is what lets a single row stand in
+    // for one per workspace - nineteen of them in this file, each of which
+    // would otherwise need its own name to invent and its own line to keep.
+    //
+    // Enter opens the picker; Escape goes back one question rather than
+    // dismissing. Two params ask one after the other.
+    //
+    // `from=` draws the choices from a list the palette already holds:
+    //   workspaces  layouts  binding-modes  scratchpads  directions
+    // `values=` writes them out instead, for a set the window manager does not
+    // know. That is the right answer for stashing: the list it does know is the
+    // slots currently holding a window, and the slot you want is the empty one.
+    //
+    // action "Send it to..." description="Move it there and stay here" {
+    //     param "ws" from="workspaces"
+    //     move --workspace "{ws}"
+    // }
+    //
+    // action "Stash it in..." {
+    //     param "s" values="notes terminal chat"
+    //     scratchpad --name "{s}"
+    // }
+    //
+    // action "Arrange..." description="Go somewhere and lay it out, in one gesture" {
+    //     param "ws" from="workspaces"
+    //     param "l"  from="layouts"
+    //     focus --workspace "{ws}"
+    //     layout --set "{l}"
+    //     equalise
+    // }
+    //
+    // Checked at load time like everything else: a placeholder nothing declares
+    // is an error with a line and a caret, and so is a question no command asks.
+    // A direction is probed with a real direction before the parser sees it, so
+    // `move --direction "{d}"` is checked rather than waved through.
+    //
+    // An action that asks cannot be answered by a key, so a keybinding pointing
+    // at one opens the palette with its name already typed and the picker one
+    // Enter away.
 
     // Six colours, not ten. The chip behind the mode name, the pill behind a
     // badge, the accent down the selected row and the hairlines between sections
