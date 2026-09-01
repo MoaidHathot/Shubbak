@@ -196,8 +196,28 @@ public sealed record MoveDirectionCommand(Direction Direction) : WmCommand
     public override bool TargetsFocusedWindow => true;
 }
 
-/// <summary><c>move --workspace 3</c></summary>
-public sealed record MoveToWorkspaceCommand(string Workspace) : WmCommand
+/// <summary><c>move --workspace 3</c> / <c>move --workspace 3 --focus</c></summary>
+/// <param name="Workspace">Where the window is to end up.</param>
+/// <param name="Focus">Whether the view follows it there.</param>
+/// <remarks>
+/// <para>
+/// "Put this away" and "go there with it" are one keystroke apart and were once
+/// expressed as two commands on one key - <c>move --workspace 3; focus --workspace
+/// 3</c>. That reads well and is wrong, because the second half is indistinguishable
+/// from a bare workspace switch. Press it for the workspace the window is already on
+/// and the move does nothing, leaving a plain <c>focus --workspace 3</c> to be
+/// answered by <c>toggle-workspace-on-refocus</c> as a re-focus: the window stayed
+/// put and the screen jumped to the previous workspace, from a key whose whole
+/// subject was moving a window.
+/// </para>
+/// <para>
+/// Nothing downstream could tell the two presses apart, because the daemon runs each
+/// command singly and no layer ever sees the pair. So the intention says itself here
+/// instead, which is also what i3, GlazeWM and komorebi do - all three bind
+/// <c>mod+shift+N</c> to one command, never to a sequence.
+/// </para>
+/// </remarks>
+public sealed record MoveToWorkspaceCommand(string Workspace, bool Focus = false) : WmCommand
 {
     public override string Name => "move-to-workspace";
 

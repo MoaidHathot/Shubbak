@@ -100,8 +100,32 @@ public sealed record ShubbakConfig
     /// </remarks>
     public NewWindowPlacement NewWindowPlacement { get; init; } = NewWindowPlacement.FollowFocus;
 
+    /// <summary>
+    /// Switch back to the previous workspace when re-focusing the active one.
+    /// </summary>
+    /// <remarks>
+    /// GlazeWM's <c>toggle_workspace_on_refocus</c>. Only a genuine re-focus bounces:
+    /// pressing the key of a workspace displayed on a monitor you are not on means
+    /// "go there".
+    /// </remarks>
     public bool ToggleWorkspaceOnRefocus { get; init; }
 
+    /// <summary>
+    /// Whether <c>move --workspace N</c> takes the view with the window.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off by default, matching i3 and GlazeWM: "put this away" and "go there with
+    /// it" are separate intentions, and sending a window somewhere you are not
+    /// looking is the commoner of the two.
+    /// </para>
+    /// <para>
+    /// This says it for every move at once, including the ones window rules and the
+    /// command palette make - the palette's "send it to 3 and leave it there" stops
+    /// leaving it there. A single binding says it with
+    /// <c>move --workspace N --focus</c>, which is what the shipped config uses.
+    /// </para>
+    /// </remarks>
     public bool FollowWindowOnMove { get; init; }
 
     public bool FocusFollowsCursor { get; init; }

@@ -82,6 +82,47 @@ schedule and breaking either is a different kind of event:
 
 ### Changed
 
+- **`move --workspace N --focus` replaces the `move; focus` pair.** "Send it there" and
+  "send it there and go with it" were one command and two commands on the same key:
+
+  ```kdl
+  // before
+  bind "alt+shift+{name}" { move --workspace "{name}"; focus --workspace "{name}" }
+
+  // after
+  bind "alt+shift+{name}" { move --workspace "{name}" --focus }
+  ```
+
+  The pair reads well and is wrong, because its second half is indistinguishable from
+  the bare workspace switch bound to the same key without shift. Press `alt+shift+1`
+  while already on workspace 1 - the ordinary slip of aiming a move at the workspace the
+  window is on - and the move correctly does nothing, leaving a plain `focus --workspace
+  1` for `toggle-workspace-on-refocus` to answer as a re-focus. The window stayed put and
+  the screen jumped to the previous workspace, from a key whose whole subject was moving
+  a window.
+
+  Nothing downstream could tell the two presses apart. The daemon runs each command
+  singly, so no layer ever sees the pair, and every fix that keeps the pair has to
+  smuggle context from one command into the next. Saying the intention once removes the
+  ambiguity instead of compensating for it - which is also what every neighbour does:
+  i3, GlazeWM and komorebi all bind `mod+shift+N` to a single command, never a sequence.
+  GlazeWM has the same fault in a worse form, where `move --workspace 2` while on 2 sends
+  the window to the previous workspace ([glzr-io/glazewm#1397]).
+
+  `--focus` is the per-binding form of `follow-window-on-move`, which remains the way to
+  say it for every move at once - and which is now documented in the example config,
+  having been accepted, validated and honoured since it was added without appearing in
+  any file a user reads. Without either, `move --workspace N` still leaves focus behind,
+  so the palette's "send it there and leave it there" is unchanged. Sequences still work
+  and the old pair still parses; it is only no longer what Shubbak ships or what
+  `shubbak config init` writes.
+
+  `move --direction right --focus` is refused (`SHB0314`) rather than accepted and
+  ignored: a directional move already carries focus with the window when it crosses to
+  another monitor, and never loses it within a workspace.
+
+  [glzr-io/glazewm#1397]: https://github.com/glzr-io/glazewm/issues/1397
+
 - **Enter opens a prompting row's list.** A row with no command has always had its list
   behind `Ctrl+Enter` at the top level, because Enter there has to keep meaning "go to
   this window". A row that exists in order to ask is the exception: there is nothing
@@ -140,6 +181,27 @@ schedule and breaking either is a different kind of event:
   | `shubbak-wm` | — | **0.000 ms/s** |
 
 ### Fixed
+
+- **A passing test asserted a rule production had stopped following.** `CommandExecutor`
+  had an `ExecuteAll` that ran a sequence and stopped at the first failure, and
+  `SequenceStopsAtTheFirstFailure` proved it did. Nothing called it. The daemon had used
+  it once, and swapped it for its own loop in order to resolve the foreground window
+  before each command - dropping the stop-on-failure rule in the process, in a commit
+  about something else entirely. The pipe grew its own loop for its own reason. So the
+  rule survived for four weeks as a green test and a comment describing the divergence
+  as deliberate, which is the one shape of dead code that costs more than it saves:
+  everybody reading it believed keybindings behaved a way they had not behaved since
+  August.
+
+  `ExecuteAll` and its test are gone. The refusal the test also happened to cover -
+  `move --workspace` with nothing focused - is kept as a translation test, which is what
+  it always was. Behaviour is unchanged: keybindings still run every command in a list.
+
+  It stays that way on purpose now rather than by accident. `WmResult.Succeeded` is
+  documented as "not an error - focusing left from the leftmost window is entirely
+  normal", so aborting a sequence on it would silently truncate every list beginning
+  with a directional command at a screen edge. Anything needing both halves to run
+  should be one command, which is what `move --workspace N --focus` above now is.
 
 - **Dalil's float/tile row could send the verb that was already true, and do nothing.**
   `Ctrl+Shift+F` floated a window, and pressing it again to tile did nothing at all

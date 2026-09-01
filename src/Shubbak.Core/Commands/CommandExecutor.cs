@@ -95,9 +95,21 @@ public readonly record struct CommandOutcome(
 /// Maps <see cref="WmCommand"/> values onto <see cref="WindowManager"/> operations.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Deliberately thin. All behaviour lives in <see cref="WindowManager"/>; this only
 /// translates. Keeping it that way is what stops keybindings and IPC developing
 /// subtly different semantics for the same command.
+/// </para>
+/// <para>
+/// One command at a time, and no sequence method. There used to be an
+/// <c>ExecuteAll</c> that stopped at the first failure, written for the pair
+/// <c>move --workspace 3; focus --workspace 3</c>; both callers had since grown
+/// reasons to drive the loop themselves - the daemon to resolve the foreground
+/// window before each command, the pipe to answer for each one - so nothing called
+/// it, while its test went on asserting a rule production did not follow. The pair it
+/// existed for is now one command with a <c>--focus</c> flag, and a sequence that only
+/// works when every part of it runs is a single intention written as several.
+/// </para>
 /// </remarks>
 public sealed class CommandExecutor
 {
@@ -105,29 +117,6 @@ public sealed class CommandExecutor
 
     public CommandExecutor(WindowManager windowManager) =>
         _wm = windowManager ?? throw new ArgumentNullException(nameof(windowManager));
-
-    /// <summary>Executes a sequence, stopping at the first command that fails.</summary>
-    /// <remarks>
-    /// Sequences exist because the author's config binds pairs such as
-    /// <c>['move --workspace 3', 'focus --workspace 3']</c>. Stopping on failure
-    /// matters: if the move is rejected there is nothing to follow, and focusing
-    /// anyway would leave the user somewhere they did not ask to be.
-    /// </remarks>
-    public IReadOnlyList<CommandOutcome> ExecuteAll(IEnumerable<WmCommand> commands)
-    {
-        ArgumentNullException.ThrowIfNull(commands);
-
-        List<CommandOutcome> outcomes = [];
-
-        foreach (WmCommand command in commands)
-        {
-            CommandOutcome outcome = Execute(command);
-            outcomes.Add(outcome);
-            if (!outcome.Succeeded) break;
-        }
-
-        return outcomes;
-    }
 
     /// <summary>Executes a single command.</summary>
     public CommandOutcome Execute(WmCommand command)
@@ -150,7 +139,7 @@ public sealed class CommandExecutor
                 : Host(HostAction.RevealWindow, c.Handle.ToString(CultureInfo.InvariantCulture)),
 
             MoveDirectionCommand c => new(_wm.MoveDirection(c.Direction)),
-            MoveToWorkspaceCommand c => new(_wm.MoveToWorkspace(c.Workspace)),
+            MoveToWorkspaceCommand c => new(_wm.MoveToWorkspace(c.Workspace, c.Focus)),
             MoveWorkspaceToMonitorCommand c => new(_wm.MoveWorkspaceToMonitor(c.Direction)),
 
             TagCommand c => new(_wm.Tag(c.Workspace, c.Mode)),

@@ -72,13 +72,9 @@ public sealed class CrossMonitorRoundTripTests
     [Fact]
     public void SendingItHomeByNameLeavesFocusBehind()
     {
-        // Deliberate, and the opposite of the directional case above.
-        //
-        // The idiom for "send it there and follow" is two commands on one key -
-        // `move --workspace 3; focus --workspace 3`. If the move moved focus, the
-        // focus command would be re-focusing the workspace it was already on, and
-        // with toggle-workspace-on-refocus that bounces to the previous workspace:
-        // the key appeared to send the window to 3 and then show 2.
+        // Deliberate, and the opposite of the directional case above. "Put this away"
+        // and "go there with it" are separate intentions, so moving to a named
+        // workspace stays put unless the key says otherwise.
         WindowManager wm = Create();
         WindowNode terminal = wm.Open("terminal");
         wm.Arrange();
@@ -93,17 +89,16 @@ public sealed class CrossMonitorRoundTripTests
     }
 
     [Fact]
-    public void TheFollowUpFocusCommandGoesWhereItSays()
+    public void FocusGoesWithItWhenTheKeySaysSo()
     {
-        // The pair as a keybinding actually runs them.
+        // What alt+shift+3 runs: one command saying both halves of the intention.
         WindowManager wm = Create();
         WindowNode terminal = wm.Open("terminal");
         wm.Arrange();
 
         wm.MoveDirection(Direction.Right);
 
-        wm.MoveToWorkspace("3");
-        wm.FocusWorkspace("3");
+        wm.MoveToWorkspace("3", focus: true);
 
         Assert.Equal("3", wm.FocusedWorkspace!.Name);
         Assert.Same(terminal, wm.FocusedWindow);

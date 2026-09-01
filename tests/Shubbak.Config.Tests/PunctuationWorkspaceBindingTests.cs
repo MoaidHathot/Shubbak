@@ -6,10 +6,18 @@ namespace Shubbak.Config.Tests;
 /// Per-workspace bindings generated for workspaces named after punctuation.
 /// </summary>
 /// <remarks>
+/// <para>
 /// The author's config names workspaces <c>;</c> <c>\</c> <c>/</c> <c>'</c> <c>-</c> and
-/// others, and generates their bindings with a <c>for-each</c> block whose command
-/// separator is itself a semicolon. Bindings for two of those workspaces were reported
-/// as activating the wrong workspace, so every step of that expansion is pinned here.
+/// others, and generates their bindings with a <c>for-each</c> block. Bindings for two of
+/// those workspaces were reported as activating the wrong workspace, so every step of
+/// that expansion is pinned here.
+/// </para>
+/// <para>
+/// The move binding is kept as a two-command sequence, which the shipped config no
+/// longer is: the command separator is a semicolon and one of these workspaces is
+/// <i>named</i> one, so this is the only place that combination is still exercised.
+/// Rewriting it to match the shipped config would quietly delete that coverage.
+/// </para>
 /// </remarks>
 public sealed class PunctuationWorkspaceBindingTests
 {

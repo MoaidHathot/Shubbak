@@ -12,6 +12,19 @@ general {
     // Switch back to the previous workspace when re-focusing the active one.
     toggle-workspace-on-refocus #true
 
+    // Whether `move --workspace N` takes the view with the window.
+    //
+    // Off, because "put this away" and "go there with it" are separate intentions.
+    // Sending a window somewhere you are not looking is the common one - it is how
+    // a workspace gets tidied without leaving it - and a move that dragged the
+    // screen along every time would make that impossible to express.
+    //
+    // The keys below say the other intention per-binding, with `move --workspace N
+    // --focus`. Turn this on if you want every move to follow, including the ones
+    // window rules and the command palette make: the palette's "send it to 3 and
+    // leave it there" then does not leave it there.
+    follow-window-on-move #false
+
     focus-follows-cursor #false
 
     // New windows start tiled.
@@ -385,9 +398,17 @@ keybindings {
     // Per-workspace bindings, generated from the workspaces declared above.
     // This one block replaces 40 hand-written lines, and can never drift out of
     // sync with the workspace list.
+    //
+    // `--focus` is what makes the second binding "send it there and go with it".
+    // It used to be a second command on the same key - `move --workspace "{name}";
+    // focus --workspace "{name}"` - which reads well and is wrong: press it for the
+    // workspace the window is already on and the move does nothing, leaving a plain
+    // focus command that `toggle-workspace-on-refocus` answers as a re-focus. The
+    // window stayed put and the screen jumped to the previous workspace, from a key
+    // whose whole subject was moving a window.
     for-each "workspace" {
         bind "alt+{name}"       { focus --workspace "{name}" }
-        bind "alt+shift+{name}" { move --workspace "{name}"; focus --workspace "{name}" }
+        bind "alt+shift+{name}" { move --workspace "{name}" --focus }
     }
 }
 
