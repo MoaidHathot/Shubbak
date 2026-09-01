@@ -723,7 +723,7 @@ public sealed class ConfigLoader
     /// <code>
     /// for-each "workspace" {
     ///   bind "alt+{name}"       { focus --workspace {name} }
-    ///   bind "alt+shift+{name}" { move --workspace {name}; focus --workspace {name} }
+    ///   bind "alt+shift+{name}" { move --workspace {name} --focus }
     /// }
     /// </code>
     /// </remarks>

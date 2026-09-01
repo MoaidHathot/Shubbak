@@ -766,6 +766,7 @@ internal static class Program
             shubbak focus --direction left
             shubbak focus --workspace 3
             shubbak move --workspace 3
+            shubbak move --workspace 3 --focus
             shubbak resize --width +5%
             shubbak layout --set fibonacci
             shubbak layout --cycle

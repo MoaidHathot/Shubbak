@@ -89,7 +89,7 @@ public sealed class ConfigLoaderTests
         Assert.IsType<FocusDirectionCommand>(config.Keybindings[0].Commands[0]);
         Assert.Equal(Direction.Left, ((FocusDirectionCommand)config.Keybindings[0].Commands[0]).Direction);
 
-        // The two-command sequence the author's config relies on.
+        // A binding may still be a sequence, even though nothing shipped is one.
         Assert.Equal(2, config.Keybindings[1].Commands.Count);
         Assert.IsType<MoveToWorkspaceCommand>(config.Keybindings[1].Commands[0]);
         Assert.IsType<FocusWorkspaceCommand>(config.Keybindings[1].Commands[1]);

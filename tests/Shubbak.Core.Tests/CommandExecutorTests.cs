@@ -10,11 +10,11 @@ namespace Shubbak.Core.Tests;
 /// Tests for <see cref="CommandExecutor"/>.
 /// </summary>
 /// <remarks>
-/// The executor is deliberately thin, so these check translation and sequencing
-/// rather than behaviour - behaviour is covered by
-/// <see cref="WindowManagerTests"/>. The valuable cases are the ones that prove a
-/// keybinding, the CLI and IPC cannot drift apart, and that command sequences from
-/// config behave as the author expects.
+/// The executor is deliberately thin, so these check translation rather than
+/// behaviour - behaviour is covered by <see cref="WindowManagerTests"/>. The valuable
+/// cases are the ones that prove a keybinding, the CLI and IPC cannot drift apart.
+/// Sequencing is not among them: every caller drives its own loop, so a test here
+/// would be pinning a rule nothing runs.
 /// </remarks>
 public sealed class CommandExecutorTests
 {
@@ -41,41 +41,33 @@ public sealed class CommandExecutorTests
     }
 
     [Fact]
-    public void MoveThenFocusSequenceMatchesTheAuthorsKeybinding()
+    public void MoveWithFocusMatchesTheAuthorsKeybinding()
     {
-        // The config binds alt+shift+3 to:
-        //   ['move --workspace 3', 'focus --workspace 3']
-        // Both must run, and focus must end up on the moved window.
+        // The config binds alt+shift+3 to a single command:
+        //   move --workspace 3 --focus
+        // The window moves and the view goes with it.
         (WindowManager wm, CommandExecutor executor) = Create(workspaces: ["1", "3"]);
         WindowNode a = wm.Open("a");
 
-        IReadOnlyList<CommandOutcome> outcomes = executor.ExecuteAll(
-        [
-            new MoveToWorkspaceCommand("3"),
-            new FocusWorkspaceCommand("3"),
-        ]);
+        CommandOutcome outcome = executor.Execute(new MoveToWorkspaceCommand("3", Focus: true));
 
-        Assert.Equal(2, outcomes.Count);
-        Assert.All(outcomes, o => Assert.True(o.Succeeded));
+        Assert.True(outcome.Succeeded);
         Assert.Equal("3", wm.FocusedWorkspace!.Name);
         Assert.Same(a, wm.FocusedWindow);
     }
 
     [Fact]
-    public void SequenceStopsAtTheFirstFailure()
+    public void MovingWithNothingFocusedIsRefused()
     {
-        // If the move is rejected there is nothing to follow it, and focusing anyway
-        // would strand the user somewhere they did not ask to be.
+        // The refusal half of what used to be a sequencing test. Its other half
+        // asserted that a following command was skipped, which no caller has done
+        // since the daemon started running commands singly - a passing test for a
+        // rule production did not follow, which is worse than no test at all.
         (WindowManager wm, CommandExecutor executor) = Create(workspaces: ["1", "2"]);
 
-        IReadOnlyList<CommandOutcome> outcomes = executor.ExecuteAll(
-        [
-            new MoveToWorkspaceCommand("2"),   // fails: nothing is focused
-            new FocusWorkspaceCommand("2"),
-        ]);
+        CommandOutcome outcome = executor.Execute(new MoveToWorkspaceCommand("2"));
 
-        Assert.Single(outcomes);
-        Assert.False(outcomes[0].Succeeded);
+        Assert.False(outcome.Succeeded);
         Assert.Equal("1", wm.FocusedWorkspace!.Name);
     }
 

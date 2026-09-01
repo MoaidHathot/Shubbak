@@ -2268,11 +2268,18 @@ public sealed class WmDaemon : IDisposable
 
     /// <summary>Runs a sequence of commands, as a keybinding or a rule does.</summary>
     /// <remarks>
+    /// <para>
+    /// Every command runs, whatever the one before it returned. The pipe stops at the
+    /// first failure and this does not; see <c>WmDaemonIpc.RunCommandAsync</c> for why
+    /// the two differ and why nothing should depend on either.
+    /// </para>
+    /// <para>
     /// The outcome is dropped rather than ignored. A command that resolves to nothing
     /// has already published its own rejection, carrying a far better explanation than
     /// anything reconstructed here, and that is what reaches the log and the IPC
     /// subscribers. Only a caller that owes someone an answer - the pipe - needs the
     /// outcome handed back, and it calls <see cref="RunCommand"/> for itself.
+    /// </para>
     /// </remarks>
     private void Execute(IEnumerable<WmCommand> commands)
     {

@@ -862,7 +862,13 @@ public sealed class WindowManager
     }
 
     /// <summary>Moves the focused window to a named workspace, creating it if needed.</summary>
-    public WmResult MoveToWorkspace(string name)
+    /// <param name="name">The workspace to move it to.</param>
+    /// <param name="focus">
+    /// Whether the view follows the window there. The per-command form of
+    /// <see cref="WmOptions.FollowWindowOnMove"/>, so that one key can mean "send it
+    /// there and go with it" without needing a second command to say the second half.
+    /// </param>
+    public WmResult MoveToWorkspace(string name, bool focus = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
 
@@ -881,14 +887,27 @@ public sealed class WindowManager
             Emit(new WorkspaceCreated(target, monitor));
         }
 
-        return MoveWindowToWorkspace(window, target);
+        return MoveWindowToWorkspace(window, target, focus: focus);
     }
 
     private WmResult MoveWindowToWorkspace(
-        WindowNode window, WorkspaceNode destination, Direction? enteringFrom = null)
+        WindowNode window, WorkspaceNode destination,
+        Direction? enteringFrom = null, bool focus = false)
     {
         WorkspaceNode? source = window.Workspace;
-        if (ReferenceEquals(source, destination)) return Complete();
+
+        if (ReferenceEquals(source, destination))
+        {
+            // Already where it was asked to go, so the request is satisfied rather
+            // than refused - and satisfied means nothing else happens either. In
+            // particular the view does not move, which is the entire reason --focus
+            // belongs to this command instead of being a second `focus --workspace`
+            // after it: that second command could not tell "and follow it" from "I am
+            // already here", and with toggle-workspace-on-refocus answered the wrong
+            // one.
+            if (focus) SetFocus(window);
+            return Complete();
+        }
 
         WindowNode? successor = ReferenceEquals(FocusedWindow, window)
             ? FocusPolicy.SuccessorFor(window)
@@ -928,22 +947,21 @@ public sealed class WindowManager
 
         Emit(new WindowMoved(window, source, destination));
 
-        // Focus follows a directional move across a monitor boundary, and only that.
+        // Focus follows the window when it is asked to, and when a directional move
+        // carries it across a monitor boundary.
         //
-        // The window is still on screen there, so leaving focus behind would mean a
-        // second push in the same direction moved a different window - which is the
-        // whole reason for following it.
+        // The directional case is not optional. The window is still on screen there,
+        // so leaving focus behind would mean a second push in the same direction moved
+        // a different window - which is the whole reason for following it.
         //
-        // Moving to a *named* workspace deliberately does not, even when that
-        // workspace is visible. The idiom for "send it there and follow" is two
-        // commands on one key - `move --workspace 3; focus --workspace 3` - and if
-        // the move had already moved focus, the focus command would be re-focusing
-        // the workspace it is already on. With toggle-workspace-on-refocus that
-        // bounces to the previous workspace, so the key appeared to send the window
-        // to 3 and then show 2.
+        // Moving to a *named* workspace does not follow unless told to, even when that
+        // workspace is visible: "put this away" and "go there with it" are separate
+        // intentions and belong on separate keys. `--focus` is how one key says the
+        // second, and `follow-window-on-move` is how a config says it for every key at
+        // once.
         bool followsWindow = enteringFrom is not null && destination.IsActive;
 
-        if (Options.FollowWindowOnMove || followsWindow)
+        if (focus || Options.FollowWindowOnMove || followsWindow)
         {
             if (!destination.IsActive) ActivateWorkspaceCore(destination);
             SetFocus(window);

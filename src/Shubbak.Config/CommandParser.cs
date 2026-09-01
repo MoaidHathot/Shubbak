@@ -403,13 +403,29 @@ public static class CommandParser
 
         if (TryDirection(rest, "--direction", out Direction direction))
         {
+            // Said no, rather than accepted and ignored. A directional move already
+            // carries focus with the window when it crosses to another monitor, and
+            // within a workspace focus never leaves it, so there is nothing --focus
+            // could add here - and a flag that is read, validated and does nothing is
+            // worse than one that is refused.
+            if (Flag(rest, "--focus"))
+            {
+                diagnostic = Diagnostic.Error(
+                    "SHB0314",
+                    $"'{text}' cannot take --focus.",
+                    span,
+                    "A directional move already takes focus with the window. --focus is for move --workspace.");
+
+                return false;
+            }
+
             command = new MoveDirectionCommand(direction);
             return true;
         }
 
         if (Value(rest, "--workspace") is { } workspace)
         {
-            command = new MoveToWorkspaceCommand(workspace);
+            command = new MoveToWorkspaceCommand(workspace, Flag(rest, "--focus"));
             return true;
         }
 

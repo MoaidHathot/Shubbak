@@ -214,7 +214,7 @@ internal static class ConfigCommand
             // than written out - so they cannot drift out of sync with the list.
             for-each "workspace" {
                 bind "alt+{name}"       { focus --workspace "{name}" }
-                bind "alt+shift+{name}" { move --workspace "{name}"; focus --workspace "{name}" }
+                bind "alt+shift+{name}" { move --workspace "{name}" --focus }
             }
         }
         """;

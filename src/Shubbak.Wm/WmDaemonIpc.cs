@@ -82,12 +82,19 @@ internal sealed partial class WmDaemonIpc
     /// that window, then un-minimise it" without two round trips and without the
     /// window able to change underneath it in between.
     /// <para>
-    /// The sequence stops at the first failure, which a keybinding bound to a list of
-    /// commands deliberately does not - see <c>WmDaemon.Execute</c>. A key is pressed
-    /// by somebody watching the screen, so a command that achieves nothing is visibly
-    /// nothing and the rest of the list is still what they asked for. A caller on the
-    /// pipe is not watching anything and is owed an answer, and half-applying a
-    /// sequence it cannot see is worse than refusing the rest of it.
+    /// The sequence stops at the first failure. A caller on the pipe is not watching
+    /// anything and is owed an answer, and half-applying a sequence it cannot see is
+    /// worse than refusing the rest of it.
+    /// </para>
+    /// <para>
+    /// A keybinding bound to a list does not stop, because <c>WmDaemon.Execute</c>
+    /// runs each command whatever the last one returned. That is a difference rather
+    /// than a decision - it arrived with the per-command foreground resolution and
+    /// nothing chose it - and it stands because <c>WmResult.Succeeded</c> is a poor
+    /// thing to abort on: focusing left from the leftmost window is a routine refusal,
+    /// not an error, so stopping on it would silently truncate every sequence that
+    /// begins with a directional command at a screen edge. Anything that genuinely
+    /// needs both halves to run should be one command, not two.
     /// </para>
     /// </remarks>
     private Task<IpcResponse> RunCommandAsync(IpcRequest request)
