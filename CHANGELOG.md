@@ -182,6 +182,42 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Taj lost its strip of screen when Explorer restarted, and every window tiled over
+  the top of it.** Restart the shell - after a hang, or by hand - and the bar goes on
+  drawing, updating and taking clicks while every window is laid out straight through
+  it. It looks like the bar is behind the tiling; it is really that nobody reserved
+  room for it any more.
+
+  The shell owns the list of registered appbars, so restarting it forgets every one and
+  hands the reserved space back. Taj was told nothing, because as far as the new
+  Explorer is concerned it never registered, and Explorer does not send appbar
+  notifications to windows it has never heard of. Taj's own `_appbarRegistered` still
+  said yes, so even its existing re-assert path would only have sent `ABM_SETPOS` -
+  addressed to nobody. Shubbak was not wrong either: it read a work area that genuinely
+  did cover the whole monitor and tiled into it, which is exactly its job. Two correct
+  components, and a message neither of them was listening for.
+
+  Taj now listens for the `TaskbarCreated` broadcast - the same announcement Shubbak's
+  tray icon has always used to put itself back - drops the dead registration and takes
+  a new one. Shubbak picks the shrunk work area back up through the two-second monitor
+  poll it already runs, so the daemon needed no change.
+
+  The removal before the re-registration looks redundant and is not. Against a shell
+  that really has restarted it addresses an Explorer that never heard of the window and
+  costs nothing; it earns its place when the broadcast arrives without the registration
+  having actually been dropped, which a shell replacement or a tool sending it by hand
+  will do. `ABM_NEW` is refused for a window already on the list, so without it the
+  retry below would fail forever against a reservation that was never lost.
+
+  Two more things found on the way there. `ABM_NEW`'s result was being ignored and the
+  reservation recorded as made whether or not the shell had accepted it, which turns
+  "the shell was not ready yet" into "there is no bar reservation for this session";
+  it is now believed, and a refused reservation is retried off the message loop. And
+  the broadcast is allowed through UIPI explicitly, because the README tells people to
+  run the daemon elevated in order to manage elevated windows and the daemon is what
+  starts Taj - so a bar that outranks Explorer, hears nothing from it, and never comes
+  back is a configuration the documentation actively recommends.
+
 - **A passing test asserted a rule production had stopped following.** `CommandExecutor`
   had an `ExecuteAll` that ran a sequence and stopped at the first failure, and
   `SequenceStopsAtTheFirstFailure` proved it did. Nothing called it. The daemon had used

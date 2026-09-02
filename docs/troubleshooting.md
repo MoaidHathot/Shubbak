@@ -229,6 +229,11 @@ taj --log-level debug --log-file
 
 - **Blank bar** — check `connected to the window manager` appears. Taj retries
   indefinitely, so a missing WM shows as repeated connection attempts.
+- **Windows tile over the bar** — the bar is still there and still working; nothing has
+  reserved room for it. Look for `the shell restarted; reserving bar N's strip again`,
+  which is Taj recovering by itself, or `the shell refused bar N's reservation`, which
+  is Explorer not being ready. Restarting Explorer is the usual cause. If it stays that
+  way, restart Taj: `shubbak taj-exit` and start it again.
 - **A widget shows nothing** — a widget whose value is empty hides itself, which is
   deliberate: an empty box with padding looks like a rendering fault. Check the
   source name in your template matches a declared source.

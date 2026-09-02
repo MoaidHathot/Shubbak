@@ -463,6 +463,12 @@ internal static class Program
 
             ApplyStandDown();
 
+            // Ahead of the stand-down test, and deliberately. A bar standing down still
+            // holds its strip - covering the screen is the full-screen application's job,
+            // not something the bar does by giving its space back - so a reservation the
+            // shell has refused still has to be retried while one is up.
+            foreach (BarWindow bar in s_bars) bar.EnsureReserved();
+
             if (!s_stoodDown) foreach (BarWindow bar in s_bars) bar.Update();
 
             if (!s_running) break;
