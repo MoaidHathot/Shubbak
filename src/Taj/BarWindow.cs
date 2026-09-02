@@ -40,6 +40,15 @@ public sealed class BarWindow : IDisposable
     private static bool s_classRegistered;
 
     /// <summary>
+    /// Broadcast to every top-level window when Explorer restarts.
+    /// </summary>
+    /// <remarks>
+    /// Registered once. The system allocates the same value for every process that
+    /// asks, which is how one broadcast reaches all of them.
+    /// </remarks>
+    private static uint s_taskbarCreated;
+
+    /// <summary>
     /// Raised when a bar window is asked to close, meaning the process should stop.
     /// </summary>
     /// <remarks>
@@ -75,6 +84,7 @@ public sealed class BarWindow : IDisposable
     private VisualNode? _tree;
     private Rect _bounds;
     private bool _appbarRegistered;
+    private bool _refusalReported;
     private VisualNode? _hovered;
     private bool _mouseTracked;
     private bool _disposed;
@@ -120,6 +130,8 @@ public sealed class BarWindow : IDisposable
         }
 
         s_windows[(nint)_handle.Value] = this;
+
+        AllowShellRestartBroadcast();
 
         _renderer = new GdiRenderer((nint)_handle.Value);
         _layout = new FlexLayout(_renderer);
@@ -265,9 +277,18 @@ public sealed class BarWindow : IDisposable
     /// Reserves the bar's strip of screen so other windows do not cover it.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The same mechanism the taskbar uses. Shubbak reads the resulting work area
     /// through <c>GetMonitorInfo</c>, so the bar and the window manager stay
     /// consistent without either knowing about the other.
+    /// </para>
+    /// <para>
+    /// <c>ABM_NEW</c> can fail - the shell may not be up yet, which is the ordinary
+    /// case when Taj is started from Shubbak's startup commands during logon. The
+    /// result is therefore believed rather than assumed: claiming a reservation that
+    /// was refused means never asking again, and a bar nobody has reserved room for is
+    /// a bar every window is tiled on top of.
+    /// </para>
     /// </remarks>
     private unsafe void RegisterAppbar()
     {
@@ -291,11 +312,50 @@ public sealed class BarWindow : IDisposable
 
         if (!_appbarRegistered)
         {
-            PInvoke.SHAppBarMessage(AbmNew, ref data);
+            if (PInvoke.SHAppBarMessage(AbmNew, ref data) == 0)
+            {
+                // Once. The retry runs off the message loop, which wakes on every
+                // repaint and every source that publishes, so a shell that stays
+                // unwilling would otherwise write this line hundreds of times.
+                if (!_refusalReported)
+                {
+                    _refusalReported = true;
+
+                    Log.Warn(LogCategory.Wm,
+                        $"the shell refused bar {_monitorIndex}'s reservation; will keep trying");
+                }
+
+                return;
+            }
+
+            if (_refusalReported)
+            {
+                _refusalReported = false;
+
+                Log.Info(LogCategory.Wm, $"bar {_monitorIndex}'s strip is reserved again");
+            }
+
             _appbarRegistered = true;
         }
 
         PInvoke.SHAppBarMessage(AbmSetPos, ref data);
+    }
+
+    /// <summary>
+    /// Re-attempts a reservation the shell has refused. Cheap, and usually nothing.
+    /// </summary>
+    /// <remarks>
+    /// Called from the message loop rather than driven by an event because there is no
+    /// event to drive it: the shell announces that it has started, not that it is
+    /// finally ready to accept an appbar, and the two are not the same instant after a
+    /// crash. A bool test per pass of a loop that already wakes once a second is a
+    /// cheaper answer than a timer, and one that also covers the logon race.
+    /// </remarks>
+    public void EnsureReserved()
+    {
+        if (_appbarRegistered || _handle.IsNull) return;
+
+        RegisterAppbar();
     }
 
     private unsafe void UnregisterAppbar()
@@ -348,6 +408,71 @@ public sealed class BarWindow : IDisposable
         if (!_appbarRegistered) return;
 
         RegisterAppbar();
+    }
+
+    /// <summary>
+    /// Reserves the strip again after Explorer has restarted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The shell owns the list of registered appbars, so a restart forgets every one of
+    /// them and hands the reserved space back. Nothing arrives on the appbar callback
+    /// to say so - as far as the new Explorer is concerned this bar never registered,
+    /// and it does not send notifications to windows it has never heard of. The
+    /// broadcast is the only announcement there is.
+    /// </para>
+    /// <para>
+    /// The symptom of not listening is not a broken bar, which is why it survived: the
+    /// bar keeps drawing, keeps updating and keeps taking clicks. It is the work area
+    /// that reverts, and Shubbak - correctly reading a work area that now covers the
+    /// whole monitor - tiles every window over the top of a bar that is still perfectly
+    /// alive underneath. Explorer hanging and being restarted is the common way in.
+    /// </para>
+    /// </remarks>
+    private void OnShellRestarted()
+    {
+        Log.Info(LogCategory.Wm, $"the shell restarted; reserving bar {_monitorIndex}'s strip again");
+
+        // Removed before it is added, and the removal is expected to do nothing. Against
+        // a genuinely restarted Explorer it addresses a shell that never heard of this
+        // window, which is free. It earns its place in the other case: the broadcast can
+        // arrive without the registration having actually been dropped - a shell
+        // replacement, or a tool that sends it deliberately - and ABM_NEW is refused for
+        // a window already on the list, which would leave the retry below failing
+        // against a reservation that was never lost, forever.
+        //
+        // Re-asserting with ABM_SETPOS instead would be wrong the other way round: after
+        // a real restart it addresses nobody.
+        UnregisterAppbar();
+
+        RegisterAppbar();
+    }
+
+    /// <summary>
+    /// Lets the Explorer-restart broadcast through UIPI.
+    /// </summary>
+    /// <remarks>
+    /// Windows silently drops messages sent from a lower integrity level to a higher
+    /// one. Shubbak tells people to run the daemon elevated in order to manage elevated
+    /// windows, and the daemon starts Taj, so an elevated bar being told nothing by an
+    /// ordinary Explorer is a configuration the documentation actively recommends.
+    /// Failure is ignored: unelevated, there is nothing to allow.
+    /// </remarks>
+    private unsafe void AllowShellRestartBroadcast()
+    {
+        if (s_taskbarCreated == 0)
+            s_taskbarCreated = PInvoke.RegisterWindowMessage("TaskbarCreated");
+
+        if (s_taskbarCreated == 0)
+        {
+            Log.Warn(LogCategory.Wm,
+                "could not register the shell-restart broadcast; the bar will not " +
+                "reserve its strip again if Explorer restarts");
+            return;
+        }
+
+        PInvoke.ChangeWindowMessageFilterEx(
+            _handle, s_taskbarCreated, WINDOW_MESSAGE_FILTER_ACTION.MSGFLT_ALLOW, null);
     }
 
     /// <summary>
@@ -440,6 +565,14 @@ public sealed class BarWindow : IDisposable
         {
             if (s_windows.TryGetValue((nint)hwnd.Value, out BarWindow? window))
             {
+                // Ahead of the switch because its value is allocated at run time by
+                // RegisterWindowMessage, and a case label has to be a constant.
+                if (s_taskbarCreated != 0 && message == s_taskbarCreated)
+                {
+                    window.OnShellRestarted();
+                    return new LRESULT(0);
+                }
+
                 switch (message)
                 {
                     case PInvoke.WM_PAINT:

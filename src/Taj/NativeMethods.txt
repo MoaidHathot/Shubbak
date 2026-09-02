@@ -70,6 +70,15 @@ GetDpiForWindow
 // --- appbar reservation ----------------------------------------------------------
 SHAppBarMessage
 APPBARDATA
+
+// Explorer keeps the list of registered appbars, so a restart takes the bar's
+// reservation with it and says nothing through the appbar callback. This broadcast is
+// the only announcement, and the filter is what lets it past UIPI when Taj was started
+// by an elevated daemon.
+RegisterWindowMessage
+ChangeWindowMessageFilterEx
+WINDOW_MESSAGE_FILTER_ACTION
+
 DwmSetWindowAttribute
 DWMWINDOWATTRIBUTE
 LoadCursor
