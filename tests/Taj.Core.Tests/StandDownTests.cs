@@ -27,7 +27,7 @@ public sealed class StandDownTests
     public void AVisibleBarOnAnOrdinaryDesktopKeepsWorking()
     {
         Assert.False(StandDown.ShouldStandDown(
-            windowManagerSuspended: false, fullScreenApp: false, confirmed: false));
+            windowManagerSuspended: false, fullScreenApp: false, confirmed: false, bars: 1));
     }
 
     [Fact]
@@ -37,14 +37,41 @@ public sealed class StandDownTests
         // And it is the case that matters most, because suspending is what someone
         // does before playing a game.
         Assert.True(StandDown.ShouldStandDown(
-            windowManagerSuspended: true, fullScreenApp: false, confirmed: false));
+            windowManagerSuspended: true, fullScreenApp: false, confirmed: false, bars: 1));
+    }
+
+    [Fact]
+    public void ASuspendedWindowManagerStandsEveryBarDown()
+    {
+        // Unqualified by the count, unlike the full-screen half. Suspending is true of
+        // the whole desktop and is a thing the user asked for, so there is no monitor
+        // it is only half-true of.
+        Assert.True(StandDown.ShouldStandDown(
+            windowManagerSuspended: true, fullScreenApp: false, confirmed: false, bars: 3));
     }
 
     [Fact]
     public void AFullScreenApplicationStandsTheBarDownWhenConfirmed()
     {
         Assert.True(StandDown.ShouldStandDown(
-            windowManagerSuspended: false, fullScreenApp: true, confirmed: true));
+            windowManagerSuspended: false, fullScreenApp: true, confirmed: true, bars: 1));
+    }
+
+    [Fact]
+    public void AFullScreenApplicationLeavesTheOtherMonitorsAlone()
+    {
+        // A full-screen application covers one screen. Neither signal behind the claim
+        // says which - ABN_FULLSCREENAPP goes to every appbar on the desktop and
+        // SHQueryUserNotificationState answers for the desktop - so with two bars up
+        // the honest reading is that one of them is covered and the other is in plain
+        // sight.
+        //
+        // Standing the visible one down stops it repainting, so it goes on showing the
+        // title it had when the video went full-screen. Moving focus to that monitor
+        // does not bring it back, because the loop that would have redrawn it is the
+        // thing that stopped.
+        Assert.False(StandDown.ShouldStandDown(
+            windowManagerSuspended: false, fullScreenApp: true, confirmed: true, bars: 2));
     }
 
     [Fact]
@@ -54,7 +81,7 @@ public sealed class StandDownTests
         // and a closing, not what is in front, so a claim nobody will confirm must not
         // be allowed to freeze the bar.
         Assert.False(StandDown.ShouldStandDown(
-            windowManagerSuspended: false, fullScreenApp: true, confirmed: false));
+            windowManagerSuspended: false, fullScreenApp: true, confirmed: false, bars: 1));
     }
 
     // ---- the confirmation --------------------------------------------------

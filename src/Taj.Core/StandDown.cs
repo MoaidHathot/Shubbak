@@ -11,6 +11,10 @@ namespace Taj.Core;
 /// is what someone does before playing a game.
 /// </para>
 /// <para>
+/// The first of those is only true of one monitor, which is why the rule below is
+/// told how many bars there are.
+/// </para>
+/// <para>
 /// Measured before this existed: the bar spent 46.9 ms of CPU over 25 seconds on an
 /// idle desktop - more than the window manager it reports on - and it spent exactly
 /// the same behind a full-screen game.
@@ -40,9 +44,39 @@ public static class StandDown
     /// independently. See <see cref="StillCovered"/> for why the edge is not trusted
     /// on its own.
     /// </param>
+    /// <param name="bars">
+    /// How many bars there are, which is one per monitor.
+    /// </param>
+    /// <remarks>
+    /// <para>
+    /// The full-screen half needs the count because neither signal behind it names a
+    /// monitor. <c>ABN_FULLSCREENAPP</c> is sent to every registered appbar on the
+    /// desktop and <c>SHQueryUserNotificationState</c> answers for the desktop, but a
+    /// full-screen application covers <i>one</i> screen. On a second monitor the bar
+    /// is in plain sight, and standing it down stops its clock and stops it
+    /// repainting - so it keeps showing whatever it showed at the moment the video
+    /// went full-screen, including the title of a window that no longer has focus.
+    /// Moving focus to that monitor does not fix it, because the thing that was
+    /// meant to redraw it is the thing that has stopped.
+    /// </para>
+    /// <para>
+    /// Which monitor is covered is not knowable from here. Both signals are
+    /// desktop-wide, and Taj deliberately does not inspect windows to find out - so
+    /// the honest reading of "a full-screen application is up" on a multi-monitor
+    /// desktop is "one of these bars is covered and the rest are not", which is not
+    /// grounds for stopping any of them. That is the same direction
+    /// <see cref="StillCovered"/> already takes on an answer it cannot get: the cost
+    /// is polling that was going to happen anyway on every other monitor, and the
+    /// alternative is a bar that has visibly stopped.
+    /// </para>
+    /// <para>
+    /// A suspended window manager is unqualified, because it is true of the whole
+    /// desktop and the user asked for it.
+    /// </para>
+    /// </remarks>
     public static bool ShouldStandDown(
-        bool windowManagerSuspended, bool fullScreenApp, bool confirmed) =>
-        windowManagerSuspended || (fullScreenApp && confirmed);
+        bool windowManagerSuspended, bool fullScreenApp, bool confirmed, int bars) =>
+        windowManagerSuspended || (fullScreenApp && confirmed && bars <= 1);
 
     /// <summary>
     /// Whether the reported activity still means the bar is covered.

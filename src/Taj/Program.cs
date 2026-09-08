@@ -56,9 +56,11 @@ internal static class Program
     /// Whether the shell has said a full-screen application is up.
     /// </summary>
     /// <remarks>
-    /// A hint rather than the truth. <c>ABN_FULLSCREENAPP</c> reports an opening and a
-    /// closing, not what is in front right now, so this starts a stand-down and
-    /// <c>StandDown.StillCovered</c> is what keeps it going.
+    /// A hint rather than the truth, in two ways. <c>ABN_FULLSCREENAPP</c> reports an
+    /// opening and a closing, not what is in front right now, so this starts a
+    /// stand-down and <c>StandDown.StillCovered</c> is what keeps it going. And it
+    /// names no monitor, which is why <c>StandDown.ShouldStandDown</c> is told how
+    /// many bars there are.
     /// </remarks>
     private static volatile bool s_fullScreenApp;
 
@@ -549,7 +551,8 @@ internal static class Program
             s_fullScreenApp = false;
         }
 
-        bool wanted = StandDown.ShouldStandDown(s_wmSuspended, s_fullScreenApp, confirmed: true);
+        bool wanted = StandDown.ShouldStandDown(
+            s_wmSuspended, s_fullScreenApp, confirmed: true, s_bars.Count);
 
         if (wanted == s_stoodDown) return;
 
@@ -570,7 +573,7 @@ internal static class Program
         }
 
         Log.Info(LogCategory.Wm, wanted
-            ? "standing down: nothing on screen is showing the bar"
+            ? $"standing down: {(s_wmSuspended ? "the window manager is suspended" : "a full-screen application is covering the bar")}"
             : "standing up: the bar is visible again");
     }
 
