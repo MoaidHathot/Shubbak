@@ -358,6 +358,82 @@ public sealed class BarWindow : IDisposable
         RegisterAppbar();
     }
 
+    /// <summary>
+    /// Tells the shell the bar has moved, so it keeps an auto-hiding taskbar above
+    /// ordinary windows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Half of a documented obligation that registering an appbar takes on, and the
+    /// half with a symptom that lands nowhere near the bar. From <i>Using Application
+    /// Desktop Toolbars</i>: "when an appbar receives a <c>WM_WINDOWPOSCHANGED</c>
+    /// message, it must call <c>ABM_WINDOWPOSCHANGED</c>. Sending these messages
+    /// ensures that the system properly sets the z-order of any autohide appbars."
+    /// </para>
+    /// <para>
+    /// The shell does not track an appbar's rectangle by watching it. It is told, and
+    /// an appbar that moves without saying so leaves the shell recomputing the
+    /// auto-hide z-order from a stale picture of the desktop. What breaks is the
+    /// taskbar: it still slides out on a hover at the screen edge, because sliding out
+    /// is its own animation, but it slides out <i>underneath</i> whatever is in front -
+    /// which under a tiling window manager is a window covering the whole work area,
+    /// permanently. The taskbar comes back the moment anything else makes the shell
+    /// re-assert it, which is why pressing the Windows key appears to fix it, and why
+    /// it appears to fix it on that monitor only.
+    /// </para>
+    /// <para>
+    /// Sent even when the reservation is not held. The shell ignores it for a window
+    /// it has never heard of, and the alternative is a gap between the window existing
+    /// and <c>ABM_NEW</c> being accepted in which the bar moves silently.
+    /// </para>
+    /// </remarks>
+    private unsafe void NotifyAppbarMoved()
+    {
+        var data = new APPBARDATA
+        {
+            cbSize = (uint)sizeof(APPBARDATA),
+            hWnd = _handle,
+        };
+
+        const uint AbmWindowPosChanged = 0x00000009;
+        PInvoke.SHAppBarMessage(AbmWindowPosChanged, ref data);
+    }
+
+    /// <summary>
+    /// Tells the shell the bar has been activated or deactivated, for the same reason
+    /// as <see cref="NotifyAppbarMoved"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The other half of the same sentence, and the rarer one: the bar is
+    /// <c>WS_EX_NOACTIVATE</c>, so the message it answers mostly does not arrive.
+    /// Mostly is not never - a click on a widget is a real interaction with a real
+    /// window - and an appbar that answers one half of the contract and not the other
+    /// is relying on a distinction the documentation does not draw.
+    /// </para>
+    /// <para>
+    /// Which way round it is has to be said, and said in <c>lParam</c>: the shell
+    /// reads the answer out of the structure rather than inferring it from the message
+    /// that prompted it, so a deactivation and an activation are the same call with
+    /// one field differing. Left unset, every <c>WM_ACTIVATE</c> would report a
+    /// deactivation - a wrong answer stated confidently, which leaves the shell worse
+    /// off than the silence this replaced.
+    /// </para>
+    /// </remarks>
+    /// <param name="active">Whether the bar is being activated rather than deactivated.</param>
+    private unsafe void NotifyAppbarActivated(bool active)
+    {
+        var data = new APPBARDATA
+        {
+            cbSize = (uint)sizeof(APPBARDATA),
+            hWnd = _handle,
+            lParam = new LPARAM(active ? 1 : 0),
+        };
+
+        const uint AbmActivate = 0x00000006;
+        PInvoke.SHAppBarMessage(AbmActivate, ref data);
+    }
+
     private unsafe void UnregisterAppbar()
     {
         if (!_appbarRegistered) return;
@@ -619,6 +695,24 @@ public sealed class BarWindow : IDisposable
                         }
 
                         return new LRESULT(0);
+
+                    // Both of these are told to the shell and then handed on rather
+                    // than answered. Returning zero from WM_WINDOWPOSCHANGED without
+                    // reaching DefWindowProc suppresses the WM_SIZE and WM_MOVE it is
+                    // responsible for synthesising, so a handler that swallows it has
+                    // quietly broken every message that comes after.
+                    case PInvoke.WM_WINDOWPOSCHANGED:
+                        window.NotifyAppbarMoved();
+                        break;
+
+                    case PInvoke.WM_ACTIVATE:
+                    {
+                        // The state is the low word. The high word says whether the
+                        // window was minimised, which this one never is.
+                        uint state = (uint)wParam.Value & 0xFFFF;
+                        window.NotifyAppbarActivated(state != PInvoke.WA_INACTIVE);
+                        break;
+                    }
 
                     case PInvoke.WM_CLOSE:
                         // Closing any bar closes the bar. There is one message loop

@@ -50,6 +50,15 @@ WM_MOUSELEAVE
 WM_DISPLAYCHANGE
 WM_DPICHANGED
 WM_APP
+
+// The shell has to be told when a registered appbar moves or is activated, or it
+// stops keeping the auto-hiding taskbar above ordinary windows. See BarWindow's
+// handling of these two. WA_INACTIVE is what tells the two apart, and ABM_ACTIVATE
+// wants the answer rather than the message.
+WM_WINDOWPOSCHANGED
+WM_ACTIVATE
+WA_INACTIVE
+
 TrackMouseEvent
 TRACKMOUSEEVENT
 TRACKMOUSEEVENT_FLAGS
