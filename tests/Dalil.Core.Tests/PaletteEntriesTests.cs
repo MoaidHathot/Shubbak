@@ -541,6 +541,32 @@ public sealed class PaletteEntriesTests
     }
 
     [Fact]
+    public void AMonitorIsTitledByWhatTheConfigCallsItThenByItsModel()
+    {
+        // The device name is a position and mostly punctuation, so it is the last
+        // resort for a title - and stays in the badges when something better is used,
+        // because it is what `query monitors` lists the display under.
+        MonitorInfoDto bare = Monitor();
+        MonitorInfoDto model = Monitor() with { FriendlyName = "DELL U3219Q" };
+        MonitorInfoDto named = model with { Names = ["dell-left"] };
+        MonitorInfoDto laptop = Monitor() with { Internal = true };
+
+        Assert.Equal("DISPLAY1", Assert.Single(PaletteEntries.ForMonitors([bare])).Primary);
+
+        PaletteEntry byModel = Assert.Single(PaletteEntries.ForMonitors([model]));
+        Assert.Equal("DELL U3219Q", byModel.Primary);
+        Assert.Contains("DISPLAY1", byModel.Badges);
+
+        PaletteEntry byName = Assert.Single(PaletteEntries.ForMonitors([named]));
+        Assert.Equal("dell-left", byName.Primary);
+        Assert.Contains("DELL U3219Q", byName.Badges);
+        Assert.Contains("DISPLAY1", byName.Badges);
+
+        Assert.Contains("built-in", Assert.Single(PaletteEntries.ForMonitors([laptop])).Badges);
+        Assert.DoesNotContain("built-in", Assert.Single(PaletteEntries.ForMonitors([bare])).Badges);
+    }
+
+    [Fact]
     public void AReportBecomesRowsOfLabelAndValue()
     {
         // The value is the searched half and the label the dim one, because somebody

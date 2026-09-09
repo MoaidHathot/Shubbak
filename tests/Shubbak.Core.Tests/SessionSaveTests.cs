@@ -183,6 +183,67 @@ public sealed class SessionSaveTests : IDisposable
     }
 
     [Fact]
+    public void TheMonitorsPathIsRememberedWhenKnownAndMatchedFirst()
+    {
+        // The GDI name is handed out in enumeration order and a replug can renumber it,
+        // so a view saved on \\.\DISPLAY2 belongs to the panel, not to the name.
+        WindowManager wm = Create();
+        wm.Root.Monitors[0].DevicePath = @"\\?\DISPLAY#DELA124#5&38500b75&0&UID4355#{e6f07b5f}";
+
+        SessionStore.Save(wm.Root, _path, focusedMonitor: wm.FocusedMonitor);
+
+        RememberedMonitor remembered = Assert.Single(SessionStore.Load(_path)!.Monitors!);
+        Assert.Equal(wm.Root.Monitors[0].DevicePath, remembered.DevicePath);
+
+        // Next session: the same panel has come back as DISPLAY2, and a different one
+        // has taken DISPLAY1. The remembered view finds the panel.
+        var root = new Core.Tree.RootNode();
+        var other = TreeBuilder.Monitor("\\\\.\\DISPLAY1");
+        other.DevicePath = @"\\?\DISPLAY#SHP1523#4&1c3f2a1&0&UID8388688#{e6f07b5f}";
+        var same = TreeBuilder.Monitor("\\\\.\\DISPLAY2", x: 1920);
+        same.DevicePath = remembered.DevicePath;
+        root.AddMonitor(other);
+        root.AddMonitor(same);
+
+        Assert.Same(same, SessionStore.FindRemembered(root, remembered));
+    }
+
+    [Fact]
+    public void ARememberedMonitorWithoutAPathFallsBackToTheName()
+    {
+        // A session written before the path was recorded, or a display whose path
+        // could not be read - a remote session's - restores the way it always did.
+        var remembered = new RememberedMonitor("\\\\.\\DISPLAY2", "3", Focused: false);
+
+        var root = new Core.Tree.RootNode();
+        root.AddMonitor(TreeBuilder.Monitor("\\\\.\\DISPLAY1"));
+        root.AddMonitor(TreeBuilder.Monitor("\\\\.\\DISPLAY2", x: 1920));
+
+        Assert.Same(root.Monitors[1], SessionStore.FindRemembered(root, remembered));
+        Assert.Null(SessionStore.FindRemembered(root, remembered with { DeviceId = "\\\\.\\DISPLAY9" }));
+    }
+
+    [Fact]
+    public void RecordingThePathCountsAsAChangeWorthWriting()
+    {
+        // The routine save skips a fingerprint it has already written. The path is
+        // part of the fingerprint, so the first save after it starts being known does
+        // not find the file "unchanged" and leave it without one.
+        WindowManager wm = Create();
+
+        SessionStore.Save(wm.Root, _path, routine: true);
+        DateTime first = File.GetLastWriteTimeUtc(_path);
+
+        Thread.Sleep(30);
+
+        wm.Root.Monitors[0].DevicePath = @"\\?\DISPLAY#DELA124#5&38500b75&0&UID4355#{e6f07b5f}";
+        SessionStore.Save(wm.Root, _path, routine: true);
+
+        Assert.NotEqual(first, File.GetLastWriteTimeUtc(_path));
+        Assert.NotNull(Assert.Single(SessionStore.Load(_path)!.Monitors!).DevicePath);
+    }
+
+    [Fact]
     public void ADeletedSessionIsWrittenAgain()
     {
         // The skip remembered what had been written and not whether it was still

@@ -55,7 +55,8 @@ internal static class StateProjection
         monitor.ActiveWorkspace?.Name,
         monitor.FriendlyName,
         monitor.DevicePath,
-        monitor.IsInternal);
+        monitor.IsInternal,
+        monitor.Names);
 
     public static StateSnapshot Snapshot(
         WindowManager wm, bool suspended = false, SessionInfo? session = null)

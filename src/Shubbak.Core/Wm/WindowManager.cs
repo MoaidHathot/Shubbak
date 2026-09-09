@@ -234,12 +234,7 @@ public sealed class WindowManager
     {
         ArgumentNullException.ThrowIfNull(workspace);
 
-        MonitorNode? target =
-            monitor
-            ?? (workspace.PreferredMonitorIndex is { } index && index < Root.Monitors.Count
-                ? Root.Monitors[index]
-                : null)
-            ?? Root.PrimaryMonitor;
+        MonitorNode? target = monitor ?? HomeOf(workspace) ?? Root.PrimaryMonitor;
 
         if (target is null)
             return Reject("add-workspace", "No monitor available to host a workspace.");
@@ -497,6 +492,36 @@ public sealed class WindowManager
         if (Root.MonitorInDirection(from, direction) is not { } to)
             return Reject("move-workspace", $"No monitor to the {direction.ToString().ToLowerInvariant()}.");
 
+        return MoveWorkspaceToMonitor(to);
+    }
+
+    /// <summary>
+    /// Moves the focused workspace to a particular monitor, and looks at it there.
+    /// </summary>
+    /// <remarks>
+    /// A user gesture, so the moved workspace becomes the one shown on the destination
+    /// and focus goes with it - the same as moving by direction. Automatic moves, which
+    /// must not steal what a monitor is showing, go through
+    /// <see cref="RehomeWorkspaces"/> instead.
+    /// </remarks>
+    public WmResult MoveWorkspaceToMonitor(MonitorNode to)
+    {
+        ArgumentNullException.ThrowIfNull(to);
+
+        if (FocusedWorkspace is not { } workspace)
+            return Reject("move-workspace", "No focused workspace.");
+
+        if (workspace.Monitor is not { } from)
+            return Reject("move-workspace", "Focused workspace is not on a monitor.");
+
+        if (!Root.Monitors.Contains(to))
+            return Reject("move-workspace", $"Monitor {to.DeviceId} is not attached.");
+
+        // Refused rather than quietly re-activated, so a key bound to "send this to the
+        // left screen" pressed while already there reports what happened.
+        if (ReferenceEquals(from, to))
+            return Reject("move-workspace", $"Workspace '{workspace.Name}' is already on {to.DeviceId}.");
+
         from.RemoveWorkspace(workspace);
         to.AddWorkspace(workspace);
         to.ActiveWorkspace = workspace;
@@ -511,6 +536,151 @@ public sealed class WindowManager
             Emit(new WorkspaceActivated(exposed, null, from));
 
         return Complete();
+    }
+
+    /// <summary>
+    /// Puts every workspace back on the monitor it belongs to, where that monitor is
+    /// attached and the workspace is somewhere else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The missing half of monitor removal. Unplugging a display migrates its
+    /// workspaces to a survivor, which is right; plugging it back in used to leave them
+    /// there, because a workspace's preference was consulted only when it was created.
+    /// Every dock and undock therefore ended with a round of moving workspaces back by
+    /// hand, which is the chore a preference exists to remove.
+    /// </para>
+    /// <para>
+    /// Automatic, so it must not change what the user is looking at more than the move
+    /// itself requires. A workspace that was being shown stays shown - on its new
+    /// monitor, which is the point of binding it there - and one that was not stays
+    /// out of sight. A monitor that had nothing to show gets the first arrival. Focus
+    /// follows only the workspace that held it.
+    /// </para>
+    /// <para>
+    /// Nothing happens for a workspace already at home, and a call that moves nothing
+    /// produces no events, so this is cheap to run on every reconciliation.
+    /// </para>
+    /// </remarks>
+    public WmResult RehomeWorkspaces()
+    {
+        // Snapshotted, because moving mutates the lists being walked.
+        List<(WorkspaceNode Workspace, MonitorNode From, MonitorNode To)> moves = [];
+
+        foreach (MonitorNode from in Root.Monitors)
+        {
+            foreach (WorkspaceNode workspace in from.Workspaces)
+            {
+                // The scratchpad lives wherever it was made and is never shown, so
+                // there is nothing to put right.
+                if (workspace.IsScratchpad) continue;
+
+                if (HomeOf(workspace) is not { } to) continue;
+                if (ReferenceEquals(to, from)) continue;
+
+                moves.Add((workspace, from, to));
+            }
+        }
+
+        foreach ((WorkspaceNode workspace, MonitorNode from, MonitorNode to) in moves)
+        {
+            bool wasShown = workspace.IsActive;
+            bool heldFocus = ReferenceEquals(FocusedWorkspace, workspace);
+            WorkspaceNode? previouslyShownOnTo = to.ActiveWorkspace;
+
+            from.RemoveWorkspace(workspace);
+            to.AddWorkspace(workspace);
+
+            Emit(new WorkspaceMoved(workspace, from, to));
+
+            // AddWorkspace makes the first arrival active on an empty monitor; a
+            // workspace that was on screen takes the destination's screen as well.
+            if (wasShown) to.ActiveWorkspace = workspace;
+
+            if (ReferenceEquals(to.ActiveWorkspace, workspace) && !ReferenceEquals(previouslyShownOnTo, workspace))
+                Emit(new WorkspaceActivated(workspace, previouslyShownOnTo, to));
+
+            if (wasShown && from.ActiveWorkspace is { } exposed)
+                Emit(new WorkspaceActivated(exposed, workspace, from));
+
+            if (heldFocus) FocusedMonitor = to;
+        }
+
+        return Complete();
+    }
+
+    /// <summary>
+    /// The attached monitor a workspace belongs on, or null when it has no opinion or
+    /// its home is not attached.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A name first, then a position. The name is whatever the configuration wrote in
+    /// <c>monitor=</c>: a declared <c>monitor "name"</c>, which the host has already
+    /// resolved onto <see cref="MonitorNode.Names"/>, or one of the positional
+    /// spellings <see cref="MonitorReference"/> reads for itself. This class never sees
+    /// the configuration; it sees what the host wrote on the nodes.
+    /// </para>
+    /// <para>
+    /// A declared name can fit more than one display - two of the same model report the
+    /// same friendly name - and the first in enumeration order is taken. Telling twins
+    /// apart is what the device path matcher is for.
+    /// </para>
+    /// </remarks>
+    public MonitorNode? HomeOf(WorkspaceNode workspace)
+    {
+        ArgumentNullException.ThrowIfNull(workspace);
+
+        if (workspace.PreferredMonitorName is { Length: > 0 } name)
+        {
+            foreach (MonitorNode monitor in Root.Monitors)
+                if (monitor.IsNamed(name)) return monitor;
+
+            if (MonitorReference.Resolve(Root, name) is { } positional) return positional;
+        }
+
+        if (workspace.PreferredMonitorIndex is { } index && index >= 0 && index < Root.Monitors.Count)
+            return Root.Monitors[index];
+
+        return null;
+    }
+
+    /// <summary>
+    /// Finds a monitor by any reference a command accepts: a name the configuration
+    /// gives it, a position counted from zero, or a GDI device name.
+    /// </summary>
+    public MonitorNode? FindMonitor(string reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+
+        foreach (MonitorNode monitor in Root.Monitors)
+            if (monitor.IsNamed(reference)) return monitor;
+
+        return MonitorReference.Resolve(Root, reference);
+    }
+
+    /// <summary>Moves the focused workspace to the monitor a reference names.</summary>
+    public WmResult MoveWorkspaceToMonitor(string reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+
+        if (FindMonitor(reference) is { } monitor) return MoveWorkspaceToMonitor(monitor);
+
+        // The refusal names what would have worked, because the one thing certain about
+        // a reference that resolved to nothing is that the person typing it thought it
+        // would.
+        List<string> known = [];
+
+        for (int index = 0; index < Root.Monitors.Count; index++)
+        {
+            MonitorNode attached = Root.Monitors[index];
+            string names = attached.Names.Count > 0 ? $" ({string.Join(", ", attached.Names)})" : "";
+            known.Add($"{index} = {attached.DeviceId}{names}");
+        }
+
+        return Reject(
+            "move-workspace",
+            $"No monitor called '{reference}'. Attached: {(known.Count > 0 ? string.Join("; ", known) : "none")}.");
     }
 
     // ---- window lifecycle --------------------------------------------------

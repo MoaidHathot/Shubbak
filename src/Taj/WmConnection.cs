@@ -41,7 +41,24 @@ public sealed class WmConnection : IAsyncDisposable
     /// </remarks>
     private bool _suspended;
     private readonly CancellationTokenSource _shutdown = new();
-    private readonly int _monitorIndex;
+
+    /// <summary>
+    /// The GDI device name of the display this bar is on, <c>\\.\DISPLAY2</c>.
+    /// </summary>
+    /// <remarks>
+    /// The join key to the window manager's state: <c>WorkspaceInfo.Monitor</c> carries
+    /// the same string. It used to be a position in the monitor list, and positions
+    /// shift - unplug the first monitor and every bar after it starts filtering on the
+    /// wrong display, with nothing to say so. The name is stable for as long as the
+    /// display is attached, which is exactly as long as the bar exists.
+    /// </remarks>
+    private readonly string _deviceId;
+
+    /// <summary>
+    /// The displays as the window manager last described them, so a change can be
+    /// noticed and announced.
+    /// </summary>
+    private IReadOnlyList<MonitorInfoDto>? _lastMonitors;
 
     private IpcClient? _client;
     private Task? _pump;
@@ -90,8 +107,29 @@ public sealed class WmConnection : IAsyncDisposable
         IpcProtocol.ResyncTopic,
     ]);
 
-    /// <summary>Raised when the active workspace changes, so profiles can switch.</summary>
-    public event Action<string>? ActiveWorkspaceChanged;
+    /// <summary>
+    /// Raised when the active workspace changes, so profiles can switch.
+    /// </summary>
+    /// <remarks>
+    /// Carries what a bar rule can match on besides the workspace: the display's
+    /// position in the window manager's monitor list, for <c>monitor=1</c>, and the
+    /// names the window manager's configuration gives it, for <c>monitor="dell-left"</c>.
+    /// Both are read off the snapshot each time rather than remembered, since a monitor
+    /// coming or going changes the first and a reload can change the second.
+    /// </remarks>
+    public event Action<string, int, IReadOnlyList<string>>? ActiveWorkspaceChanged;
+
+    /// <summary>
+    /// Raised when the set of displays the window manager knows about, or where any of
+    /// them is, differs from the last time this connection looked.
+    /// </summary>
+    /// <remarks>
+    /// Raised, not acted on, like everything else here: creating and destroying bar
+    /// windows is the message loop's job. Every bar's connection sees the same snapshot
+    /// and so every one of them raises this for the same change; the loop's response is
+    /// idempotent, so that costs a few comparisons and nothing else.
+    /// </remarks>
+    public event Action<IReadOnlyList<MonitorInfoDto>>? MonitorsChanged;
 
     /// <summary>
     /// Raised when the window manager reports that it has re-read the configuration.
@@ -104,16 +142,20 @@ public sealed class WmConnection : IAsyncDisposable
     public event Action? ConfigReloaded;
 
     /// <param name="model">The bar model to feed.</param>
-    /// <param name="monitorIndex">
-    /// Which monitor this bar is on. Used to show only that monitor's workspaces,
-    /// which is what makes a per-monitor bar useful rather than several identical
-    /// copies of one list.
+    /// <param name="deviceId">
+    /// The GDI device name of the display this bar is on. Used to show only that
+    /// display's workspaces, which is what makes a per-monitor bar useful rather than
+    /// several identical copies of one list.
     /// </param>
-    public WmConnection(BarModel model, int monitorIndex = -1)
+    public WmConnection(BarModel model, string deviceId)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
-        _monitorIndex = monitorIndex;
+        ArgumentException.ThrowIfNullOrEmpty(deviceId);
+        _deviceId = deviceId;
     }
+
+    /// <summary>The display this connection filters for.</summary>
+    public string DeviceId => _deviceId;
 
     /// <summary>
     /// Whether to show only this monitor's workspaces.
@@ -458,6 +500,16 @@ public sealed class WmConnection : IAsyncDisposable
 
             if (state is null) return;
 
+            // The position this display holds in the window manager's list, for bar
+            // rules written as monitor=N, and the names its configuration gives it, for
+            // rules written as monitor="name". Read off the snapshot every time rather
+            // than remembered, because a monitor coming or going moves the one and a
+            // reload can change the other.
+            int monitorIndex = IndexOfThisMonitor(state);
+            IReadOnlyList<string> monitorNames = monitorIndex >= 0
+                ? state.Monitors[monitorIndex].Names ?? []
+                : [];
+
             List<WorkspaceInfo> visible = [];
             string active = string.Empty;
 
@@ -467,13 +519,14 @@ public sealed class WmConnection : IAsyncDisposable
                 // unchanged, but it is not something the user switches to.
                 if (workspace.Name.StartsWith("__", StringComparison.Ordinal)) continue;
 
+                bool onThisMonitor = string.Equals(workspace.Monitor, _deviceId, StringComparison.OrdinalIgnoreCase);
+
                 // The active workspace of this monitor is what selects the bar
                 // profile, so it is noted before any filtering.
-                if (workspace.Active && workspace.MonitorIndex == _monitorIndex && active.Length == 0)
+                if (workspace.Active && onThisMonitor && active.Length == 0)
                     active = workspace.Name;
 
-                if (OwnMonitorOnly && _monitorIndex >= 0 && workspace.MonitorIndex != _monitorIndex)
-                    continue;
+                if (OwnMonitorOnly && !onThisMonitor) continue;
 
                 visible.Add(workspace);
             }
@@ -507,7 +560,13 @@ public sealed class WmConnection : IAsyncDisposable
             _suspended = state.Suspended;
             PublishStatus();
 
-            if (active.Length > 0) ActiveWorkspaceChanged?.Invoke(active);
+            if (active.Length > 0) ActiveWorkspaceChanged?.Invoke(active, monitorIndex, monitorNames);
+
+            if (MonitorsDiffer(_lastMonitors, state.Monitors))
+            {
+                _lastMonitors = state.Monitors;
+                MonitorsChanged?.Invoke(state.Monitors);
+            }
         }
         catch (JsonException ex)
         {
@@ -522,6 +581,43 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>Where this display sits in the window manager's list, or -1.</summary>
+    private int IndexOfThisMonitor(StateSnapshot state)
+    {
+        for (int index = 0; index < state.Monitors.Count; index++)
+        {
+            if (string.Equals(state.Monitors[index].DeviceId, _deviceId, StringComparison.OrdinalIgnoreCase))
+                return index;
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Whether two descriptions of the displays disagree about which are attached or
+    /// where any of them is.
+    /// </summary>
+    /// <remarks>
+    /// Identity and rectangle only. DPI, the friendly name and the active workspace
+    /// change without anything about the bar windows needing to, and this decides
+    /// whether the loop is asked to look at them.
+    /// </remarks>
+    private static bool MonitorsDiffer(IReadOnlyList<MonitorInfoDto>? before, IReadOnlyList<MonitorInfoDto> after)
+    {
+        if (before is null || before.Count != after.Count) return true;
+
+        for (int i = 0; i < after.Count; i++)
+        {
+            MonitorInfoDto a = before[i];
+            MonitorInfoDto b = after[i];
+
+            if (!string.Equals(a.DeviceId, b.DeviceId, StringComparison.OrdinalIgnoreCase)) return true;
+            if (a.X != b.X || a.Y != b.Y || a.Width != b.Width || a.Height != b.Height) return true;
+        }
+
+        return false;
+    }
+
     /// <summary>The layout of the workspace displayed on this bar's monitor.</summary>
     /// <remarks>
     /// Filtered by monitor. Taking the first active workspace in the snapshot meant
@@ -533,7 +629,7 @@ public sealed class WmConnection : IAsyncDisposable
         foreach (WorkspaceInfo workspace in state.Workspaces)
         {
             if (!workspace.Active) continue;
-            if (_monitorIndex >= 0 && workspace.MonitorIndex != _monitorIndex) continue;
+            if (!string.Equals(workspace.Monitor, _deviceId, StringComparison.OrdinalIgnoreCase)) continue;
 
             return workspace.Layout;
         }

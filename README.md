@@ -282,6 +282,7 @@ disagree about which file is loaded.
 | `animation` | `enabled`, `fps`, `minimum-distance`, and per-event duration + curve |
 | `logging` | `level`, `file`, `console` |
 | `workspaces` | Names, display names, monitor binding, starting layout |
+| `monitor` | A display named by what it is, for workspaces and commands to refer to |
 | `keybindings` | `bind`, and `for-each` |
 | `binding-modes` | Modal keymaps, i3-style |
 | `app` | Reusable named matchers you reference from rules |
@@ -356,6 +357,35 @@ tells it to take on a window the built-in filter passed over.
 Reloading is explicit — `wm-reload-config`, from a keybinding, the CLI or the tray.
 Nothing watches your file behind your back, so a half-saved config can't take your
 desktop with it.
+
+### Monitors by name
+
+`monitor=1` on a workspace is a position in the order Windows reports displays, and
+Windows reorders that on replug, on DisplayPort wake and on a driver restart — which
+is how a workspace bound to "the right-hand screen" ends up on the left one after a
+dock. So a display can be named by what it *is* instead, with the same matcher shape
+an `app` uses:
+
+```kdl
+monitor "laptop"     { internal }
+monitor "dell-left"  { path *= "UID4355" }   // two of the same model report the same
+monitor "dell-right" { path *= "UID4357" }   // name; the connector path tells them apart
+
+workspaces {
+    workspace "3" display-name="Code"   monitor="dell-left"
+    workspace "/" display-name="Second" monitor="dell-right"
+}
+
+bind "alt+shift+o" { move-workspace --monitor "laptop" }
+```
+
+`shubbak monitors` prints a definition for every attached display, ready to paste, so
+the hundred characters of hexadecimal that distinguish two identical panels never
+have to be typed. A workspace whose monitor is unplugged moves to a survivor, and
+**moves back when the monitor returns** — the round of dragging workspaces home after
+every dock is gone. Bars follow too: Taj opens one on a display that arrives and
+closes the one on a display that goes, and a bar `rule` can say `monitor="laptop"` in
+the same words.
 
 ### Commands
 
@@ -660,8 +690,9 @@ because titles contain URLs and document names and that's your business.
 
 **Multi-monitor? High DPI?**
 Both. Per-monitor DPI awareness (V2) in all three GUI processes, effective DPI read
-per display, workspaces bindable to a monitor, one bar per monitor, and
-`move-workspace` to shove a whole workspace to another screen.
+per display, workspaces bindable to a monitor by name or by position, one bar per
+monitor that comes and goes with it, and `move-workspace` to shove a whole workspace
+to another screen — by direction or by name.
 
 ## Status
 

@@ -149,10 +149,34 @@ public static class TajConfigLoader
 
             WarnAboutUnknown(node, KnownBarRuleKeys, "setting on a bar rule", "TAJ0019", diagnostics);
 
+            // A number is a position in the window manager's monitor list; anything
+            // else is a name the window manager's configuration gives a display, and
+            // the same word means the same screen in both halves of the file. A quoted
+            // number is still a position - the loader for the other half makes the same
+            // call, for the same reason: the value type is not a reliable signal of
+            // what was meant.
+            int? monitorIndex = null;
+            string? monitorName = null;
+
+            if (Setting(node, "monitor") is { } monitor)
+            {
+                if (monitor.TryAsInt(out int index) ||
+                    int.TryParse(monitor.AsString(), System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out index))
+                {
+                    monitorIndex = index;
+                }
+                else
+                {
+                    monitorName = monitor.AsString();
+                }
+            }
+
             rules.Add(new BarRule(
                 profileName,
                 SettingText(node, "workspace"),
-                SettingInt(node, "monitor")));
+                monitorIndex,
+                monitorName));
         }
 
         BarProfile fallbackProfile =

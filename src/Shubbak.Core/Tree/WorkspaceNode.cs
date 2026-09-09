@@ -57,7 +57,24 @@ public sealed class WorkspaceNode : ContainerNode
     /// The monitor index this workspace prefers, from config
     /// (GlazeWM's <c>bind_to_monitor</c>). Null means "any".
     /// </summary>
+    /// <remarks>
+    /// A position in the enumeration, which Windows reorders on replug. Where the
+    /// config names the display instead, <see cref="PreferredMonitorName"/> is set and
+    /// this is not; the host resolves the name because only the host knows what the
+    /// name means.
+    /// </remarks>
     public int? PreferredMonitorIndex { get; set; }
+
+    /// <summary>
+    /// The declared <c>monitor "name"</c> this workspace lives on, from config. Null
+    /// when unbound or bound by position.
+    /// </summary>
+    /// <remarks>
+    /// Kept on the node rather than only in the config so that a query can say where a
+    /// workspace <i>wants</i> to be as well as where it is - which is the question
+    /// anyone asks when it is somewhere else.
+    /// </remarks>
+    public string? PreferredMonitorName { get; set; }
 
     /// <summary>
     /// True when this workspace exists only because a window was placed on it, and

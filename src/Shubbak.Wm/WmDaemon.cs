@@ -2158,7 +2158,10 @@ public sealed class WmDaemon : IDisposable
 
         foreach (RememberedMonitor remembered in monitors)
         {
-            MonitorNode? monitor = _wm.Root.FindMonitor(remembered.DeviceId);
+            // By connector path where both sides know it, by GDI name otherwise. A
+            // replug can hand the same panel a different name, and the view saved on
+            // \\.\DISPLAY2 belongs to the panel, not to the name.
+            MonitorNode? monitor = SessionStore.FindRemembered(_wm.Root, remembered);
 
             // A monitor that is no longer attached takes its view with it. The
             // workspaces themselves have already been re-homed by the config.
@@ -4546,13 +4549,18 @@ public sealed class WmDaemon : IDisposable
                 };
 
                 Identify(monitor, targets);
+                NameMonitor(monitor);
                 Publish(_wm.AddMonitor(monitor));
 
                 Log.Info(LogCategory.Wm, $"monitor {DescribeIdentity(monitor)}");
             }
             else
             {
+                // Primary can move without the enumeration changing shape, and the
+                // names depend on it.
+                existing.IsPrimary = info.IsPrimary;
                 Identify(existing, targets);
+                NameMonitor(existing);
                 Publish(_wm.UpdateMonitor(existing, info.Bounds, info.WorkArea, info.Dpi));
             }
         }
@@ -4571,7 +4579,13 @@ public sealed class WmDaemon : IDisposable
             Log.Info(LogCategory.Wm, $"display topology: {topology.ToString().ToLowerInvariant()}");
         }
 
+        ReportUnmatchedMonitorDefinitions();
         CreateConfiguredWorkspaces();
+
+        // The other half of the migration above. A workspace pushed off a vanishing
+        // monitor is put back when the monitor returns; one whose home is named by
+        // config and has just been named for the first time is put there too.
+        RehomeWorkspaces();
 
         // The work area may have shrunk - a bar appearing, the taskbar moving - so
         // everything has to be re-placed against the new bounds.
@@ -4602,6 +4616,95 @@ public sealed class WmDaemon : IDisposable
         }
     }
 
+    /// <summary>
+    /// Writes onto a monitor every name the configuration gives it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Here, because this is the one place that has both the definitions and the
+    /// display. The state machine reads the result off the node and never sees a
+    /// definition; the config never sees a display.
+    /// </para>
+    /// <para>
+    /// Declaration order, so that when two definitions fit one display the one written
+    /// first is the one the tree reports first - and a workspace bound to the second
+    /// still finds it, since <c>IsNamed</c> checks them all.
+    /// </para>
+    /// </remarks>
+    private void NameMonitor(MonitorNode monitor)
+    {
+        if (_config.Monitors.Count == 0)
+        {
+            if (monitor.Names.Count > 0) monitor.Names = [];
+            return;
+        }
+
+        var attributes = new MonitorAttributes(
+            monitor.DeviceId, monitor.FriendlyName, monitor.DevicePath, monitor.IsInternal, monitor.IsPrimary);
+
+        List<string> names = [];
+
+        foreach (MonitorDefinition definition in _config.Monitors.Values)
+            if (definition.Matches(attributes)) names.Add(definition.Name);
+
+        // Replaced only on change, so the log line below says something happened.
+        if (names.SequenceEqual(monitor.Names, StringComparer.OrdinalIgnoreCase)) return;
+
+        monitor.Names = names;
+
+        Log.Info(LogCategory.Wm, names.Count > 0
+            ? $"monitor {monitor.DeviceId} is {string.Join(", ", names.Select(n => $"\"{n}\""))}"
+            : $"monitor {monitor.DeviceId} matches no declared monitor");
+    }
+
+    /// <summary>Re-applies every name after a reload, and says which declarations fit nothing.</summary>
+    private void NameMonitors()
+    {
+        foreach (MonitorNode monitor in _wm.Root.Monitors) NameMonitor(monitor);
+
+        ReportUnmatchedMonitorDefinitions();
+    }
+
+    /// <summary>
+    /// Says which declared monitors describe no attached display.
+    /// </summary>
+    /// <remarks>
+    /// The loader cannot know what is attached, so this is where a definition that fits
+    /// no display gets reported: once per monitor change and once per reload, rather
+    /// than every two seconds. A laptop's "dock" monitor is expected to match nothing
+    /// while undocked, so this is information rather than a warning.
+    /// </remarks>
+    private void ReportUnmatchedMonitorDefinitions()
+    {
+        foreach (MonitorDefinition definition in _config.Monitors.Values)
+        {
+            if (_wm.Root.Monitors.Any(m => m.IsNamed(definition.Name))) continue;
+
+            Log.Info(LogCategory.Config,
+                $"monitor \"{definition.Name}\" matches none of the {_wm.Root.Monitors.Count} attached display(s); " +
+                "workspaces bound to it stay where they are. `shubbak monitors` prints what each display reports.");
+        }
+    }
+
+    /// <summary>
+    /// Puts workspaces back where the config says they live, and says so.
+    /// </summary>
+    private void RehomeWorkspaces()
+    {
+        WmResult result = _wm.RehomeWorkspaces();
+
+        foreach (WmEvent wmEvent in result.Events)
+        {
+            if (wmEvent is WorkspaceMoved moved)
+            {
+                Log.Info(LogCategory.Wm,
+                    $"workspace \"{moved.Workspace.Name}\" back on {moved.To.DeviceId} from {moved.From.DeviceId}");
+            }
+        }
+
+        Publish(result);
+    }
+
     /// <summary>One line saying what a monitor is, for the log and the report.</summary>
     private static string DescribeIdentity(MonitorNode monitor) =>
         $"{monitor.DeviceId} {monitor.Bounds.Width}x{monitor.Bounds.Height} @ {monitor.Dpi} dpi" +
@@ -4630,6 +4733,7 @@ public sealed class WmDaemon : IDisposable
             {
                 existing.DisplayName = declared.DisplayName;
                 existing.PreferredMonitorIndex = declared.BindToMonitor;
+                existing.PreferredMonitorName = declared.BindToMonitorName;
                 existing.SortIndex = index;
                 existing.IsTransient = false;
 
@@ -4644,6 +4748,7 @@ public sealed class WmDaemon : IDisposable
             {
                 DisplayName = declared.DisplayName,
                 PreferredMonitorIndex = declared.BindToMonitor,
+                PreferredMonitorName = declared.BindToMonitorName,
                 IsTransient = false,
 
                 // Declaration order, so the bar shows workspaces in the order the
@@ -4738,7 +4843,12 @@ public sealed class WmDaemon : IDisposable
 
         if (!initial)
         {
+            // The monitor definitions may have changed, so every display is re-named
+            // before the workspaces that refer to those names are brought up to date
+            // and sent home. Startup does the same three in SyncMonitors.
+            NameMonitors();
             CreateConfiguredWorkspaces();
+            RehomeWorkspaces();
 
             // Forgotten, so rules are re-applied to windows that are already open.
             // The set is a cache of past verdicts, and the verdicts have just changed:

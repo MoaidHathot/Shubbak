@@ -8,11 +8,17 @@ namespace Dalil.Core;
 /// <param name="Layouts">Names, for the layout arguments.</param>
 /// <param name="BindingModes">Names declared in the configuration.</param>
 /// <param name="ScratchpadSlots">Slots currently holding a window.</param>
+/// <param name="Monitors">
+/// Every way of naming an attached display that a command accepts: the names the
+/// configuration gives it, then its position. Appended and optional, so the callers
+/// that predate it still compile.
+/// </param>
 public sealed record CompletionSources(
     IReadOnlyList<string> Workspaces,
     IReadOnlyList<string> Layouts,
     IReadOnlyList<string> BindingModes,
-    IReadOnlyList<string> ScratchpadSlots)
+    IReadOnlyList<string> ScratchpadSlots,
+    IReadOnlyList<string>? Monitors = null)
 {
     public static CompletionSources None { get; } = new([], [], [], []);
 }
@@ -208,6 +214,7 @@ public static class CommandComposer
                 "--workspace" => CommandArgument.WorkspaceName,
                 "--direction" => CommandArgument.Direction,
                 "--name" => CommandArgument.BindingMode,
+                "--monitor" => CommandArgument.MonitorName,
 
                 // Whatever this verb's own argument is: --set means "the value" for
                 // layout and for split alike.
@@ -227,6 +234,7 @@ public static class CommandComposer
             CommandArgument.LayoutName => sources.Layouts,
             CommandArgument.BindingMode => sources.BindingModes,
             CommandArgument.ScratchpadSlot => sources.ScratchpadSlots,
+            CommandArgument.MonitorName => sources.Monitors ?? [],
 
             // An axis, an amount, a window handle, a signal name, a command line:
             // nothing finite to offer, and a guess would be worse than silence.

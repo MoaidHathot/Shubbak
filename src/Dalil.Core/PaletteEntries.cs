@@ -740,9 +740,18 @@ public static class PaletteEntries
 
     /// <summary>Describes every monitor as a row.</summary>
     /// <remarks>
+    /// <para>
     /// Choosing one goes to the workspace it is showing, which is the only way to
     /// "focus a monitor" - the window manager has no command that names a display, and
     /// activating what is on it amounts to the same thing.
+    /// </para>
+    /// <para>
+    /// The row is titled by what the configuration calls the display when it calls it
+    /// anything, then by the panel's own name, and only then by the device name Windows
+    /// hands out - which is a position and mostly punctuation. The rest of what is
+    /// known goes in the badges, so a display that no declared <c>monitor</c> matches
+    /// is visibly unnamed rather than silently so.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<PaletteEntry> ForMonitors(IEnumerable<MonitorInfoDto> monitors)
     {
@@ -754,12 +763,23 @@ public static class PaletteEntries
         {
             List<string> badges = [];
             if (monitor.Primary) badges.Add("primary");
+            if (monitor.Internal == true) badges.Add("built-in");
             if (monitor.Dpi != 96) badges.Add($"{monitor.Dpi} dpi");
+
+            string device = ShortMonitor(monitor.DeviceId);
+            string? called = monitor.Names is { Count: > 0 } names ? string.Join(", ", names) : null;
+            string? model = monitor.FriendlyName is { Length: > 0 } friendly ? friendly : null;
+
+            // Whatever the title is not, so nothing known is lost: a display titled by
+            // its config name still shows its model, and one titled by its model still
+            // shows the device name it appears under in `query monitors`.
+            if (called is not null && model is not null) badges.Add(model);
+            if (called is not null || model is not null) badges.Add(device);
 
             bool showing = monitor.ActiveWorkspace is { Length: > 0 };
 
             entries.Add(new PaletteEntry(
-                ShortMonitor(monitor.DeviceId),
+                called ?? model ?? device,
                 showing
                     ? $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  showing {monitor.ActiveWorkspace}"
                     : $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  nothing on it",

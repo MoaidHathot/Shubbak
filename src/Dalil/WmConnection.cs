@@ -274,7 +274,15 @@ public sealed class WmConnection : IAsyncDisposable
                 names,
                 layouts,
                 [.. bindings.Where(b => b.Mode is { Length: > 0 }).Select(b => b.Mode!).Distinct()],
-                [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()]);
+                [.. windows.Where(w => w.Scratchpad is { Length: > 0 }).Select(w => w.Scratchpad!).Distinct()],
+
+                // Every way of naming a display that move-workspace --monitor accepts:
+                // the names the configuration gives it first, because those are the
+                // ones a person chose, then its position.
+                [
+                    .. monitors.SelectMany(m => m.Names ?? []).Distinct(StringComparer.OrdinalIgnoreCase),
+                    .. monitors.Select((_, index) => index.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                ]);
 
             IReadOnlyList<PaletteEntry> ownActions =
                 PaletteEntries.ForMacros(macros ?? [], completions, labels);

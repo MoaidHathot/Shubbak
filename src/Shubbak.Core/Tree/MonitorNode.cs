@@ -75,6 +75,27 @@ public sealed class MonitorNode : Node
     /// </remarks>
     public bool? IsInternal { get; set; }
 
+    /// <summary>
+    /// The names the configuration gives this display: every declared
+    /// <c>monitor "name"</c> whose conditions it satisfies.
+    /// </summary>
+    /// <remarks>
+    /// Set by the host, which is the only party that has both the definitions and the
+    /// display. Held on the node so that whatever describes a monitor - the state
+    /// snapshot, the bar, the palette, the report - can say what the config calls it
+    /// without asking the config. Empty for a display nothing names.
+    /// </remarks>
+    public IReadOnlyList<string> Names { get; set; } = [];
+
+    /// <summary>Whether the configuration calls this display <paramref name="name"/>.</summary>
+    public bool IsNamed(string name)
+    {
+        foreach (string candidate in Names)
+            if (string.Equals(candidate, name, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
+    }
+
     /// <summary>Full monitor rectangle in virtual-desktop coordinates.</summary>
     public Rect Bounds { get; set; }
 

@@ -16,17 +16,52 @@ namespace Taj;
 /// <summary>The Taj bar.</summary>
 internal static class Program
 {
-    private static readonly List<BarWindow> s_bars = [];
-    private static readonly List<BarModel> s_models = [];
-    private static readonly List<WmConnection> s_connections = [];
-
-    /// <summary>Per-bar state a reload has to rebuild.</summary>
-    private static readonly List<BarProfileSelector> s_selectors = [];
-
     /// <summary>
-    /// The workspace each bar last reported, so a reload can re-pick its profile.
+    /// Everything that belongs to one bar, kept together.
     /// </summary>
-    private static readonly List<string> s_workspaces = [];
+    /// <remarks>
+    /// <para>
+    /// These were five parallel lists indexed by monitor position, and the position
+    /// was captured into each connection's event handlers at creation. Two things
+    /// went wrong with that. A bar whose window failed to create was skipped but its
+    /// index was not, so every bar after it indexed the lists one slot off. And a
+    /// monitor being unplugged compacts the window manager's list, so every bar after
+    /// it filtered on the wrong display - permanently, with nothing to say so.
+    /// </para>
+    /// <para>
+    /// A bar is now identified by the GDI device name of its display, which is what
+    /// the window manager's own state uses, and its handlers capture <i>this object</i>
+    /// rather than a position. The position is still needed for a rule written
+    /// <c>monitor=1</c>; it is read off each snapshot and kept here.
+    /// </para>
+    /// </remarks>
+    private sealed class Bar
+    {
+        public required string DeviceId { get; init; }
+        public required BarWindow Window { get; init; }
+        public required BarModel Model { get; init; }
+        public required WmConnection Connection { get; init; }
+
+        /// <summary>Per-bar state a reload has to rebuild.</summary>
+        public required BarProfileSelector Selector { get; set; }
+
+        /// <summary>The workspace this bar last reported, so a reload can re-pick its profile.</summary>
+        public string Workspace { get; set; } = string.Empty;
+
+        /// <summary>Where its display sits in the window manager's list, as last reported.</summary>
+        public int MonitorIndex { get; set; } = -1;
+
+        /// <summary>What the window manager's configuration calls its display, as last reported.</summary>
+        public IReadOnlyList<string> MonitorNames { get; set; } = [];
+    }
+
+    private static readonly List<Bar> s_bars = [];
+
+    /// <summary>The configuration in force, for bars created after startup.</summary>
+    private static TajConfig s_config = TajConfigLoader.CreateDefault();
+
+    /// <summary>What was wrong with it, for the <c>config</c> indicator on a new bar.</summary>
+    private static DiagnosticCounts s_problems;
 
     /// <summary>Arguments, kept so the config can be found again on a reload.</summary>
     private static string[] s_args = [];
@@ -40,6 +75,24 @@ internal static class Program
     /// message loop, so the loop picks it up on its next pass.
     /// </remarks>
     private static volatile bool s_reloadRequested;
+
+    /// <summary>When the configuration was last re-read, so reports of one event coalesce.</summary>
+    private static long s_lastReloadTicks;
+
+    /// <summary>How close together two reload requests have to be to count as one.</summary>
+    private static readonly TimeSpan ReloadCoalesceWindow = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// The displays as the window manager last described them, when that differs from
+    /// what the bars were built for. Null when nothing is pending.
+    /// </summary>
+    /// <remarks>
+    /// The same shape as <see cref="s_reloadRequested"/> and for the same reason: set on
+    /// a connection's pump thread, consumed by the loop, which creates and destroys bar
+    /// windows in response. Several connections report the same change; the last one
+    /// wins and the response is idempotent, so that is harmless.
+    /// </remarks>
+    private static volatile IReadOnlyList<MonitorInfoDto>? s_pendingMonitors;
 
     private static volatile bool s_running = true;
 
@@ -127,16 +180,16 @@ internal static class Program
         {
             (TajConfig config, _) = LoadConfig(args, out DiagnosticCounts problems);
 
-            if (!CreateBars(config))
+            // Kept, because bars are created after startup too - a monitor plugged in
+            // later gets one - and each new bar is built from whatever is in force.
+            s_config = config;
+            s_problems = problems;
+
+            if (!CreateBars())
             {
                 Log.Error(LogCategory.Wm, "no bars could be created");
                 return 1;
             }
-
-            // Said at startup as well as on reload. A config that has been wrong since
-            // logon is the one most likely to have been given up on.
-            foreach (BarModel model in s_models)
-                model.SetValue("config", Problems(problems));
 
             Log.Info(LogCategory.Wm, $"Taj started with {s_bars.Count} bar(s)");
 
@@ -211,16 +264,25 @@ internal static class Program
     }
 
     /// <summary>
-    /// Creates one bar per monitor.
+    /// Creates one bar per attached display.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Each bar gets its own model and its own connection, so a profile rule that
     /// depends on the active workspace can resolve differently per monitor - which is
     /// the whole point of per-workspace bar profiles on a multi-monitor setup.
+    /// </para>
+    /// <para>
+    /// From the local enumeration rather than from the window manager, because the bar
+    /// is usually started by the window manager's own startup command and can win the
+    /// race - and a bar with no window manager yet is still a clock. Once connected,
+    /// the window manager's monitor list is the one that counts; see
+    /// <see cref="ReconcileBars"/>.
+    /// </para>
     /// </remarks>
-    private static bool CreateBars(TajConfig config)
+    private static bool CreateBars()
     {
-        List<Rect> monitors = EnumerateMonitors();
+        IReadOnlyList<MonitorInfo> monitors = MonitorSource.Enumerate();
 
         if (monitors.Count == 0)
         {
@@ -228,66 +290,194 @@ internal static class Program
             return false;
         }
 
-        for (int index = 0; index < monitors.Count; index++)
-        {
-            var model = new BarModel(config.Default);
-            var selector = new BarProfileSelector(config.Profiles, config.Rules, config.Default);
-
-            foreach (Core.Sources.ISource source in TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current))
-                model.AddSource(source);
-
-            var bar = new BarWindow(model, index);
-            var connection = new WmConnection(model, index);
-
-            int monitorIndex = index;
-
-            connection.ActiveWorkspaceChanged += workspace =>
-            {
-                s_workspaces[monitorIndex] = workspace;
-                SelectProfile(monitorIndex, workspace);
-            };
-
-            connection.ConfigReloaded += () => s_reloadRequested = true;
-
-            // The window manager going away takes the bar with it. Signalled rather
-            // than acted on, for the same reason a reload is: this runs on the
-            // connection's pump thread, and the windows belong to the message loop.
-            connection.WindowManagerStopped += () => s_running = false;
-
-            // A level rather than an edge, and set rather than or-ed, because every
-            // connection talks to the same daemon and so reports the same answer.
-            connection.SuspendedChanged += suspended => s_wmSuspended = suspended;
-
-            connection.WindowManagerTimeout = config.WindowManagerTimeout;
-
-            bar.CommandRequested += command => _ = connection.SendCommandAsync(command);
-
-            if (!bar.Create(monitors[index]))
-            {
-                bar.Dispose();
-                model.Dispose();
-                continue;
-            }
-
-            connection.Start();
-
-            s_models.Add(model);
-            s_bars.Add(bar);
-            s_selectors.Add(selector);
-            s_workspaces.Add(string.Empty);
-            s_connections.Add(connection);
-        }
+        // Full bounds rather than the work area: the bar reserves its own strip
+        // through the appbar API, and using the work area would make it shrink away
+        // from itself every time it re-registered.
+        foreach (MonitorInfo monitor in monitors)
+            CreateBar(monitor.DeviceId, monitor.Bounds);
 
         return s_bars.Count > 0;
     }
 
-    /// <summary>Picks and applies the profile for one bar.</summary>
-    private static void SelectProfile(int index, string workspace)
+    /// <summary>
+    /// Builds a bar for one display from the configuration in force, and starts it.
+    /// </summary>
+    /// <remarks>
+    /// Runs on the message-loop thread, at startup and again whenever a display
+    /// arrives. Everything the connection later reports is a signal for the loop, never
+    /// an action - the windows and the sources belong to this thread - with one
+    /// standing exception: the profile switch on a workspace change writes the model's
+    /// profile from the pump thread, which is how it has always worked and what the
+    /// model's dirty flag exists for.
+    /// </remarks>
+    /// <returns>The bar, or null if its window could not be created.</returns>
+    private static Bar? CreateBar(string deviceId, Rect bounds)
     {
-        if (index >= s_models.Count || index >= s_selectors.Count) return;
+        TajConfig config = s_config;
 
-        BarModel model = s_models[index];
-        BarProfile chosen = s_selectors[index].Select(workspace, index);
+        var model = new BarModel(config.Default);
+        var selector = new BarProfileSelector(config.Profiles, config.Rules, config.Default);
+
+        foreach (Core.Sources.ISource source in TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current))
+            model.AddSource(source);
+
+        var window = new BarWindow(model, deviceId);
+        var connection = new WmConnection(model, deviceId);
+
+        var bar = new Bar
+        {
+            DeviceId = deviceId,
+            Window = window,
+            Model = model,
+            Connection = connection,
+            Selector = selector,
+        };
+
+        // The handlers capture the bar, not a position in a list. A position was how a
+        // bar came to filter on the wrong display after its neighbour was unplugged.
+        connection.ActiveWorkspaceChanged += (workspace, monitorIndex, monitorNames) =>
+        {
+            bar.Workspace = workspace;
+            bar.MonitorIndex = monitorIndex;
+            bar.MonitorNames = monitorNames;
+            SelectProfile(bar);
+        };
+
+        connection.MonitorsChanged += monitors =>
+        {
+            s_pendingMonitors = monitors;
+            Wake();
+        };
+
+        connection.ConfigReloaded += () =>
+        {
+            s_reloadRequested = true;
+            Wake();
+        };
+
+        // The window manager going away takes the bar with it. Signalled rather
+        // than acted on, for the same reason a reload is: this runs on the
+        // connection's pump thread, and the windows belong to the message loop.
+        connection.WindowManagerStopped += () =>
+        {
+            s_running = false;
+            Wake();
+        };
+
+        // A level rather than an edge, and set rather than or-ed, because every
+        // connection talks to the same daemon and so reports the same answer.
+        connection.SuspendedChanged += suspended =>
+        {
+            s_wmSuspended = suspended;
+            Wake();
+        };
+
+        connection.WindowManagerTimeout = config.WindowManagerTimeout;
+
+        window.CommandRequested += command => _ = connection.SendCommandAsync(command);
+
+        if (!window.Create(bounds))
+        {
+            window.Dispose();
+            model.Dispose();
+            return null;
+        }
+
+        // Said at startup as well as on reload. A config that has been wrong since
+        // logon is the one most likely to have been given up on.
+        model.SetValue("config", Problems(s_problems));
+
+        model.Dirtied += Wake;
+
+        // A bar created while the rest are stood down joins them, or it alone would
+        // go on ticking behind the full-screen application.
+        if (s_stoodDown) model.StandDown();
+
+        connection.Start();
+
+        s_bars.Add(bar);
+        return bar;
+    }
+
+    /// <summary>
+    /// Closes a bar and lets go of everything it owned.
+    /// </summary>
+    private static void DestroyBar(Bar bar)
+    {
+        s_bars.Remove(bar);
+
+        bar.Model.Dirtied -= Wake;
+
+        // Waited for, as at shutdown, so the pump cannot report on a bar that no longer
+        // exists. It ends promptly: the token it watches is cancelled, and the one call
+        // that does not take the token answers within its own timeout.
+        bar.Connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        bar.Window.Dispose();
+        bar.Model.Dispose();
+    }
+
+    /// <summary>
+    /// Brings the bars into line with the displays the window manager reports.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bars used to be created once, from the displays present at startup, and
+    /// that was the whole of it. Plug in a monitor and it had no bar; unplug one and its
+    /// bar stayed, reserving a strip of a display that no longer existed and filtering
+    /// on a position that now belonged to a different one. A laptop docked and undocked
+    /// once a day met both.
+    /// </para>
+    /// <para>
+    /// Driven by the window manager's monitor list rather than by <c>WM_DISPLAYCHANGE</c>,
+    /// for the same reason the bar reads window titles off the pipe rather than off the
+    /// desktop: one party watches the displays, and the bar should agree with it about
+    /// what is attached rather than race it. The window manager polls every two
+    /// seconds, so a dock is reflected here within that.
+    /// </para>
+    /// <para>
+    /// Idempotent: a bar per display the window manager knows, at that display's
+    /// rectangle, and no others. Several connections report the same change and the
+    /// second report finds nothing to do.
+    /// </para>
+    /// </remarks>
+    private static void ReconcileBars(IReadOnlyList<MonitorInfoDto> monitors)
+    {
+        foreach (Bar bar in s_bars.ToArray())
+        {
+            if (monitors.Any(m => SameDevice(m.DeviceId, bar.DeviceId))) continue;
+
+            Log.Info(LogCategory.Monitor, $"display {bar.Window.Label} has gone; closing its bar");
+            DestroyBar(bar);
+        }
+
+        foreach (MonitorInfoDto monitor in monitors)
+        {
+            var bounds = new Rect(monitor.X, monitor.Y, monitor.Width, monitor.Height);
+            Bar? existing = s_bars.Find(b => SameDevice(b.DeviceId, monitor.DeviceId));
+
+            if (existing is null)
+            {
+                Log.Info(LogCategory.Monitor,
+                    $"display {monitor.DeviceId} has arrived" +
+                    $"{(monitor.FriendlyName is { } name ? $" (\"{name}\")" : "")}; opening a bar on it");
+
+                CreateBar(monitor.DeviceId, bounds);
+                continue;
+            }
+
+            existing.Window.Relocate(bounds);
+        }
+    }
+
+    private static bool SameDevice(string a, string b) =>
+        string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Picks and applies the profile for one bar.</summary>
+    private static void SelectProfile(Bar bar)
+    {
+        BarModel model = bar.Model;
+        BarProfile chosen = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames);
 
         if (ReferenceEquals(chosen, model.Profile)) return;
 
@@ -298,7 +488,7 @@ internal static class Program
         // wrong profile was chosen, the right one was built badly, or the
         // window failed to resize.
         Log.Info(LogCategory.Config,
-            $"monitor {index} -> profile \"{chosen.Name}\" on workspace \"{workspace}\" " +
+            $"{bar.Window.Label} -> profile \"{chosen.Name}\" on workspace \"{bar.Workspace}\" " +
             $"(height {chosen.Height}, zones: " +
             $"{string.Join(", ", chosen.Zones.Select(z => $"{z.Id}/{z.Widgets.Count}w/grow{z.Grow}"))})");
     }
@@ -344,18 +534,24 @@ internal static class Program
                 "the configuration has errors; keeping the bar as it is. " +
                 "Run `shubbak check-config` to see them.");
 
-            foreach (BarModel unchanged in s_models)
-                unchanged.SetValue("config", Problems(problems));
+            s_problems = problems;
+
+            foreach (Bar unchanged in s_bars)
+                unchanged.Model.SetValue("config", Problems(problems));
 
             return;
         }
 
-        for (int index = 0; index < s_models.Count; index++)
-        {
-            BarModel model = s_models[index];
+        // Kept for bars created from now on, so a display plugged in after a reload
+        // gets the reloaded configuration rather than the one Taj started with.
+        s_config = config;
+        s_problems = problems;
 
-            s_selectors[index] =
-                new BarProfileSelector(config.Profiles, config.Rules, config.Default);
+        foreach (Bar bar in s_bars)
+        {
+            BarModel model = bar.Model;
+
+            bar.Selector = new BarProfileSelector(config.Profiles, config.Rules, config.Default);
 
             // Sources hold timers, so the old set has to be disposed rather than
             // dropped, or a reloaded bar accumulates a clock per reload.
@@ -364,7 +560,7 @@ internal static class Program
             // Forced through, rather than going via SelectProfile: the profile object
             // is new after a reload even when it is the same profile by name, and the
             // reference check would otherwise skip it.
-            model.Profile = s_selectors[index].Select(s_workspaces[index], index);
+            model.Profile = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames);
 
             model.SetValue("config", Problems(problems));
         }
@@ -441,7 +637,8 @@ internal static class Program
             s_wake.Set();
         };
 
-        foreach (BarModel model in s_models) model.Dirtied += Wake;
+        // Every model wakes the loop when it changes; CreateBar wires that as each bar
+        // is made, at startup and later alike, so there is nothing to do here.
 
         while (s_running)
         {
@@ -460,8 +657,26 @@ internal static class Program
             if (s_reloadRequested)
             {
                 s_reloadRequested = false;
-                ReloadConfig();
+
+                // One reload per event, not one per bar. Every bar's connection hears
+                // the same config.reloaded and each wakes the loop, so without this the
+                // file was re-read and every source rebuilt once per display - which for
+                // a command source means its process killed and started again, twice.
+                // A quarter of a second is far longer than the reports are apart and far
+                // shorter than a person can save a file twice.
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+
+                if (System.Diagnostics.Stopwatch.GetElapsedTime(s_lastReloadTicks, now) > ReloadCoalesceWindow)
+                {
+                    s_lastReloadTicks = now;
+                    ReloadConfig();
+                }
             }
+
+            // Taken and cleared in one step, so a report arriving while this pass is
+            // reconciling is kept for the next one rather than lost.
+            if (Interlocked.Exchange(ref s_pendingMonitors, null) is { } monitors)
+                ReconcileBars(monitors);
 
             ApplyStandDown();
 
@@ -469,9 +684,9 @@ internal static class Program
             // holds its strip - covering the screen is the full-screen application's job,
             // not something the bar does by giving its space back - so a reservation the
             // shell has refused still has to be retried while one is up.
-            foreach (BarWindow bar in s_bars) bar.EnsureReserved();
+            foreach (Bar bar in s_bars) bar.Window.EnsureReserved();
 
-            if (!s_stoodDown) foreach (BarWindow bar in s_bars) bar.Update();
+            if (!s_stoodDown) foreach (Bar bar in s_bars) bar.Window.Update();
 
             if (!s_running) break;
 
@@ -558,10 +773,10 @@ internal static class Program
 
         s_stoodDown = wanted;
 
-        foreach (BarModel model in s_models)
+        foreach (Bar bar in s_bars)
         {
-            if (wanted) model.StandDown();
-            else model.StandUp();
+            if (wanted) bar.Model.StandDown();
+            else bar.Model.StandUp();
         }
 
         if (wanted)
@@ -569,7 +784,7 @@ internal static class Program
             // Drawn once more before going quiet, so the bar is left showing the state
             // that stopped it rather than whatever it happened to be showing a frame
             // earlier.
-            foreach (BarWindow bar in s_bars) bar.Update();
+            foreach (Bar bar in s_bars) bar.Window.Update();
         }
 
         Log.Info(LogCategory.Wm, wanted
@@ -577,66 +792,16 @@ internal static class Program
             : "standing up: the bar is visible again");
     }
 
-    private static unsafe List<Rect> EnumerateMonitors()
-    {
-        List<Rect> monitors = [];
-        GCHandle handle = GCHandle.Alloc(monitors);
-
-        try
-        {
-            PInvoke.EnumDisplayMonitors(
-                HDC.Null, (RECT?)null, &Collect, new LPARAM(GCHandle.ToIntPtr(handle)));
-        }
-        finally
-        {
-            handle.Free();
-        }
-
-        return monitors;
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvStdcall)])]
-    private static unsafe BOOL Collect(HMONITOR monitor, HDC _, RECT* __, LPARAM lParam)
-    {
-        try
-        {
-            var handle = GCHandle.FromIntPtr(lParam.Value);
-            if (handle.Target is not List<Rect> list) return true;
-
-            var info = new MONITORINFOEXW
-            {
-                monitorInfo = new MONITORINFO { cbSize = (uint)sizeof(MONITORINFOEXW) },
-            };
-
-            if (PInvoke.GetMonitorInfo(monitor, (MONITORINFO*)&info))
-            {
-                RECT bounds = info.monitorInfo.rcMonitor;
-
-                // Full bounds rather than the work area: the bar reserves its own
-                // strip through the appbar API, and using the work area would make it
-                // shrink away from itself every time it re-registered.
-                list.Add(Rect.FromEdges(bounds.left, bounds.top, bounds.right, bounds.bottom));
-            }
-        }
-        catch
-        {
-            return false;
-        }
-
-        return true;
-    }
-
     private static void Shutdown()
     {
-        foreach (WmConnection connection in s_connections)
-            connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        // Connections first, so no pump can report on a bar that is being torn down.
+        foreach (Bar bar in s_bars)
+            bar.Connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
-        foreach (BarWindow bar in s_bars) bar.Dispose();
-        foreach (BarModel model in s_models) model.Dispose();
+        foreach (Bar bar in s_bars) bar.Window.Dispose();
+        foreach (Bar bar in s_bars) bar.Model.Dispose();
 
-        s_connections.Clear();
         s_bars.Clear();
-        s_models.Clear();
     }
 
     /// <summary>

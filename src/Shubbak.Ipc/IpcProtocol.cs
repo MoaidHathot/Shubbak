@@ -82,7 +82,11 @@ public sealed record MonitorInfoDto(
     // survives replug and renumbering. Internal is null until the daemon has asked.
     string? FriendlyName = null,
     string? DevicePath = null,
-    bool? Internal = null);
+    bool? Internal = null,
+
+    // What the configuration calls it: every declared `monitor "name"` this display
+    // satisfies. Null when the daemon has not said, empty when nothing names it.
+    IReadOnlyList<string>? Names = null);
 
 /// <summary>
 /// A window on the desktop, managed or not.

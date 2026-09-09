@@ -57,18 +57,31 @@ public sealed record RememberedWindow(
     long Handle = 0);
 
 /// <summary>Which workspace a monitor was showing.</summary>
-/// <param name="DeviceId">The monitor's device id.</param>
+/// <param name="DeviceId">The monitor's GDI device name, <c>\\.\DISPLAY1</c>.</param>
 /// <param name="ActiveWorkspace">The workspace it was displaying.</param>
 /// <param name="Focused">Whether this was the monitor being worked on.</param>
+/// <param name="DevicePath">
+/// The connector's device interface path, when the platform layer supplied one.
+/// Optional, so a file written before this existed still loads.
+/// </param>
 /// <remarks>
+/// <para>
 /// Remembered because restarting otherwise dropped the user on whichever workspace
 /// happened to sort first, with the one they were using still on screen somewhere
 /// else. Restoring the windows but not the view is only half the job.
+/// </para>
+/// <para>
+/// The path is the identity that survives a replug; the GDI name is handed out in
+/// enumeration order and can change between one session and the next. Restoring
+/// matches on the path first and falls back to the name, so a session saved before the
+/// path was recorded still restores the way it always did.
+/// </para>
 /// </remarks>
 public sealed record RememberedMonitor(
     string DeviceId,
     string ActiveWorkspace,
-    bool Focused);
+    bool Focused,
+    string? DevicePath = null);
 
 /// <summary>A saved session.</summary>
 /// <param name="Version">Format version, so an old file can be rejected cleanly.</param>
@@ -154,10 +167,37 @@ public sealed class SessionStore
             monitors.Add(new RememberedMonitor(
                 monitor.DeviceId,
                 active.Name,
-                ReferenceEquals(monitor, focusedMonitor)));
+                ReferenceEquals(monitor, focusedMonitor),
+                monitor.DevicePath));
         }
 
         return new Session(CurrentVersion, DateTimeOffset.Now, windows, monitors);
+    }
+
+    /// <summary>
+    /// The attached monitor a remembered one describes: the same connector if the path
+    /// is known on both sides, otherwise the same GDI name.
+    /// </summary>
+    /// <remarks>
+    /// The path first, because it is what survives a replug. The name second, because
+    /// a session written before the path was recorded has nothing else, and because a
+    /// display whose path could not be read - a remote session's - still has a name.
+    /// </remarks>
+    public static MonitorNode? FindRemembered(RootNode root, RememberedMonitor remembered)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(remembered);
+
+        if (remembered.DevicePath is { Length: > 0 } path)
+        {
+            foreach (MonitorNode monitor in root.Monitors)
+            {
+                if (string.Equals(monitor.DevicePath, path, StringComparison.OrdinalIgnoreCase))
+                    return monitor;
+            }
+        }
+
+        return root.FindMonitor(remembered.DeviceId);
     }
 
     /// <summary>Writes a session to disk.</summary>
@@ -278,10 +318,13 @@ public sealed class SessionStore
         }
 
         // Which workspace each monitor is showing is part of what has to be restored,
-        // so switching workspace is a real change and does get written.
+        // so switching workspace is a real change and does get written. The path is in
+        // too, so the first routine save after the path started being recorded writes
+        // it rather than finding the file unchanged.
         foreach (RememberedMonitor monitor in session.Monitors ?? [])
         {
             builder.Append(monitor.DeviceId).Append('\u001f')
+                   .Append(monitor.DevicePath).Append('\u001f')
                    .Append(monitor.ActiveWorkspace).Append('\u001f')
                    .Append(monitor.Focused).Append('\u001e');
         }

@@ -224,8 +224,15 @@ public sealed record MoveToWorkspaceCommand(string Workspace, bool Focus = false
     public override bool TargetsFocusedWindow => true;
 }
 
-/// <summary><c>move-workspace --direction left</c></summary>
-public sealed record MoveWorkspaceToMonitorCommand(Direction Direction) : WmCommand
+/// <summary>
+/// <c>move-workspace --direction left</c> / <c>move-workspace --monitor dell-left</c>
+/// </summary>
+/// <param name="Direction">The neighbouring monitor to move to, when given by direction.</param>
+/// <param name="Monitor">
+/// The monitor to move to, when given by name: a declared <c>monitor</c>, a position
+/// counted from zero, or a GDI device name. Exactly one of the two is set.
+/// </param>
+public sealed record MoveWorkspaceToMonitorCommand(Direction? Direction = null, string? Monitor = null) : WmCommand
 {
     public override string Name => "move-workspace";
 }

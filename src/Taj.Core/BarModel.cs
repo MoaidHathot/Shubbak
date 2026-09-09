@@ -348,11 +348,27 @@ public sealed class BarModel : IDisposable
 /// </summary>
 /// <param name="Profile">Profile name to apply.</param>
 /// <param name="Workspace">Match when this workspace is active, or null for any.</param>
-/// <param name="MonitorIndex">Match on this monitor, or null for any.</param>
-public sealed record BarRule(string Profile, string? Workspace = null, int? MonitorIndex = null)
+/// <param name="MonitorIndex">Match on the display at this position, or null for any.</param>
+/// <param name="MonitorName">
+/// Match on a display the window manager's configuration calls this, or null for any.
+/// The same names a workspace's <c>monitor="..."</c> uses, so one word means one
+/// screen in both halves of the file. Written as <c>monitor="dell-left"</c>; a number
+/// in the same place is a position.
+/// </param>
+public sealed record BarRule(
+    string Profile,
+    string? Workspace = null,
+    int? MonitorIndex = null,
+    string? MonitorName = null)
 {
     /// <summary>Whether this rule applies.</summary>
-    public bool Matches(string activeWorkspace, int monitorIndex)
+    /// <param name="activeWorkspace">The workspace the bar's display is showing.</param>
+    /// <param name="monitorIndex">Where that display sits in the window manager's list.</param>
+    /// <param name="monitorNames">
+    /// What the window manager's configuration calls that display; empty when nothing
+    /// does or the bar has not been told.
+    /// </param>
+    public bool Matches(string activeWorkspace, int monitorIndex, IReadOnlyList<string>? monitorNames = null)
     {
         if (Workspace is not null &&
             !string.Equals(Workspace, activeWorkspace, StringComparison.OrdinalIgnoreCase))
@@ -360,7 +376,27 @@ public sealed record BarRule(string Profile, string? Workspace = null, int? Moni
             return false;
         }
 
-        return MonitorIndex is null || MonitorIndex == monitorIndex;
+        if (MonitorIndex is not null && MonitorIndex != monitorIndex) return false;
+
+        if (MonitorName is not null)
+        {
+            if (monitorNames is null) return false;
+
+            bool named = false;
+
+            foreach (string name in monitorNames)
+            {
+                if (string.Equals(name, MonitorName, StringComparison.OrdinalIgnoreCase))
+                {
+                    named = true;
+                    break;
+                }
+            }
+
+            if (!named) return false;
+        }
+
+        return true;
     }
 }
 
@@ -389,11 +425,11 @@ public sealed class BarProfileSelector
     }
 
     /// <summary>The profile to use, first matching rule wins.</summary>
-    public BarProfile Select(string activeWorkspace, int monitorIndex)
+    public BarProfile Select(string activeWorkspace, int monitorIndex, IReadOnlyList<string>? monitorNames = null)
     {
         foreach (BarRule rule in _rules)
         {
-            if (!rule.Matches(activeWorkspace, monitorIndex)) continue;
+            if (!rule.Matches(activeWorkspace, monitorIndex, monitorNames)) continue;
             if (_profiles.TryGetValue(rule.Profile, out BarProfile? profile)) return profile;
         }
 

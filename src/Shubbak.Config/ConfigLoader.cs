@@ -92,11 +92,13 @@ public sealed class ConfigLoader
         config = ApplyLogging(config, document.Node("logging"));
 
         Dictionary<string, AppDefinition> apps = ParseApps(document);
-        List<WorkspaceConfig> workspaces = ParseWorkspaces(document.Node("workspaces"));
+        Dictionary<string, MonitorDefinition> monitors = ParseMonitors(document);
+        List<WorkspaceConfig> workspaces = ParseWorkspaces(document.Node("workspaces"), monitors);
 
         ShubbakConfig loaded = config with
         {
             Apps = apps,
+            Monitors = monitors,
             Workspaces = workspaces,
             Keybindings = ParseKeybindings(document.Node("keybindings"), workspaces),
             BindingModes = ParseBindingModes(document.Node("binding-modes"), workspaces),
@@ -104,6 +106,7 @@ public sealed class ConfigLoader
         };
 
         WarnAboutUndeclaredBindingModes(loaded);
+        WarnAboutUndeclaredMonitors(loaded);
 
         return loaded;
     }
@@ -158,11 +161,62 @@ public sealed class ConfigLoader
     private static IEnumerable<Keybinding> AllBindings(ShubbakConfig config) =>
         config.Keybindings.Concat(config.BindingModes.SelectMany(mode => mode.Keybindings));
 
+    /// <summary>
+    /// Reports <c>move-workspace --monitor</c> commands that name a monitor nobody
+    /// declared.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The reference may also be a position (<c>1</c>) or a GDI device name
+    /// (<c>DISPLAY2</c>, with or without the <c>\\.\</c>), neither of which the loader
+    /// can check - the desktop is not attached to the config file. Only a word that is
+    /// none of those is reported, and as a warning: the command is refused out loud at
+    /// runtime too, but by then the key has been pressed.
+    /// </para>
+    /// <para>
+    /// Rules are walked as well as bindings, because a rule can run any command.
+    /// </para>
+    /// </remarks>
+    private void WarnAboutUndeclaredMonitors(ShubbakConfig config)
+    {
+        string[] declared = [.. config.Monitors.Keys];
+
+        IEnumerable<(IReadOnlyList<WmCommand> Commands, TextSpan Span, string Where)> sources =
+            AllBindings(config)
+                .Select(b => (b.Commands, b.Span, $"Binding '{b.Key.Display}'"))
+                .Concat(config.Rules.Select(r => (r.Commands, r.Span, $"Rule '{r.Name}'")));
+
+        foreach ((IReadOnlyList<WmCommand> commands, TextSpan span, string where) in sources)
+        {
+            foreach (WmCommand command in commands)
+            {
+                if (command is not MoveWorkspaceToMonitorCommand { Monitor: { } reference }) continue;
+                if (MonitorReference.IsPositional(reference)) continue;
+                if (declared.Contains(reference, StringComparer.OrdinalIgnoreCase)) continue;
+
+                string? guess = Suggestion.Closest(reference, declared);
+
+                Report(Diagnostic.Warning(
+                    "SHB0443",
+                    $"{where} moves a workspace to monitor '{reference}', which is not declared.",
+                    span,
+                    declared.Length == 0
+                        ? "No monitors are declared. Add one with monitor \"name\" { path ~= \"...\" }, " +
+                          "or give a position such as --monitor 1."
+                        : guess is not null
+                            ? $"Did you mean '{guess}'?"
+                            : $"Declared monitors: {string.Join(", ", declared)}."));
+            }
+        }
+    }
+
     private static readonly string[] KnownSections =
     [
         "general", "gaps", "window-effects", "animation", "logging",
-        "workspaces", "keybindings", "binding-modes", "rules", "app", "bar", "dalil",
+        "workspaces", "keybindings", "binding-modes", "rules", "app", "monitor", "bar", "dalil",
     ];
+
+    private static readonly string[] KnownWorkspaceKeys = ["display-name", "monitor", "layout"];
 
     private static readonly string[] KnownGeneralKeys =
     [
@@ -586,7 +640,8 @@ public sealed class ConfigLoader
 
     // ---- workspaces --------------------------------------------------------
 
-    private List<WorkspaceConfig> ParseWorkspaces(KdlNode? node)
+    private List<WorkspaceConfig> ParseWorkspaces(
+        KdlNode? node, IReadOnlyDictionary<string, MonitorDefinition> monitors)
     {
         List<WorkspaceConfig> workspaces = [];
         if (node is null) return workspaces;
@@ -614,6 +669,11 @@ public sealed class ConfigLoader
                 continue;
             }
 
+            // A misspelt setting on a workspace was discarded in silence, which for the
+            // one people reach for by analogy - bind-to-monitor, GlazeWM's name for
+            // monitor= - meant the workspace quietly took the primary display.
+            WarnAboutUnknownProperties(child, KnownWorkspaceKeys, "setting on a workspace", "SHB0428");
+
             string? layout = child.Property("layout")?.AsString();
 
             // Validated here for the same reason default-layout is: an unrecognised
@@ -631,48 +691,122 @@ public sealed class ConfigLoader
                 layout = null;
             }
 
-            int? monitor = null;
-
-            if (child.Property("monitor") is { } m)
-            {
-                if (!m.TryAsInt(out int index))
-                {
-                    // A device name is the obvious thing to try and has never worked:
-                    // the property is read as an integer, so `monitor="DISPLAY2"` was
-                    // dropped on the floor and the workspace quietly took the primary.
-                    Report(Diagnostic.Error(
-                        "SHB0431",
-                        $"Workspace '{name}' asks for monitor {m.Raw}, which is not a number.",
-                        m.Span,
-                        "Monitors are numbered from 0 in the order Windows reports them, " +
-                        "not by device name. `shubbak query monitors` lists them in that " +
-                        "order, so the second one is monitor=1."));
-                }
-
-                // A negative index is never a monitor, and it would silently fall
-                // through to the primary rather than being reported.
-                else if (index < 0)
-                {
-                    Report(Diagnostic.Error(
-                        "SHB0430",
-                        $"Workspace '{name}' asks for monitor {index}.",
-                        m.Span,
-                        "Monitors are numbered from 0."));
-                }
-                else
-                {
-                    monitor = index;
-                }
-            }
+            (int? monitorIndex, string? monitorName) = ReadWorkspaceMonitor(name, child.Property("monitor"), monitors);
 
             workspaces.Add(new WorkspaceConfig(
                 name,
                 child.Property("display-name")?.AsString(),
-                monitor,
-                layout));
+                monitorIndex,
+                layout,
+                monitorName));
         }
 
         return workspaces;
+    }
+
+    /// <summary>
+    /// Reads a workspace's <c>monitor=</c>: a position in the enumeration, or the name
+    /// of a declared <c>monitor</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A number is a position, numbered from 0 in the order Windows reports displays.
+    /// Anything else is a name and has to have been declared, because a name nothing
+    /// declares would leave the workspace on the primary display with nothing to say
+    /// why - the same silent fallback the number path already refuses.
+    /// </para>
+    /// <para>
+    /// A quoted number - <c>monitor="1"</c> - is a position too, unless a monitor has
+    /// literally been named <c>1</c>. The value type is not a reliable signal of what
+    /// was meant: workspace names are written both ways in this project's own config,
+    /// and a person who writes one that way will write the other that way.
+    /// </para>
+    /// </remarks>
+    private (int? Index, string? Name) ReadWorkspaceMonitor(
+        string workspace, KdlValue? value, IReadOnlyDictionary<string, MonitorDefinition> monitors)
+    {
+        if (value is null) return (null, null);
+
+        if (value.TryAsInt(out int index))
+        {
+            // A negative index is never a monitor, and it would silently fall through
+            // to the primary rather than being reported.
+            if (index < 0)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0430",
+                    $"Workspace '{workspace}' asks for monitor {index}.",
+                    value.Span,
+                    "Monitors are numbered from 0."));
+
+                return (null, null);
+            }
+
+            return (index, null);
+        }
+
+        string reference = value.AsString();
+
+        if (monitors.ContainsKey(reference)) return (null, reference);
+
+        if (MonitorReference.TryIndex(reference, out int quoted))
+        {
+            if (quoted >= 0) return (quoted, null);
+
+            Report(Diagnostic.Error(
+                "SHB0430",
+                $"Workspace '{workspace}' asks for monitor {quoted}.",
+                value.Span,
+                "Monitors are numbered from 0."));
+
+            return (null, null);
+        }
+
+        // A device name - DISPLAY2, with or without the \\.\ - is positional too, and
+        // the tree resolves it for itself against whatever is attached. Kept as the
+        // name rather than turned into an index here, because which index it is cannot
+        // be known until the desktop is.
+        if (MonitorReference.IsPositional(reference)) return (null, reference);
+
+        string[] declared = [.. monitors.Keys];
+        string? guess = Suggestion.Closest(reference, declared);
+
+        Report(Diagnostic.Error(
+            "SHB0442",
+            $"Workspace '{workspace}' asks for monitor '{reference}', which is not declared.",
+            value.Span,
+            declared.Length == 0
+                ? "Declare it with monitor \"" + reference + "\" { path ~= \"...\" } - `shubbak monitors` " +
+                  "prints a definition for each display - or give a position: monitors are " +
+                  "numbered from 0 in the order Windows reports them, so the second is monitor=1."
+                : guess is not null
+                    ? $"Did you mean '{guess}'?"
+                    : $"Declared monitors: {string.Join(", ", declared)}."));
+
+        return (null, null);
+    }
+
+    /// <summary>
+    /// Reports properties on a node that are not names this loader knows.
+    /// </summary>
+    /// <remarks>
+    /// The property-shaped sibling of <see cref="WarnAboutUnknown"/>, for nodes whose
+    /// settings are written as <c>key=value</c> on one line rather than as children.
+    /// </remarks>
+    private void WarnAboutUnknownProperties(KdlNode node, string[] known, string what, string code)
+    {
+        foreach ((string key, KdlValue value) in node.Properties)
+        {
+            if (known.Contains(key, StringComparer.OrdinalIgnoreCase)) continue;
+
+            string? guess = Suggestion.Closest(key, known);
+
+            Report(Diagnostic.Warning(
+                code,
+                $"Unknown {what} '{key}'; it will be ignored.",
+                value.Span,
+                guess is null ? null : $"Did you mean '{guess}'?"));
+        }
     }
 
     // ---- keybindings -------------------------------------------------------
@@ -948,6 +1082,166 @@ public sealed class ConfigLoader
     private static bool LeavesTheMode(List<Keybinding> bindings) =>
         bindings.Any(b => b.Commands.Any(
             c => c is DisableBindingModeCommand or EnableBindingModeCommand));
+
+    // ---- monitors ------------------------------------------------------------
+
+    /// <summary>
+    /// Reads the top-level <c>monitor "name" { ... }</c> definitions.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same shape as <c>app</c>, on purpose: a block of matchers with the same five
+    /// operators and the same <c>!</c> negation, so someone who has written one has
+    /// written the other. The matchable facts are the ones the display configuration
+    /// reports - <c>name</c> from the EDID, <c>path</c> for the connector, <c>device</c>
+    /// for the GDI name - plus two booleans, <c>internal</c> and <c>primary</c>.
+    /// </para>
+    /// <para>
+    /// Duplicates keep the first, as workspaces do, and say so. Apps silently keep the
+    /// last, which is a different rule for no reason and not one to copy.
+    /// </para>
+    /// </remarks>
+    private Dictionary<string, MonitorDefinition> ParseMonitors(KdlDocument document)
+    {
+        Dictionary<string, MonitorDefinition> monitors = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (KdlNode node in document.NodesNamed("monitor"))
+        {
+            if (node.Argument(0) is not { } nameValue)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0438", "A monitor definition must be named.", node.Span,
+                    "Write monitor \"dell-left\" { path ~= \"UID4355\" }. `shubbak monitors` prints one per display."));
+                continue;
+            }
+
+            string name = nameValue.AsString();
+
+            if (monitors.ContainsKey(name))
+            {
+                Report(Diagnostic.Warning(
+                    "SHB0441",
+                    $"Monitor '{name}' is declared more than once; the first declaration wins.",
+                    node.Span));
+                continue;
+            }
+
+            List<MonitorMatcher> matchers = [];
+            bool? isInternal = null;
+            bool? isPrimary = null;
+
+            foreach (KdlNode child in node.Children)
+            {
+                string key = child.Name;
+                bool negated = key.StartsWith('!');
+                if (negated) key = key[1..];
+
+                switch (key.ToLowerInvariant())
+                {
+                    case "internal":
+                        isInternal = ReadMonitorFlag(child, negated);
+                        continue;
+
+                    case "primary":
+                        isPrimary = ReadMonitorFlag(child, negated);
+                        continue;
+                }
+
+                MonitorMatchTarget? target = key.ToLowerInvariant() switch
+                {
+                    "name" or "friendly-name" => MonitorMatchTarget.FriendlyName,
+                    "path" or "device-path" => MonitorMatchTarget.DevicePath,
+                    "device" or "device-id" or "device-name" => MonitorMatchTarget.DeviceId,
+                    _ => null,
+                };
+
+                if (target is null)
+                {
+                    Report(Diagnostic.Error(
+                        "SHB0439",
+                        $"Unknown monitor matcher '{child.Name}'.",
+                        child.Span,
+                        "Match on name, path, or device; or say internal #true / primary #true."));
+                    continue;
+                }
+
+                (MatchOperator op, KdlValue? value) = ReadMatcherOperand(child);
+
+                if (value is null)
+                {
+                    Report(Diagnostic.Error(
+                        "SHB0413",
+                        $"Matcher '{child.Name}' has no pattern.",
+                        child.Span,
+                        "Write name = \"DELL U3219Q\", or path ~= \"UID4355\" for a regex."));
+                    continue;
+                }
+
+                string pattern = value.AsString();
+                ValidatePattern(op, pattern, value.Span);
+
+                matchers.Add(new MonitorMatcher(target.Value, op, pattern, negated, child.Span));
+            }
+
+            // Properties on the node itself are accepted for the two flags, so the
+            // one-line form reads naturally: monitor "laptop" internal=#true
+            if (node.Property("internal") is { } internalProperty)
+                isInternal = ReadMonitorFlag(internalProperty, "internal");
+
+            if (node.Property("primary") is { } primaryProperty)
+                isPrimary = ReadMonitorFlag(primaryProperty, "primary");
+
+            var definition = new MonitorDefinition(name, matchers, isInternal, isPrimary, node.Span);
+
+            if (!definition.HasConditions)
+            {
+                Report(Diagnostic.Warning(
+                    "SHB0440",
+                    $"Monitor '{name}' defines no conditions, so it will never match.",
+                    node.Span,
+                    "A definition with nothing to check matches no display rather than every display."));
+            }
+
+            monitors[name] = definition;
+        }
+
+        return monitors;
+    }
+
+    /// <summary>Reads <c>internal #true</c>, <c>internal</c> alone, or <c>!internal</c>.</summary>
+    private bool? ReadMonitorFlag(KdlNode child, bool negated)
+    {
+        // Bare, the way the matchers read: `internal` means built in, `!internal`
+        // means not. With an argument the argument decides and `!` inverts it.
+        bool value = true;
+
+        if (child.Argument(0) is { } argument)
+        {
+            if (!argument.TryAsBool(out value))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0419",
+                    $"'{child.Name}' expects true or false but got '{argument.Raw}'.",
+                    argument.Span));
+
+                return null;
+            }
+        }
+
+        return negated ? !value : value;
+    }
+
+    private bool? ReadMonitorFlag(KdlValue value, string name)
+    {
+        if (value.TryAsBool(out bool result)) return result;
+
+        Report(Diagnostic.Error(
+            "SHB0419",
+            $"'{name}' expects true or false but got '{value.Raw}'.",
+            value.Span));
+
+        return null;
+    }
 
     // ---- apps and rules ----------------------------------------------------
 

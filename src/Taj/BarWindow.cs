@@ -76,7 +76,18 @@ public sealed class BarWindow : IDisposable
     public static event Action<bool>? FullScreenAppChanged;
 
     private readonly BarModel _model;
-    private readonly int _monitorIndex;
+
+    /// <summary>
+    /// Which display this bar sits on, for the log: the tail of the GDI device name,
+    /// <c>DISPLAY2</c>.
+    /// </summary>
+    /// <remarks>
+    /// Was a position. Positions shift when a monitor is unplugged - every bar after
+    /// it moves down one - so "bar 1" in a log written across a dock and an undock
+    /// named two different displays, and the device name is what the window manager's
+    /// own log calls the same display.
+    /// </remarks>
+    private readonly string _label;
 
     private HWND _handle;
     private GdiRenderer? _renderer;
@@ -92,13 +103,20 @@ public sealed class BarWindow : IDisposable
     /// <summary>Raised when a widget is clicked, with the command to run.</summary>
     public event Action<string>? CommandRequested;
 
-    public BarWindow(BarModel model, int monitorIndex)
+    /// <param name="model">The bar model to draw.</param>
+    /// <param name="deviceId">The GDI device name of the display this bar is for.</param>
+    public BarWindow(BarModel model, string deviceId)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
-        _monitorIndex = monitorIndex;
+        ArgumentException.ThrowIfNullOrEmpty(deviceId);
+
+        _label = deviceId.LastIndexOf('\\') is var slash && slash >= 0 ? deviceId[(slash + 1)..] : deviceId;
     }
 
     public unsafe nint Handle => (nint)_handle.Value;
+
+    /// <summary>The display this bar sits on, as the log names it.</summary>
+    public string Label => _label;
 
     /// <summary>Creates the window on the given monitor work area.</summary>
     public unsafe bool Create(Rect monitorBounds)
@@ -161,7 +179,7 @@ public sealed class BarWindow : IDisposable
         if (Log.IsEnabled(LogLevel.Debug))
         {
             Log.Debug(LogCategory.Wm,
-                $"bar {_monitorIndex} laid out at {_bounds.Width}x{_bounds.Height}: " +
+                $"bar {_label} laid out at {_bounds.Width}x{_bounds.Height}: " +
                 string.Join(", ", _tree.SelfAndDescendants()
                     .Where(n => n.Visible && !n.Rect.IsEmpty && n.Kind == VisualKind.Text)
                     .Select(n => $"{n.Id}@{n.Rect.Left}..{n.Rect.Right}")));
@@ -182,6 +200,52 @@ public sealed class BarWindow : IDisposable
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
 
         RegisterAppbar();
+    }
+
+    /// <summary>
+    /// Moves the bar to a display that has changed shape or position.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A resolution change, a scaling change, or a monitor to the left being unplugged
+    /// so that this one's origin moves to zero: the display is the same, the rectangle
+    /// is not. Until this existed the bar stayed where it was created, which after an
+    /// undock could be off the edge of every attached display.
+    /// </para>
+    /// <para>
+    /// The strip is reserved again at the new place. The shell keys a reservation on
+    /// the window, not the rectangle, so <c>ABM_SETPOS</c> with the new one is a move
+    /// rather than a second reservation.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether anything moved.</returns>
+    public bool Relocate(Rect monitorBounds)
+    {
+        if (_handle.IsNull) return false;
+
+        BarProfile profile = _model.Profile;
+
+        Rect wanted = profile.Edge == BarEdge.Top
+            ? new Rect(monitorBounds.X, monitorBounds.Y, monitorBounds.Width, _bounds.Height)
+            : new Rect(monitorBounds.X, monitorBounds.Bottom - _bounds.Height, monitorBounds.Width, _bounds.Height);
+
+        if (wanted == _bounds) return false;
+
+        _bounds = wanted;
+
+        PInvoke.SetWindowPos(
+            _handle, HWND.Null, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
+
+        RegisterAppbar();
+
+        // The tree was laid out for the old width. Dropping it makes the next Update
+        // rebuild, whether or not the model has changed.
+        _tree = null;
+
+        Log.Info(LogCategory.Wm, $"bar {_label} moved to {_bounds}");
+
+        return true;
     }
 
     private void Paint()
@@ -322,7 +386,7 @@ public sealed class BarWindow : IDisposable
                     _refusalReported = true;
 
                     Log.Warn(LogCategory.Wm,
-                        $"the shell refused bar {_monitorIndex}'s reservation; will keep trying");
+                        $"the shell refused bar {_label}'s reservation; will keep trying");
                 }
 
                 return;
@@ -332,7 +396,7 @@ public sealed class BarWindow : IDisposable
             {
                 _refusalReported = false;
 
-                Log.Info(LogCategory.Wm, $"bar {_monitorIndex}'s strip is reserved again");
+                Log.Info(LogCategory.Wm, $"bar {_label}'s strip is reserved again");
             }
 
             _appbarRegistered = true;
@@ -507,7 +571,7 @@ public sealed class BarWindow : IDisposable
     /// </remarks>
     private void OnShellRestarted()
     {
-        Log.Info(LogCategory.Wm, $"the shell restarted; reserving bar {_monitorIndex}'s strip again");
+        Log.Info(LogCategory.Wm, $"the shell restarted; reserving bar {_label}'s strip again");
 
         // Removed before it is added, and the removal is expected to do nothing. Against
         // a genuinely restarted Explorer it addresses a shell that never heard of this

@@ -240,29 +240,65 @@ rules {
 }
 
 // ---------------------------------------------------------------------------
+// Monitors, named by what they are.
+//
+// `monitor=1` on a workspace is a position in the order Windows reports displays,
+// and Windows reorders that on replug, on DisplayPort wake and on a driver restart
+// - which is how a workspace bound to "the right-hand screen" ends up on the left
+// one after a dock. A definition here names the screen instead, by what the
+// display configuration reports about it, and a workspace bound to the name goes
+// back to that screen whenever it is attached.
+//
+// `shubbak monitors` prints one of these for every attached display, ready to
+// paste. Match on `name` (the panel's EDID name, e.g. "DELL U3219Q"), `path` (the
+// connector's device path, which is what tells two of the same model apart), or
+// `device` (the \\.\DISPLAYn name, for what that is worth); and on the two flags
+// `internal` and `primary`. Same operators and `!` negation as an `app`.
+// ---------------------------------------------------------------------------
+
+monitor "laptop" {
+    internal
+}
+
+// Two of the same monitor report the same name, so the path is what tells them
+// apart. The segment after the last `&` is the connector's own id.
+monitor "dell-left" {
+    // DELL U3219Q
+    path *= "UID4355"
+}
+
+monitor "dell-right" {
+    // DELL U3219Q
+    path *= "UID4357"
+}
+
+// ---------------------------------------------------------------------------
 // Workspaces. Declared workspaces persist when empty, so their bindings keep
 // working; workspaces created on demand are reaped once their last window goes.
+//
+// `monitor=` takes a declared name or a position. A workspace whose monitor is
+// unplugged moves to a survivor and moves back when the monitor returns.
 // ---------------------------------------------------------------------------
 
 workspaces {
-    workspace "1"  display-name="Firefox"      monitor=0
-    workspace "2"  display-name="Edge"         monitor=0
-    workspace "3"  display-name="Code"         monitor=0
+    workspace "1"  display-name="Firefox"      monitor="dell-left"
+    workspace "2"  display-name="Edge"         monitor="dell-left"
+    workspace "3"  display-name="Code"         monitor="dell-left"
     workspace "4"
     workspace "5"
     workspace "6"
-    workspace "7"  monitor=0
-    workspace "8"  monitor=0
+    workspace "7"  monitor="dell-left"
+    workspace "8"  monitor="dell-left"
     workspace "9"
-    workspace "0"  display-name="Docs"         monitor=0
+    workspace "0"  display-name="Docs"         monitor="dell-left"
     workspace "-"  display-name="Chat"
-    workspace "\\" display-name="Presentation" monitor=0
+    workspace "\\" display-name="Presentation" monitor="dell-left"
     workspace "="  display-name="Notes"
-    workspace "]"  display-name="Mail"         monitor=0
-    workspace "/"  display-name="Second"       monitor=1
-    workspace "`"  display-name="System"       monitor=1
-    workspace "'"  display-name="AI"           monitor=0
-    workspace ";"  display-name="Slides"       monitor=0
+    workspace "]"  display-name="Mail"         monitor="dell-left"
+    workspace "/"  display-name="Second"       monitor="dell-right"
+    workspace "`"  display-name="System"       monitor="dell-right"
+    workspace "'"  display-name="AI"           monitor="dell-left"
+    workspace ";"  display-name="Slides"       monitor="dell-left"
     workspace "["  display-name="Recording"    monitor=2
 }
 
@@ -357,11 +393,13 @@ keybindings {
     bind "alt+m"       { toggle-minimized }
     bind "alt+shift+q" { close }
 
-    // Move the current workspace between monitors.
+    // Move the current workspace between monitors: by direction, or by the name a
+    // `monitor` definition gives a display (a position or DISPLAYn works too).
     bind "alt+a" { move-workspace --direction left }
     bind "alt+f" { move-workspace --direction right }
     bind "alt+d" { move-workspace --direction up }
     bind "alt+s" { move-workspace --direction down }
+    bind "alt+shift+o" { move-workspace --monitor "laptop" }
 
     // Tags: make a window a member of several workspaces at once. Unlike `move`,
     // which relocates a window, tagging means "I want this here too" - the window
@@ -610,9 +648,11 @@ bar {
     }
 
     // First matching rule wins. Profiles are all built up front, so switching is
-    // a pointer swap rather than a restart.
+    // a pointer swap rather than a restart. `monitor=` takes the same names the
+    // `monitor` definitions above declare, or a position.
     rule use="presentation" workspace="\\"
     rule use="presentation" workspace=";"
+    rule use="presentation" monitor="laptop"
 }
 
 // ---------------------------------------------------------------------------

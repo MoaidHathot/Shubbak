@@ -64,6 +64,7 @@ internal static class Program
                 "config" => ConfigCommand.Run(args),
                 "autostart" => Autostart.Run(args),
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
+                "monitors" => await MonitorsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "restore" => Restore(args),
@@ -295,6 +296,32 @@ internal static class Program
             response.Data, IpcJsonContext.Default.IReadOnlyListString);
 
         foreach (string layout in layouts ?? []) Console.WriteLine(layout);
+
+        return 0;
+    }
+
+    /// <summary>Describes each display, with a definition ready to paste into the config.</summary>
+    /// <remarks>
+    /// A convenience over <c>query monitors</c> in the same way <c>layouts</c> is over
+    /// <c>query layouts</c>, and the counterpart of <c>inspect</c>'s "write a rule for
+    /// it": the fact that tells two identical monitors apart is a hundred characters of
+    /// hexadecimal, and this is the step that used to be left as a transcription job.
+    /// </remarks>
+    private static async Task<int> MonitorsAsync()
+    {
+        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+        IpcResponse response = await client.SendAsync("query", "monitors").ConfigureAwait(false);
+
+        if (!response.Ok || response.Data is null)
+        {
+            Console.Error.WriteLine($"shubbak: {response.Error}");
+            return 1;
+        }
+
+        IReadOnlyList<MonitorInfoDto>? monitors = System.Text.Json.JsonSerializer.Deserialize(
+            response.Data, IpcJsonContext.Default.IReadOnlyListMonitorInfoDto);
+
+        Console.Write(MonitorReportText.Format(monitors ?? []));
 
         return 0;
     }
@@ -871,6 +898,10 @@ internal static class Program
                                      workspaces, monitors, focused, layouts,
                                      commands, bindings
           layouts              List the available layouts.
+          monitors             Describe each display, with a `monitor` definition
+                               ready to paste into the config. Displays are named
+                               by what they are, so a workspace bound to one stays
+                               there however Windows renumbers them.
 
           all-windows lists every window on the desktop, not only the managed
           ones, with the reason each unmanaged window was passed over. It is the

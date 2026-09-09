@@ -1,3 +1,4 @@
+using Shubbak.Config;
 using Shubbak.Core.Rendering;
 using Taj.Core;
 using Shubbak.Ui.Layout;
@@ -448,6 +449,61 @@ public sealed class BarProfileSelectorTests
 
         Assert.Equal("minimal", selector.Select("1", 1).Name);
         Assert.Equal("default", selector.Select("1", 0).Name);
+    }
+
+    [Fact]
+    public void MatchesOnAMonitorsName()
+    {
+        // The names the window manager's configuration gives a display arrive with the
+        // snapshot, so a bar rule can say the same word a workspace binding says.
+        BarProfileSelector selector = Selector(new BarRule("minimal", MonitorName: "projector"));
+
+        Assert.Equal("minimal", selector.Select("1", 0, ["projector"]).Name);
+        Assert.Equal("minimal", selector.Select("1", 3, ["dell", "PROJECTOR"]).Name);
+        Assert.Equal("default", selector.Select("1", 0, ["dell"]).Name);
+
+        // Told nothing about names - an older window manager, or a display nothing
+        // names - a rule that wants one does not match, rather than matching everything.
+        Assert.Equal("default", selector.Select("1", 0).Name);
+        Assert.Equal("default", selector.Select("1", 0, []).Name);
+    }
+
+    [Fact]
+    public void ANameAndAWorkspaceTogetherBothHaveToHold()
+    {
+        BarProfileSelector selector = Selector(
+            new BarRule("presentation", Workspace: ";", MonitorName: "projector"));
+
+        Assert.Equal("presentation", selector.Select(";", 0, ["projector"]).Name);
+        Assert.Equal("default", selector.Select(";", 0, ["laptop"]).Name);
+        Assert.Equal("default", selector.Select("1", 0, ["projector"]).Name);
+    }
+
+    [Fact]
+    public void TheLoaderReadsANumberAsAPositionAndAWordAsAName()
+    {
+        (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" { height 26 }
+                profile "minimal" { height 20 }
+                rule use="minimal" monitor=1
+                rule use="minimal" monitor="1"
+                rule use="minimal" monitor="projector"
+            }
+            """);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(3, config.Rules.Count);
+
+        Assert.Equal(1, config.Rules[0].MonitorIndex);
+        Assert.Null(config.Rules[0].MonitorName);
+
+        // Quoted, still a position: the value type is not a signal of what was meant.
+        Assert.Equal(1, config.Rules[1].MonitorIndex);
+        Assert.Null(config.Rules[1].MonitorName);
+
+        Assert.Null(config.Rules[2].MonitorIndex);
+        Assert.Equal("projector", config.Rules[2].MonitorName);
     }
 
     [Fact]

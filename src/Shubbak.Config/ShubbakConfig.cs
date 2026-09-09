@@ -45,11 +45,23 @@ public sealed record BindingMode(
     bool PassThrough);
 
 /// <summary>A workspace declared in config.</summary>
+/// <param name="Name">The name keybindings use.</param>
+/// <param name="DisplayName">What the bar shows, when it differs.</param>
+/// <param name="BindToMonitor">
+/// The position of its home monitor in the enumeration, from <c>monitor=1</c>. Null
+/// when unbound or bound by name.
+/// </param>
+/// <param name="Layout">The layout it starts in, when the config names one.</param>
+/// <param name="BindToMonitorName">
+/// The declared <c>monitor "name"</c> it lives on, from <c>monitor="name"</c>. Takes
+/// precedence over the index; the two are never both set.
+/// </param>
 public sealed record WorkspaceConfig(
     string Name,
     string? DisplayName,
     int? BindToMonitor,
-    string? Layout);
+    string? Layout,
+    string? BindToMonitorName = null);
 
 /// <summary>Visual treatment of focused and unfocused windows.</summary>
 /// <param name="Enabled">Whether to draw a border at all.</param>
@@ -210,6 +222,10 @@ public sealed record ShubbakConfig
 
     public IReadOnlyDictionary<string, AppDefinition> Apps { get; init; } =
         new Dictionary<string, AppDefinition>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Displays named by what they are, for workspaces and commands to refer to.</summary>
+    public IReadOnlyDictionary<string, MonitorDefinition> Monitors { get; init; } =
+        new Dictionary<string, MonitorDefinition>(StringComparer.OrdinalIgnoreCase);
 
     public string? DefaultLayout { get; init; }
 

@@ -254,3 +254,93 @@ Re-measure with the same two commands after a day and replace this table.
   the daemon sees as `3840x2160 @ 144`. Harmless here - the join is by device id - but
   any future test asserting geometry against the daemon's numbers will need
   `EnableDpiAwareness` first.
+
+### Phase 1
+
+Named monitors, re-homing, `move-workspace --monitor`, `shubbak monitors`, bars that
+follow displays, and the session remembering connector paths.
+
+**Decisions made while building it, beyond the plan:**
+
+- **`path` is a first-class matcher, not a fallback.** Forced by the finding above:
+  two `DELL U3219Q`s. The `shubbak monitors` output matches on the shortest tail of
+  the path that no other attached display shares - `UID4355` - rather than the whole
+  hundred characters, widening leftwards only if that is not unique.
+- **A quoted number is a position.** `monitor="1"` and `monitor=1` mean the same thing
+  unless a monitor is literally declared as `"1"`. Workspace names are written both
+  ways in the example config; the value type is not a signal of intent.
+- **`monitor="DISPLAY2"` is accepted.** The old `SHB0431` said device names had never
+  worked. They are positional and reused by Windows, but sometimes they are all a
+  person has, and refusing them sent people back to indices. `MonitorReference` in
+  Core resolves the positional spellings against the tree; declared names are the
+  host's to resolve onto `MonitorNode.Names`, and the state machine reads them off the
+  node. It never sees a definition; the config never sees a display.
+- **Re-homing is a level, not an edge.** `RehomeWorkspaces` runs after every monitor
+  sync and every reload, moves nothing that is already home, and produces no events
+  when nothing moves - so it costs a few comparisons on a topology change and nothing
+  otherwise. A hand-moved workspace stays until the next such event; the alternative
+  (re-home on every tick) would fight the user.
+- **Bars are keyed by device name, driven by the WM's monitor list, not by
+  `WM_DISPLAYCHANGE`.** One party watches the displays; the bar agrees with it rather
+  than racing it. The five parallel lists indexed by position became one record per
+  bar, which also removed a latent off-by-one: a bar whose window failed to create was
+  skipped while its index was not.
+- **`SHB0428` now covers workspace properties.** `bind-to-monitor=1` - GlazeWM's name
+  for the same thing - was accepted and ignored.
+
+**Diagnostic codes used:** SHB0315-0316 (parser), SHB0438-0443 (loader). SHB0431 is
+retired; nothing pinned it.
+
+**Not done, deliberately:**
+
+- The bar does not relocate on DPI-only changes; the daemon's `MonitorChanged` fires
+  but `MonitorsDiffer` looks only at identity and rectangle. A DPI change without a
+  rectangle change means the panel's scaling moved; the bar's height is in logical
+  pixels and GDI handles it. Revisit if a bar looks wrong after a scaling change.
+- `RemoveMonitor` still migrates to the *first* surviving monitor rather than to a
+  workspace's home if that is attached. Re-homing runs right after and corrects it, so
+  the only cost is a second `workspace.moved` event for those workspaces during an
+  undock. Folding the two would save the event and complicate `RemoveMonitor`; not
+  worth it yet.
+
+**Measured.** Binaries, NativeAOT Release, against the Phase 0 build:
+
+| | Phase 0 | Phase 1 | delta |
+|---|---|---|---|
+| shubbak-wm.exe | 5.67 MB | 5.74 MB | +68 KB |
+| shubbak.exe | 4.54 MB | 4.61 MB | +68 KB |
+| taj.exe | 4.75 MB | 4.80 MB | +53 KB |
+| dalil.exe | 4.79 MB | 4.85 MB | +57 KB |
+
+Cumulative since `pre-contexts`: daemon +124 KB, the others +85 to +100 KB. The CLI
+grew as much as the daemon because it gained the report writer and the daemon's
+`MonitorDefinition` matching arrived via `Shubbak.Config`, which the CLI links too.
+
+The Phase 0 build ran for 1 h 49 m on a busy development desktop - builds, test runs,
+dozens of transient console windows - before being replaced. Its tick interval was
+p50 251 ms, p99 266 ms, tick duration p50 0.02 ms, p99 1.87 ms; three GCs in each
+generation. Allocation p99 was 46 KB per tick against the baseline's 720 B, and the
+breakdown says where: `drain` p99 46 KB with `publish` p99 only 5.5 KB, so the
+allocation is window-event handling for the windows the tooling kept opening and
+closing (14 ignored windows at the time of the report against 3 in the baseline), not
+the event stream. Not a like-for-like sample, and the idle tick at the median reads as
+it always has. The Phase 1 build a minute and a half after starting: p50 0.02 ms,
+0 B, no GCs. A quiet day on this build is what would settle the p99 column; measure
+it before starting Phase 2.
+
+**Live verification done:** `shubbak monitors` on the two-Dell desk, `move-workspace
+--monitor` by device name, index and declared name, both refusals, the both-flags
+parse error, a `--replace` start with monitor definitions naming both displays and
+binding workspace 9 to `dell-right` (created there), then `move-workspace --monitor
+dell-left` followed by `wm-reload-config` re-homing it with the `back on` log line and
+the view preserved. Taj came through the daemon restart with two bars and an idempotent
+reconcile. **Not exercised live:** an actual unplug or replug, and a bar relocating
+after a resolution change - the code paths are covered by tests at the unit level and
+the reconcile ran as a no-op against the real list, but the first real dock will be
+the first real test. Watch `taj.log` for `has gone` / `has arrived` lines.
+
+**Found on the way:** each bar's connection reports `config.reloaded` separately, and
+with the pump-thread `Wake()` that Phase 1 added the loop reloaded once per display.
+Coalesced to one reload per 250 ms. Before the `Wake()`, both reports usually landed
+before the loop's next natural pass, so this was a latent shape rather than a new one.
+Dalil still did not leave on `wm.shutdown` during either restart.

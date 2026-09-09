@@ -40,6 +40,12 @@ public enum CommandArgument
 
     /// <summary>Everything after the verb, taken verbatim.</summary>
     CommandLine,
+
+    /// <summary>
+    /// A monitor: a name the config declares, a position counted from zero, or a GDI
+    /// device name.
+    /// </summary>
+    MonitorName,
 }
 
 /// <summary>One command verb, as a user types it.</summary>
@@ -128,7 +134,8 @@ public static class CommandCatalogue
         Spec("focus-window", "Focus a window by handle, wherever it is", [CommandArgument.WindowHandle]),
         Spec("focus-recent-window", "Return to the window focused before this one"),
         Spec("move", "Move the focused window", [CommandArgument.Direction]),
-        Spec("move-workspace", "Move this workspace to another monitor", [CommandArgument.Direction]),
+        Spec("move-workspace", "Move this workspace to another monitor, by direction or by name",
+            [CommandArgument.Direction]),
 
         Spec("resize", "Grow or shrink the focused window", [CommandArgument.Axis, CommandArgument.Amount]),
         Spec("equalise", "Give siblings an equal share", aliases: ["equalize"]),

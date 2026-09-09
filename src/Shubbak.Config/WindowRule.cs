@@ -31,6 +31,57 @@ public enum MatchTarget
 }
 
 /// <summary>
+/// The comparison every matcher performs, whatever it is matching.
+/// </summary>
+/// <remarks>
+/// Case-insensitive throughout. Window titles and class names vary in casing
+/// between versions of the same application often enough that case-sensitive
+/// matching is a trap rather than a feature, and monitor names arrive in whatever
+/// case the panel's firmware chose.
+/// </remarks>
+public static class PatternMatch
+{
+    /// <summary>Tests one value against a pattern.</summary>
+    /// <param name="op">How to compare.</param>
+    /// <param name="pattern">The pattern as written.</param>
+    /// <param name="value">The attribute; null reads as empty.</param>
+    /// <param name="compiled">
+    /// The regex cache for this pattern, compiled on first use. A rule set can hold
+    /// dozens of patterns, and most are never exercised in a given session.
+    /// </param>
+    public static bool Test(MatchOperator op, string pattern, string? value, ref Regex? compiled)
+    {
+        ArgumentNullException.ThrowIfNull(pattern);
+
+        value ??= string.Empty;
+
+        return op switch
+        {
+            MatchOperator.Equals => string.Equals(value, pattern, StringComparison.OrdinalIgnoreCase),
+            MatchOperator.StartsWith => value.StartsWith(pattern, StringComparison.OrdinalIgnoreCase),
+            MatchOperator.EndsWith => value.EndsWith(pattern, StringComparison.OrdinalIgnoreCase),
+            MatchOperator.Contains => value.Contains(pattern, StringComparison.OrdinalIgnoreCase),
+            MatchOperator.Regex => (compiled ??= new Regex(
+                pattern,
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+                TimeSpan.FromMilliseconds(100))).IsMatch(value),
+            _ => false,
+        };
+    }
+
+    /// <summary>The operator as the config writes it.</summary>
+    public static string Symbol(MatchOperator op) => op switch
+    {
+        MatchOperator.Equals => "=",
+        MatchOperator.Regex => "~=",
+        MatchOperator.StartsWith => "^=",
+        MatchOperator.EndsWith => "$=",
+        MatchOperator.Contains => "*=",
+        _ => "?",
+    };
+}
+
+/// <summary>
 /// One condition on a window.
 /// </summary>
 /// <param name="Target">Which attribute to inspect.</param>
@@ -48,50 +99,15 @@ public sealed record WindowMatcher(
     private Regex? _compiled;
 
     /// <summary>Tests one attribute value.</summary>
-    /// <remarks>
-    /// Case-insensitive throughout. Window titles and class names vary in casing
-    /// between versions of the same application often enough that case-sensitive
-    /// matching is a trap rather than a feature.
-    /// </remarks>
     public bool Matches(string? value)
     {
-        value ??= string.Empty;
-
-        bool result = Operator switch
-        {
-            MatchOperator.Equals => string.Equals(value, Pattern, StringComparison.OrdinalIgnoreCase),
-            MatchOperator.StartsWith => value.StartsWith(Pattern, StringComparison.OrdinalIgnoreCase),
-            MatchOperator.EndsWith => value.EndsWith(Pattern, StringComparison.OrdinalIgnoreCase),
-            MatchOperator.Contains => value.Contains(Pattern, StringComparison.OrdinalIgnoreCase),
-            MatchOperator.Regex => CompiledRegex().IsMatch(value),
-            _ => false,
-        };
+        bool result = PatternMatch.Test(Operator, Pattern, value, ref _compiled);
 
         return Negated ? !result : result;
     }
 
-    private Regex CompiledRegex() =>
-        // Compiled lazily and cached: a rule set can hold dozens of patterns, and
-        // most are never exercised in a given session.
-        _compiled ??= new Regex(
-            Pattern,
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-            TimeSpan.FromMilliseconds(100));
-
-    public override string ToString()
-    {
-        string op = Operator switch
-        {
-            MatchOperator.Equals => "=",
-            MatchOperator.Regex => "~=",
-            MatchOperator.StartsWith => "^=",
-            MatchOperator.EndsWith => "$=",
-            MatchOperator.Contains => "*=",
-            _ => "?",
-        };
-
-        return $"{(Negated ? "!" : "")}{Target.ToString().ToLowerInvariant()}{op}\"{Pattern}\"";
-    }
+    public override string ToString() =>
+        $"{(Negated ? "!" : "")}{Target.ToString().ToLowerInvariant()}{PatternMatch.Symbol(Operator)}\"{Pattern}\"";
 }
 
 /// <summary>

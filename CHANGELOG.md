@@ -17,6 +17,63 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **Monitors can be named by what they are, and workspaces bound to the name.**
+  `monitor=1` on a workspace is a position in the order Windows reports displays, and
+  Windows reorders that on replug, on DisplayPort wake and on a driver restart - which
+  is how a workspace bound to "the right-hand screen" ends up on the left one after a
+  dock. A top-level `monitor "name" { ... }` names the screen instead, by what the
+  display configuration reports about it, with the same matchers and `!` negation an
+  `app` has: `name` (the panel's EDID name), `path` (the connector's device path),
+  `device` (the `\\.\DISPLAYn` name), and the flags `internal` and `primary`.
+
+  ```kdl
+  monitor "laptop"     { internal }
+  monitor "dell-left"  { path *= "UID4355" }
+  monitor "dell-right" { path *= "UID4357" }
+
+  workspaces {
+      workspace "/" display-name="Second" monitor="dell-right"
+  }
+  ```
+
+  The desk this was written on is why `path` is first-class rather than a fallback: two
+  identical Dells, the same name on both, and only the connector's id in the path to
+  tell them apart. `shubbak monitors` prints a definition for every attached display,
+  ready to paste, matching on the shortest part of the path that no other attached
+  display shares - so the hundred characters of hexadecimal never have to be typed.
+
+  Checked at load, as far as load can check: a workspace bound to a name nothing
+  declares is an error with a suggestion (`SHB0442`), a definition with nothing to match
+  on is a warning (`SHB0440`), a misspelt matcher is named rather than dropped
+  (`SHB0439`), and a setting on a workspace that is not one of `display-name`,
+  `monitor` or `layout` - `bind-to-monitor`, GlazeWM's spelling, was the common one -
+  is now reported (`SHB0428`) rather than silently ignored. Whether a definition fits a
+  real display is the daemon's to know, and it logs each display's names at startup and
+  each definition that fits nothing. `monitor="DISPLAY2"` is accepted for what it is
+  worth - it used to be an error that told you device names had never worked.
+
+- **Workspaces go home when their monitor comes back.** Unplugging a display migrated
+  its workspaces to a survivor, and always had; plugging it back in did nothing, because
+  a workspace's preference was consulted when it was created and never again. Every dock
+  and undock therefore ended with a round of moving workspaces back by hand, which is
+  the chore a preference exists to remove. They are now put back whenever the monitors
+  change and whenever the config is reloaded - a workspace that was on screen stays on
+  screen, on the display it belongs to, and a hidden one stays hidden; focus follows
+  only the workspace that held it. A workspace moved by hand stays where it was put
+  until the next such event.
+
+- **`move-workspace --monitor <name>`.** The command was direction-only. It now also
+  takes a declared monitor name, a position counted from zero, or a device name
+  (`DISPLAY2`, with or without the `\\.\`). Giving both a direction and a monitor is
+  refused (`SHB0315`); a name nothing declares is a warning at load (`SHB0443`) and a
+  refusal at runtime that lists what would have worked. The palette completes the
+  argument from the names and positions the window manager reports.
+
+- **`shubbak monitors`.** Describes each display - position, device name, resolution,
+  DPI, built-in or external, EDID name, connector path, what it is showing, and what the
+  configuration calls it - followed by the `monitor` block above. The counterpart of
+  `inspect`'s "write a rule for it".
+
 - **Three things the daemon knew and told nobody are now on the event stream.** Each
   was already being read, and each was acted on privately or written into the
   diagnostic report and nowhere else. Anything outside the process that wanted the same
@@ -148,6 +205,29 @@ schedule and breaking either is a different kind of event:
   nothing anywhere to say so.
 
 ### Changed
+
+- **Taj's bars follow the displays.** They were created once, from the displays present
+  at startup, and that was the whole of it: plug in a monitor and it had no bar; unplug
+  one and its bar stayed, reserving a strip of a display that no longer existed and
+  filtering on a position that now belonged to a different one. A laptop docked and
+  undocked once a day met both. Bars are now opened and closed as the window manager
+  reports displays coming and going, and moved when a display changes shape or
+  position - a resolution change, or the monitor to its left being unplugged so that
+  its origin moves to zero.
+
+  A bar identifies its display by device name rather than by position. Positions
+  shift when a monitor is unplugged - every bar after it moved down one and started
+  showing the wrong display's workspaces - and a bar whose window failed to create was
+  skipped while its position was not, so every bar after *that* had been one slot off
+  since startup. A bar `rule` can now also say `monitor="laptop"`, using the same names
+  the `monitor` definitions declare; `monitor=1` still means the position, and both
+  are read off the window manager's list rather than the bar's own enumeration, so the
+  two halves of the file agree about which display is which.
+
+- **The session remembers each monitor's connector path** beside its device name, and
+  restores the view by path first. A display that comes back under a different device
+  name after a replug gets its own workspace back rather than whichever one the name
+  now belongs to. Sessions written before the path was recorded restore as before.
 
 - **Taj subscribes to the topics it handles, not to everything.** It subscribed to `*`,
   which is the shortest thing to write and made the window manager serialise and send a

@@ -140,7 +140,13 @@ public sealed class CommandExecutor
 
             MoveDirectionCommand c => new(_wm.MoveDirection(c.Direction)),
             MoveToWorkspaceCommand c => new(_wm.MoveToWorkspace(c.Workspace, c.Focus)),
-            MoveWorkspaceToMonitorCommand c => new(_wm.MoveWorkspaceToMonitor(c.Direction)),
+
+            // The parser guarantees exactly one of the two is set; a record built by
+            // hand with neither is a programming error and is refused rather than
+            // guessed at.
+            MoveWorkspaceToMonitorCommand { Monitor: { } monitor } => new(_wm.MoveWorkspaceToMonitor(monitor)),
+            MoveWorkspaceToMonitorCommand { Direction: { } direction } => new(_wm.MoveWorkspaceToMonitor(direction)),
+            MoveWorkspaceToMonitorCommand => Rejected(command, "move-workspace needs a direction or a monitor."),
 
             TagCommand c => new(_wm.Tag(c.Workspace, c.Mode)),
             ToggleStickyCommand => new(_wm.ToggleSticky()),

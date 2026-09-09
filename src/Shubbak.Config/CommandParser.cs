@@ -77,9 +77,46 @@ public static class CommandParser
 
             case "move-workspace":
             {
+                // Two ways to say where: a direction, or a monitor by name. Both at
+                // once is a contradiction rather than a preference, and is refused so
+                // the binding does not quietly obey whichever one this happens to
+                // read first.
+                string? monitor = Value(rest, "--monitor");
+                bool hasDirection = Value(rest, "--direction") is not null;
+
+                if (monitor is not null && hasDirection)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0315",
+                        $"'{text}' gives both a direction and a monitor.",
+                        span,
+                        "Write move-workspace --direction left, or move-workspace --monitor \"name\", not both.");
+                    return false;
+                }
+
+                if (monitor is not null)
+                {
+                    if (monitor.Length == 0)
+                    {
+                        diagnostic = Diagnostic.Error(
+                            "SHB0316", $"'{text}' does not say which monitor.", span,
+                            "Write move-workspace --monitor \"dell-left\" for a declared monitor, " +
+                            "--monitor 1 for the second display, or --monitor DISPLAY2.");
+                        return false;
+                    }
+
+                    command = new MoveWorkspaceToMonitorCommand(Monitor: monitor);
+                    return true;
+                }
+
                 if (!TryDirection(rest, "--direction", out Direction direction))
                 {
-                    diagnostic = DirectionMissing("move-workspace", text, span);
+                    diagnostic = Diagnostic.Error(
+                        "SHB0310",
+                        $"'{text}' does not name a direction or a monitor.",
+                        span,
+                        "Write move-workspace --direction left (or right, up, down), " +
+                        "or move-workspace --monitor \"name\".");
                     return false;
                 }
 
@@ -510,13 +547,6 @@ public static class CommandParser
             default: return false;
         }
     }
-
-    private static Diagnostic DirectionMissing(string verb, string text, TextSpan span) =>
-        Diagnostic.Error(
-            "SHB0310",
-            $"'{text}' does not name a direction.",
-            span,
-            $"Write {verb} --direction left (or right, up, down).");
 
     private static string? Value(ReadOnlySpan<string> tokens, string flag)
     {
