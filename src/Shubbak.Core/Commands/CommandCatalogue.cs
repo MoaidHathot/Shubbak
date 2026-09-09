@@ -46,6 +46,9 @@ public enum CommandArgument
     /// device name.
     /// </summary>
     MonitorName,
+
+    /// <summary>The name of a context declared in the config.</summary>
+    ContextName,
 }
 
 /// <summary>One command verb, as a user types it.</summary>
@@ -169,6 +172,8 @@ public static class CommandCatalogue
         Spec("wm-enable-binding-mode", "Enter a binding mode", [CommandArgument.BindingMode]),
         Spec("wm-disable-binding-mode", "Leave the current binding mode"),
         Spec("wm-toggle-pause", "Stop rearranging windows, or start again"),
+
+        Spec("context", "Hold a context on or off, or let its conditions decide", [CommandArgument.ContextName]),
 
         // Worded to make the difference from pause findable, because the two are one
         // word apart and do very different things. Pause keeps the keyboard; suspend

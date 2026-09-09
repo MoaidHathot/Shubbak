@@ -106,8 +106,21 @@ public sealed record WindowMatcher(
         return Negated ? !result : result;
     }
 
-    public override string ToString() =>
-        $"{(Negated ? "!" : "")}{Target.ToString().ToLowerInvariant()}{PatternMatch.Symbol(Operator)}\"{Pattern}\"";
+    public override string ToString()
+    {
+        // The config's spelling, not the enum's: `process=` is what a person wrote and
+        // what a report should hand back to them.
+        string target = Target switch
+        {
+            MatchTarget.Title => "title",
+            MatchTarget.ClassName => "class",
+            MatchTarget.ProcessName => "process",
+            MatchTarget.ProcessPath => "path",
+            _ => Target.ToString().ToLowerInvariant(),
+        };
+
+        return $"{(Negated ? "!" : "")}{target}{PatternMatch.Symbol(Operator)}\"{Pattern}\"";
+    }
 }
 
 /// <summary>

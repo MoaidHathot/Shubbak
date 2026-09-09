@@ -344,3 +344,138 @@ with the pump-thread `Wake()` that Phase 1 added the loop reloaded once per disp
 Coalesced to one reload per 250 ms. Before the `Wake()`, both reports usually landed
 before the loop's next natural pass, so this was a latent shape rather than a new one.
 Dalil still did not leave on `wm.shutdown` during either restart.
+
+### Phase 2
+
+The contexts core, with the extension primitive. Everything the plan listed shipped:
+the config section, the pure engine, the `context` verb with `--ttl` and `--lease`,
+the seven kinds of effect, `context.changed`, the snapshot field, `query contexts`,
+`shubbak contexts`, and the attribution.
+
+**How it is shaped, and why:**
+
+- **The engine lives in `Shubbak.Wm`, not the state machine.** Which contexts hold is
+  decided from facts the tree has never held - windows it does not manage, the
+  session, what a client asked for - so the tree is one input rather than the owner.
+  `ContextChanged` is raised by the daemon exactly as `SuspendChanged` is; the state
+  machine did not learn a new concept. The engine is still headless: no Win32, time as
+  a parameter, `WindowRegistry` and `RootNode` read through a struct of references.
+- **Deltas, not resets.** `ReadGaps`, `ReadEffects` and `ReadAnimation` now read the
+  top-level sections and a context's blocks alike into override records, which are
+  applied onto whatever is underneath. The top-level result is byte-for-byte what it
+  was (411 loader tests unchanged), and a context's `gaps { inner 0 }` means "inner
+  zero, everything else as it was". `window-effects` was the odd one out - rebuilt from
+  scratch, border defaulting to off when unspecified - and layering it changed nothing
+  for a file whose defaults underneath are off and unset.
+- **The hook still does one lookup.** `BindingTable.SetOverlay` merges the overlay into
+  the default dictionary when a context flips; `IsBound` and `Resolve` are untouched.
+  The overlay does not reach inside a binding mode, where the mode's table is the
+  whole keyboard as it always was. Rule three, pinned by `BindingOverlayTests`.
+- **Zero allocation when nothing changed, and nothing looked at when nothing is dirty.**
+  `ContextEngine.Evaluate` returns a static empty list without work unless a fact
+  changed or a linger or time-to-live is due; when it does run and finds nothing
+  changed it allocates nothing - pinned by two tests, one of which caught a real
+  `foreach` over an `IReadOnlyList` (a boxed enumerator, 72 bytes) on the first run.
+  The daemon calls it every tick after the drains: two comparisons on a quiet desktop.
+  Rules one and two.
+- **No window catalogue.** One `HashSet<nint>` per `window` condition, one bool per
+  `focused` condition; `fullscreen` reads the managed windows' identities with no
+  syscall. Attributes are read only when a condition exists, once per event, and the
+  title is the last thing read. Rule four. Title-change storms are the accepted cost,
+  paid once by whoever wrote a `window` condition.
+- **The fixed point.** A context may refer to one declared after it, so detection is
+  run to a fixed point over the effective set and diffed once against the state before
+  the call. A context that flipped and flipped back inside the loop reports nothing,
+  which is the truth about it. The loader removes cycles, so the loop converges in at
+  most one pass per context; the cap is a guard against a loader bug.
+- **Pins are host state with an origin.** `RunCommand` gained an optional
+  `CommandOrigin`, set ambiently for the duration of one command, and only `WmDaemonIpc`
+  supplies one - only for a payload containing a `context` verb, so `focus` pays
+  nothing for it. The pipe server gained a client-aware handler overload, a per-connection
+  id (a counter, because handles are reused), and `ClientDisconnected`; a lease is a pin
+  that names a connection id and dies when the notice arrives.
+- **Toggle pins to the opposite of what it is now.** Not "toggle the pin": a detected-on
+  context toggled goes to pinned-off, and toggled again to pinned-on. Predictable from
+  the outside, which is what a key wants.
+
+**Decisions made while building it, beyond the plan:**
+
+- **`--ttl` and `--lease` are refused with `--auto`** (`SHB0320`), since there is no pin
+  for them to govern, and accepted with `--toggle`, applying to whichever pin it turns
+  out to make.
+- **Bare numbers in `--ttl` are seconds; `linger` is milliseconds.** Different units in
+  different places, deliberately: a time-to-live is a heartbeat, a linger is a debounce.
+- **A quoted `--ttl` under a second is fine** (`--ttl 500ms`), and zero or negative is
+  refused (`SHB0319`).
+- **Pins survive a reload for contexts the new file still declares**, as the binding
+  mode does; a pinned context the file no longer declares is logged and dropped.
+- **Suspended freezes the contexts.** A `context --set` while suspended is accepted and
+  logged as taking effect on resume; the window sets are re-read on resume because the
+  hooks were down.
+- **A destroy event can be missed** while the hooks are down, so the 2 s monitor sync
+  prunes dead handles from the window sets - one `IsWindow` per remembered handle,
+  only while any is remembered.
+- **Attribution is best-effort.** The pid comes from `GetNamedPipeClientProcessId`, the
+  name from the process path cache; a process that has exited by the time it is asked
+  about is described by its pid.
+- **`WindowMatcher.ToString()` now spells targets as the config does** (`process=`
+  rather than `processname=`), which `inspect`'s failed-matcher list and a context's
+  condition text both show to a person.
+
+**Diagnostic codes used:** SHB0317-0320 (parser), SHB0444-0451 (loader). Unknown
+settings inside a context reuse SHB0428.
+
+**Not done, deliberately:**
+
+- **Taj and Dalil do not act on contexts yet.** That is Phase 3: `rule ...
+  context="presenting"` on the bar, `{{ contexts }}`, the palette's status pill and
+  `from="contexts"`. Both processes already receive `context.changed` if they subscribe
+  and read `contexts` off the snapshot.
+- **A context cannot override `hide-method`, logging, or `allow-shell-exec-over-ipc`.**
+  The first is unrecoverable if wrong; the other two are not about the desktop.
+- **`query bindings` does not list overlay bindings**, and `binding.fired` reports
+  `mode: null` for one. A follow-up could report them under a `context:<name>` mode.
+- **Activating a context does not re-run its rules over existing windows.** `on-enter`
+  is the place for bulk actions; the alternative churns every window on every flip.
+
+**Measured** (release, NativeAOT, same SDK as Phase 1):
+
+| binary | Phase 1 | Phase 2 | delta |
+|---|---|---|---|
+| shubbak-wm.exe | 5.74 MB | 6.05 MB | +320 KB |
+| shubbak.exe | 4.61 MB | 4.83 MB | +218 KB |
+| taj.exe | 4.80 MB | 5.01 MB | +216 KB |
+| dalil.exe | 4.85 MB | 5.08 MB | +234 KB |
+
+Roughly 220 KB of that is shared by all four, since all four link `Shubbak.Config`
+and `Shubbak.Ipc`: the section parser and its records, the three report DTOs and the
+snapshot field in the source-generated JSON, the verb in Core. The daemon carries
+about 100 KB more for the engine and its integration. That is the largest single step
+in the feature, and it is the price of a closed, checked vocabulary rather than a
+string bag: every condition and every effect is a type with a parser and a report.
+
+Runtime, on the desk, with three contexts declared - one `fullscreen app=` (so
+window attributes are read on every window event), one external, one `monitors
+count=` - over 12 minutes that included F11 toggles, two reloads, a dozen pins and a
+lease: tick p50 0.02 ms (unchanged from the baseline and Phase 1), p99 1.79 ms,
+allocation p50 0 B, zero collections in any generation. Working set 33.5 MB (Phase 1
+settled at 36.6 MB after 1h14m; both are within the run-to-run spread). The p99 is a
+busy testing window and not a like-for-like against Phase 1's settled 1.01 ms; the
+p50 and the zero collections are the numbers rules one and two ask for. A daemon with
+no `contexts` section pays two comparisons per tick and nothing else, since the
+engine holds no conditions to read attributes for.
+
+Verified live: detection of a full-screen Firefox on F11, with the report saying
+`firefox is full-screen`; the 300 ms linger holding at 150 ms after leaving and gone
+by 1.35 s; `on-enter` and `on-exit` firing once each in the fixed order, visible on
+the wire as the on-exit `signal` arriving before `context.changed`; gaps collapsing to
+zero and coming back on `--auto` (window rect 0,34 3840x2126 pinned, 5,39 3830x2111
+released); a 4 s `--ttl` expiring by itself with `expires in 3.5 s` in the report; a
+`--lease` from a held pipe attributed to `pwsh.exe (pid …)` and released the moment
+the pipe closed; the bindings overlay through the real keyboard hook - a key that
+is unbound in the base file did nothing, fired the overlay's command while the
+context was pinned, and did nothing again after `--auto`; the refusals for an
+undeclared name and for `--lease` from the command line, each with its hint.
+
+**Found on the way:** Dalil kept its process across a `--replace` for the fourth time
+and reconnected on its own; still not this feature's problem. Nothing else.

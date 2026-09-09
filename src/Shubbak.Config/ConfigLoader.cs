@@ -103,10 +103,12 @@ public sealed class ConfigLoader
             Keybindings = ParseKeybindings(document.Node("keybindings"), workspaces),
             BindingModes = ParseBindingModes(document.Node("binding-modes"), workspaces),
             Rules = ParseRules(document.Node("rules"), apps),
+            Contexts = ParseContexts(document.Node("contexts"), apps, monitors, workspaces),
         };
 
         WarnAboutUndeclaredBindingModes(loaded);
         WarnAboutUndeclaredMonitors(loaded);
+        WarnAboutUndeclaredContexts(loaded);
 
         return loaded;
     }
@@ -152,14 +154,43 @@ public sealed class ConfigLoader
         }
     }
 
-    /// <summary>Every binding in the config, default and per-mode alike.</summary>
+    /// <summary>Every binding in the config: default, per-mode, and per-context alike.</summary>
     /// <remarks>
     /// A mode can enter another mode, so the bindings inside modes have to be checked
     /// too - and a typo there is harder to notice, because reaching it means being in
-    /// the first mode already.
+    /// the first mode already. A context's overlay bindings are the same story one
+    /// level further away: reaching them means the context being active.
     /// </remarks>
     private static IEnumerable<Keybinding> AllBindings(ShubbakConfig config) =>
-        config.Keybindings.Concat(config.BindingModes.SelectMany(mode => mode.Keybindings));
+        config.Keybindings
+            .Concat(config.BindingModes.SelectMany(mode => mode.Keybindings))
+            .Concat(config.Contexts.SelectMany(context => context.Effects.Bindings));
+
+    /// <summary>
+    /// Everywhere a command can be written, with a name for the place, for the
+    /// post-passes that check what commands refer to.
+    /// </summary>
+    private static IEnumerable<(IReadOnlyList<WmCommand> Commands, TextSpan Span, string Where)> AllCommandSites(
+        ShubbakConfig config)
+    {
+        foreach (Keybinding binding in AllBindings(config))
+            yield return (binding.Commands, binding.Span, $"Binding '{binding.Key.Display}'");
+
+        foreach (WindowRule rule in config.Rules)
+            yield return (rule.Commands, rule.Span, $"Rule '{rule.Name}'");
+
+        foreach (ContextDefinition context in config.Contexts)
+        {
+            foreach (WindowRule rule in context.Effects.Rules)
+                yield return (rule.Commands, rule.Span, $"Rule '{rule.Name}' in context '{context.Name}'");
+
+            if (context.Effects.OnEnter.Count > 0)
+                yield return (context.Effects.OnEnter, context.Span, $"on-enter of context '{context.Name}'");
+
+            if (context.Effects.OnExit.Count > 0)
+                yield return (context.Effects.OnExit, context.Span, $"on-exit of context '{context.Name}'");
+        }
+    }
 
     /// <summary>
     /// Reports <c>move-workspace --monitor</c> commands that name a monitor nobody
@@ -181,12 +212,7 @@ public sealed class ConfigLoader
     {
         string[] declared = [.. config.Monitors.Keys];
 
-        IEnumerable<(IReadOnlyList<WmCommand> Commands, TextSpan Span, string Where)> sources =
-            AllBindings(config)
-                .Select(b => (b.Commands, b.Span, $"Binding '{b.Key.Display}'"))
-                .Concat(config.Rules.Select(r => (r.Commands, r.Span, $"Rule '{r.Name}'")));
-
-        foreach ((IReadOnlyList<WmCommand> commands, TextSpan span, string where) in sources)
+        foreach ((IReadOnlyList<WmCommand> commands, TextSpan span, string where) in AllCommandSites(config))
         {
             foreach (WmCommand command in commands)
             {
@@ -210,10 +236,46 @@ public sealed class ConfigLoader
         }
     }
 
+    /// <summary>
+    /// Reports <c>context</c> commands that name a context nobody declared.
+    /// </summary>
+    /// <remarks>
+    /// A warning, like the two above: refused out loud at runtime as well, but this is
+    /// the moment the mistake can be pointed at with a line and a caret. An external
+    /// context - one with no <c>when</c> - is declared like any other, so a provider's
+    /// name has to appear in the file before a key can set it; that is deliberate, since
+    /// the file is where what the context <i>does</i> is written.
+    /// </remarks>
+    private void WarnAboutUndeclaredContexts(ShubbakConfig config)
+    {
+        string[] declared = [.. config.Contexts.Select(c => c.Name)];
+
+        foreach ((IReadOnlyList<WmCommand> commands, TextSpan span, string where) in AllCommandSites(config))
+        {
+            foreach (WmCommand command in commands)
+            {
+                if (command is not ContextCommand { Context: var reference }) continue;
+                if (declared.Contains(reference, StringComparer.OrdinalIgnoreCase)) continue;
+
+                string? guess = Suggestion.Closest(reference, declared);
+
+                Report(Diagnostic.Warning(
+                    "SHB0451",
+                    $"{where} refers to context '{reference}', which is not declared.",
+                    span,
+                    declared.Length == 0
+                        ? "No contexts are declared. Add one with contexts { context \"" + reference + "\" { } }."
+                        : guess is not null
+                            ? $"Did you mean '{guess}'?"
+                            : $"Declared contexts: {string.Join(", ", declared)}."));
+            }
+        }
+    }
+
     private static readonly string[] KnownSections =
     [
         "general", "gaps", "window-effects", "animation", "logging",
-        "workspaces", "keybindings", "binding-modes", "rules", "app", "monitor", "bar", "dalil",
+        "workspaces", "keybindings", "binding-modes", "rules", "app", "monitor", "contexts", "bar", "dalil",
     ];
 
     private static readonly string[] KnownWorkspaceKeys = ["display-name", "monitor", "layout"];
@@ -437,79 +499,88 @@ public sealed class ConfigLoader
 
     // ---- gaps --------------------------------------------------------------
 
-    private ShubbakConfig ApplyGaps(ShubbakConfig config, KdlNode? node)
+    private ShubbakConfig ApplyGaps(ShubbakConfig config, KdlNode? node) =>
+        node is null ? config : ReadGaps(node).Apply(config);
+
+    private ShubbakConfig ApplyEffects(ShubbakConfig config, KdlNode? node) =>
+        node is null ? config : ReadEffects(node).Apply(config);
+
+    private ShubbakConfig ApplyAnimation(ShubbakConfig config, KdlNode? node) =>
+        node is null ? config : ReadAnimation(node).Apply(config);
+
+    /// <summary>
+    /// Reads a <c>gaps</c> block as a delta: only what was written.
+    /// </summary>
+    /// <remarks>
+    /// The top-level section and a context's block are read by this same method. Read
+    /// as a delta and then applied, the top-level section layers onto the defaults
+    /// exactly as it always did, and a context's block layers onto whatever is
+    /// underneath it - which is what lets <c>gaps { inner 0 }</c> inside a context
+    /// mean "inner zero, everything else as it was".
+    /// </remarks>
+    private GapsOverride ReadGaps(KdlNode node)
     {
-        if (node is null) return config;
         WarnAboutUnknown(node.Children, KnownGapsKeys, "setting in 'gaps'", "SHB0428");
 
+        int? inner = OptionalInt(node, "inner");
+        int? left = null, top = null, right = null, bottom = null;
 
-        int inner = Int(node, "inner", config.InnerGap);
-
-        Gaps outer = config.OuterGap;
         if (node.Child("outer") is { } outerNode)
         {
             // A single positional argument means "the same on all sides".
             if (outerNode.Argument(0) is { } uniform && uniform.TryAsInt(out int all))
             {
-                outer = Gaps.All(all);
+                left = top = right = bottom = all;
             }
             else
             {
-                outer = new Gaps(
-                    Math.Max(0, Int(outerNode, "left", outer.Left)),
-                    Math.Max(0, Int(outerNode, "top", outer.Top)),
-                    Math.Max(0, Int(outerNode, "right", outer.Right)),
-                    Math.Max(0, Int(outerNode, "bottom", outer.Bottom)));
+                left = OptionalInt(outerNode, "left");
+                top = OptionalInt(outerNode, "top");
+                right = OptionalInt(outerNode, "right");
+                bottom = OptionalInt(outerNode, "bottom");
             }
         }
 
-        return config with { InnerGap = Math.Max(0, inner), OuterGap = outer };
+        return new GapsOverride(inner, left, top, right, bottom);
     }
 
-    private ShubbakConfig ApplyEffects(ShubbakConfig config, KdlNode? node)
+    /// <summary>Reads a <c>window-effects</c> block as a delta.</summary>
+    /// <remarks>
+    /// This used to rebuild the effects from scratch, with the border defaulting to off
+    /// when unspecified. Layering changes nothing for the top-level section - the
+    /// defaults underneath it are off and unset - and is what a context needs.
+    /// </remarks>
+    private EffectsOverride ReadEffects(KdlNode node)
     {
-        if (node is null) return config;
         WarnAboutUnknown(node.Children, KnownEffectsKeys, "setting in 'window-effects'", "SHB0428");
 
-
-        return config with
-        {
-            Effects = new WindowEffects(
-                Bool(node, "border", false),
-                Text(node, "focused-colour", null) ?? Text(node, "focused-color", null),
-                Text(node, "unfocused-colour", null) ?? Text(node, "unfocused-color", null),
-                Text(node, "floating-colour", null) ?? Text(node, "floating-color", null),
-                Text(node, "floating-unfocused-colour", null)
-                    ?? Text(node, "floating-unfocused-color", null)),
-        };
+        return new EffectsOverride(
+            OptionalBool(node, "border"),
+            Text(node, "focused-colour", null) ?? Text(node, "focused-color", null),
+            Text(node, "unfocused-colour", null) ?? Text(node, "unfocused-color", null),
+            Text(node, "floating-colour", null) ?? Text(node, "floating-color", null),
+            Text(node, "floating-unfocused-colour", null) ?? Text(node, "floating-unfocused-color", null));
     }
 
-    private ShubbakConfig ApplyAnimation(ShubbakConfig config, KdlNode? node)
+    /// <summary>Reads an <c>animation</c> block as a delta.</summary>
+    private AnimationOverride ReadAnimation(KdlNode node)
     {
-        if (node is null) return config;
-
         WarnAboutUnknown(node.Children, KnownAnimationKeys, "setting in 'animation'", "SHB0428");
 
-        Core.Animation.AnimationOptions animation = config.Animation;
-
-        animation = animation with
-        {
-            Enabled = Bool(node, "enabled", animation.Enabled),
-            AnimateNewWindows = Bool(node, "animate-new-windows", animation.AnimateNewWindows),
-            MinimumAnimatedDistance = Math.Max(
-                0, Int(node, "minimum-distance", animation.MinimumAnimatedDistance)),
-            FramesPerSecond = FramesPerSecond(node, animation.FramesPerSecond),
-            WindowOpen = Profile(node, "window-open", animation.WindowOpen),
-            WindowMove = Profile(node, "window-move", animation.WindowMove),
-            LayoutChange = Profile(node, "layout-change", animation.LayoutChange),
-            WorkspaceSwitch = Profile(node, "workspace-switch", animation.WorkspaceSwitch),
-        };
-
-        return config with { Animation = animation };
+        return new AnimationOverride(
+            OptionalBool(node, "enabled"),
+            OptionalBool(node, "animate-new-windows"),
+            OptionalInt(node, "minimum-distance"),
+            ReadFps(node),
+            ReadProfile(node, "window-open"),
+            ReadProfile(node, "window-move"),
+            ReadProfile(node, "layout-change"),
+            ReadProfile(node, "workspace-switch"));
     }
 
     /// <summary>
-    /// Reads <c>fps</c>: a number, or <c>"auto"</c> to follow the display.
+    /// Reads <c>fps</c>: a number, or <c>"auto"</c> to follow the display. Null when
+    /// not written.
     /// </summary>
     /// <remarks>
     /// Clamped rather than rejected when out of range, because a frame rate is a
@@ -517,17 +588,17 @@ public sealed class ConfigLoader
     /// warning says what was used, so a rate that was silently ignored does not look
     /// like one that was silently honoured.
     /// </remarks>
-    private int? FramesPerSecond(KdlNode parent, int? fallback)
+    private FpsSetting? ReadFps(KdlNode parent)
     {
         KdlNode? node = parent.Child("fps");
-        if (node is null || node.Arguments.Count == 0) return fallback;
+        if (node is null || node.Arguments.Count == 0) return null;
 
         KdlValue argument = node.Arguments[0];
 
         if (argument.Kind == KdlValueKind.Text &&
             string.Equals(argument.StringValue, "auto", StringComparison.OrdinalIgnoreCase))
         {
-            return null;
+            return new FpsSetting(null);
         }
 
         if (!argument.TryAsInt(out int fps))
@@ -539,7 +610,7 @@ public sealed class ConfigLoader
                 "Write fps \"auto\" to follow the display's refresh rate, which is the " +
                 "default, or a number such as fps 60 to override it."));
 
-            return fallback;
+            return null;
         }
 
         int clamped = Math.Clamp(
@@ -560,29 +631,33 @@ public sealed class ConfigLoader
                 "any application repaints them, so the work is done and then discarded."));
         }
 
-        return clamped;
+        return new FpsSetting(clamped);
     }
 
     /// <summary>
-    /// Reads one animation profile, e.g. <c>window-move duration=140 curve="ease-out"</c>.
+    /// Reads one animation profile, e.g. <c>window-move duration=140 curve="ease-out"</c>,
+    /// as a delta. Null when not written.
     /// </summary>
-    private Core.Animation.AnimationProfile Profile(
-        KdlNode parent, string name, Core.Animation.AnimationProfile fallback)
+    private ProfileOverride? ReadProfile(KdlNode parent, string name)
     {
         KdlNode? node = parent.Child(name);
-        if (node is null) return fallback;
+        if (node is null) return null;
 
-        TimeSpan duration = node.Property("duration") is { } d && d.TryAsInt(out int ms)
+        TimeSpan? duration = node.Property("duration") is { } d && d.TryAsInt(out int ms)
             ? TimeSpan.FromMilliseconds(Math.Max(0, ms))
-            : fallback.Duration;
+            : null;
 
-        Core.Animation.Easing curve = fallback.Curve;
+        Core.Animation.Easing? curve = null;
 
         if (node.Property("curve") is { } c)
         {
             string curveName = c.AsString();
 
-            if (!Core.Animation.Easing.TryParse(curveName, out curve))
+            if (Core.Animation.Easing.TryParse(curveName, out Core.Animation.Easing parsed))
+            {
+                curve = parsed;
+            }
+            else
             {
                 Report(Diagnostic.Warning(
                     "SHB0421",
@@ -590,10 +665,12 @@ public sealed class ConfigLoader
                     c.Span,
                     "Available: linear, ease-in, ease-out, ease-in-out, ease-out-back, " +
                     "ease-out-expo, or cubic-bezier(x1, y1, x2, y2)."));
+
+                curve = Core.Animation.Easing.EaseOut;
             }
         }
 
-        return new Core.Animation.AnimationProfile(duration, curve);
+        return new ProfileOverride(duration, curve);
     }
 
     /// <summary>
@@ -823,18 +900,19 @@ public sealed class ConfigLoader
     }
 
     private void CollectBindings(
-        KdlNode container, IReadOnlyList<WorkspaceConfig> workspaces, List<Keybinding> into)
+        KdlNode container, IReadOnlyList<WorkspaceConfig> workspaces, List<Keybinding> into,
+        bool allowEmpty = false)
     {
         foreach (KdlNode child in container.Children)
         {
             switch (child.Name)
             {
                 case "bind":
-                    if (ParseBinding(child, substitutions: null) is { } binding) into.Add(binding);
+                    if (ParseBinding(child, substitutions: null, allowEmpty) is { } binding) into.Add(binding);
                     break;
 
                 case "for-each":
-                    ExpandForEach(child, workspaces, into);
+                    ExpandForEach(child, workspaces, into, allowEmpty);
                     break;
 
                 default:
@@ -862,7 +940,7 @@ public sealed class ConfigLoader
     /// </code>
     /// </remarks>
     private void ExpandForEach(
-        KdlNode node, IReadOnlyList<WorkspaceConfig> workspaces, List<Keybinding> into)
+        KdlNode node, IReadOnlyList<WorkspaceConfig> workspaces, List<Keybinding> into, bool allowEmpty = false)
     {
         string source = node.Argument(0)?.AsString() ?? "workspace";
 
@@ -895,11 +973,20 @@ public sealed class ConfigLoader
             };
 
             foreach (KdlNode child in node.ChildrenNamed("bind"))
-                if (ParseBinding(child, substitutions) is { } binding) into.Add(binding);
+                if (ParseBinding(child, substitutions, allowEmpty) is { } binding) into.Add(binding);
         }
     }
 
-    private Keybinding? ParseBinding(KdlNode node, IReadOnlyDictionary<string, string>? substitutions)
+    /// <param name="node">The <c>bind</c> node.</param>
+    /// <param name="substitutions">Placeholders from an enclosing <c>for-each</c>.</param>
+    /// <param name="allowEmpty">
+    /// Whether a binding with no commands is meaningful. It is not in the keybindings
+    /// section, where it is a key that does nothing and is reported as such; it is inside
+    /// a context's <c>bindings</c>, where laying an empty binding over a key is how the
+    /// key is disarmed while the context holds.
+    /// </param>
+    private Keybinding? ParseBinding(
+        KdlNode node, IReadOnlyDictionary<string, string>? substitutions, bool allowEmpty = false)
     {
         if (node.Argument(0) is not { } keyValue)
         {
@@ -919,7 +1006,7 @@ public sealed class ConfigLoader
 
         List<WmCommand> commands = ParseCommandBlock(node, substitutions);
 
-        if (commands.Count == 0)
+        if (commands.Count == 0 && !allowEmpty)
         {
             Report(Diagnostic.Warning(
                 "SHB0408",
@@ -1243,6 +1330,604 @@ public sealed class ConfigLoader
         return null;
     }
 
+    // ---- contexts ------------------------------------------------------------
+
+    private static readonly string[] KnownContextKeys =
+    [
+        "when", "linger", "gaps", "window-effects", "animation", "bindings", "rules",
+        "workspaces", "on-enter", "on-exit",
+    ];
+
+    private static readonly string[] KnownConditions =
+    [
+        "window", "focused", "fullscreen", "workspace", "monitors", "monitor",
+        "display-topology", "remote-session", "system-state", "context",
+    ];
+
+    /// <summary>
+    /// Reads <c>contexts { context "name" { when { ... } ... } }</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Everything inside a context reuses the reader for the section it overrides -
+    /// <c>gaps</c>, <c>window-effects</c> and <c>animation</c> come out as deltas from
+    /// the same code that reads the top-level sections, <c>bindings</c> is the
+    /// keybindings reader, <c>rules</c> the rules reader, <c>on-enter</c> a command block
+    /// - so there is no second vocabulary and a mistake is reported with the same code
+    /// it would get at the top level.
+    /// </para>
+    /// <para>
+    /// References to other contexts are checked after every context has been read, so a
+    /// context may name one declared below it. What it may not do is name itself by any
+    /// route; a cycle is reported and the offending reference dropped.
+    /// </para>
+    /// </remarks>
+    private List<ContextDefinition> ParseContexts(
+        KdlNode? node,
+        IReadOnlyDictionary<string, AppDefinition> apps,
+        IReadOnlyDictionary<string, MonitorDefinition> monitors,
+        IReadOnlyList<WorkspaceConfig> workspaces)
+    {
+        List<ContextDefinition> contexts = [];
+        if (node is null) return contexts;
+
+        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (KdlNode child in node.ChildrenNamed("context"))
+        {
+            if (child.Argument(0) is not { } nameValue)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0444", "A context must be named.", child.Span,
+                    "Write context \"presenting\" { when { window app=\"slides\" } }."));
+                continue;
+            }
+
+            string name = nameValue.AsString();
+
+            if (!seen.Add(name))
+            {
+                Report(Diagnostic.Warning(
+                    "SHB0445",
+                    $"Context '{name}' is declared more than once; the first declaration wins.",
+                    child.Span));
+                continue;
+            }
+
+            WarnAboutUnknown(child.Children, KnownContextKeys, $"setting in context '{name}'", "SHB0428");
+
+            List<IReadOnlyList<ContextCondition>> when = [];
+
+            foreach (KdlNode block in child.ChildrenNamed("when"))
+            {
+                List<ContextCondition> conditions = ParseConditions(block, name, apps, monitors);
+
+                if (conditions.Count == 0)
+                {
+                    // Not "matches everything". An empty block would make the context
+                    // permanently active, which is the one reading nobody who wrote an
+                    // empty block meant.
+                    Report(Diagnostic.Error(
+                        "SHB0449",
+                        $"A 'when' block in context '{name}' has no conditions, so it is ignored.",
+                        block.Span,
+                        "Put a condition in it, or remove it. A context with no 'when' at all is " +
+                        "external: only `context --set` can turn it on."));
+                    continue;
+                }
+
+                when.Add(conditions);
+            }
+
+            TimeSpan linger = ContextDefinition.DefaultLinger;
+
+            if (OptionalInt(child, "linger") is { } ms)
+            {
+                if (ms < 0)
+                {
+                    Report(Diagnostic.Error(
+                        "SHB0448",
+                        $"Context '{name}' has a negative linger.",
+                        SpanOf(child, "linger"),
+                        "linger is how many milliseconds the conditions must have stopped holding " +
+                        "before the context lets go; 0 means at once."));
+                }
+                else
+                {
+                    linger = TimeSpan.FromMilliseconds(ms);
+                }
+            }
+
+            List<Keybinding> bindings = [];
+
+            if (child.Child("bindings") is { } bindingsNode)
+            {
+                CollectBindings(bindingsNode, workspaces, bindings, allowEmpty: true);
+                WarnOnDuplicates(bindings);
+            }
+
+            var effects = new ContextEffects(
+                child.Child("gaps") is { } gaps ? ReadGaps(gaps) : null,
+                child.Child("window-effects") is { } look ? ReadEffects(look) : null,
+                child.Child("animation") is { } motion ? ReadAnimation(motion) : null,
+                bindings,
+                ParseRules(child.Child("rules"), apps),
+                ParseWorkspaceHomes(child.Child("workspaces"), name, monitors, workspaces),
+                child.Child("on-enter") is { } enter ? ParseCommandBlock(enter, null) : [],
+                child.Child("on-exit") is { } exit ? ParseCommandBlock(exit, null) : []);
+
+            contexts.Add(new ContextDefinition(name, when, linger, effects, child.Span));
+        }
+
+        return ResolveContextReferences(contexts);
+    }
+
+    private List<ContextCondition> ParseConditions(
+        KdlNode block,
+        string context,
+        IReadOnlyDictionary<string, AppDefinition> apps,
+        IReadOnlyDictionary<string, MonitorDefinition> monitors)
+    {
+        List<ContextCondition> conditions = [];
+
+        foreach (KdlNode node in block.Children)
+        {
+            string name = node.Name;
+            bool negated = name.StartsWith('!');
+            if (negated) name = name[1..];
+
+            ContextCondition? condition = name.ToLowerInvariant() switch
+            {
+                "window" => ParseWindowCondition(node, WindowConditionKind.Present, negated, apps),
+                "focused" => ParseWindowCondition(node, WindowConditionKind.Focused, negated, apps),
+                "fullscreen" => ParseWindowCondition(node, WindowConditionKind.Fullscreen, negated, apps),
+                "workspace" => ParseWorkspaceCondition(node, negated),
+                "monitors" => ParseMonitorCountCondition(node, negated),
+                "monitor" => ParseMonitorPresentCondition(node, negated, monitors),
+                "display-topology" => ParseTopologyCondition(node, negated),
+                "remote-session" => ParseRemoteSessionCondition(node, negated),
+                "system-state" => ParseSystemStateCondition(node, negated),
+                "context" => ParseContextReference(node, negated),
+                _ => Unknown(node, context),
+            };
+
+            if (condition is not null) conditions.Add(condition);
+        }
+
+        return conditions;
+
+        ContextCondition? Unknown(KdlNode node, string context)
+        {
+            string bare = node.Name.TrimStart('!');
+            string? guess = Suggestion.Closest(bare, KnownConditions);
+
+            Report(Diagnostic.Error(
+                "SHB0446",
+                $"Unknown condition '{node.Name}' in context '{context}'.",
+                node.Span,
+                guess is not null
+                    ? $"Did you mean '{guess}'?"
+                    : $"Conditions: {string.Join(", ", KnownConditions)}."));
+
+            return null;
+        }
+    }
+
+    private WindowCondition? ParseWindowCondition(
+        KdlNode node, WindowConditionKind kind, bool negated, IReadOnlyDictionary<string, AppDefinition> apps)
+    {
+        string? app = node.Property("app")?.AsString();
+
+        if (app is not null && !apps.ContainsKey(app))
+        {
+            string? guess = Suggestion.Closest(app, [.. apps.Keys]);
+
+            Report(Diagnostic.Error(
+                "SHB0447",
+                $"'{node.Name}' refers to app '{app}', which is not declared.",
+                node.Property("app")!.Span,
+                guess is not null ? $"Did you mean '{guess}'?" : "Declare it with app \"" + app + "\" { process = \"...\" }."));
+
+            return null;
+        }
+
+        // Inline matchers, the way a rule's match block takes them; the property form
+        // above is the compact spelling and the two may be combined.
+        List<WindowMatcher> matchers = ParseMatchers(node);
+
+        var condition = new WindowCondition(kind, app, matchers, negated, node.Span);
+
+        if (condition.IsUnconstrained && kind != WindowConditionKind.Fullscreen)
+        {
+            // "Some window exists" is true of every desktop with a window on it.
+            // Full-screen without a subject is the one that means something on its own.
+            Report(Diagnostic.Error(
+                "SHB0448",
+                $"'{node.Name}' does not say which window.",
+                node.Span,
+                $"Write {node.Name} app=\"slides\", or {node.Name} {{ process = \"POWERPNT\" }}."));
+
+            return null;
+        }
+
+        return condition;
+    }
+
+    private WorkspaceCondition? ParseWorkspaceCondition(KdlNode node, bool negated)
+    {
+        KdlValue? active = node.Property("active");
+        KdlValue? focused = node.Property("focused");
+
+        if ((active is null) == (focused is null))
+        {
+            Report(Diagnostic.Error(
+                "SHB0448",
+                active is null
+                    ? "'workspace' does not say which workspace, or how."
+                    : "'workspace' gives both active= and focused=.",
+                node.Span,
+                "Write workspace active=\"3\" for one that is on a screen, or workspace " +
+                "focused=\"3\" for the one being worked on."));
+
+            return null;
+        }
+
+        return new WorkspaceCondition((active ?? focused)!.AsString(), focused is not null, negated, node.Span);
+    }
+
+    private MonitorCountCondition? ParseMonitorCountCondition(KdlNode node, bool negated)
+    {
+        int? exactly = OptionalIntProperty(node, "count");
+        int? min = OptionalIntProperty(node, "min");
+        int? max = OptionalIntProperty(node, "max");
+
+        if (exactly is null && min is null && max is null)
+        {
+            Report(Diagnostic.Error(
+                "SHB0448",
+                "'monitors' does not say how many.",
+                node.Span,
+                "Write monitors count=2, monitors min=2, or monitors max=1."));
+
+            return null;
+        }
+
+        if (exactly < 0 || min < 0 || max < 0)
+        {
+            Report(Diagnostic.Error(
+                "SHB0448", "'monitors' is given a negative count.", node.Span,
+                "Counts are zero or more."));
+
+            return null;
+        }
+
+        return new MonitorCountCondition(exactly, min, max, negated, node.Span);
+    }
+
+    private MonitorPresentCondition? ParseMonitorPresentCondition(
+        KdlNode node, bool negated, IReadOnlyDictionary<string, MonitorDefinition> monitors)
+    {
+        KdlValue? present = node.Property("present");
+        KdlValue? absent = node.Property("absent");
+
+        if ((present is null) == (absent is null))
+        {
+            Report(Diagnostic.Error(
+                "SHB0448",
+                present is null
+                    ? "'monitor' does not say which monitor, or whether it should be there."
+                    : "'monitor' gives both present= and absent=.",
+                node.Span,
+                "Write monitor present=\"dell-left\" or monitor absent=\"dell-left\", naming a " +
+                "declared monitor."));
+
+            return null;
+        }
+
+        KdlValue value = (present ?? absent)!;
+        string monitor = value.AsString();
+
+        if (!monitors.ContainsKey(monitor))
+        {
+            string[] declared = [.. monitors.Keys];
+            string? guess = Suggestion.Closest(monitor, declared);
+
+            Report(Diagnostic.Error(
+                "SHB0447",
+                $"'monitor' refers to '{monitor}', which is not a declared monitor.",
+                value.Span,
+                declared.Length == 0
+                    ? "Declare it with monitor \"" + monitor + "\" { path *= \"...\" }; `shubbak monitors` prints one per display."
+                    : guess is not null
+                        ? $"Did you mean '{guess}'?"
+                        : $"Declared monitors: {string.Join(", ", declared)}."));
+
+            return null;
+        }
+
+        // `absent` is the negated spelling; `!monitor absent=` is present again.
+        return new MonitorPresentCondition(monitor, negated ^ (absent is not null), node.Span);
+    }
+
+    private TopologyCondition? ParseTopologyCondition(KdlNode node, bool negated)
+    {
+        List<Core.Wm.DisplayTopologyKind> kinds = [];
+
+        foreach (KdlValue argument in node.Arguments)
+        {
+            string word = argument.AsString();
+
+            if (Core.Wm.DisplayTopologyNames.Parse(word) is { } kind && kind != Core.Wm.DisplayTopologyKind.Unknown)
+            {
+                kinds.Add(kind);
+                continue;
+            }
+
+            Report(Diagnostic.Error(
+                "SHB0448",
+                $"'{word}' is not a display topology.",
+                argument.Span,
+                $"One of: {string.Join(", ", Core.Wm.DisplayTopologyNames.Accepted)} - the four choices on the Win+P panel."));
+        }
+
+        if (kinds.Count == 0)
+        {
+            if (node.Arguments.Count == 0)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0448", "'display-topology' does not say which.", node.Span,
+                    $"Write display-topology \"extend\"; one of {string.Join(", ", Core.Wm.DisplayTopologyNames.Accepted)}."));
+            }
+
+            return null;
+        }
+
+        return new TopologyCondition(kinds, negated, node.Span);
+    }
+
+    private RemoteSessionCondition? ParseRemoteSessionCondition(KdlNode node, bool negated)
+    {
+        // Bare means true, the way the matchers read; an argument decides, and `!`
+        // inverts whatever it decided.
+        if (node.Argument(0) is { } argument)
+        {
+            if (!argument.TryAsBool(out bool wanted))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0419",
+                    $"'remote-session' expects true or false but got '{argument.Raw}'.",
+                    argument.Span));
+
+                return null;
+            }
+
+            negated ^= !wanted;
+        }
+
+        return new RemoteSessionCondition(negated, node.Span);
+    }
+
+    private SystemStateCondition? ParseSystemStateCondition(KdlNode node, bool negated)
+    {
+        List<Core.Wm.UserActivity> states = [];
+
+        foreach (KdlValue argument in node.Arguments)
+        {
+            string word = argument.AsString();
+
+            if (Core.Wm.UserActivityNames.Parse(word) is { } state)
+            {
+                states.Add(state);
+                continue;
+            }
+
+            Report(Diagnostic.Error(
+                "SHB0448",
+                $"'{word}' is not a system state.",
+                argument.Span,
+                "One of: ordinary, presenting, fullscreen-app, fullscreen-game, quiet-time."));
+        }
+
+        if (states.Count == 0)
+        {
+            if (node.Arguments.Count == 0)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0448", "'system-state' does not say which.", node.Span,
+                    "Write system-state \"presenting\"; one of ordinary, presenting, fullscreen-app, " +
+                    "fullscreen-game, quiet-time."));
+            }
+
+            return null;
+        }
+
+        return new SystemStateCondition(states, negated, node.Span);
+    }
+
+    private ContextReferenceCondition? ParseContextReference(KdlNode node, bool negated)
+    {
+        if (node.Argument(0) is not { } argument)
+        {
+            Report(Diagnostic.Error(
+                "SHB0448", "'context' does not name a context.", node.Span,
+                "Write context \"meeting\", naming another declared context."));
+
+            return null;
+        }
+
+        return new ContextReferenceCondition(argument.AsString(), negated, node.Span);
+    }
+
+    private int? OptionalIntProperty(KdlNode node, string name)
+    {
+        if (node.Property(name) is not { } value) return null;
+
+        if (value.TryAsInt(out int result)) return result;
+
+        Report(Diagnostic.Error(
+            "SHB0420",
+            $"'{name}' expects a whole number but got '{value.Raw}'.",
+            value.Span));
+
+        return null;
+    }
+
+    /// <summary>
+    /// Reads a context's <c>workspaces { workspace "3" monitor="projector" }</c>.
+    /// </summary>
+    /// <remarks>
+    /// Only <c>monitor=</c>, because a context re-homes a workspace and nothing else
+    /// about it; and only for a workspace declared at the top level, because a
+    /// workspace that exists on demand has no home to override.
+    /// </remarks>
+    private List<WorkspaceHome> ParseWorkspaceHomes(
+        KdlNode? node,
+        string context,
+        IReadOnlyDictionary<string, MonitorDefinition> monitors,
+        IReadOnlyList<WorkspaceConfig> workspaces)
+    {
+        List<WorkspaceHome> homes = [];
+        if (node is null) return homes;
+
+        foreach (KdlNode child in node.ChildrenNamed("workspace"))
+        {
+            if (child.Argument(0) is not { } nameValue)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0402", "A workspace must be given a name.", child.Span,
+                    "Write workspace \"3\" monitor=\"projector\"."));
+                continue;
+            }
+
+            string name = nameValue.AsString();
+
+            WarnAboutUnknownProperties(child, ["monitor"], $"setting on a workspace in context '{context}'", "SHB0428");
+
+            if (!workspaces.Any(w => string.Equals(w.Name, name, StringComparison.OrdinalIgnoreCase)))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0448",
+                    $"Context '{context}' re-homes workspace '{name}', which is not declared in workspaces {{ }}.",
+                    nameValue.Span,
+                    "A context can move a declared workspace to another monitor while it holds; declare " +
+                    "the workspace first."));
+                continue;
+            }
+
+            if (child.Property("monitor") is not { } monitor)
+            {
+                Report(Diagnostic.Error(
+                    "SHB0448",
+                    $"Workspace '{name}' in context '{context}' does not say which monitor.",
+                    child.Span,
+                    "Write workspace \"" + name + "\" monitor=\"projector\"."));
+                continue;
+            }
+
+            (int? index, string? monitorName) = ReadWorkspaceMonitor(name, monitor, monitors);
+
+            if (index is null && monitorName is null) continue;
+
+            homes.Add(new WorkspaceHome(name, index, monitorName, child.Span));
+        }
+
+        return homes;
+    }
+
+    /// <summary>
+    /// Checks every <c>context "x"</c> condition against the declared contexts, and
+    /// drops the ones that would make a context depend on itself.
+    /// </summary>
+    /// <remarks>
+    /// A cycle is not merely a mistake; it is undecidable. "Presenting holds when meeting
+    /// holds, and meeting holds when presenting holds" has two consistent answers, and
+    /// an evaluator that picked one would be right by accident. The reference that
+    /// closes the cycle is reported and removed, and a block left empty by that removal
+    /// goes with it, so what remains is decidable.
+    /// </remarks>
+    private List<ContextDefinition> ResolveContextReferences(List<ContextDefinition> contexts)
+    {
+        Dictionary<string, ContextDefinition> byName = new(StringComparer.OrdinalIgnoreCase);
+        foreach (ContextDefinition context in contexts) byName[context.Name] = context;
+
+        // Undeclared references first, so a cycle check only ever sees real edges.
+        for (int i = 0; i < contexts.Count; i++)
+        {
+            contexts[i] = contexts[i] with
+            {
+                When = contexts[i].When
+                    .Select(block => (IReadOnlyList<ContextCondition>)[.. block.Where(c => !IsUndeclared(c, contexts[i].Name))])
+                    .Where(block => block.Count > 0)
+                    .ToList(),
+            };
+        }
+
+        // Then cycles, one edge at a time until none remain.
+        bool removed;
+
+        do
+        {
+            removed = false;
+
+            for (int i = 0; i < contexts.Count && !removed; i++)
+            {
+                foreach (ContextReferenceCondition reference in contexts[i].AllConditions.OfType<ContextReferenceCondition>())
+                {
+                    if (!Reaches(reference.Context, contexts[i].Name, byName, [])) continue;
+
+                    Report(Diagnostic.Error(
+                        "SHB0450",
+                        $"Context '{contexts[i].Name}' depends on '{reference.Context}', which depends on it; the reference is ignored.",
+                        reference.Span,
+                        "A context cannot decide itself. Break the loop: one of the two has to be decided by something else."));
+
+                    contexts[i] = contexts[i] with
+                    {
+                        When = contexts[i].When
+                            .Select(block => (IReadOnlyList<ContextCondition>)[.. block.Where(c => !ReferenceEquals(c, reference))])
+                            .Where(block => block.Count > 0)
+                            .ToList(),
+                    };
+
+                    byName[contexts[i].Name] = contexts[i];
+                    removed = true;
+                    break;
+                }
+            }
+        }
+        while (removed);
+
+        return contexts;
+
+        bool IsUndeclared(ContextCondition condition, string owner)
+        {
+            if (condition is not ContextReferenceCondition reference) return false;
+            if (byName.ContainsKey(reference.Context)) return false;
+
+            string? guess = Suggestion.Closest(reference.Context, [.. byName.Keys]);
+
+            Report(Diagnostic.Error(
+                "SHB0447",
+                $"Context '{owner}' refers to context '{reference.Context}', which is not declared.",
+                reference.Span,
+                guess is not null ? $"Did you mean '{guess}'?" : $"Declared contexts: {string.Join(", ", byName.Keys)}."));
+
+            return true;
+        }
+
+        static bool Reaches(string from, string target, Dictionary<string, ContextDefinition> byName, HashSet<string> visited)
+        {
+            if (string.Equals(from, target, StringComparison.OrdinalIgnoreCase)) return true;
+            if (!visited.Add(from)) return false;
+            if (!byName.TryGetValue(from, out ContextDefinition? context)) return false;
+
+            foreach (ContextReferenceCondition next in context.AllConditions.OfType<ContextReferenceCondition>())
+                if (Reaches(next.Context, target, byName, visited)) return true;
+
+            return false;
+        }
+    }
+
     // ---- apps and rules ----------------------------------------------------
 
     private Dictionary<string, AppDefinition> ParseApps(KdlDocument document)
@@ -1416,7 +2101,7 @@ public sealed class ConfigLoader
         }
     }
 
-    private List<WindowRule> ParseRules(KdlNode? node, Dictionary<string, AppDefinition> apps)
+    private List<WindowRule> ParseRules(KdlNode? node, IReadOnlyDictionary<string, AppDefinition> apps)
     {
         List<WindowRule> rules = [];
         if (node is null) return rules;
@@ -1551,6 +2236,35 @@ public sealed class ConfigLoader
             value.Span));
 
         return fallback;
+    }
+
+    /// <summary>A setting's value when written, null when not - and null on a type error, once reported.</summary>
+    private bool? OptionalBool(KdlNode parent, string name)
+    {
+        if (SettingValue(parent, name) is not { } value) return null;
+
+        if (value.TryAsBool(out bool result)) return result;
+
+        Report(Diagnostic.Error(
+            "SHB0419",
+            $"'{name}' expects true or false but got '{value.Raw}'.",
+            value.Span));
+
+        return null;
+    }
+
+    private int? OptionalInt(KdlNode parent, string name)
+    {
+        if (SettingValue(parent, name) is not { } value) return null;
+
+        if (value.TryAsInt(out int result)) return result;
+
+        Report(Diagnostic.Error(
+            "SHB0420",
+            $"'{name}' expects a whole number but got '{value.Raw}'.",
+            value.Span));
+
+        return null;
     }
 
     private static string? Text(KdlNode parent, string name, string? fallback) =>

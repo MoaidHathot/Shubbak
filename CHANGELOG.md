@@ -17,6 +17,84 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **Contexts: named conditions on the desktop that layer overrides on the config while
+  they hold.** A talk from the laptop alone, then on a projector, then docked to two
+  monitors for a remote session, each wanting different gaps, a safer keyboard and the
+  slides somewhere else - and none of it should need a hand on the config file.
+
+  ```kdl
+  contexts {
+      context "presenting" {
+          when { window app="powerpoint-slideshow" }
+          when { system-state "presenting" }
+          linger 500
+
+          gaps { inner 0; outer { top 0; right 0; bottom 0; left 0 } }
+          window-effects { border #false }
+          animation { enabled #false }
+          bindings { bind "alt+shift+q" { } }
+          workspaces { workspace ";" monitor="projector" }
+          on-enter { focus --workspace ";" }
+      }
+      context "docked"  { when { monitor present="dell-right" } }
+      context "meeting" { }
+  }
+  ```
+
+  A context is level-triggered: active exactly while a `when` block holds, with no
+  stuck state and no exit rule to forget. Within a block every condition must hold;
+  several blocks mean any one is enough; `!` negates. Several contexts hold at once and
+  cascade in declaration order, later winning, with the file as layer zero. A context
+  whose conditions have just stopped holding lingers a moment before letting go,
+  because PowerPoint creates and destroys several windows while a show starts and a
+  context that flapped with them would run its on-enter and on-exit twice.
+
+  The conditions are a closed set, on purpose: a window present, focused or full-screen
+  - matched with the same `app` definitions rules use, or inline matchers; a workspace
+  active or focused; how many monitors, which declared ones, the Win+P topology; remote
+  session; the shell's notification state. Every one is something the window manager
+  already knows in order to place windows, or something Windows says about the session
+  in one cheap call. **Shubbak observes the desktop, not the applications.** Whether the
+  camera is on, whether a call is up, what the calendar says, arrive from outside as a
+  context with no `when` - external - that another program sets over the pipe.
+
+  What a context can change: `gaps`, `window-effects` and `animation`, each read by the
+  same code as the top-level section and applied as a delta, so `gaps { inner 0 }`
+  changes the inner gap and nothing else; `bindings`, laid over the default table with an
+  empty binding disarming a key; `rules`, consulted only while it holds; `workspaces`,
+  re-homing a declared workspace while it holds and sending it back after; `on-enter`
+  and `on-exit`, run once each way. Rules scoped to a context apply to events after it
+  activates; `on-enter` is the place for bulk actions. The order on a flip is fixed:
+  on-exit under the old configuration, apply, announce, on-enter under the new.
+
+  Checked at load as far as load can check: an unknown condition is named with a
+  suggestion (`SHB0446`), a reference to an undeclared app, monitor or context is an
+  error (`SHB0447`), a bad value - a topology that is not one of the four, a state that
+  is not one of the five, a `window` that names no window - is refused with the accepted
+  list (`SHB0448`), an empty `when` is an error rather than always-true (`SHB0449`), a
+  context that would depend on itself by any route has the closing reference dropped
+  (`SHB0450`), and a `context` command naming an undeclared context is a warning
+  (`SHB0451`). Reading the three sections as deltas also fixed a quiet asymmetry:
+  `window-effects` was rebuilt from scratch rather than layered like the other two.
+
+- **`context --set|--clear|--toggle|--auto <name> [--ttl 5s] [--lease]`.** A pin beats
+  the conditions either way; `--auto` hands the context back to them. `--ttl` takes a
+  pin off by itself after a while, so a script that polls every few seconds and then
+  crashes leaves nothing behind; `--lease` takes it off when the connection that made it
+  closes, so a process holding a pipe open supplies a fact for exactly as long as it is
+  alive. That pair is the extension primitive this whole feature is arranged around: the
+  daemon never learns the word "camera", and the program that watches the camera never
+  learns what a meeting should do to the desktop. The command line refuses `--lease`,
+  since its connection closes at once, and says what to use instead.
+
+- **`context.changed` on the event stream, `contexts` on the snapshot, `query contexts`
+  and `shubbak contexts`.** The report answers "why is this context on" or "why is it
+  not" the way `inspect` answers "why is this window not tiled": every block, every
+  condition, whether it held and what it saw - `no such window`, `2 attached`, `the
+  shell says ordinary` - and for a pin, who made it, how long ago, when it expires,
+  whether it is leased. `shubbak status` names the active contexts, the tray tooltip
+  shows them, and `diagnose` has a section.
+
 - **Monitors can be named by what they are, and workspaces bound to the name.**
   `monitor=1` on a workspace is a position in the order Windows reports displays, and
   Windows reorders that on replug, on DisplayPort wake and on a driver restart - which

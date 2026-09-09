@@ -161,6 +161,7 @@ public sealed class CommandCatalogueTests
             "signal" => "signal palette",
             "shell-exec" => "shell-exec pwsh",
             "wm-enable-binding-mode" => "wm-enable-binding-mode resize",
+            "context" => "context --set presenting",
             _ => verb,
         };
 

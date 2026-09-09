@@ -115,11 +115,70 @@ public sealed class BindingTable
             ? kept
             : null;
 
-        _state = new Snapshot(defaults, modes, active, active is null ? null : wasActive);
+        _baseDefaults = defaults;
+
+        // The overlay in force survives a reload, as the mode does: a reload is not a
+        // request to leave the context you are in. The daemon re-applies the effective
+        // config straight after, which replaces it anyway.
+        _state = new Snapshot(Merge(defaults, _overlay), modes, active, active is null ? null : wasActive);
 
         // A mode that has been deleted from the config leaves the keyboard on the
         // defaults, and everything that reports the mode has to be told so.
         return wasActive is not null && active is null ? wasActive : null;
+    }
+
+    /// <summary>The default bindings as the config wrote them, before any overlay.</summary>
+    private Dictionary<int, Keybinding> _baseDefaults = [];
+
+    /// <summary>The bindings the active contexts lay over the defaults, in order.</summary>
+    private IReadOnlyList<Keybinding> _overlay = [];
+
+    /// <summary>
+    /// Lays a set of bindings over the default table, or takes the overlay off.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Merged here, once, into the table the hook reads - not consulted by the hook as a
+    /// second table. The callback does one dictionary lookup per key-down today and
+    /// does one after this; a context flipping costs a rebuild of a few hundred entries
+    /// on the daemon thread and the hook thread nothing at all. That is rule three in
+    /// <c>ideas/contexts.md</c>, and this is where it is kept.
+    /// </para>
+    /// <para>
+    /// Later entries win on the same key, so the caller's order is the cascade's order.
+    /// A binding with no commands claims the key and does nothing when it fires, which
+    /// is how a context disarms a key: the chord is swallowed rather than reaching the
+    /// application, and nothing runs.
+    /// </para>
+    /// <para>
+    /// The overlay applies to the default table only. Inside a binding mode the mode's
+    /// table is the whole keyboard, as it always was; a mode that wants a context's
+    /// key can bind it itself.
+    /// </para>
+    /// </remarks>
+    public void SetOverlay(IReadOnlyList<Keybinding> overlay)
+    {
+        ArgumentNullException.ThrowIfNull(overlay);
+
+        _overlay = overlay;
+
+        Snapshot state = _state;
+        _state = state with { Default = Merge(_baseDefaults, overlay) };
+    }
+
+    /// <summary>How many bindings the overlay in force contributes.</summary>
+    public int OverlayCount => _overlay.Count;
+
+    private static Dictionary<int, Keybinding> Merge(Dictionary<int, Keybinding> defaults, IReadOnlyList<Keybinding> overlay)
+    {
+        if (overlay.Count == 0) return defaults;
+
+        Dictionary<int, Keybinding> merged = new(defaults);
+
+        foreach (Keybinding binding in overlay)
+            merged[Pack(binding.Key)] = binding;
+
+        return merged;
     }
 
     /// <summary>Switches binding mode; null returns to the default set.</summary>

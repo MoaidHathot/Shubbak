@@ -75,6 +75,17 @@ public enum HostAction
     /// the only thing that knows whether they are currently installed.
     /// </remarks>
     ToggleSuspend,
+
+    /// <summary>
+    /// Pin a context, or take its pin off. The payload is the encoded
+    /// <see cref="ContextCommand"/>; see <see cref="CommandExecutor.Decode"/>.
+    /// </summary>
+    /// <remarks>
+    /// A host action because which contexts hold is decided from facts the state
+    /// machine has never held - windows it does not manage, the session, what a
+    /// client asked for - and the pin is one of those facts.
+    /// </remarks>
+    Context,
 }
 
 /// <summary>The outcome of executing one command.</summary>
@@ -187,6 +198,10 @@ public sealed class CommandExecutor
             ResumeCommand => Host(HostAction.Resume),
             ToggleSuspendCommand => Host(HostAction.ToggleSuspend),
 
+            // A pin on a context, for the same reason: the facts that decide a context
+            // are the host's.
+            ContextCommand c => Host(HostAction.Context, Encode(c)),
+
             // Only meaningful inside a window rule, where the rule engine consumes it
             // before execution. Reaching here means it was bound to a key by mistake.
             IgnoreCommand => Rejected(command, "'ignore' is only valid in a window rule."),
@@ -229,6 +244,43 @@ public sealed class CommandExecutor
         command.Arguments.Count == 0
             ? command.Signal
             : command.Signal + '\t' + string.Join('\t', command.Arguments);
+
+    /// <summary>
+    /// Flattens a context command into the single string a host action carries.
+    /// </summary>
+    /// <remarks>
+    /// Tab-separated, like a signal, and for the same reason. The fields are the action,
+    /// the context, the time-to-live in milliseconds or nothing, and whether the pin is
+    /// leased. <see cref="Decode"/> is the inverse and lives beside this so the two
+    /// cannot drift.
+    /// </remarks>
+    public static string Encode(ContextCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        return string.Join('\t',
+            command.Action.ToString(),
+            command.Context,
+            command.Ttl is { } ttl ? ((long)ttl.TotalMilliseconds).ToString(CultureInfo.InvariantCulture) : "",
+            command.Lease ? "lease" : "");
+    }
+
+    /// <summary>Reads a context command back out of a host-action payload.</summary>
+    public static ContextCommand Decode(string payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        string[] parts = payload.Split('\t');
+
+        if (parts.Length != 4 || !Enum.TryParse(parts[0], out ContextAction action))
+            throw new FormatException($"Not a context payload: '{payload}'.");
+
+        TimeSpan? ttl = parts[2].Length > 0
+            ? TimeSpan.FromMilliseconds(long.Parse(parts[2], CultureInfo.InvariantCulture))
+            : null;
+
+        return new ContextCommand(parts[1], action, ttl, parts[3].Length > 0);
+    }
 
     private static CommandOutcome Rejected(WmCommand command, string reason) =>
         new(new WmResult(false, [new CommandRejected(command.Name, reason)]));

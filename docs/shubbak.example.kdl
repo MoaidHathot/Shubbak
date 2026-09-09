@@ -303,6 +303,91 @@ workspaces {
 }
 
 // ---------------------------------------------------------------------------
+// Contexts: named conditions on the desktop that layer overrides on this file
+// while they hold.
+//
+// A context is level-triggered - active exactly while a `when` block holds, no
+// stuck state, no exit rule to forget. Within a block every condition must hold;
+// several blocks mean any one of them is enough. Prefix a condition with `!` to
+// negate it. Several contexts can hold at once, and their overrides cascade in
+// declaration order, later winning, with this file underneath as layer zero.
+//
+// Conditions, all of them things Shubbak already knows or Windows says about the
+// session in one cheap call - never what an application is doing internally:
+//
+//   window app="x"  / window { process = "..." }   some top-level window matches,
+//                                                  managed or not
+//   focused app="x"                                the foreground window matches
+//   fullscreen [app="x"]                           a managed window is full-screen
+//   workspace active="3"  / workspace focused="3"
+//   monitors count=2  / min=2  / max=1
+//   monitor present="dell-left"  / monitor absent="dell-left"
+//   display-topology "extend"        internal, clone, extend, external (Win+P)
+//   remote-session
+//   system-state "presenting"        ordinary, presenting, fullscreen-app,
+//                                    fullscreen-game, quiet-time
+//   context "meeting"                another context holds
+//
+// What a context can change: gaps, window-effects, animation (each a delta on
+// the section above - only what you write changes), bindings (laid over the
+// default keys; an empty binding disarms a key), rules (only while it holds),
+// workspaces (a workspace lives elsewhere while it holds), and on-enter /
+// on-exit commands, run once each way.
+//
+// Pin one by hand with `context --set presenting`, `--clear`, `--toggle`, or hand
+// it back to its conditions with `--auto`. `shubbak contexts` says why each one is
+// the way it is, condition by condition.
+// ---------------------------------------------------------------------------
+
+contexts {
+    // On stage. The slide show window exists, or the shell says presentation mode
+    // (the Windows Mobility Center toggle). Gaps and borders go, animation stops,
+    // the close key is disarmed so a slip cannot take the deck with it, and the
+    // slides workspace moves to the projector when one is attached.
+    context "presenting" {
+        when { window app="powerpoint-slideshow" }
+        when { system-state "presenting" }
+
+        // PowerPoint creates and destroys several windows while a show starts.
+        // Half a second of patience stops the context flapping through them.
+        linger 500
+
+        gaps { inner 0; outer { top 0; right 0; bottom 0; left 0 } }
+        window-effects { border #false }
+        animation { enabled #false }
+
+        bindings {
+            bind "alt+shift+q" { }
+        }
+
+        on-enter { focus --workspace ";" }
+    }
+
+    // Docked: the right-hand Dell is attached. Nothing to change here; it exists
+    // so a bar rule, a palette row or a script can key off it, and so that
+    // "docked-meeting" below can compose it.
+    context "docked" {
+        when { monitor present="dell-right" }
+    }
+
+    // External: nothing on the desktop decides this, so it has no `when`. Another
+    // program - one that watches the camera, the calendar, a call - sets it over
+    // the pipe: `shubbak context --set meeting --ttl 10s` from a script, or a held
+    // connection with --lease so the pin dies with the program. The config says
+    // what a meeting does; the program never needs to know.
+    context "meeting" {
+        window-effects { focused-colour "#f38ba8" }
+    }
+
+    // Composed. Both hold, so both sets of changes are already in force; this one
+    // adds what only the combination wants.
+    context "docked-meeting" {
+        when { context "docked"; context "meeting" }
+        workspaces { workspace "-" monitor="dell-right" }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Keybindings
 // ---------------------------------------------------------------------------
 //
@@ -400,6 +485,11 @@ keybindings {
     bind "alt+d" { move-workspace --direction up }
     bind "alt+s" { move-workspace --direction down }
     bind "alt+shift+o" { move-workspace --monitor "laptop" }
+
+    // Hold a context on or off by hand, or hand it back to its conditions. The
+    // pin beats whatever the conditions say until --auto takes it off.
+    bind "alt+shift+u" { context --toggle "presenting" }
+    bind "alt+ctrl+u"  { context --auto "presenting" }
 
     // Tags: make a window a member of several workspaces at once. Unlike `move`,
     // which relocates a window, tagging means "I want this here too" - the window

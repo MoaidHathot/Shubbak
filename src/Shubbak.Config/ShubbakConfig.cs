@@ -227,6 +227,12 @@ public sealed record ShubbakConfig
     public IReadOnlyDictionary<string, MonitorDefinition> Monitors { get; init; } =
         new Dictionary<string, MonitorDefinition>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Named conditions on the desktop that layer overrides on this configuration while
+    /// they hold, in declaration order.
+    /// </summary>
+    public IReadOnlyList<ContextDefinition> Contexts { get; init; } = [];
+
     public string? DefaultLayout { get; init; }
 
     public static ShubbakConfig Default => new();

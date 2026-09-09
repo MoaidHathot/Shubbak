@@ -98,6 +98,8 @@ public sealed class WmEventGeometryTests
         Assert.False(new EnvironmentChanged(false, UserActivity.Ordinary).AffectsGeometry());
         Assert.False(new BindingFired("alt+h", null, ["focus"]).AffectsGeometry());
         Assert.False(new BindingFired("alt+r", "resize", ["resize", "resize"]).AffectsGeometry());
+        Assert.False(new ContextChanged("presenting", true, "detected", "a slide show is up").AffectsGeometry());
+        Assert.False(new ContextChanged("presenting", false, "pinned", "cleared by a command").AffectsGeometry());
     }
 
     [Fact]
@@ -253,6 +255,7 @@ public sealed class WmEventGeometryTests
                 nameof(CommandRejected),
                 nameof(ConfigReloaded),
                 nameof(ContainerResized),
+                nameof(ContextChanged),
                 nameof(EnvironmentChanged),
                 nameof(LayoutChanged),
                 nameof(MonitorAdded),

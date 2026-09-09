@@ -306,6 +306,39 @@ public sealed record EnvironmentChanged(bool RemoteSession, UserActivity Activit
 }
 
 /// <summary>
+/// A context became active or stopped being.
+/// </summary>
+/// <param name="Name">The context, as the config names it.</param>
+/// <param name="Active">Whether it now holds.</param>
+/// <param name="Source">
+/// Why: <c>detected</c> when its conditions decided, <c>pinned</c> when a command did.
+/// </param>
+/// <param name="Reason">One line saying what decided it, for the log and the bar.</param>
+/// <remarks>
+/// <para>
+/// A context is a named condition on the desktop - a slide show is up, the laptop is
+/// docked, a meeting is on - that layers overrides on the configuration while it
+/// holds. This is the announcement that the layer went on or came off. Whatever the
+/// overrides changed announces itself separately, as it would have had the user
+/// changed it by hand.
+/// </para>
+/// <para>
+/// Raised by the daemon rather than the state machine, like <see cref="SuspendChanged"/>:
+/// which contexts hold is decided from facts about the desktop the state machine has
+/// never held - windows it does not manage, the session, what a client asked for -
+/// and the tree is one input to that decision rather than its owner.
+/// </para>
+/// <para>
+/// Inert for geometry. Applying the overrides marks the layout dirty itself, before
+/// this is raised.
+/// </para>
+/// </remarks>
+public sealed record ContextChanged(string Name, bool Active, string Source, string Reason) : WmEvent
+{
+    public override string Topic => "context.changed";
+}
+
+/// <summary>
 /// The configuration was re-read from disk.
 /// </summary>
 /// <remarks>

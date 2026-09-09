@@ -1,3 +1,4 @@
+using Shubbak.Core.Wm;
 using Windows.Win32;
 using Windows.Win32.Devices.Display;
 using Windows.Win32.Foundation;
@@ -30,32 +31,6 @@ public readonly record struct DisplayTarget(
     string FriendlyName,
     string DevicePath,
     bool IsInternal);
-
-/// <summary>
-/// The arrangement the user chose with Win+P.
-/// </summary>
-/// <remarks>
-/// Named for the four choices on that panel rather than the constants behind them,
-/// because the choice is what a person recognises. <c>Unknown</c> is a failed call or
-/// a machine with no display at all.
-/// </remarks>
-public enum DisplayTopologyKind
-{
-    /// <summary>Could not be read.</summary>
-    Unknown,
-
-    /// <summary>"PC screen only": the built-in panel and nothing else.</summary>
-    Internal,
-
-    /// <summary>"Duplicate": every display shows the same desktop.</summary>
-    Clone,
-
-    /// <summary>"Extend": one desktop across several displays.</summary>
-    Extend,
-
-    /// <summary>"Second screen only": the built-in panel is off.</summary>
-    External,
-}
 
 /// <summary>
 /// The display configuration API, asked the two questions the monitor enumeration

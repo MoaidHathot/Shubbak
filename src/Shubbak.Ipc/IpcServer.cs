@@ -61,10 +61,39 @@ public sealed class IpcServer : IAsyncDisposable
     /// </remarks>
     public delegate Task<IpcResponse> RequestHandler(IpcRequest request);
 
-    private RequestHandler? _handler;
+    /// <summary>
+    /// Handles one request, knowing which connection it came over.
+    /// </summary>
+    /// <remarks>
+    /// The extra argument exists for two things a plain handler cannot do: say who asked
+    /// - the pid behind the pipe, for a report - and tie something to the connection's
+    /// lifetime, which is what a leased context is. Everything else is the same as
+    /// <see cref="RequestHandler"/>.
+    /// </remarks>
+    public delegate Task<IpcResponse> ClientAwareRequestHandler(IpcRequest request, IpcClientInfo client);
+
+    private ClientAwareRequestHandler? _handler;
+
+    /// <summary>
+    /// Raised when a client's connection has ended, with its id, once per connection.
+    /// </summary>
+    /// <remarks>
+    /// From a pipe thread, like the handler. What a host does with it - releasing the
+    /// leases the connection held - is the host's business; this layer knows only that
+    /// the connection is gone.
+    /// </remarks>
+    public Action<long>? ClientDisconnected { get; set; }
 
     /// <summary>Starts listening.</summary>
     public void Start(RequestHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+
+        Start((request, _) => handler(request));
+    }
+
+    /// <summary>Starts listening, telling the handler which connection each request came over.</summary>
+    public void Start(ClientAwareRequestHandler handler)
     {
         ArgumentNullException.ThrowIfNull(handler);
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -270,7 +299,13 @@ public sealed class IpcServer : IAsyncDisposable
         // ago, silently undoing the saving this exists for.
         ForgetSubscriptions(client);
 
-        lock (_gate) _clients.Remove(client);
+        bool removed;
+        lock (_gate) removed = _clients.Remove(client);
+
+        // Once, however many paths noticed the disconnect: the read loop finishing and
+        // disposal both arrive here, and a lease released twice is a lease released
+        // for a connection that may since have been reused.
+        if (removed) ClientDisconnected?.Invoke(client.Id);
     }
 
     public async ValueTask DisposeAsync()
@@ -336,6 +371,8 @@ public sealed class IpcServer : IAsyncDisposable
     /// <summary>One connected client.</summary>
     private sealed class ClientConnection : IDisposable
     {
+        private static long s_nextId;
+
         private readonly NamedPipeServerStream _pipe;
         private readonly IpcServer _server;
         private readonly HashSet<string> _subscriptions = new(StringComparer.Ordinal);
@@ -349,7 +386,21 @@ public sealed class IpcServer : IAsyncDisposable
         {
             _pipe = pipe;
             _server = server;
+            Id = Interlocked.Increment(ref s_nextId);
         }
+
+        /// <summary>
+        /// This connection, distinct from every other the server has had.
+        /// </summary>
+        /// <remarks>
+        /// A counter rather than the pipe handle, because handles are reused by the
+        /// operating system the moment one closes - and the point of an id is to name a
+        /// connection that has gone.
+        /// </remarks>
+        public long Id { get; }
+
+        /// <summary>This connection as the handler sees it.</summary>
+        public IpcClientInfo Info => new(Id, PipeHandle);
 
         /// <summary>
         /// Whether this client has fallen behind and needs to re-read the world.
@@ -585,7 +636,7 @@ public sealed class IpcServer : IAsyncDisposable
             }
 
             IpcResponse response = _server._handler is { } handler
-                ? await handler(request).ConfigureAwait(false)
+                ? await handler(request, Info).ConfigureAwait(false)
                 : new IpcResponse(request.Id, false, null, "server is not ready");
 
             await WriteAsync(writer, response).ConfigureAwait(false);

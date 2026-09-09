@@ -127,7 +127,11 @@ public abstract record WmCommand
         // Entering or leaving a mode repeatedly leaves which one is active a matter
         // of when the key happened to be released.
         EnableBindingModeCommand or
-        DisableBindingModeCommand);
+        DisableBindingModeCommand or
+
+        // The same, for a context: a toggle that flips at the repeat rate, and a set or
+        // clear whose on-enter and on-exit commands would run dozens of times.
+        ContextCommand);
 }
 
 // ---- focus -----------------------------------------------------------------
@@ -403,6 +407,48 @@ public sealed record EnableBindingModeCommand(string Mode) : WmCommand
 public sealed record DisableBindingModeCommand : WmCommand
 {
     public override string Name => "wm-disable-binding-mode";
+}
+
+/// <summary>What a <see cref="ContextCommand"/> does to a context's pin.</summary>
+public enum ContextAction
+{
+    /// <summary>Hold it active, whatever its conditions say.</summary>
+    Set,
+
+    /// <summary>Hold it inactive, whatever its conditions say.</summary>
+    Clear,
+
+    /// <summary>Pin it to the opposite of whatever it is now.</summary>
+    Toggle,
+
+    /// <summary>Take the pin off and let its conditions decide again.</summary>
+    Auto,
+}
+
+/// <summary>
+/// <c>context --set presenting</c> / <c>--clear</c> / <c>--toggle</c> / <c>--auto</c>,
+/// with an optional <c>--ttl 5s</c> or <c>--lease</c>.
+/// </summary>
+/// <param name="Context">The context, as the config declares it.</param>
+/// <param name="Action">What to do to its pin.</param>
+/// <param name="Ttl">How long a set or clear lasts before the pin comes off by itself.</param>
+/// <param name="Lease">
+/// Whether the pin should come off when the connection that made it closes. The
+/// extension primitive: a process that watches something the window manager does not -
+/// a camera, a calendar - sets a context with a lease, and a crash of that process
+/// takes the fact with it rather than leaving the window manager believing it forever.
+/// </param>
+/// <remarks>
+/// A host action rather than a state-machine one, like suspending: which contexts hold
+/// is decided from facts the state machine has never held, and the pin is one of them.
+/// </remarks>
+public sealed record ContextCommand(
+    string Context,
+    ContextAction Action,
+    TimeSpan? Ttl = null,
+    bool Lease = false) : WmCommand
+{
+    public override string Name => "context";
 }
 
 /// <summary><c>wm-toggle-pause</c></summary>

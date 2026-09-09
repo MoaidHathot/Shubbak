@@ -296,6 +296,9 @@ public static class CommandParser
                 command = new DisableBindingModeCommand();
                 return true;
 
+            case "context":
+                return ParseContext(rest, text, span, out command, out diagnostic);
+
             case "wm-toggle-pause":
                 command = new TogglePauseCommand();
                 return true;
@@ -506,6 +509,145 @@ public static class CommandParser
         }
 
         command = new ResizeCommand(axis, delta);
+        return true;
+    }
+
+    /// <summary>
+    /// <c>context --set name [--ttl 5s] [--lease]</c>, and the three other verbs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Exactly one of <c>--set</c>, <c>--clear</c>, <c>--toggle</c> and <c>--auto</c>,
+    /// each taking the context's name. Two at once is a contradiction rather than a
+    /// preference and is refused, as <c>move-workspace</c> refuses a direction and a
+    /// monitor together.
+    /// </para>
+    /// <para>
+    /// <c>--ttl</c> and <c>--lease</c> only mean something on a set or a clear: a toggle
+    /// is one of those two decided at the far end, so they are accepted there and apply
+    /// to whichever it turns out to be; on <c>--auto</c> there is no pin for either to
+    /// govern, and they are refused rather than ignored.
+    /// </para>
+    /// </remarks>
+    private static bool ParseContext(
+        ReadOnlySpan<string> rest, string text, TextSpan span,
+        out WmCommand? command, out Diagnostic? diagnostic)
+    {
+        command = null;
+        diagnostic = null;
+
+        (ContextAction Action, string Flag)[] verbs =
+        [
+            (ContextAction.Set, "--set"),
+            (ContextAction.Clear, "--clear"),
+            (ContextAction.Toggle, "--toggle"),
+            (ContextAction.Auto, "--auto"),
+        ];
+
+        ContextAction? action = null;
+        string? name = null;
+        int given = 0;
+
+        foreach ((ContextAction candidate, string flag) in verbs)
+        {
+            if (!Flag(rest, flag)) continue;
+
+            given++;
+            action = candidate;
+            name = Value(rest, flag);
+        }
+
+        if (given > 1)
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0317", $"'{text}' asks for more than one of --set, --clear, --toggle and --auto.", span,
+                "Write one of them: context --set presenting, or context --auto presenting.");
+            return false;
+        }
+
+        if (action is null)
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0317", $"'{text}' does not say what to do with the context.", span,
+                "Write context --set presenting to hold it on, --clear to hold it off, " +
+                "--toggle to flip it, or --auto to let its conditions decide again.");
+            return false;
+        }
+
+        if (name is null || name.StartsWith("--", StringComparison.Ordinal))
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0318", $"'{text}' does not name a context.", span,
+                "Write context --set presenting, using a name declared in contexts { }.");
+            return false;
+        }
+
+        TimeSpan? ttl = null;
+
+        if (Value(rest, "--ttl") is { } ttlText)
+        {
+            if (!TryParseDuration(ttlText, out TimeSpan parsed) || parsed <= TimeSpan.Zero)
+            {
+                diagnostic = Diagnostic.Error(
+                    "SHB0319", $"'{ttlText}' is not a duration.", span,
+                    "Write --ttl 5s, --ttl 500ms, --ttl 2m or --ttl 1h; a bare number is seconds.");
+                return false;
+            }
+
+            ttl = parsed;
+        }
+        else if (Flag(rest, "--ttl"))
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0319", $"'{text}' gives --ttl without a duration.", span,
+                "Write --ttl 5s, --ttl 500ms, --ttl 2m or --ttl 1h.");
+            return false;
+        }
+
+        bool lease = Flag(rest, "--lease");
+
+        if (action == ContextAction.Auto && (ttl is not null || lease))
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0320", $"'{text}' gives --ttl or --lease with --auto, which has no pin for them to govern.", span,
+                "Drop them: context --auto presenting takes the pin off outright.");
+            return false;
+        }
+
+        command = new ContextCommand(name, action.Value, ttl, lease);
+        return true;
+    }
+
+    /// <summary>
+    /// Reads <c>500ms</c>, <c>5s</c>, <c>2m</c>, <c>1h</c>, or a bare number of seconds.
+    /// </summary>
+    /// <remarks>
+    /// Seconds for a bare number because that is the unit a person reaching for a
+    /// time-to-live thinks in: a heartbeat every few seconds, a pin that outlives a
+    /// crash by not much more. Milliseconds is the unit a linger is written in, and the
+    /// two are in different places for exactly that reason.
+    /// </remarks>
+    public static bool TryParseDuration(string text, out TimeSpan duration)
+    {
+        duration = default;
+
+        if (string.IsNullOrWhiteSpace(text)) return false;
+
+        ReadOnlySpan<char> span = text.AsSpan().Trim();
+        double scale;
+
+        if (span.EndsWith("ms", StringComparison.OrdinalIgnoreCase)) { scale = 1; span = span[..^2]; }
+        else if (span.EndsWith("s", StringComparison.OrdinalIgnoreCase)) { scale = 1000; span = span[..^1]; }
+        else if (span.EndsWith("m", StringComparison.OrdinalIgnoreCase)) { scale = 60_000; span = span[..^1]; }
+        else if (span.EndsWith("h", StringComparison.OrdinalIgnoreCase)) { scale = 3_600_000; span = span[..^1]; }
+        else scale = 1000;
+
+        if (!double.TryParse(span, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out double amount))
+            return false;
+
+        if (amount < 0 || double.IsNaN(amount) || double.IsInfinity(amount)) return false;
+
+        duration = TimeSpan.FromMilliseconds(amount * scale);
         return true;
     }
 

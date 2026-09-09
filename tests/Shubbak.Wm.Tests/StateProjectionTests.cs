@@ -249,6 +249,41 @@ public sealed class StateProjectionTests
         Assert.Null(read.Internal);
     }
 
+    // ---- contexts -------------------------------------------------------------
+
+    [Fact]
+    public void AContextAnnouncementCarriesNameStateSourceAndReason()
+    {
+        WindowManager wm = WithOneWorkspace(out _);
+
+        string payload = StateProjection.Payload(
+            new ContextChanged("presenting", true, "detected", "window app=\"slides\""), wm);
+
+        Assert.Equal(
+            "{\"name\":\"presenting\",\"active\":true,\"source\":\"detected\",\"reason\":\"window app=\\u0022slides\\u0022\"}",
+            payload);
+        Assert.Equal("context.changed", new ContextChanged("x", false, "pinned", "r").Topic);
+        Assert.Contains("context.changed", IpcProtocol.Topics);
+    }
+
+    [Fact]
+    public void TheSnapshotCarriesTheActiveContextsWhenGivenThem()
+    {
+        WindowManager wm = WithOneWorkspace(out _);
+
+        StateSnapshot snapshot = StateProjection.Snapshot(wm, contexts: ["presenting", "docked"]);
+        Assert.Equal(["presenting", "docked"], snapshot.Contexts);
+
+        // Not given: absent on the wire, as every appended field is.
+        string json = JsonSerializer.Serialize(StateProjection.Snapshot(wm), IpcJsonContext.Default.StateSnapshot);
+        Assert.DoesNotContain("contexts", json, StringComparison.Ordinal);
+
+        // Given and empty: present and empty, so a client can tell "none hold" from
+        // "this daemon predates contexts".
+        string none = JsonSerializer.Serialize(StateProjection.Snapshot(wm, contexts: []), IpcJsonContext.Default.StateSnapshot);
+        Assert.Contains("\"contexts\":[]", none, StringComparison.Ordinal);
+    }
+
     // ---- bindings -------------------------------------------------------------
 
     [Fact]

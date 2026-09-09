@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Shubbak.Core.Wm;
 using Shubbak.Native;
 using Windows.Win32.Devices.Display;
 

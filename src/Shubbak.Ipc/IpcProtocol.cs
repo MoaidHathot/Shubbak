@@ -24,6 +24,20 @@ public sealed record IpcResponse(int Id, bool Ok, string? Data = null, string? E
 /// <param name="Data">Event payload as JSON.</param>
 public sealed record IpcEvent(string Topic, string Data);
 
+/// <summary>
+/// The connection a request came over, for a handler that needs to know.
+/// </summary>
+/// <param name="ConnectionId">
+/// Names this connection for its lifetime and never names another; see
+/// <c>IpcServer.ClientDisconnected</c>.
+/// </param>
+/// <param name="PipeHandle">
+/// The server's end of the pipe while connected, or zero. Handed out so the host can
+/// ask Windows which process is on the other side; this assembly has no Win32 in it and
+/// does not interpret the handle.
+/// </param>
+public readonly record struct IpcClientInfo(long ConnectionId, nint PipeHandle);
+
 /// <summary>A window as described to clients.</summary>
 public sealed record WindowInfo(
     long Id,
@@ -284,6 +298,53 @@ public sealed record AppReport(
     bool Matched,
     IReadOnlyList<string> FailedMatchers);
 
+/// <summary>
+/// One context, as <c>query contexts</c> and <c>shubbak contexts</c> describe it: whether
+/// it holds, why, and who decided.
+/// </summary>
+/// <remarks>
+/// The answer to "why is this context on" or "why is it not", which is the question
+/// anybody asks the first time a context does not do what they expected. Every
+/// condition is listed with whether it holds and what it saw, so the answer is in the
+/// report rather than in a debugger.
+/// </remarks>
+/// <param name="Name">The context, as the config names it.</param>
+/// <param name="Active">Whether it holds now.</param>
+/// <param name="Source"><c>detected</c> when its conditions decided, <c>pinned</c> when a command did.</param>
+/// <param name="External">Whether it has no conditions, so only a command can set it.</param>
+/// <param name="Reason">One line saying what decided it.</param>
+/// <param name="Pin"><c>set</c>, <c>clear</c>, or null when its conditions are in charge.</param>
+/// <param name="SetBy">Who pinned it: a process and pid, or "a keybinding or rule".</param>
+/// <param name="SetAgoMs">How long ago the pin was made.</param>
+/// <param name="ExpiresInMs">How long until a pin with a time-to-live comes off, or null.</param>
+/// <param name="Leased">Whether the pin comes off when the connection that made it closes.</param>
+/// <param name="LingerRemainingMs">
+/// How long an active context whose conditions have stopped holding has before it lets
+/// go, or null when it is not lingering.
+/// </param>
+/// <param name="When">Each block of conditions, with whether it holds.</param>
+/// <param name="Effects">Short descriptions of what the context changes while it holds.</param>
+public sealed record ContextReport(
+    string Name,
+    bool Active,
+    string Source,
+    bool External,
+    string Reason,
+    string? Pin,
+    string? SetBy,
+    long? SetAgoMs,
+    long? ExpiresInMs,
+    bool Leased,
+    long? LingerRemainingMs,
+    IReadOnlyList<WhenReport> When,
+    IReadOnlyList<string> Effects);
+
+/// <summary>One <c>when</c> block: it holds when every condition in it does.</summary>
+public sealed record WhenReport(bool Holds, IReadOnlyList<ConditionReport> Conditions);
+
+/// <summary>One condition, as written, with what it saw.</summary>
+public sealed record ConditionReport(string Text, bool Holds, string Detail);
+
 /// <summary>The whole state, for a bar that has just connected.</summary>
 public sealed record StateSnapshot(
     IReadOnlyList<MonitorInfoDto> Monitors,
@@ -306,7 +367,11 @@ public sealed record StateSnapshot(
     // a client written against the event stream reads the same word in both places;
     // null means the daemon has not asked yet.
     bool RemoteSession = false,
-    string? Activity = null);
+    string? Activity = null,
+
+    // The contexts that hold right now, in declaration order. Null from a daemon that
+    // predates contexts, empty when none hold.
+    IReadOnlyList<string>? Contexts = null);
 
 /// <summary>
 /// Source-generated JSON serialisation for the IPC protocol.
@@ -335,6 +400,10 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(ManagedWindowReport))]
 [JsonSerializable(typeof(RuleReport))]
 [JsonSerializable(typeof(AppReport))]
+[JsonSerializable(typeof(ContextReport))]
+[JsonSerializable(typeof(WhenReport))]
+[JsonSerializable(typeof(ConditionReport))]
+[JsonSerializable(typeof(IReadOnlyList<ContextReport>))]
 [JsonSerializable(typeof(IReadOnlyList<WindowInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<WorkspaceInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<MonitorInfoDto>))]
@@ -562,6 +631,7 @@ public static class IpcProtocol
         "wm.paused",
         "wm.suspended",
         "wm.environment",
+        "context.changed",
         SignalTopic,
         ShutdownTopic,
         ResyncTopic,

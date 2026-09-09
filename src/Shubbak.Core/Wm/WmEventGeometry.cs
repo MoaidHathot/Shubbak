@@ -81,6 +81,10 @@ public static class WmEventGeometry
         // events, with their own answers to this question.
         BindingFired => false,
 
+        // A layer going on or coming off. Applying what it changes marks the layout
+        // dirty itself, before this is raised; this is the announcement.
+        ContextChanged => false,
+
         _ => true,
     };
 

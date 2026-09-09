@@ -53,6 +53,35 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private readonly WindowRegistry _windows = new();
 
+    /// <summary>
+    /// Which contexts hold, and why.
+    /// </summary>
+    /// <remarks>
+    /// Fed from three places and read from one. Window events and the monitor sync feed
+    /// it facts; the state machine's events mark it dirty; commands pin it. The tick
+    /// evaluates it, and a change re-applies the effective configuration - the file's
+    /// settings with the active contexts layered on. See <c>ideas/contexts.md</c>.
+    /// </remarks>
+    private readonly ContextEngine _contexts = new();
+
+    /// <summary>
+    /// The configuration as the file has it, before any context is layered on.
+    /// </summary>
+    /// <remarks>
+    /// <c>_config</c> is what is in force, which with no active context is this same
+    /// object. Kept apart so a context can be taken off again: the effective config is
+    /// always recomputed from here rather than undone.
+    /// </remarks>
+    private ShubbakConfig _baseConfig = ShubbakConfig.Default;
+
+    /// <summary>Who sent the command being run, when it came over the pipe.</summary>
+    /// <remarks>
+    /// Ambient rather than threaded through every command path, because exactly one
+    /// command reads it and the message loop runs one command at a time. Null for a
+    /// command from a keybinding, a rule, or a context's on-enter.
+    /// </remarks>
+    private CommandOrigin? _commandOrigin;
+
     /// <summary>How long each tick took, and how far apart they landed.</summary>
     /// <remarks>
     /// The interval is the one that answers whether the loop runs at the rate it asks
@@ -333,6 +362,10 @@ public sealed class WmDaemon : IDisposable
         AdoptExistingWindows();
         phase = ReportPhase("adopting windows", phase);
 
+        // After the windows, before the hooks: the desktop as it is now goes into the
+        // context engine, and the hooks keep it current from here.
+        SeedContextFacts();
+
         _winEvents = new WinEventSource { WorkQueued = _loop.Wake };
         _winEvents.Start();
         phase = ReportPhase("window event hooks", phase);
@@ -342,6 +375,11 @@ public sealed class WmDaemon : IDisposable
         phase = ReportPhase("keyboard hook", phase);
 
         _ipc = new IpcServer { Warn = message => Log.Warn(LogCategory.Ipc, message) };
+
+        // A leased pin dies with the connection that made it. The notice arrives on a
+        // pipe thread; the pins belong to the loop.
+        _ipc.ClientDisconnected = id => _ = InvokeAsync(() => ReleaseLeases(id));
+
         _ipc.Start(new WmDaemonIpc(this).HandleAsync);
         phase = ReportPhase("ipc server", phase);
 
@@ -362,7 +400,8 @@ public sealed class WmDaemon : IDisposable
         Log.Info(LogCategory.Wm, $"started in {Since(_startedTicks):F0} ms: " +
             $"{_windows.ManagedCount} windows adopted, " +
             $"{_wm.Root.Monitors.Count} monitors, {_config.Keybindings.Count} keybindings, " +
-            $"{_config.Rules.Count} rules");
+            $"{_config.Rules.Count} rules" +
+            $"{(_contexts.Count > 0 ? $", {_contexts.Count} contexts" : "")}");
 
         _loop.Run(TimeSpan.FromMilliseconds(8));
 
@@ -791,6 +830,12 @@ public sealed class WmDaemon : IDisposable
 
             _drainAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeDrain);
 
+            // After the drains, so a tick sees the whole of what arrived, and before the
+            // layout pass, so a context that changes the gaps is laid out in the same
+            // pass. Two comparisons when nothing is dirty and nothing is due; not while
+            // suspended, when nothing is watching the desktop the contexts describe.
+            if (!_suspended) EvaluateContexts(now);
+
             // Paused means the daemon keeps its hands off the desktop. The flag is left
             // set, so everything that accumulated while paused is applied in a single
             // pass on resuming rather than being lost.
@@ -1202,6 +1247,11 @@ public sealed class WmDaemon : IDisposable
     private void HandleWindowEvent(WinEventNotification notification)
     {
         nint handle = notification.Handle;
+
+        // Before everything, paused included: a context is an observation about the
+        // desktop rather than an act of arranging it, and the windows it observes are
+        // very often ones this method is about to decline to manage.
+        ObserveForContexts(notification.Kind, handle);
 
         // Paused suspends window management: nothing is adopted, released, focused or
         // re-arranged while the user has asked Shubbak to leave the desktop alone.
@@ -1919,6 +1969,8 @@ public sealed class WmDaemon : IDisposable
 
         report.AddSection("Animation", DescribeAnimation());
 
+        report.AddSection("Contexts", DescribeContexts());
+
         report.AddCodeSection("Window tree", TreeRenderer.Render(_wm.Root, _wm.FocusedWindow));
 
         if (_configPath is not null && File.Exists(_configPath))
@@ -2562,7 +2614,7 @@ public sealed class WmDaemon : IDisposable
             : "Clear it by binding tag --clear, or run: shubbak tag --clear";
     }
 
-    internal CommandOutcome RunCommand(WmCommand command)
+    internal CommandOutcome RunCommand(WmCommand command, CommandOrigin? origin = null)
     {
         if (!ResolveTarget(command))
         {
@@ -2570,12 +2622,28 @@ public sealed class WmDaemon : IDisposable
                 new WmResult(false, [new CommandRejected(command.Name, "the focused window is not managed")]));
         }
 
-        CommandOutcome outcome = _executor.Execute(command);
+        CommandOrigin? previous = _commandOrigin;
+        _commandOrigin = origin;
 
-        Publish(outcome.Result);
-        PerformHostAction(outcome);
+        try
+        {
+            CommandOutcome outcome = _executor.Execute(command);
 
-        return outcome;
+            // The one host action whose answer the caller needs. Suspend, exit and the
+            // rest cannot fail in a way a reply could say; a pin can - the context may
+            // not exist - and the command line asking for it should hear so.
+            if (outcome.Action == HostAction.Context && outcome.Payload is { } payload)
+                outcome = PinContext(CommandExecutor.Decode(payload));
+
+            Publish(outcome.Result);
+            PerformHostAction(outcome);
+
+            return outcome;
+        }
+        finally
+        {
+            _commandOrigin = previous;
+        }
     }
 
     /// <summary>
@@ -2796,10 +2864,338 @@ public sealed class WmDaemon : IDisposable
                 if (outcome.Payload is { } signal) RaiseSignal(signal);
                 break;
 
+            case HostAction.Context:
+                // Already handled in RunCommand, which needed the answer.
+                break;
+
             case HostAction.None:
             default:
                 break;
         }
+    }
+
+    // ---- contexts ------------------------------------------------------------
+
+    /// <summary>The contexts that hold right now, in declaration order, for the snapshot.</summary>
+    internal IReadOnlyList<string> ActiveContexts => _contexts.ActiveNames();
+
+    /// <summary>Everything about every context, for <c>query contexts</c>.</summary>
+    internal IReadOnlyList<ContextReport> ReportContexts() =>
+        _contexts.Report(ContextFactsNow(), Stopwatch.GetTimestamp());
+
+    private ContextFacts ContextFactsNow() =>
+        new(_wm.Root, _wm.FocusedWorkspace, _windows, _displayTopology, _isRemoteSession, _userActivity);
+
+    /// <summary>
+    /// Pins a context or takes its pin off, and applies the consequence at once.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Evaluated here rather than left to the next tick, so the command's reply follows
+    /// the change: <c>shubbak context --set presenting</c> returns after the gaps have
+    /// closed and the event has gone out, which is what a script chaining commands
+    /// needs and what a person watching the screen expects.
+    /// </para>
+    /// <para>
+    /// Not while suspended. A suspended window manager arranges nothing, and applying a
+    /// context is arranging; the pin is kept and takes effect on resume, and the log
+    /// says so.
+    /// </para>
+    /// </remarks>
+    private CommandOutcome PinContext(ContextCommand command)
+    {
+        PinOrigin origin = _commandOrigin is { } from
+            ? new PinOrigin(from.Description, from.ConnectionId)
+            : PinOrigin.Local;
+
+        long now = Stopwatch.GetTimestamp();
+        PinOutcome outcome = _contexts.Pin(command.Context, command.Action, command.Ttl, command.Lease, origin, now);
+
+        if (!outcome.Accepted)
+        {
+            Log.Warn(LogCategory.Command, $"context: {outcome.Refusal}");
+            return new CommandOutcome(new WmResult(false, [new CommandRejected("context", outcome.Refusal!)]));
+        }
+
+        Log.Info(LogCategory.Wm,
+            $"context \"{command.Context}\" {command.Action.ToString().ToLowerInvariant()} by {origin.Description}" +
+            $"{(command.Ttl is { } ttl ? $" for {ttl.TotalSeconds:0.#} s" : "")}{(command.Lease ? ", leased" : "")}");
+
+        if (_suspended)
+            Log.Info(LogCategory.Wm, "suspended; the pin takes effect on resume");
+        else
+            EvaluateContexts(now);
+
+        return new CommandOutcome(new WmResult(true, []));
+    }
+
+    /// <summary>
+    /// Decides the contexts against the desktop as it is now, and applies whatever
+    /// changed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The engine returns nothing when nothing changed and allocates nothing finding
+    /// that out, and it declines to look at all unless something marked it dirty or a
+    /// linger or time-to-live has come due - so calling this on every tick costs two
+    /// comparisons on a quiet desktop. That is rules one and two of
+    /// <c>ideas/contexts.md</c>.
+    /// </para>
+    /// <para>
+    /// The order on a change is fixed: the contexts that are leaving run their on-exit
+    /// under the configuration they were active in; the effective configuration is
+    /// recomputed and applied; the changes are announced; the contexts that are arriving
+    /// run their on-enter under the configuration they brought. An on-enter that
+    /// changes the desktop marks the engine dirty again and the next tick sees a
+    /// desktop with nothing left to change.
+    /// </para>
+    /// </remarks>
+    private void EvaluateContexts(long now)
+    {
+        if (_contexts.Count == 0) return;
+
+        IReadOnlyList<ContextTransition> transitions = _contexts.Evaluate(ContextFactsNow(), now);
+        if (transitions.Count == 0) return;
+
+        // Copied: the engine reuses the list on the next call, and on-exit commands can
+        // cause one.
+        ContextTransition[] changes = [.. transitions];
+
+        foreach (ContextTransition change in changes)
+        {
+            Log.Info(LogCategory.Wm,
+                $"context \"{change.Name}\" {(change.Active ? "on" : "off")} ({change.Source}: {change.Reason})");
+        }
+
+        foreach (ContextTransition change in changes)
+        {
+            if (change.Active) continue;
+            if (FindContext(change.Name) is { } leaving && leaving.Effects.OnExit.Count > 0)
+                Execute(leaving.Effects.OnExit);
+        }
+
+        ApplyEffectiveConfig();
+
+        foreach (ContextTransition change in changes)
+            Publish(new WmResult(true, [new ContextChanged(change.Name, change.Active, change.Source, change.Reason)]));
+
+        foreach (ContextTransition change in changes)
+        {
+            if (!change.Active) continue;
+            if (FindContext(change.Name) is { } arriving && arriving.Effects.OnEnter.Count > 0)
+                Execute(arriving.Effects.OnEnter);
+        }
+
+        _tray.SetTooltip(TrayTooltip());
+    }
+
+    private ContextDefinition? FindContext(string name)
+    {
+        foreach (ContextDefinition context in _baseConfig.Contexts)
+            if (string.Equals(context.Name, name, StringComparison.OrdinalIgnoreCase)) return context;
+
+        return null;
+    }
+
+    /// <summary>A pipe connection has ended; whatever it had leased comes off.</summary>
+    /// <returns>How many pins were released - the value <c>InvokeAsync</c> wants.</returns>
+    private int ReleaseLeases(long connectionId)
+    {
+        IReadOnlyList<string> released = _contexts.ReleaseLeases(connectionId);
+        if (released.Count == 0) return 0;
+
+        Log.Info(LogCategory.Wm,
+            $"connection {connectionId} closed; released its lease on {string.Join(", ", released.Select(n => $"\"{n}\""))}");
+
+        if (!_suspended) EvaluateContexts(Stopwatch.GetTimestamp());
+
+        return released.Count;
+    }
+
+    /// <summary>
+    /// Recomputes the configuration in force from the file and the active contexts, and
+    /// applies it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The same statements a reload runs after reading the file, minus the file: the
+    /// state machine's options, the animation engine's, the rule index, and now the
+    /// binding overlay and the workspace homes. Kept as one method so the two paths
+    /// cannot drift - a reload calls this too, once it has a new base.
+    /// </para>
+    /// <para>
+    /// Borders are the one thing nothing else would repaint. The colours are read live on
+    /// every paint, but only the focused window and windows whose state changes get
+    /// painted, so a context turning the border off would leave every unfocused window
+    /// wearing one until something happened to it. Repainted here when the effects
+    /// differ, which a context flip is the only path to.
+    /// </para>
+    /// </remarks>
+    private void ApplyEffectiveConfig()
+    {
+        EffectiveConfig effective = ContextCascade.Apply(_baseConfig, _contexts.ActiveDefinitions());
+        WindowEffects before = _config.Effects;
+
+        _config = effective.Config;
+
+        _wm.Options = _config.ToWmOptions();
+        _animation.Options = _config.Animation;
+        if (!_config.Animation.Enabled) _animation.Clear();
+        ApplySystemAnimationPreference();
+
+        _rules.Load(_config);
+        _bindings.SetOverlay(effective.OverlayBindings);
+
+        // A key that stopped being bound while held would otherwise be reported as
+        // still down to the application that never saw it pressed; the same reason a
+        // mode change forgets.
+        _keyboard?.ForgetSwallowed();
+
+        if (_wm.Root.Monitors.Count > 0)
+        {
+            CreateConfiguredWorkspaces();
+            RehomeWorkspaces();
+        }
+
+        if (before != _config.Effects) RepaintBorders(before.Enabled);
+
+        _layoutDirty = true;
+    }
+
+    /// <summary>Puts every managed window's border right after the effects changed.</summary>
+    private void RepaintBorders(bool wasEnabled)
+    {
+        if (!_config.Effects.Enabled)
+        {
+            if (!wasEnabled) return;
+
+            foreach ((nint handle, WindowNode _) in _windows)
+            {
+                if (Win32Window.Exists(handle)) WindowActions.ClearBorderColour(handle);
+            }
+
+            _borderedWindow = null;
+            return;
+        }
+
+        WindowNode? focused = _wm.FocusedWindow;
+
+        foreach ((nint handle, WindowNode window) in _windows)
+        {
+            if (!Win32Window.Exists(handle)) continue;
+            ApplyBorder(window, ColourFor(window, ReferenceEquals(window, focused)));
+        }
+
+        _borderedWindow = focused;
+    }
+
+    /// <summary>
+    /// Tells the engine about a window event, for the conditions that watch windows.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Before the paused check and before management, because a context is an
+    /// observation about the desktop, not an act of arranging it: a slide show that the
+    /// rules ignore - which the example config does, deliberately - is exactly the
+    /// window the presenting context is about.
+    /// </para>
+    /// <para>
+    /// Cheap-first. Nothing is read unless a context asks about windows, and then the
+    /// attributes are read once: the process identity is cached by the platform layer,
+    /// the class is one call, the title one more. Title changes are the expensive case -
+    /// a playing video retitles itself every second - and that cost is accepted, once,
+    /// by the person who wrote a <c>window</c> condition.
+    /// </para>
+    /// </remarks>
+    private void ObserveForContexts(WinEventKind kind, nint handle)
+    {
+        if (!_contexts.HasWindowConditions) return;
+
+        switch (kind)
+        {
+            case WinEventKind.Created:
+            case WinEventKind.Shown:
+            case WinEventKind.Uncloaked:
+            case WinEventKind.TitleChanged:
+                if (!_contexts.HasPresenceConditions) break;
+
+                // Visible includes cloaked, which is how Shubbak conceals inactive
+                // workspaces: a slide show on another workspace is still present.
+                if (Win32Window.IsVisible(handle)) _contexts.WindowSeen(handle, ToAttributes(handle));
+                else _contexts.WindowGone(handle);
+                break;
+
+            case WinEventKind.Destroyed:
+            case WinEventKind.Hidden:
+                if (_contexts.HasPresenceConditions) _contexts.WindowGone(handle);
+                break;
+
+            case WinEventKind.Foreground:
+                if (_contexts.HasFocusConditions)
+                    _contexts.ForegroundChanged(handle == 0 ? null : ToAttributes(handle));
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Reads the desktop into the engine's window sets: at startup, after a reload, and
+    /// on resume, which are the three moments events may have been missed.
+    /// </summary>
+    private void SeedContextFacts()
+    {
+        if (_contexts.Count == 0) return;
+
+        if (_contexts.HasPresenceConditions)
+        {
+            foreach (nint handle in Win32Window.EnumerateTopLevel())
+            {
+                if (Win32Window.IsVisible(handle)) _contexts.WindowSeen(handle, ToAttributes(handle));
+            }
+        }
+
+        if (_contexts.HasFocusConditions)
+        {
+            nint foreground = Win32Window.GetForeground();
+            _contexts.ForegroundChanged(foreground == 0 ? null : ToAttributes(foreground));
+        }
+
+        _contexts.MarkDirty();
+    }
+
+    /// <summary>Whether an event from the state machine can change what a context sees.</summary>
+    private static bool ConcernsContexts(WmEvent wmEvent) => wmEvent switch
+    {
+        // Named for what a condition can read: which windows are managed and how, what
+        // is focused, what each monitor shows, which monitors there are, the session.
+        WindowManaged or WindowUnmanaged or WindowFocused or WindowStateChanged or WindowNativeFullscreenChanged => true,
+        WorkspaceActivated or WorkspaceCreated or WorkspaceDestroyed or WorkspaceMoved => true,
+        MonitorAdded or MonitorRemoved or MonitorChanged or EnvironmentChanged => true,
+        _ => false,
+    };
+
+    /// <summary>What one line of a diagnostic report says about the contexts.</summary>
+    private string DescribeContexts()
+    {
+        if (_contexts.Count == 0) return "(none declared)";
+
+        IReadOnlyList<ContextReport> report = ReportContexts();
+        var lines = new System.Text.StringBuilder();
+
+        foreach (ContextReport context in report)
+        {
+            lines.Append(CultureInfo.InvariantCulture,
+                $"- **{context.Name}**: {(context.Active ? "active" : "inactive")} ({context.Source}: {context.Reason})");
+
+            if (context.External) lines.Append(", external");
+            if (context.Pin is { } pin) lines.Append(CultureInfo.InvariantCulture, $", pinned {pin} by {context.SetBy}");
+            if (context.ExpiresInMs is { } left) lines.Append(CultureInfo.InvariantCulture, $", expires in {left / 1000.0:0.#} s");
+            if (context.Leased) lines.Append(", leased");
+            if (context.LingerRemainingMs is { } linger) lines.Append(CultureInfo.InvariantCulture, $", lingering {linger} ms");
+
+            lines.AppendLine();
+        }
+
+        return lines.ToString().TrimEnd();
     }
 
     /// <summary>
@@ -3723,7 +4119,11 @@ public sealed class WmDaemon : IDisposable
         if (_suspended) return "Shubbak - suspended, keyboard released";
         if (_wm.IsPaused) return "Shubbak - not arranging windows";
 
-        return $"Shubbak {ShubbakVersion.Current}";
+        IReadOnlyList<string> active = _contexts.ActiveNames();
+
+        return active.Count > 0
+            ? $"Shubbak {ShubbakVersion.Current} - {string.Join(", ", active)}"
+            : $"Shubbak {ShubbakVersion.Current}";
     }
 
     /// <summary>
@@ -3793,6 +4193,10 @@ public sealed class WmDaemon : IDisposable
         // Whatever opened, closed or moved while nobody was looking.
         SyncMonitors();
         AdoptExistingWindows();
+
+        // The contexts were frozen with the hooks, and the windows their conditions watch
+        // may have come or gone. Re-read, and let the next tick decide.
+        SeedContextFacts();
 
         _layoutDirty = true;
 
@@ -4172,6 +4576,11 @@ public sealed class WmDaemon : IDisposable
         RefreshDisplayPreferences(monitors);
 
         if (MonitorLayoutChanged(monitors)) SyncMonitors(monitors);
+
+        // A destroy event missed - the hooks are down while suspended - would leave a
+        // context on for ever. One IsWindow per remembered handle, only while any is
+        // remembered, is the price of never being wrong about that.
+        if (_contexts.TracksAnyWindow) _contexts.Prune(Win32Window.Exists);
     }
 
     /// <summary>
@@ -4576,6 +4985,7 @@ public sealed class WmDaemon : IDisposable
         if (topology != _displayTopology)
         {
             _displayTopology = topology;
+            _contexts.MarkDirty();
             Log.Info(LogCategory.Wm, $"display topology: {topology.ToString().ToLowerInvariant()}");
         }
 
@@ -4794,7 +5204,19 @@ public sealed class WmDaemon : IDisposable
             return;
         }
 
-        _config = result.Config;
+        _baseConfig = result.Config;
+
+        // The contexts are told about the new file first, so the active ones survive
+        // where the file still declares them; then what is in force is the file with
+        // those layered on. With none active, that is the file itself.
+        IReadOnlyList<string> lostPins = _contexts.Load(_baseConfig);
+
+        foreach (string lost in lostPins)
+            Log.Warn(LogCategory.Config, $"context \"{lost}\" was pinned and is no longer declared; the pin is dropped");
+
+        EffectiveConfig effective = ContextCascade.Apply(_baseConfig, _contexts.ActiveDefinitions());
+
+        _config = effective.Config;
         _wm.Options = _config.ToWmOptions();
         _animation.Options = _config.Animation;
 
@@ -4819,6 +5241,7 @@ public sealed class WmDaemon : IDisposable
         // does not. Silently dropping it left the keyboard on the default bindings
         // while the state machine, the report and the bar all still announced the mode.
         string? lostMode = _bindings.Load(_config);
+        _bindings.SetOverlay(effective.OverlayBindings);
 
         _rules.Load(_config);
 
@@ -4870,9 +5293,15 @@ public sealed class WmDaemon : IDisposable
 
             ReconsiderOpenWindows();
 
+            // The window conditions were rebuilt with the definitions, so the desktop
+            // is read into them again; the first tick then decides the contexts against
+            // the new file.
+            SeedContextFacts();
+
             Log.Info(LogCategory.Config,
                 $"reloaded: {_config.Keybindings.Count} keybindings, {_config.Rules.Count} rules, " +
-                $"{forgotten} previously excluded window(s) re-examined");
+                $"{forgotten} previously excluded window(s) re-examined" +
+                $"{(_contexts.Count > 0 ? $", {_contexts.Count} context(s)" : "")}");
         }
     }
 
@@ -5133,6 +5562,11 @@ public sealed class WmDaemon : IDisposable
 
                 if (_config.Effects.Enabled) RefreshBorderFor((nint)changed.Window.Handle);
             }
+
+            // Whatever a context can read has just moved, so the engine looks again on
+            // the next tick. A flag, not an evaluation: a workspace switch emits a dozen
+            // events and the contexts should be decided once against the result.
+            if (_contexts.Count > 0 && ConcernsContexts(wmEvent)) _contexts.MarkDirty();
 
             // Asked before the payload is built, not after. Payload is a full JSON
             // serialisation and it is an argument, so it used to run whether or not

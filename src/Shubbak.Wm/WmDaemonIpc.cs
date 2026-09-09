@@ -21,11 +21,11 @@ internal sealed partial class WmDaemonIpc
 
     public WmDaemonIpc(WmDaemon daemon) => _daemon = daemon;
 
-    public Task<IpcResponse> HandleAsync(IpcRequest request)
+    public Task<IpcResponse> HandleAsync(IpcRequest request, IpcClientInfo client)
     {
         return request.Method switch
         {
-            "command" => RunCommandAsync(request),
+            "command" => RunCommandAsync(request, client),
             "query" => QueryAsync(request),
             "inspect" => InspectAsync(request),
             "diagnose" => DiagnoseAsync(request),
@@ -34,6 +34,33 @@ internal sealed partial class WmDaemonIpc
             _ => Task.FromResult(new IpcResponse(
                 request.Id, false, null, $"unknown method '{request.Method}'")),
         };
+    }
+
+    /// <summary>
+    /// Who sent a command, for the one command that wants to know.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Resolved on the pipe thread, before the hop to the message loop, so the loop pays
+    /// nothing for it; and resolved only for a command that carries a context verb,
+    /// because that is the only one that reads it - the pid lookup is a kernel call and
+    /// the process name a handle open, neither of which every <c>focus</c> should pay.
+    /// </para>
+    /// <para>
+    /// The name is best-effort. A process that has exited between sending and being
+    /// asked about is described by its pid alone, which is still an answer.
+    /// </para>
+    /// </remarks>
+    private static CommandOrigin Describe(IpcClientInfo client)
+    {
+        uint pid = Win32Foreground.ProcessIdOfPipeClient(client.PipeHandle);
+
+        if (pid == 0) return new CommandOrigin(client.ConnectionId, "a pipe client");
+
+        string? path = Win32Window.GetProcessPath(pid);
+        string name = path is null ? $"pid {pid}" : $"{Path.GetFileName(path)} (pid {pid})";
+
+        return new CommandOrigin(client.ConnectionId, name);
     }
 
     /// <summary>
@@ -97,7 +124,7 @@ internal sealed partial class WmDaemonIpc
     /// needs both halves to run should be one command, not two.
     /// </para>
     /// </remarks>
-    private Task<IpcResponse> RunCommandAsync(IpcRequest request)
+    private Task<IpcResponse> RunCommandAsync(IpcRequest request, IpcClientInfo client)
     {
         if (string.IsNullOrWhiteSpace(request.Payload))
             return Task.FromResult(new IpcResponse(request.Id, false, null, "no command given"));
@@ -114,7 +141,9 @@ internal sealed partial class WmDaemonIpc
             if (!TryAccept(request.Payload, out WmCommand? only, out string? refusal))
                 return Task.FromResult(new IpcResponse(request.Id, false, null, refusal));
 
-            return _daemon.InvokeAsync(() => RunAll(only!, null, request.Id));
+            CommandOrigin? origin = only is ContextCommand ? Describe(client) : null;
+
+            return _daemon.InvokeAsync(() => RunAll(only!, null, request.Id, origin));
         }
 
         List<WmCommand> commands = [];
@@ -132,17 +161,19 @@ internal sealed partial class WmDaemonIpc
         if (commands.Count == 0)
             return Task.FromResult(new IpcResponse(request.Id, false, null, "no command given"));
 
-        return _daemon.InvokeAsync(() => RunAll(null, commands, request.Id));
+        CommandOrigin? sequenceOrigin = commands.Exists(c => c is ContextCommand) ? Describe(client) : null;
+
+        return _daemon.InvokeAsync(() => RunAll(null, commands, request.Id, sequenceOrigin));
     }
 
     /// <summary>Runs one command, or a sequence, on the message loop.</summary>
-    private IpcResponse RunAll(WmCommand? single, List<WmCommand>? sequence, int id)
+    private IpcResponse RunAll(WmCommand? single, List<WmCommand>? sequence, int id, CommandOrigin? origin)
     {
-        if (single is not null) return Report(_daemon.RunCommand(single), id);
+        if (single is not null) return Report(_daemon.RunCommand(single, origin), id);
 
         foreach (WmCommand command in sequence!)
         {
-            IpcResponse response = Report(_daemon.RunCommand(command), id);
+            IpcResponse response = Report(_daemon.RunCommand(command, origin), id);
             if (!response.Ok) return response;
         }
 
@@ -238,7 +269,7 @@ internal sealed partial class WmDaemonIpc
             string json = what switch
             {
                 "state" => JsonSerializer.Serialize(
-                    StateProjection.Snapshot(wm, _daemon.IsSuspended, _daemon.Session),
+                    StateProjection.Snapshot(wm, _daemon.IsSuspended, _daemon.Session, _daemon.ActiveContexts),
                     IpcJsonContext.Default.StateSnapshot),
 
                 "windows" => JsonSerializer.Serialize(
@@ -266,13 +297,16 @@ internal sealed partial class WmDaemonIpc
                 "bindings" => JsonSerializer.Serialize(
                     _daemon.DescribeBindings(), IpcJsonContext.Default.IReadOnlyListBindingInfo),
 
+                "contexts" => JsonSerializer.Serialize(
+                    _daemon.ReportContexts(), IpcJsonContext.Default.IReadOnlyListContextReport),
+
                 _ => string.Empty,
             };
 
             return json.Length == 0
                 ? new IpcResponse(request.Id, false, null,
                     $"unknown query '{what}'. Try: state, windows, all-windows, workspaces, " +
-                    "monitors, focused, layouts, commands, bindings")
+                    "monitors, focused, layouts, commands, bindings, contexts")
                 : new IpcResponse(request.Id, true, json);
         });
     }

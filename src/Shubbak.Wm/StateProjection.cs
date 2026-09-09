@@ -59,7 +59,7 @@ internal static class StateProjection
         monitor.Names);
 
     public static StateSnapshot Snapshot(
-        WindowManager wm, bool suspended = false, SessionInfo? session = null)
+        WindowManager wm, bool suspended = false, SessionInfo? session = null, IReadOnlyList<string>? contexts = null)
     {
         WindowNode? focused = wm.FocusedWindow;
 
@@ -79,7 +79,10 @@ internal static class StateProjection
             // Likewise. The session is something the daemon observes around the state
             // machine, not something the state machine holds.
             session?.RemoteSession ?? false,
-            session?.Activity?.Wire());
+            session?.Activity?.Wire(),
+
+            // And likewise again: which contexts hold is the daemon's decision.
+            contexts);
     }
 
     /// <summary>
@@ -155,6 +158,12 @@ internal static class StateProjection
             EnvironmentChanged e =>
                 $"{{\"remote_session\":{(e.RemoteSession ? "true" : "false")}," +
                 $"\"activity\":{JsonString(e.Activity.Wire())}}}",
+
+            ContextChanged e =>
+                $"{{\"name\":{JsonString(e.Name)}," +
+                $"\"active\":{(e.Active ? "true" : "false")}," +
+                $"\"source\":{JsonString(e.Source)}," +
+                $"\"reason\":{JsonString(e.Reason)}}}",
 
             // The same shape as one entry of `query bindings`, so a client that
             // already reads those reads this.

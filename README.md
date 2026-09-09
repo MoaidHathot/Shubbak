@@ -283,6 +283,7 @@ disagree about which file is loaded.
 | `logging` | `level`, `file`, `console` |
 | `workspaces` | Names, display names, monitor binding, starting layout |
 | `monitor` | A display named by what it is, for workspaces and commands to refer to |
+| `contexts` | Named conditions on the desktop that layer overrides on the config while they hold |
 | `keybindings` | `bind`, and `for-each` |
 | `binding-modes` | Modal keymaps, i3-style |
 | `app` | Reusable named matchers you reference from rules |
@@ -387,9 +388,55 @@ every dock is gone. Bars follow too: Taj opens one on a display that arrives and
 closes the one on a display that goes, and a bar `rule` can say `monitor="laptop"` in
 the same words.
 
+### Contexts
+
+A talk from the laptop alone, then on a projector, then docked to two monitors for a
+remote session: each wants different gaps, a different bar, a safer keyboard, and the
+slides somewhere else. A **context** is a named condition on the desktop that layers
+overrides on the config while it holds — and stops the moment it doesn't:
+
+```kdl
+contexts {
+    context "presenting" {
+        when { window app="powerpoint-slideshow" }   // any block holding is enough
+        when { system-state "presenting" }           // the Win+P / Mobility Center toggle
+        linger 500                                   // ride out PowerPoint's window churn
+
+        gaps { inner 0; outer { top 0; right 0; bottom 0; left 0 } }
+        window-effects { border #false }
+        animation { enabled #false }
+        bindings { bind "alt+shift+q" { } }          // disarm close while on stage
+        workspaces { workspace ";" monitor="projector" }
+        on-enter { focus --workspace ";" }
+    }
+
+    context "docked" { when { monitor present="dell-right" } }
+    context "meeting" { }                            // external: set over the pipe
+    context "docked-meeting" { when { context "docked"; context "meeting" } }
+}
+```
+
+Conditions are deliberately only things Shubbak already knows or Windows says about
+the *session* in one call: a window present, focused or full-screen (matched with the
+same `app` definitions rules use); a workspace active or focused; how many monitors,
+which named ones, the Win+P topology; remote session; the shell's notification state.
+Several contexts hold at once and cascade in declaration order. Every override is a
+delta — `gaps { inner 0 }` changes the inner gap and nothing else.
+
+**The line:** Shubbak observes the desktop, not the applications. Whether the camera
+is on, whether a call is up, what the calendar says — those come from *outside*, as a
+context with no `when` that another program sets: `shubbak context --set meeting
+--ttl 10s` from any script, or a held pipe connection with `--lease` so the fact dies
+with the process that supplied it. The config says what a meeting *does*; the program
+supplying the fact never needs to know. Pins beat detection (`--set`, `--clear`,
+`--toggle`); `--auto` hands a context back to its conditions.
+
+`shubbak contexts` says why each one is the way it is, condition by condition, and who
+pinned what — the same answer `inspect` gives for a window that didn't tile.
+
 ### Commands
 
-33 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
+34 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
 
 **Focus & movement** — `focus` `focus-window` `focus-recent-window` `move`
 `move-workspace` `resize` `equalise` `split` `toggle-tiling-direction`
@@ -400,6 +447,8 @@ the same words.
 **Workspaces & stashing** — `tag` `sticky` `scratchpad`
 
 **Management** — `ignore` `manage` `toggle-managed`
+
+**Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`)
 
 **The window manager itself** — `wm-enable-binding-mode` `wm-disable-binding-mode`
 `wm-toggle-pause` `wm-suspend` `wm-resume` `wm-toggle-suspend` `wm-reload-config`
@@ -617,7 +666,7 @@ shubbak sub                  # tail every event
 shubbak sub window.focused,workspace.activated
 ```
 
-**26 event topics** you can subscribe to:
+**27 event topics** you can subscribe to:
 
 ```
 window.managed       window.unmanaged      window.focused      window.title_changed
@@ -627,7 +676,7 @@ layout.changed       container.resized
 monitor.added        monitor.removed       monitor.changed
 binding_mode.changed binding.fired         command.rejected    config.reloaded
 wm.paused            wm.suspended          wm.environment      wm.shutdown         wm.resync
-signal
+context.changed      signal
 ```
 
 Three of those exist purely so that things outside the daemon can know what it

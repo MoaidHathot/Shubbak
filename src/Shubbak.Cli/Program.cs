@@ -65,6 +65,7 @@ internal static class Program
                 "autostart" => Autostart.Run(args),
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "monitors" => await MonitorsAsync().ConfigureAwait(false),
+                "contexts" => await ContextsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "restore" => Restore(args),
@@ -250,6 +251,18 @@ internal static class Program
     {
         string command = string.Join(' ', args);
 
+        // A lease dies with the connection that made it, and this connection closes the
+        // moment the reply arrives - so the pin would be gone before the prompt came
+        // back, having done nothing visible. Refused here, where the alternative can be
+        // named, rather than accepted by the daemon and released a millisecond later.
+        if (args.Length > 0 && string.Equals(args[0], "context", StringComparison.OrdinalIgnoreCase) &&
+            Array.Exists(args, a => string.Equals(a, "--lease", StringComparison.OrdinalIgnoreCase)))
+        {
+            Console.Error.WriteLine("shubbak: --lease needs a connection that stays open, and the command line's closes at once.");
+            Console.Error.WriteLine("hint: use --ttl 5s and repeat, or hold a pipe connection open from your own process.");
+            return 1;
+        }
+
         await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
         IpcResponse response = await client.SendAsync("command", command).ConfigureAwait(false);
 
@@ -326,6 +339,31 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>Says which contexts hold and why, condition by condition.</summary>
+    /// <remarks>
+    /// The answer to "why is this context on" or "why is it not", which is the first
+    /// question anybody asks a context that did not do what they expected - the same
+    /// question <c>inspect</c> answers for a window that did not tile.
+    /// </remarks>
+    private static async Task<int> ContextsAsync()
+    {
+        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+        IpcResponse response = await client.SendAsync("query", "contexts").ConfigureAwait(false);
+
+        if (!response.Ok || response.Data is null)
+        {
+            Console.Error.WriteLine($"shubbak: {response.Error}");
+            return 1;
+        }
+
+        IReadOnlyList<ContextReport>? contexts = System.Text.Json.JsonSerializer.Deserialize(
+            response.Data, IpcJsonContext.Default.IReadOnlyListContextReport);
+
+        Console.Write(ContextReportText.Format(contexts ?? []));
+
+        return 0;
+    }
+
     private static async Task<int> StatusAsync()
     {
         await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
@@ -360,6 +398,16 @@ internal static class Program
             {
                 Console.WriteLine("running, paused");
                 Console.WriteLine("hint: shubbak wm-toggle-pause starts arranging windows again");
+                return 0;
+            }
+
+            // A context changes what the desktop does - the gaps, the keys, where a
+            // workspace lives - and from the outside looks like a setting having changed
+            // by itself. Named here so "why are my gaps gone" has a first place to look.
+            if (snapshot?.Contexts is { Count: > 0 } contexts)
+            {
+                Console.WriteLine($"running, in context {string.Join(", ", contexts)}");
+                Console.WriteLine("hint: shubbak contexts says why");
                 return 0;
             }
         }
@@ -753,6 +801,7 @@ internal static class Program
             errors == 0 && warnings == 0
                 ? $"{path}: ok - {result.Config.Keybindings.Count} keybindings, " +
                   $"{result.Config.Workspaces.Count} workspaces, {result.Config.Rules.Count} rules, " +
+                  (result.Config.Contexts.Count == 0 ? "" : $"{result.Config.Contexts.Count} context(s), ") +
                   $"{bar.Profiles.Count} bar profile(s)" +
                   (paletteLoad.Config.Macros.Count == 0
                       ? " "
@@ -896,16 +945,35 @@ internal static class Program
           query [what]         Print state as JSON.
                                what: state (default), windows, all-windows,
                                      workspaces, monitors, focused, layouts,
-                                     commands, bindings
+                                     commands, bindings, contexts
           layouts              List the available layouts.
           monitors             Describe each display, with a `monitor` definition
                                ready to paste into the config. Displays are named
                                by what they are, so a workspace bound to one stays
                                there however Windows renumbers them.
+          contexts             Say which contexts hold and why, condition by
+                               condition, and who pinned what.
 
           all-windows lists every window on the desktop, not only the managed
           ones, with the reason each unmanaged window was passed over. It is the
           place to look for a window that has gone missing.
+
+        CONTEXTS
+          context --set <name>      Hold a context on, whatever its conditions say.
+          context --clear <name>    Hold it off.
+          context --toggle <name>   Flip it.
+          context --auto <name>     Take the pin off; its conditions decide again.
+            --ttl 5s                The pin comes off by itself after that long.
+                                    500ms, 5s, 2m, 1h; a bare number is seconds.
+            --lease                 The pin comes off when the connection that made
+                                    it closes. Not from the command line, whose
+                                    connection closes at once; for a process that
+                                    watches something Shubbak does not.
+
+          A context with no `when` block is external: nothing on the desktop
+          decides it, and setting it over the pipe is how another program tells
+          Shubbak about a meeting, a call, a recording. The config says what the
+          context does; the program never needs to know.
 
         EVENTS
           sub [topics]         Tail the event stream. Comma-separated topics, or
