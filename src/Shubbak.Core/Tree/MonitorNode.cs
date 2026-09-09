@@ -15,10 +15,11 @@ namespace Shubbak.Core.Tree;
 /// a whole class of "why is my workspace half-width" bug.
 /// </para>
 /// <para>
-/// <see cref="DeviceId"/> is the stable key, not the index. Windows renumbers
-/// displays on replug, on DisplayPort wake, and on GPU driver restart; keying
-/// workspace affinity on an index is why those events scramble other window
-/// managers' workspace assignments.
+/// <see cref="DeviceId"/> is the key, not the index. Windows renumbers displays on
+/// replug, on DisplayPort wake, and on GPU driver restart; keying workspace affinity
+/// on an index is why those events scramble other window managers' workspace
+/// assignments. It is a session-stable key rather than a hardware one; see the
+/// property for the difference.
 /// </para>
 /// </remarks>
 public sealed class MonitorNode : Node
@@ -37,12 +38,42 @@ public sealed class MonitorNode : Node
     }
 
     /// <summary>
-    /// Stable hardware identity (device path), surviving replug and renumbering.
+    /// The GDI device name, <c>\\.\DISPLAY1</c>: what every monitor API in the program
+    /// keys on, and the join key to everything the platform layer learns about the
+    /// display afterwards.
     /// </summary>
+    /// <remarks>
+    /// This used to be described as a hardware device path, which it never was. Windows
+    /// hands these names out in enumeration order and reuses them, so the same panel
+    /// can be <c>DISPLAY1</c> before undocking and <c>DISPLAY2</c> after. It is stable
+    /// for the life of a configuration - which is what the tree needs - and no further.
+    /// The identity that survives replug and renumbering is <see cref="DevicePath"/>.
+    /// </remarks>
     public string DeviceId { get; }
 
-    /// <summary>Human-readable name for config and the bar.</summary>
+    /// <summary>
+    /// The name the panel reports in its EDID - <c>DELL U3219Q</c> - or null when the
+    /// platform layer has not supplied one. Built-in panels usually have none.
+    /// </summary>
+    /// <remarks>
+    /// Not unique. Two of the same model side by side report the same name, so a rule
+    /// that wants one of them has to say which by <see cref="DevicePath"/>.
+    /// </remarks>
     public string? FriendlyName { get; set; }
+
+    /// <summary>
+    /// The connector's device interface path, stable for a given panel on a given port
+    /// across replug, renumbering and reboot. Null when the platform layer has not
+    /// supplied one, which a remote session's display never does.
+    /// </summary>
+    public string? DevicePath { get; set; }
+
+    /// <summary>Whether the panel is built into the machine.</summary>
+    /// <remarks>
+    /// Answered by the connector type, not guessed from the name or the position. Null
+    /// until the platform layer has said.
+    /// </remarks>
+    public bool? IsInternal { get; set; }
 
     /// <summary>Full monitor rectangle in virtual-desktop coordinates.</summary>
     public Rect Bounds { get; set; }

@@ -1,4 +1,5 @@
 using System.Globalization;
+using Shubbak.Core.Wm;
 using Taj.Core;
 using Taj.Core.Sources;
 
@@ -87,22 +88,26 @@ public sealed class StandDownTests
     // ---- the confirmation --------------------------------------------------
 
     [Theory]
-    [InlineData(UserActivityKind.FullScreenGame)]
-    [InlineData(UserActivityKind.FullScreenApp)]
-    [InlineData(UserActivityKind.Presenting)]
-    public void ActivitiesThatCoverTheScreenKeepTheBarDown(UserActivityKind activity)
+    [InlineData(UserActivity.FullScreenGame)]
+    [InlineData(UserActivity.FullScreenApp)]
+    [InlineData(UserActivity.Presenting)]
+    public void ActivitiesThatCoverTheScreenKeepTheBarDown(UserActivity activity)
     {
         Assert.True(StandDown.StillCovered(activity));
     }
 
     [Theory]
-    [InlineData(UserActivityKind.Ordinary)]
-    [InlineData(UserActivityKind.Unknown)]
-    public void AnythingElseBringsTheBarBack(UserActivityKind activity)
+    [InlineData(UserActivity.Ordinary)]
+    [InlineData(UserActivity.Unknown)]
+    [InlineData(UserActivity.QuietTime)]
+    public void AnythingElseBringsTheBarBack(UserActivity activity)
     {
         // Unknown included, and deliberately. Standing back up on an answer nobody can
         // give costs the polling this exists to avoid; staying down costs a bar that
         // has stopped for a reason the user cannot see.
+        //
+        // Quiet time too: it is the first hour after a first logon, and nothing about
+        // it covers the screen.
         Assert.False(StandDown.StillCovered(activity));
     }
 

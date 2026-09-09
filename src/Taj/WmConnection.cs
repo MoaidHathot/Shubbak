@@ -46,6 +46,50 @@ public sealed class WmConnection : IAsyncDisposable
     private IpcClient? _client;
     private Task? _pump;
 
+    /// <summary>
+    /// Every topic <see cref="HandleEventAsync"/> has a case for, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bar used to subscribe to <c>*</c>. That is the shortest thing to write and
+    /// it made the window manager build and send a payload for every event on the
+    /// desktop to a client that dropped most of them on the floor: <c>command.rejected</c>
+    /// alone fires on every repeat of a held key that cannot be satisfied, and the
+    /// daemon's <c>HasSubscribers</c> gate - which exists so that a payload is only
+    /// serialised when somebody wants it - was answering "yes" to everything for as
+    /// long as a bar was running. Anything added to the stream later for other
+    /// consumers would have been paid for by the bar as well.
+    /// </para>
+    /// <para>
+    /// A case added to the switch must be added here, or the event never arrives and
+    /// nothing says so. The list sits beside the switch for that reason.
+    /// </para>
+    /// </remarks>
+    private static readonly string Subscribed = string.Join(',',
+    [
+        "window.title_changed",
+        "window.state_changed",
+        "window.focused",
+        "window.managed",
+        "window.unmanaged",
+        "window.moved",
+        "window.tags_changed",
+        "workspace.activated",
+        "workspace.created",
+        "workspace.destroyed",
+        "workspace.moved",
+        "monitor.added",
+        "monitor.removed",
+        "monitor.changed",
+        "layout.changed",
+        "binding_mode.changed",
+        "wm.paused",
+        "wm.suspended",
+        "config.reloaded",
+        IpcProtocol.ShutdownTopic,
+        IpcProtocol.ResyncTopic,
+    ]);
+
     /// <summary>Raised when the active workspace changes, so profiles can switch.</summary>
     public event Action<string>? ActiveWorkspaceChanged;
 
@@ -191,7 +235,7 @@ public sealed class WmConnection : IAsyncDisposable
                 await events.ConnectAsync(TimeSpan.FromSeconds(2), _shutdown.Token).ConfigureAwait(false);
 
                 await foreach (IpcEvent notification in
-                    events.SubscribeAsync(null, _shutdown.Token).ConfigureAwait(false))
+                    events.SubscribeAsync(Subscribed, _shutdown.Token).ConfigureAwait(false))
                 {
                     await HandleEventAsync(client, notification).ConfigureAwait(false);
                 }
@@ -270,6 +314,7 @@ public sealed class WmConnection : IAsyncDisposable
             case "workspace.activated":
             case "workspace.created":
             case "workspace.destroyed":
+            case "workspace.moved":
             case "window.managed":
             case "window.unmanaged":
             case "window.moved":
@@ -278,6 +323,17 @@ public sealed class WmConnection : IAsyncDisposable
                 // list is re-queried rather than patched. It is a handful of entries;
                 // reconstructing it is cheaper than keeping a correct incremental
                 // model in step.
+                await RefreshAsync(client).ConfigureAwait(false);
+                break;
+
+            case "monitor.added":
+            case "monitor.removed":
+            case "monitor.changed":
+                // Which monitor a workspace is on is part of what the snapshot says,
+                // and this bar shows only its own monitor's workspaces - so a monitor
+                // coming or going changes the answer for every bar, not just the one
+                // on the monitor concerned. Used to be dropped by the default case
+                // below while the subscription was to everything.
                 await RefreshAsync(client).ConfigureAwait(false);
                 break;
 
@@ -330,6 +386,10 @@ public sealed class WmConnection : IAsyncDisposable
                 break;
 
             default:
+                // Nothing should arrive here: the subscription names exactly the topics
+                // above. If something does, the two lists have drifted, and a debug
+                // line is the cheapest way to find out which way.
+                Log.Debug(LogCategory.Ipc, $"unhandled event on a subscribed topic: {notification.Topic}");
                 break;
         }
     }

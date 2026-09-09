@@ -238,7 +238,8 @@ internal sealed partial class WmDaemonIpc
             string json = what switch
             {
                 "state" => JsonSerializer.Serialize(
-                    StateProjection.Snapshot(wm, _daemon.IsSuspended), IpcJsonContext.Default.StateSnapshot),
+                    StateProjection.Snapshot(wm, _daemon.IsSuspended, _daemon.Session),
+                    IpcJsonContext.Default.StateSnapshot),
 
                 "windows" => JsonSerializer.Serialize(
                     (IReadOnlyList<WindowInfo>)[.. wm.Root.DescendantWindows()

@@ -66,6 +66,21 @@ public static class WmEventGeometry
         // this event is the announcement to other processes, sent afterwards.
         ConfigReloaded => false,
 
+        // An observation about a window's rectangle, and the detection that made it
+        // already owns the pass: on the timer it marks the layout dirty from its own
+        // return value, and at the head of a pass the answer is read by the next line.
+        // Raised from inside that pass, a geometric event here would set the flag the
+        // pass is about to clear - harmless, but a lie about what the event means.
+        WindowNativeFullscreenChanged => false,
+
+        // Two facts about the session. The one that has a consequence - a remote
+        // session turns animation off - is applied by the daemon before this is raised.
+        EnvironmentChanged => false,
+
+        // A report that a binding ran. Whatever the binding did has produced its own
+        // events, with their own answers to this question.
+        BindingFired => false,
+
         _ => true,
     };
 

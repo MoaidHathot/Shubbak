@@ -36,7 +36,13 @@ public sealed record WindowInfo(
     int X,
     int Y,
     int Width,
-    int Height);
+    int Height,
+
+    // Whether the application has taken the window full-screen itself. Not a State:
+    // the window is still tiled or floating in the tree and is put back the moment the
+    // application lets go. Appended and optional, so the protocol version stays where
+    // it is and an older client simply never sees it.
+    bool NativeFullscreen = false);
 
 /// <summary>A workspace as described to clients.</summary>
 /// <remarks>
@@ -68,7 +74,15 @@ public sealed record MonitorInfoDto(
     int Y,
     int Width,
     int Height,
-    string? ActiveWorkspace);
+    string? ActiveWorkspace,
+
+    // What the display is, as opposed to where. Appended and optional, so the protocol
+    // version stays where it is. FriendlyName is the EDID name and is not unique - two
+    // of the same model report the same one - so DevicePath is the identity that
+    // survives replug and renumbering. Internal is null until the daemon has asked.
+    string? FriendlyName = null,
+    string? DevicePath = null,
+    bool? Internal = null);
 
 /// <summary>
 /// A window on the desktop, managed or not.
@@ -280,7 +294,15 @@ public sealed record StateSnapshot(
     // being rearranged, suspended means the keyboard hook has been let go of - and a
     // client showing "everything is fine" while keys do nothing is the reason this is
     // worth reporting at all.
-    bool Suspended = false);
+    bool Suspended = false,
+
+    // The session around the window manager, for a client that connected between two
+    // wm.environment events. Same appended-and-optional rule. Activity is a wire name
+    // - "ordinary", "presenting", "fullscreen-app" and so on - rather than a number, so
+    // a client written against the event stream reads the same word in both places;
+    // null means the daemon has not asked yet.
+    bool RemoteSession = false,
+    string? Activity = null);
 
 /// <summary>
 /// Source-generated JSON serialisation for the IPC protocol.
@@ -517,6 +539,7 @@ public static class IpcProtocol
         "window.focused",
         "window.title_changed",
         "window.state_changed",
+        "window.native_fullscreen",
         "window.tags_changed",
         "window.moved",
         "workspace.activated",
@@ -529,10 +552,12 @@ public static class IpcProtocol
         "monitor.removed",
         "monitor.changed",
         "binding_mode.changed",
+        "binding.fired",
         "command.rejected",
         "config.reloaded",
         "wm.paused",
         "wm.suspended",
+        "wm.environment",
         SignalTopic,
         ShutdownTopic,
         ResyncTopic,

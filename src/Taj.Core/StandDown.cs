@@ -1,3 +1,5 @@
+using Shubbak.Core.Wm;
+
 namespace Taj.Core;
 
 /// <summary>
@@ -98,49 +100,25 @@ public static class StandDown
     /// <para>
     /// Takes the activity as a plain value rather than calling
     /// <c>SHQueryUserNotificationState</c> here, so this stays testable and
-    /// <c>Taj.Core</c> stays free of Win32.
+    /// <c>Taj.Core</c> stays free of Win32. The value is the core library's
+    /// <see cref="UserActivity"/>, which the window manager also publishes; the bar
+    /// used to keep a narrowed copy of it from before that was true.
     /// </para>
     /// </remarks>
     /// <param name="activity">What the shell says the user is doing.</param>
-    public static bool StillCovered(UserActivityKind activity) => activity switch
+    public static bool StillCovered(UserActivity activity) => activity switch
     {
         // A game with the display to itself, and an ordinary window that has taken
         // the whole screen - a browser playing a video full-screen is this one.
-        UserActivityKind.FullScreenGame or UserActivityKind.FullScreenApp => true,
+        UserActivity.FullScreenGame or UserActivity.FullScreenApp => true,
 
         // Presenting covers the screen too, and is the case where a bar appearing over
         // the slides would be worse than merely wasteful.
-        UserActivityKind.Presenting => true,
+        UserActivity.Presenting => true,
 
         // Anything else, including "could not tell". Standing back up on an unknown
         // answer is the safe direction: the cost is the polling this avoids, and the
         // alternative is a bar that has stopped for a reason nobody can see.
         _ => false,
     };
-}
-
-/// <summary>
-/// What the shell says the user is doing, as far as the bar needs to care.
-/// </summary>
-/// <remarks>
-/// A narrowed copy of the platform layer's <c>UserActivity</c>. <c>Taj.Core</c> is
-/// deliberately free of Win32 so it can be tested without a desktop, and the
-/// executable maps one to the other.
-/// </remarks>
-public enum UserActivityKind
-{
-    /// <summary>Could not be determined.</summary>
-    Unknown,
-
-    /// <summary>Ordinary use. The bar is visible.</summary>
-    Ordinary,
-
-    /// <summary>A game with exclusive use of the display.</summary>
-    FullScreenGame,
-
-    /// <summary>Some other window covering the whole screen.</summary>
-    FullScreenApp,
-
-    /// <summary>Presentation mode.</summary>
-    Presenting,
 }

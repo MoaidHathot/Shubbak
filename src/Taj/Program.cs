@@ -543,7 +543,7 @@ internal static class Program
     /// </remarks>
     private static void ApplyStandDown()
     {
-        if (s_fullScreenApp && !StandDown.StillCovered(CurrentActivity()))
+        if (s_fullScreenApp && !StandDown.StillCovered(DisplayPreferences.CurrentActivity()))
         {
             // The edge has outlived what it described. ABN_FULLSCREENAPP reports an
             // opening and a closing, not what is in front, so this is expected rather
@@ -576,22 +576,6 @@ internal static class Program
             ? $"standing down: {(s_wmSuspended ? "the window manager is suspended" : "a full-screen application is covering the bar")}"
             : "standing up: the bar is visible again");
     }
-
-    /// <summary>
-    /// Asks the shell what the user is doing, in the terms <c>Taj.Core</c> uses.
-    /// </summary>
-    /// <remarks>
-    /// The mapping lives here because <c>Taj.Core</c> is deliberately free of Win32,
-    /// which is what lets the rule that consumes this be tested without a desktop.
-    /// </remarks>
-    private static UserActivityKind CurrentActivity() => DisplayPreferences.CurrentActivity() switch
-    {
-        UserActivity.FullScreenGame => UserActivityKind.FullScreenGame,
-        UserActivity.FullScreenApp => UserActivityKind.FullScreenApp,
-        UserActivity.Presenting => UserActivityKind.Presenting,
-        UserActivity.Ordinary => UserActivityKind.Ordinary,
-        _ => UserActivityKind.Unknown,
-    };
 
     private static unsafe List<Rect> EnumerateMonitors()
     {

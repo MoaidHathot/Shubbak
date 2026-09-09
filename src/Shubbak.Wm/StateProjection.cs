@@ -26,7 +26,8 @@ internal static class StateProjection
         window.Rect.X,
         window.Rect.Y,
         window.Rect.Width,
-        window.Rect.Height);
+        window.Rect.Height,
+        window.IsNativeFullscreen);
 
     public static WorkspaceInfo Describe(
         WorkspaceNode workspace, int monitorIndex = -1, WorkspaceNode? focused = null) => new(
@@ -51,9 +52,13 @@ internal static class StateProjection
         monitor.Bounds.Y,
         monitor.Bounds.Width,
         monitor.Bounds.Height,
-        monitor.ActiveWorkspace?.Name);
+        monitor.ActiveWorkspace?.Name,
+        monitor.FriendlyName,
+        monitor.DevicePath,
+        monitor.IsInternal);
 
-    public static StateSnapshot Snapshot(WindowManager wm, bool suspended = false)
+    public static StateSnapshot Snapshot(
+        WindowManager wm, bool suspended = false, SessionInfo? session = null)
     {
         WindowNode? focused = wm.FocusedWindow;
 
@@ -68,8 +73,23 @@ internal static class StateProjection
             // Passed in rather than read from the tree, because the state machine has
             // never known that a keyboard hook exists and this is not the change that
             // should teach it.
-            suspended);
+            suspended,
+
+            // Likewise. The session is something the daemon observes around the state
+            // machine, not something the state machine holds.
+            session?.RemoteSession ?? false,
+            session?.Activity?.Wire());
     }
+
+    /// <summary>
+    /// What the daemon knows about the session, for the snapshot.
+    /// </summary>
+    /// <remarks>
+    /// The same two facts <see cref="EnvironmentChanged"/> carries, held by the daemon
+    /// between reads. <c>Activity</c> is null until the first read, so a snapshot
+    /// taken before then says "not asked yet" rather than "ordinary".
+    /// </remarks>
+    public readonly record struct SessionInfo(bool RemoteSession, UserActivity? Activity);
 
     /// <summary>
     /// Describes every workspace, tagged with the index of the monitor it is on.
@@ -104,6 +124,10 @@ internal static class StateProjection
             WindowStateChanged e => Json(Describe(e.Window, focused)),
             WindowMoved e => Json(Describe(e.Window, focused)),
 
+            // The window, with the flag already on it. Nothing more is needed: a
+            // subscriber that wants the transition compares with what it last saw.
+            WindowNativeFullscreenChanged e => Json(Describe(e.Window, focused)),
+
             // Described rather than left to the fallback below, which published an
             // empty object on a topic clients can subscribe to - telling a subscriber
             // that something had changed, and neither what nor for which window.
@@ -127,6 +151,16 @@ internal static class StateProjection
             BindingModeChanged e => e.Mode is null ? "null" : JsonString(e.Mode),
             PauseChanged e => $"{{\"paused\":{(e.Paused ? "true" : "false")}}}",
             SuspendChanged e => $"{{\"suspended\":{(e.Suspended ? "true" : "false")}}}",
+            EnvironmentChanged e =>
+                $"{{\"remote_session\":{(e.RemoteSession ? "true" : "false")}," +
+                $"\"activity\":{JsonString(e.Activity.Wire())}}}",
+
+            // The same shape as one entry of `query bindings`, so a client that
+            // already reads those reads this.
+            BindingFired e =>
+                $"{{\"key\":{JsonString(e.Key)}," +
+                $"\"mode\":{(e.Mode is null ? "null" : JsonString(e.Mode))}," +
+                $"\"commands\":[{string.Join(',', e.Commands.Select(JsonString))}]}}",
             LayoutChanged e => $"{{\"layout\":{JsonString(e.Layout)}}}",
             ContainerResized e => $"{{\"id\":{e.Container.Id.Value}}}",
             CommandRejected e =>

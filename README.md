@@ -587,18 +587,28 @@ shubbak sub                  # tail every event
 shubbak sub window.focused,workspace.activated
 ```
 
-**23 event topics** you can subscribe to:
+**26 event topics** you can subscribe to:
 
 ```
 window.managed       window.unmanaged      window.focused      window.title_changed
-window.state_changed window.tags_changed   window.moved
+window.state_changed window.tags_changed   window.moved        window.native_fullscreen
 workspace.activated  workspace.created     workspace.destroyed workspace.moved
 layout.changed       container.resized
 monitor.added        monitor.removed       monitor.changed
-binding_mode.changed command.rejected      config.reloaded
-wm.paused            wm.suspended          wm.shutdown         wm.resync
+binding_mode.changed binding.fired         command.rejected    config.reloaded
+wm.paused            wm.suspended          wm.environment      wm.shutdown         wm.resync
 signal
 ```
+
+Three of those exist purely so that things outside the daemon can know what it
+knows. `window.native_fullscreen` says an application took its own window
+full-screen (a video, a slide show) or gave the monitor back; it is an observation,
+not a state, and the window is still tiled underneath. `wm.environment` says the
+session became remote or stopped being, or the shell's idea of what you are doing
+changed - presenting, a full-screen app, a game. `binding.fired` reports each chord
+Shubbak claimed and ran, by key and verb name, and **only** those: nothing typed into
+an application can reach it, which is what makes a keycast overlay for a talk a small
+external subscriber rather than a keylogger.
 
 Subscribe to a topic that doesn't exist and you get told, along with the list of
 ones that do. `wm.resync` tells you your backlog was dropped; `wm.shutdown` tells

@@ -49,6 +49,18 @@ public static class TreeRenderer
                 $"monitor {monitor.DeviceId}{(monitor.IsPrimary ? " (primary)" : "")} " +
                 $"{monitor.Bounds} work={monitor.WorkArea} dpi={monitor.Dpi}");
 
+            // What the display is, on its own line so the geometry line above stays
+            // the shape every existing report has. Only when the platform layer has
+            // said: a tree built in a test has nothing here and prints nothing.
+            if (monitor.FriendlyName is not null || monitor.DevicePath is not null || monitor.IsInternal is not null)
+            {
+                output.AppendLine(
+                    CultureInfo.InvariantCulture,
+                    $"  is {(monitor.IsInternal switch { true => "built-in", false => "external", null => "unknown" })}" +
+                    $"{(monitor.FriendlyName is { } name ? $" \"{name}\"" : "")}" +
+                    $"{(monitor.DevicePath is { } path ? $" {path}" : "")}");
+            }
+
             foreach (WorkspaceNode workspace in monitor.Workspaces)
             {
                 output.AppendLine(

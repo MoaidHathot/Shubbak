@@ -1,3 +1,4 @@
+using Shubbak.Core.Wm;
 using Shubbak.Native;
 
 namespace Shubbak.Native.Tests;

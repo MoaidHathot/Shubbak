@@ -17,6 +17,73 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **Three things the daemon knew and told nobody are now on the event stream.** Each
+  was already being read, and each was acted on privately or written into the
+  diagnostic report and nowhere else. Anything outside the process that wanted the same
+  fact had to ask Windows for itself, which is the thing the event stream exists to
+  make unnecessary.
+
+  - `window.native_fullscreen` - an application took its own window full-screen, or
+    gave the monitor back. A video, a slide show, a game in a window. It is an
+    observation about the rectangle rather than a state: the window is still tiled or
+    floating in the tree and is put back the moment the application lets go, so
+    reporting it as `fullscreen` would have every client offer a toggle that cannot be
+    toggled. `WindowInfo` carries it as `native_fullscreen`, appended and optional.
+  - `wm.environment` - the session became remote or stopped being, or the shell's idea
+    of what you are doing moved: `ordinary`, `presenting`, `fullscreen-app`,
+    `fullscreen-game`, `quiet-time`. Both facts were already read every two seconds; the
+    first turned animation off and the second appeared in `diagnose`. Published on
+    change, and carried in the state snapshot as `remote_session` and `activity` so a
+    client connecting between changes is not left guessing. The words are spelt out
+    rather than derived from an enum, so they can be written in a config file later
+    without anyone guessing how a member lower-cases.
+  - `binding.fired` - a chord Shubbak claimed and ran, as `{key, mode, commands}`, the
+    same shape as one entry of `query bindings`. **Bound chords only, and that is the
+    design.** The hook sees every key on the machine; this reports the ones that were
+    gestures at the window manager, so nothing typed into an application can reach it
+    and a keycast overlay for a talk becomes a small external subscriber rather than a
+    keylogger. Verb names rather than full command text, for the reason `query
+    bindings` gives names: an argument can be a whole shell command line. Built only
+    when someone is subscribed, so an unwatched desktop allocates nothing for it.
+
+  All three are inert for the layout pass, and a test now names every event kind and
+  fails when a new one has not been considered - which is how these were. The protocol
+  version stays at 2: every wire change is a new topic or an appended optional field,
+  and an older client reads exactly the JSON it read before.
+
+  This is the first step of a longer piece of work, written up in
+  `ideas/contexts.md`: the facts the window manager will later act on are the facts it
+  now publishes, so whatever gets built on top can be built outside the daemon first.
+
+- **`UserActivity` moved from the platform layer to the core library.** It is published
+  now, so the processes with no Win32 in them have to be able to name it. The bar kept a
+  narrowed copy (`UserActivityKind`) for exactly that reason; the copy and the mapping
+  between the two are gone.
+
+- **Monitors now know what they are, not only where.** `query monitors`, the state
+  snapshot and the diagnostic report carry `friendly_name` (the EDID name, `DELL
+  U3219Q`), `device_path` (the connector's device interface path) and `internal`
+  (whether the panel is built in), read from the display configuration API and
+  attached to the monitor node. The GDI name `\\.\DISPLAY1`, which is what everything
+  keyed on and still does, is handed out in enumeration order and reused, so the same
+  panel can be `DISPLAY1` before undocking and `DISPLAY2` after; the device path is the
+  identity that survives that, and the comment on `MonitorNode.DeviceId` that called
+  *it* a device path was wrong and has been corrected.
+
+  Asked only when the monitor enumeration has changed - a dock, an undock, a cable -
+  which is the only time the answer can differ, so the two-second poll pays nothing
+  for it. Each monitor is logged once at startup with all three, so the path is one
+  copy away from a config file. The Win+P arrangement (`extend`, `clone`, and so on) is
+  read at the same moment and logged when it changes. Nothing acts on any of this yet;
+  it is the ground the next step stands on, and a machine with two of the same monitor
+  - this one - is already the case that proves the friendly name alone would not have
+  been enough.
+
+  Measured against the tagged `pre-contexts` build: `shubbak-wm.exe` grew by 56 KB, the
+  other three by about 32 KB each. The idle tick is unchanged - about 4 Hz, tens of
+  microseconds, nothing allocated at the median - and nothing periodic was added that
+  could move it. `ideas/contexts.md` has the full table and the procedure.
+
 - **A palette action can ask a question.** A `param` turns one row into a picker, so a
   single entry stands in for one per workspace. Nineteen workspaces meant nineteen
   actions to name, write and scroll past - or, in practice, none of them, because
@@ -81,6 +148,17 @@ schedule and breaking either is a different kind of event:
   nothing anywhere to say so.
 
 ### Changed
+
+- **Taj subscribes to the topics it handles, not to everything.** It subscribed to `*`,
+  which is the shortest thing to write and made the window manager serialise and send a
+  payload for every event on the desktop to a process that dropped most of them:
+  `command.rejected` alone fires on every repeat of a held key that cannot be satisfied.
+  The daemon has a gate that only builds a payload when somebody is subscribed to the
+  topic, and for as long as a bar was running that gate answered yes to everything -
+  including anything added to the stream for other consumers, which the bar would then
+  have paid for too. The list of topics now sits beside the switch that handles them,
+  and two that were being dropped by the default case are handled: `workspace.moved`
+  and `monitor.*` both change which workspaces a per-monitor bar should be listing.
 
 - **`move --workspace N --focus` replaces the `move; focus` pair.** "Send it there" and
   "send it there and go with it" were one command and two commands on the same key:

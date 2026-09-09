@@ -71,6 +71,35 @@ public sealed class WmEventGeometryTests
         Assert.False(new SuspendChanged(false).AffectsGeometry());
     }
 
+    /// <summary>
+    /// The announcements added for the event stream's own sake are inert.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Native full-screen is the one that could plausibly be argued the other way: it
+    /// does owe a layout pass. But the detection that raises it owns that pass already
+    /// - on the timer from its return value, at the head of a pass by the next line -
+    /// and it is raised from <i>inside</i> a pass in the second case, where a geometric
+    /// event would set the flag that pass is about to clear.
+    /// </para>
+    /// <para>
+    /// The other two describe the session and a keystroke, neither of which is a
+    /// rectangle. Whatever the keystroke does produces its own events.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void ObservationsAboutTheSessionDoNotMoveAnything()
+    {
+        WindowNode window = TreeBuilder.Window("player");
+
+        Assert.False(new WindowNativeFullscreenChanged(window, true).AffectsGeometry());
+        Assert.False(new WindowNativeFullscreenChanged(window, false).AffectsGeometry());
+        Assert.False(new EnvironmentChanged(true, UserActivity.Presenting).AffectsGeometry());
+        Assert.False(new EnvironmentChanged(false, UserActivity.Ordinary).AffectsGeometry());
+        Assert.False(new BindingFired("alt+h", null, ["focus"]).AffectsGeometry());
+        Assert.False(new BindingFired("alt+r", "resize", ["resize", "resize"]).AffectsGeometry());
+    }
+
     [Fact]
     public void FocusMovingIsTreatedAsGeometric()
     {
@@ -219,10 +248,12 @@ public sealed class WmEventGeometryTests
         [
             .. new[]
             {
+                nameof(BindingFired),
                 nameof(BindingModeChanged),
                 nameof(CommandRejected),
                 nameof(ConfigReloaded),
                 nameof(ContainerResized),
+                nameof(EnvironmentChanged),
                 nameof(LayoutChanged),
                 nameof(MonitorAdded),
                 nameof(MonitorChanged),
@@ -232,6 +263,7 @@ public sealed class WmEventGeometryTests
                 nameof(WindowFocused),
                 nameof(WindowManaged),
                 nameof(WindowMoved),
+                nameof(WindowNativeFullscreenChanged),
                 nameof(WindowStateChanged),
                 nameof(WindowTagsChanged),
                 nameof(WindowTitleChanged),

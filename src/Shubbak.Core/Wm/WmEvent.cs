@@ -79,6 +79,34 @@ public sealed record WindowStateChanged(
     public override string Topic => "window.state_changed";
 }
 
+/// <summary>
+/// An application took its own window full-screen, or gave the monitor back.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Distinct from <see cref="WindowStateChanged"/>, because it is not a state. The
+/// window is still tiled or floating in the tree and goes back to its tile the moment
+/// the application lets go; what changed is an observation the daemon made about the
+/// window's rectangle - see <c>WindowNode.IsNativeFullscreen</c>. Reporting it as a
+/// state would have every client show "fullscreen" for a window it cannot toggle back.
+/// </para>
+/// <para>
+/// Announced because it was the one thing the daemon knew about a window and told
+/// nobody. A bar could not dim itself for a video, and nothing outside the process
+/// could tell a slide show had started, without inspecting windows for itself - which
+/// is the thing the event stream exists to make unnecessary.
+/// </para>
+/// <para>
+/// Inert for geometry. The detection owns the layout pass already: on the timer it
+/// marks the layout dirty from its own return value, and at the head of a pass the
+/// answer is consumed by the very next line. This is the announcement, sent afterwards.
+/// </para>
+/// </remarks>
+public sealed record WindowNativeFullscreenChanged(WindowNode Window, bool NativeFullscreen) : WmEvent
+{
+    public override string Topic => "window.native_fullscreen";
+}
+
 /// <summary>A window's workspace membership changed.</summary>
 /// <param name="Window">The window.</param>
 /// <param name="Tags">Workspaces it now also belongs to.</param>
@@ -170,6 +198,41 @@ public sealed record BindingModeChanged(string? Mode) : WmEvent
 }
 
 /// <summary>
+/// A keybinding is being run.
+/// </summary>
+/// <param name="Key">The chord, as the config writes it: <c>alt+shift+h</c>.</param>
+/// <param name="Mode">The binding mode it resolved in, or null for the default table.</param>
+/// <param name="Commands">The verbs it runs, by name.</param>
+/// <remarks>
+/// <para>
+/// Bound chords only, and that is the whole design. The keyboard hook sees every key
+/// on the machine; this reports the ones the window manager claimed and acted on,
+/// which are gestures the user made <i>at the window manager</i>. Nothing typed into
+/// an application can reach this event, so a subscriber learns what a keycast overlay
+/// for a talk needs and nothing a keylogger would want. The pipe is scoped to the
+/// account, not to the integrity level, which is why the distinction is drawn here
+/// rather than left to whoever subscribes.
+/// </para>
+/// <para>
+/// Verb names rather than the full command text, for the same reason
+/// <c>query bindings</c> gives names: an argument can be a whole shell command line,
+/// which is not the thing anybody showing "what key did I just press" wants on screen.
+/// </para>
+/// <para>
+/// Raised as the binding is dispatched, before the commands run, so on the wire it
+/// precedes whatever those commands announce and <paramref name="Mode"/> is the mode
+/// the chord was resolved in - which the chord itself may be about to change. Once
+/// per execution, so a held key that repeats reports each repeat and a held key that
+/// does not repeat reports once. A subscriber counting presses gets the number of
+/// things that happened, which is the honest answer.
+/// </para>
+/// </remarks>
+public sealed record BindingFired(string Key, string? Mode, IReadOnlyList<string> Commands) : WmEvent
+{
+    public override string Topic => "binding.fired";
+}
+
+/// <summary>
 /// Tiling was suspended or resumed.
 /// </summary>
 /// <remarks>
@@ -211,6 +274,35 @@ public sealed record PauseChanged(bool Paused) : WmEvent
 public sealed record SuspendChanged(bool Suspended) : WmEvent
 {
     public override string Topic => "wm.suspended";
+}
+
+/// <summary>
+/// The session changed around the window manager: a remote connection began or ended,
+/// or the shell's idea of what the user is doing moved.
+/// </summary>
+/// <param name="RemoteSession">Whether the desktop is being viewed over a remote connection.</param>
+/// <param name="Activity">What the shell says the user is doing.</param>
+/// <remarks>
+/// <para>
+/// Both facts were already being read every two seconds, and both were acted on
+/// privately - the remote session turns animation off, the activity appeared in the
+/// diagnostic report - and reported to no one. They are the two cheapest answers
+/// Windows gives about the <i>session</i> rather than about any window, which makes
+/// them exactly the kind of thing a bar or an external tool should be able to key off
+/// without asking the operating system for itself.
+/// </para>
+/// <para>
+/// Published on change, not on every read. The values also travel in the state
+/// snapshot so a client connecting between changes is not left guessing.
+/// </para>
+/// <para>
+/// Inert for geometry. Neither fact moves a window; the animation preference it feeds
+/// is applied by the daemon on the same pass, before this is raised.
+/// </para>
+/// </remarks>
+public sealed record EnvironmentChanged(bool RemoteSession, UserActivity Activity) : WmEvent
+{
+    public override string Topic => "wm.environment";
 }
 
 /// <summary>

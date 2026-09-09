@@ -1074,9 +1074,28 @@ public sealed class WmDaemon : IDisposable
                 continue;
             }
 
+            // Before the commands run, so the announcement precedes its consequences on
+            // the wire and names the mode the chord resolved in - which the chord itself
+            // may be about to change. Built only for a listener: the record and its
+            // list of names are an allocation per bound chord, and a desktop with nobody
+            // subscribed should pay nothing for a feature it is not using.
+            if (_ipc is { } ipc && ipc.HasSubscribers(BindingFiredTopic))
+            {
+                Publish(new WmResult(true, [new BindingFired(
+                    binding.Key.Display,
+                    _wm.BindingMode,
+                    [.. binding.Commands.Select(c => c.Name)])]));
+            }
+
             Execute(binding.Commands);
         }
     }
+
+    /// <summary>
+    /// The topic <see cref="BindingFired"/> publishes on, held so the subscriber check
+    /// above does not construct an event to read it.
+    /// </summary>
+    private static readonly string BindingFiredTopic = new BindingFired(string.Empty, null, []).Topic;
 
     private void DrainWindowEvents()
     {
@@ -4013,6 +4032,12 @@ public sealed class WmDaemon : IDisposable
                 covers
                     ? $"0x{handle:X} took itself full-screen; leaving it the monitor"
                     : $"0x{handle:X} left full-screen; putting it back in its tile");
+
+            // Said out loud, after the flag is set so the payload carries the new
+            // answer. Inert for geometry - this method's return value is what owes the
+            // pass - so publishing from inside a layout pass, which is one of the two
+            // places this runs, does not set the flag that pass is about to clear.
+            Publish(new WmResult(true, [new WindowNativeFullscreenChanged(window, covers)]));
         }
 
         return changed;
@@ -4159,9 +4184,25 @@ public sealed class WmDaemon : IDisposable
         _displayHz = fastest > 0 ? fastest : AnimationOptions.FallbackFps;
 
         _systemWantsAnimation = DisplayPreferences.SystemWantsAnimation();
-        _isRemoteSession = DisplayPreferences.IsRemoteSession();
 
+        bool remote = DisplayPreferences.IsRemoteSession();
+        UserActivity activity = DisplayPreferences.CurrentActivity();
+
+        // Announced only when either answer moved. The read happens every two seconds
+        // for the life of the process; the event happens when a remote session begins
+        // or ends, or a presentation starts or stops, which is a handful of times a
+        // day. The first read always differs from "not asked yet", so a subscriber
+        // connected from the start is told once, and everyone else reads the snapshot.
+        bool changed = remote != _isRemoteSession || activity != _userActivity;
+
+        _isRemoteSession = remote;
+        _userActivity = activity;
+
+        // Applied before the announcement, so anything that hears the event and asks
+        // for the animation state gets the answer the event implies.
         ApplySystemAnimationPreference();
+
+        if (changed) Publish(new WmResult(true, [new EnvironmentChanged(remote, activity)]));
     }
 
     /// <summary>
@@ -4204,6 +4245,18 @@ public sealed class WmDaemon : IDisposable
 
     /// <summary>Whether the session is being viewed over a remote connection.</summary>
     private bool _isRemoteSession;
+
+    /// <summary>
+    /// What the shell last said the user was doing, or null before the first read.
+    /// </summary>
+    /// <remarks>
+    /// Nullable so that the first read is a change and is announced, and so the state
+    /// snapshot can say "not asked yet" rather than inventing an answer.
+    /// </remarks>
+    private UserActivity? _userActivity;
+
+    /// <summary>The session as the daemon last saw it, for the state snapshot.</summary>
+    internal StateProjection.SessionInfo Session => new(_isRemoteSession, _userActivity);
 
     /// <summary>
     /// Whether motion should be animated at all, taking the system into account.
@@ -4475,6 +4528,12 @@ public sealed class WmDaemon : IDisposable
 
     private void SyncMonitors(IReadOnlyList<MonitorInfo> current)
     {
+        // Asked here and nowhere else. The enumeration runs twice a second for the life
+        // of the process; this runs when it has changed, which is a dock, an undock or
+        // a cable - and is the only time the answer can be different.
+        IReadOnlyList<DisplayTarget> targets = DisplayTopology.Targets();
+        DisplayTopologyKind topology = DisplayTopology.Current();
+
         foreach (MonitorInfo info in current)
         {
             MonitorNode? existing = _wm.Root.FindMonitor(info.DeviceId);
@@ -4486,10 +4545,14 @@ public sealed class WmDaemon : IDisposable
                     IsPrimary = info.IsPrimary,
                 };
 
+                Identify(monitor, targets);
                 Publish(_wm.AddMonitor(monitor));
+
+                Log.Info(LogCategory.Wm, $"monitor {DescribeIdentity(monitor)}");
             }
             else
             {
+                Identify(existing, targets);
                 Publish(_wm.UpdateMonitor(existing, info.Bounds, info.WorkArea, info.Dpi));
             }
         }
@@ -4502,12 +4565,50 @@ public sealed class WmDaemon : IDisposable
                 Publish(_wm.RemoveMonitor(monitor));
         }
 
+        if (topology != _displayTopology)
+        {
+            _displayTopology = topology;
+            Log.Info(LogCategory.Wm, $"display topology: {topology.ToString().ToLowerInvariant()}");
+        }
+
         CreateConfiguredWorkspaces();
 
         // The work area may have shrunk - a bar appearing, the taskbar moving - so
         // everything has to be re-placed against the new bounds.
         _layoutDirty = true;
     }
+
+    /// <summary>The Win+P arrangement as of the last monitor change.</summary>
+    private DisplayTopologyKind _displayTopology;
+
+    /// <summary>
+    /// Attaches what the display configuration API knows about a monitor to its node.
+    /// </summary>
+    /// <remarks>
+    /// Nothing is cleared when there is no match. A target list that has come back
+    /// empty - a failed call, an odd session - should leave the node knowing what it
+    /// knew rather than forgetting it.
+    /// </remarks>
+    private static void Identify(MonitorNode monitor, IReadOnlyList<DisplayTarget> targets)
+    {
+        foreach (DisplayTarget target in targets)
+        {
+            if (!string.Equals(target.DeviceId, monitor.DeviceId, StringComparison.OrdinalIgnoreCase)) continue;
+
+            monitor.FriendlyName = target.FriendlyName.Length > 0 ? target.FriendlyName : null;
+            monitor.DevicePath = target.DevicePath.Length > 0 ? target.DevicePath : null;
+            monitor.IsInternal = target.IsInternal;
+            return;
+        }
+    }
+
+    /// <summary>One line saying what a monitor is, for the log and the report.</summary>
+    private static string DescribeIdentity(MonitorNode monitor) =>
+        $"{monitor.DeviceId} {monitor.Bounds.Width}x{monitor.Bounds.Height} @ {monitor.Dpi} dpi" +
+        $"{(monitor.IsPrimary ? ", primary" : "")}" +
+        $"{(monitor.IsInternal switch { true => ", built-in", false => ", external", null => "" })}" +
+        $"{(monitor.FriendlyName is { } name ? $", \"{name}\"" : "")}" +
+        $"{(monitor.DevicePath is { } path ? $", {path}" : "")}";
 
     private void CreateConfiguredWorkspaces()
     {

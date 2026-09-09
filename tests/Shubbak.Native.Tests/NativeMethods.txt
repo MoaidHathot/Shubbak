@@ -37,3 +37,7 @@ INPUT
 INPUT_TYPE
 KEYBD_EVENT_FLAGS
 VIRTUAL_KEY
+
+// The connector-type enum, generated here from the same metadata the library uses,
+// so a test can pin the raw values it writes against the names they stand for.
+DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY

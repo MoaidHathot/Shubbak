@@ -34,4 +34,11 @@
     <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />
   </ItemGroup>
 
+  <!--
+    No InternalsVisibleTo, deliberately. The test project generates its own CsWin32
+    PInvoke class, and opening this project's internals to it makes the two collide
+    (CS0436) on every generated type both sides use. Anything a test needs from here is
+    public, and takes public types.
+  -->
+
 </Project>

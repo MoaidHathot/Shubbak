@@ -1,3 +1,4 @@
+using Shubbak.Core.Wm;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
@@ -124,6 +125,11 @@ public static class DisplayPreferences
     /// So this is reported rather than acted on. It answers the question honestly for
     /// the cases it covers, and says nothing about the rest.
     /// </para>
+    /// <para>
+    /// The answer is a <see cref="UserActivity"/> from the core library rather than a
+    /// type of this one, because it is published - in an event and in the state
+    /// snapshot - and the processes reading it have no Win32 in them.
+    /// </para>
     /// </remarks>
     public static UserActivity CurrentActivity()
     {
@@ -143,32 +149,4 @@ public static class DisplayPreferences
             _ => UserActivity.Unknown,
         };
     }
-}
-
-/// <summary>
-/// What the shell believes the user is doing, as far as it can tell.
-/// </summary>
-/// <remarks>
-/// Named for what each state means to a window manager rather than for the constant it
-/// came from, because the constants are named for notifications.
-/// </remarks>
-public enum UserActivity
-{
-    /// <summary>The call failed, or the answer is not one we recognise.</summary>
-    Unknown,
-
-    /// <summary>Nothing special: an ordinary desktop.</summary>
-    Ordinary,
-
-    /// <summary>A Direct3D exclusive-fullscreen application - a game, reliably.</summary>
-    FullScreenGame,
-
-    /// <summary>A full-screen window that is not Direct3D exclusive.</summary>
-    FullScreenApp,
-
-    /// <summary>Presentation mode: the user has asked not to be interrupted.</summary>
-    Presenting,
-
-    /// <summary>The first hour after a new user logs in for the first time.</summary>
-    QuietTime,
 }
