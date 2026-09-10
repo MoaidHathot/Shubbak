@@ -176,6 +176,13 @@ public sealed class BarWindow : IDisposable
         _tree = _model.Build();
         _layout.Arrange(_tree, _bounds with { X = 0, Y = 0 });
 
+        // The hovered node belongs to the tree that was just thrown away. Found again
+        // by id in the new one, or the highlight lasted exactly until the clock next
+        // ticked - half a second - and the hand cursor stayed while the pill went
+        // flat, which read as the bar changing its mind about whether it was a control.
+        if (_hovered is { } stale)
+            _hovered = _tree.SelfAndDescendants().FirstOrDefault(n => n.HoverStyle is not null && n.Id == stale.Id);
+
         if (Log.IsEnabled(LogLevel.Debug))
         {
             Log.Debug(LogCategory.Wm,
@@ -271,6 +278,13 @@ public sealed class BarWindow : IDisposable
         if (ReferenceEquals(hovered, _hovered)) return;
 
         _hovered = hovered;
+
+        // The cursor as well as the highlight. WM_SETCURSOR arrives before the
+        // WM_MOUSEMOVE that moves the highlight, so it reads the state one movement
+        // behind - and the last movement before the pointer comes to rest is the one
+        // that shows. Setting it here, after the highlight moved, is what makes the
+        // pointer at rest over a pill a hand and at rest beside one an arrow.
+        PInvoke.SetCursor(PInvoke.LoadCursor(HINSTANCE.Null, hovered is not null ? PInvoke.IDC_HAND : PInvoke.IDC_ARROW));
 
         PInvoke.InvalidateRect(_handle, (RECT?)null, false);
     }
@@ -742,6 +756,15 @@ public sealed class BarWindow : IDisposable
                     case PInvoke.WM_MOUSELEAVE:
                         window.OnMouseLeave();
                         return new LRESULT(0);
+
+                    // The hand over anything that can be clicked, the arrow over
+                    // everything else. The class cursor is the arrow; saying so here
+                    // for the rest stops the hand lingering after the pointer has left
+                    // a control for a readout beside it.
+                    case PInvoke.WM_SETCURSOR:
+                        PInvoke.SetCursor(PInvoke.LoadCursor(
+                            HINSTANCE.Null, window._hovered is not null ? PInvoke.IDC_HAND : PInvoke.IDC_ARROW));
+                        return new LRESULT(1);
 
                     case AppbarCallbackMessage:
                         switch ((nuint)wParam.Value)

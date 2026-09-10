@@ -944,6 +944,20 @@ a green microphone glyph appeared between the second clock and the layout icon;
 brought the green one back; `--auto` on the meeting removed both. `ayn --report`
 said `microphone mute: muted` while it was. Refusals: `signal ayn camera mute` and
 `signal ayn microphone louder` each logged one line naming what is accepted.
+**After the fact, the same day:** three more asks from the user, each answered mostly
+in the file. The pills and glyphs moved left of the two readouts, so the readouts stay
+put when a pill appears - a reordering of the right zone and nothing else. Every
+clickable widget now shows it is one: a `text` with `on-click` lights up under the
+pointer, derived from the style it is showing (a pill lightens by a fifth towards
+white, a bare glyph gains the workspaces' faint pill), or takes `hover-*` of its own;
+the pointer is a hand over anything clickable and an arrow otherwise, set from
+`WM_MOUSEMOVE` after the highlight moves because `WM_SETCURSOR` arrives one movement
+earlier and read the state a step behind. And a bug the workspaces had carried since
+their hover was added: the tree is rebuilt on every model change - the clock, twice a
+second - and the hovered node belonged to the tree just thrown away, so the highlight
+lasted until the next tick. Found by photographing the bar with the pointer parked on
+a pill for 1.2 s and seeing it flat. Found again by id in the new tree now. Taj
++6 KB; nothing else changed.
 ---
 
 ## The series, in one table

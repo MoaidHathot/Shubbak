@@ -525,7 +525,10 @@ Templates get filters — `truncate:N` `upper` `lower` `trim` `default:X` `then:
 `pad:N` `replace:from,to` `icon` `state-icon` — and a `when { }` block for conditional
 styling, so "colour the keyboard indicator red when I'm in the wrong language" is a
 line, not a plugin. A widget can have a `font=` of its own, which is how one widget
-draws a glyph from Segoe Fluent Icons beside text in the profile's face.
+draws a glyph from Segoe Fluent Icons beside text in the profile's face. Anything with
+an `on-click` shows it is a control: the pointer becomes a hand and the widget lights
+up under it — a pill lightens, a bare glyph gains the same faint pill the workspaces
+use — or takes `hover-background` and `hover-colour` of its own.
 
 Zones are flex containers. Profiles can `extend` each other, so a slim
 "presentation" variant costs five lines instead of a duplicate. A `rule` picks the
@@ -836,7 +839,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1812 test methods**, around 700 ms to run. Everything except the platform layer
+**1818 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -898,7 +901,7 @@ src/
   Dalil/            the palette
   Ayn.Core/       the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/            the camera and microphone watcher
-tests/              1812 test methods across 10 projects
+tests/              1818 test methods across 10 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```

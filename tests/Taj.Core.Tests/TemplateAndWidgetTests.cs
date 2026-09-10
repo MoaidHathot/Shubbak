@@ -697,6 +697,99 @@ public sealed class ActiveContextsTests
     }
 }
 
+/// <summary>Tests for how a clickable widget admits it is one.</summary>
+public sealed class WidgetHoverTests
+{
+    private static readonly Dictionary<string, string?> None = new(StringComparer.Ordinal);
+
+    private static TemplateWidget Widget(string source) =>
+        (TemplateWidget)TajConfigLoader.Load($$"""
+            bar {
+                profile "default" {
+                    height 30
+                    zone "right" {
+                        {{source}}
+                    }
+                }
+            }
+            """).Config.Profiles["default"].Zones.Single().Widgets.Single();
+
+    [Fact]
+    public void OnlyAClickableWidgetReactsToThePointer()
+    {
+        // A readout that lit up when hovered would be claiming to be a control.
+        Assert.Null(Widget("""text template="{{ clock }}" """).Build(None).HoverStyle);
+        Assert.NotNull(Widget("""text template="{{ clock }}" on-click="wm-redraw" """).Build(None).HoverStyle);
+    }
+
+    [Fact]
+    public void ABareGlyphGainsTheSameFaintPillTheWorkspacesUse()
+    {
+        VisualNode node = Widget("""text template="x" colour="#a6e3a1" on-click="signal ayn microphone mute" """).Build(None);
+
+        Assert.Equal(new Colour(0xFF, 0xFF, 0xFF, 0x1A), node.HoverStyle!.Value.Background);
+        Assert.Equal(node.Style.Foreground, node.HoverStyle.Value.Foreground);
+        Assert.Equal(4, node.HoverStyle.Value.CornerRadius);
+    }
+
+    [Fact]
+    public void APillHoversAsALighterPill()
+    {
+        VisualNode node = Widget("""text template="x" colour="#1e1e2e" background="#f38ba8" on-click="wm-resume" """).Build(None);
+
+        Colour rest = node.Style.Background;
+        Colour hover = node.HoverStyle!.Value.Background;
+
+        Assert.True(hover.R >= rest.R && hover.G > rest.G && hover.B > rest.B, "lighter, towards white");
+        Assert.Equal(rest.A, hover.A);
+    }
+
+    [Fact]
+    public void TheHoverFollowsTheStyleInForceNotTheDefault()
+    {
+        // A `when` turned it red; hovering must not snap it back to green.
+        var values = new Dictionary<string, string?> { ["keyboard"] = "HE" };
+
+        VisualNode node = Widget("""
+            text template="{{ keyboard }}" colour="#a6e3a1" on-click="wm-redraw" {
+                when value="HE" background="#f38ba8"
+            }
+            """).Build(values);
+
+        Assert.Equal(new Colour(0xF3, 0x8B, 0xA8), node.Style.Background);
+        Assert.NotEqual(new Colour(0xFF, 0xFF, 0xFF, 0x1A), node.HoverStyle!.Value.Background);
+        Assert.True(node.HoverStyle.Value.Background.R >= 0xF3);
+    }
+
+    [Fact]
+    public void WrittenHoverColoursWin()
+    {
+        VisualNode node = Widget("""
+            text template="x" on-click="wm-redraw" hover-background="#ffffff" hover-colour="#000000"
+            """).Build(None);
+
+        Assert.Equal(Colour.White, node.HoverStyle!.Value.Background);
+        Assert.Equal(Colour.Black, node.HoverStyle.Value.Foreground);
+    }
+
+    [Fact]
+    public void AHoverColourWithoutAClickIsPointedOut()
+    {
+        (_, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" {
+                    height 30
+                    zone "right" { text id="clock" template="{{ clock }}" hover-background="#ffffff" }
+                }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(diagnostics, d => d.Code == "TAJ0022");
+        Assert.Contains("clock", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("on-click", warning.Hint!, StringComparison.Ordinal);
+    }
+}
+
 /// <summary>Tests for typography and icons per widget.</summary>
 public sealed class WidgetFontTests
 {

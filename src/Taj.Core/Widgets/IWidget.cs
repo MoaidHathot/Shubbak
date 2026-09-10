@@ -1,4 +1,5 @@
 using Shubbak.Core.Geometry;
+using Shubbak.Core.Rendering;
 using Shubbak.Ui.Layout;
 using Taj.Core.Sources;
 
@@ -133,19 +134,61 @@ public sealed class TemplateWidget : IWidget
         }
     }
 
+    /// <summary>
+    /// Colours to use while the pointer is over the widget, or null to derive them.
+    /// </summary>
+    /// <remarks>
+    /// Only a widget with <see cref="OnClick"/> reacts to the pointer at all: the
+    /// response is how a pointer interface admits that something is a control, and a
+    /// readout that lit up when hovered would be claiming to be one. Written as
+    /// <c>hover-background</c> and <c>hover-colour</c>; what is not written is derived
+    /// from the style the widget is showing at that moment, so a red pill hovers as a
+    /// lighter red pill and a bare glyph gains the same faint pill the workspaces do.
+    /// </remarks>
+    public VisualStyle? HoverStyle { get; set; }
+
     public VisualNode Build(IReadOnlyDictionary<string, string?> values)
     {
         string text = Template.Render(_template, values);
+        VisualStyle style = StyleFor(text, values);
 
         return new VisualNode
         {
             Id = Id,
             Kind = VisualKind.Text,
             Text = text,
-            Style = StyleFor(text, values),
+            Style = style,
             Box = Box,
             Visible = !HideWhenEmpty || text.Length > 0,
             OnClick = OnClick,
+            HoverStyle = OnClick is { Length: > 0 } ? Hovered(style) : null,
+        };
+    }
+
+    /// <summary>
+    /// The style while hovered, from what was written and what the widget is showing.
+    /// </summary>
+    /// <remarks>
+    /// Derived from the style in force rather than the default one, so a widget whose
+    /// <c>when</c> block turned it red hovers as lighter red rather than snapping back
+    /// to the colour it would have had otherwise. A widget with a background is
+    /// lightened towards white by a fifth; one without gains the faint white pill the
+    /// workspaces use, rounded the same way, which is the one hover the whole bar
+    /// speaks.
+    /// </remarks>
+    private VisualStyle Hovered(VisualStyle style)
+    {
+        Colour background = HoverStyle is { } written && !written.Background.IsTransparent
+            ? written.Background
+            : style.Background.IsTransparent
+                ? new Colour(0xFF, 0xFF, 0xFF, 0x1A)
+                : style.Background.Lerp(Colour.White, 0.2);
+
+        return style with
+        {
+            Foreground = HoverStyle is { } hover && !hover.Foreground.IsTransparent ? hover.Foreground : style.Foreground,
+            Background = background,
+            CornerRadius = Math.Max(style.CornerRadius, 4),
         };
     }
 

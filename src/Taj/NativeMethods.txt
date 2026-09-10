@@ -91,7 +91,10 @@ WINDOW_MESSAGE_FILTER_ACTION
 DwmSetWindowAttribute
 DWMWINDOWATTRIBUTE
 LoadCursor
+SetCursor
 IDC_ARROW
+IDC_HAND
+WM_SETCURSOR
 GetKeyboardLayout
 GetWindowThreadProcessId
 GetForegroundWindow

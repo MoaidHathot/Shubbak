@@ -325,7 +325,8 @@ public static class TajConfigLoader
 
     private static readonly string[] KnownSpacerKeys = [.. CommonWidgetKeys, "width", "grow"];
 
-    private static readonly string[] KnownTextKeys = [.. CommonWidgetKeys, "template", "on-click", "when"];
+    private static readonly string[] KnownTextKeys =
+        [.. CommonWidgetKeys, "template", "on-click", "when", "hover-background", "hover-colour", "hover-color"];
 
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
     private static readonly string[] KnownConditionKeys =
@@ -754,10 +755,31 @@ public static class TajConfigLoader
                     return null;
                 }
 
+                string? onClick = SettingText(node, "on-click");
+                Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
+                Colour? hoverForeground = ParseColour(SettingText(node, "hover-colour") ?? SettingText(node, "hover-color"));
+
+                // A hover on something that cannot be clicked would claim it can be.
+                if (onClick is null && (hoverBackground is not null || hoverForeground is not null))
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0022",
+                        $"'{id}' has a hover colour but no on-click; only a clickable widget reacts to the pointer.",
+                        node.Span,
+                        "Add on-click=\"...\" to make it a control, or drop the hover settings."));
+                }
+
                 return new TemplateWidget(id, template, style, box)
                 {
-                    OnClick = SettingText(node, "on-click"),
+                    OnClick = onClick,
                     Conditions = ParseConditions(node, style, widgetFont, diagnostics),
+                    HoverStyle = hoverBackground is null && hoverForeground is null
+                        ? null
+                        : VisualStyle.Default with
+                        {
+                            Background = hoverBackground ?? Colour.Transparent,
+                            Foreground = hoverForeground ?? Colour.Transparent,
+                        },
                 };
             }
 

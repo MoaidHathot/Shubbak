@@ -167,6 +167,17 @@ schedule and breaking either is a different kind of event:
   that widget is a mute button. A template or `when of=` reading a `context.x` the
   file does not declare is pointed out at load (`TAJ0021`), with a guess.
 
+- **Every clickable widget on the bar now admits it is one.** The workspaces had a
+  hover response and a hand cursor had nothing; the pills for suspended, paused, a
+  broken file and a binding mode, and the new camera and microphone glyphs, sat there
+  looking like readouts. Any `text` widget with an `on-click` now lights up under the
+  pointer - a pill lightens towards white by a fifth, a bare glyph gains the same faint
+  pill the workspaces use, derived from whatever style the widget is showing at that
+  moment so a red pill hovers red - or takes `hover-background` and `hover-colour` of
+  its own (`TAJ0022` if given to a widget with no `on-click`, since a readout that lit
+  up would be claiming to be a control). The pointer becomes a hand over anything
+  clickable, workspaces included, and an arrow over everything else.
+
 - **Saved arrangements: `arrangement --save|--restore|--delete <name>`.** A demo whose
   windows have been dragged about wants them back where they were. `--save` records the
   focused workspace's tree - the containers, their layouts, their ratios, and which
@@ -518,6 +529,12 @@ schedule and breaking either is a different kind of event:
   | `shubbak-wm` | — | **0.000 ms/s** |
 
 ### Fixed
+
+- **The bar's hover highlight lasted half a second.** The tree is rebuilt on every
+  model change - the clock, twice a second - and the hovered node belonged to the tree
+  just thrown away, so the highlight went flat at the next tick while the pointer had
+  not moved. The node is found again by id in the new tree. This affected the
+  workspaces since the hover was added.
 
 - **The session file's title hash now survives a restart.** It was `string.GetHashCode`,
   which the runtime seeds differently in every process, so a hash written by one window
