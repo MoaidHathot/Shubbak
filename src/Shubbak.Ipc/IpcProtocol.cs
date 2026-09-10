@@ -558,7 +558,7 @@ public static class IpcProtocol
     /// installed copy running while a build from source is started.
     /// </para>
     /// </remarks>
-    /// <param name="component">Which program is being counted: <c>wm</c>, <c>taj</c>, <c>dalil</c>, <c>rasid</c>.</param>
+    /// <param name="component">Which program is being counted: <c>wm</c>, <c>taj</c>, <c>dalil</c>, <c>ayn</c>.</param>
     public static string InstanceMutexNameFor(string component) =>
         $@"Local\shubbak-{component}-{Account}";
 

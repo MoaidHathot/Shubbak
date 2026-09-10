@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Rasid (راصد, "observer") - the reference provider for external contexts.
+    Ayn (عين, "eye") - the reference provider for external contexts.
 
     Shubbak observes the desktop, not the applications. Whether the camera is on is a
     fact about what an application is doing with hardware, so it is not the window
@@ -24,14 +24,14 @@
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <AssemblyName>rasid</AssemblyName>
+    <AssemblyName>ayn</AssemblyName>
     <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
-    <AssemblyTitle>Shubbak Rasid</AssemblyTitle>
-    <RootNamespace>Rasid</RootNamespace>
+    <AssemblyTitle>Shubbak Ayn</AssemblyTitle>
+    <RootNamespace>Ayn</RootNamespace>
     <Platforms>x64</Platforms>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- Regenerate with tools/make-icons.ps1. -->
-    <ApplicationIcon>..\icons\rasid.ico</ApplicationIcon>
+    <ApplicationIcon>..\icons\ayn.ico</ApplicationIcon>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <InvariantGlobalization>true</InvariantGlobalization>
     <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
@@ -45,7 +45,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Rasid.Core\Rasid.Core.csproj" />
+    <ProjectReference Include="..\Ayn.Core\Ayn.Core.csproj" />
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
 

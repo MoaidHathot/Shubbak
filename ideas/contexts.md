@@ -76,11 +76,12 @@ client can set: `signal` is fire-and-forget, so a provider had no way to durably
   with built-in facts (`when { context "meeting"; monitor present="dell-left" }`). A
   provider never needs to know what "meeting" should *do*.
 - Attribution replaces load-time validation. The loader cannot know whether a provider
-  will ever set `meeting`; `shubbak contexts` says `external - set by rasid.exe
+  will ever set `meeting`; `shubbak contexts` says `external - set by ayn.exe
   (pid 1234) 1.2 s ago, expires in 3.8 s`, or `never set`.
 
-The reference provider is a fifth optional executable (working name **Rasid**, راصد,
-"observer") that watches the camera and microphone consent store with
+The reference provider is a fifth optional executable - working name Rasid, راصد,
+"observer"; shipped as **Ayn**, عين, "eye", because the second word is one everybody
+uses and the first is not - that watches the camera and microphone consent store with
 `RegNotifyChangeKeyValue` and sets a context with a lease. It exists as much to
 dogfood the API as to detect meetings: if it is painful to write, the API is wrong,
 and that should be found here rather than by the first person to try.
@@ -177,7 +178,7 @@ Each shippable alone, in this order.
    contexts`, `shubbak contexts` with reasons and attribution.
 3. **Taj and Dalil.** `rule use="..." context="..."`, `{{ contexts }}`, palette status
    line and `from="contexts"`.
-4. **Rasid.** The reference provider.
+4. **Ayn.** The reference provider.
 5. **Saved arrangements.** `arrangement --save/--restore` per workspace, including the
    container tree and ratios, which the session file deliberately does not record.
 
@@ -249,7 +250,7 @@ Re-measure with the same two commands after a day and replace this table.
 - **Dalil does not leave on `wm.shutdown`.** Its log showed nothing received at the
   moment the daemon exited; the bar left, the palette stayed. The topic is documented
   as best-effort and `shubbak dalil-exit` closes it, but a palette attached to nothing
-  is worth a look before Rasid copies the same reconnect loop.
+  is worth a look before Ayn copies the same reconnect loop.
 - **A test process is not DPI-aware.** The probe reported `2560x1440 @ 96` for panels
   the daemon sees as `3840x2160 @ 144`. Harmless here - the join is by device id - but
   any future test asserting geometry against the daemon's numbers will need
@@ -590,16 +591,19 @@ this; not worth plumbing, since the answer for a real user is "edit the file".
 
 ### Phase 4
 
-Rasid, the reference provider. The design note said it exists as much to dogfood
+Ayn, the reference provider. Built under the working name Rasid (راصد, "observer")
+and renamed before release: راصد is a dictionary word, عين - eye - is one everybody
+uses, and the icon was already an eye. Everything below reads Ayn; the commit that
+added it reads Rasid. The design note said it exists as much to dogfood
 the pipe as to detect meetings: if it was painful to write, the pipe was wrong. It
 was not painful. The whole provider is a config record, a state machine of two
 booleans per device, a registry reader, and one connection that sends two commands.
 
 **How it is shaped, and why:**
 
-- **Two projects, like the bar and the palette.** `Rasid.Core` is pure: the `rasid`
+- **Two projects, like the bar and the palette.** `Ayn.Core` is pure: the `ayn`
   section, the consent-store model, and `Provider`, which takes readings and a clock
-  and hands back commands. The registry and the pipe live in `Rasid`, the host, and
+  and hands back commands. The registry and the pipe live in `Ayn`, the host, and
   are the two things a test cannot have. Thirty-one tests cover the debounce, the
   flicker, the lost lease, the rename under a running watcher, and the spelling of
   every command; the host is a hundred and fifty lines of wiring.
@@ -646,9 +650,9 @@ booleans per device, a registry reader, and one connection that sends two comman
 - **Refusals are said once and treated as sent.** The likeliest one - a context the
   file does not declare - would repeat on every change until somebody declares it. A
   reload or a reconnect asks again.
-- **`rasid-exit` through a named event.** The bar and the palette are stopped with
+- **`ayn-exit` through a named event.** The bar and the palette are stopped with
   `WM_CLOSE`; a process with no window has nothing to close, so it holds
-  `Local\shubbak-rasid-stop-<SID>` open and the CLI sets it, then waits for the
+  `Local\shubbak-ayn-stop-<SID>` open and the CLI sets it, then waits for the
   instance mutex to be released so a script that stops and restarts does not race.
   `IpcProtocol.StopEventNameFor` sits beside `InstanceMutexNameFor`; a naming
   helper, not a wire change.
@@ -662,9 +666,9 @@ booleans per device, a registry reader, and one connection that sends two comman
 
 **Decided along the way:**
 
-- **`camera #false` turns a device off; `camera ""` is a slip** (`RAS0002`), because
+- **`camera #false` turns a device off; `camera ""` is a slip** (`AYN0002`), because
   an empty name is far more likely a mistake than a decision.
-- **Rasid stays when the window manager leaves**, as the palette does, and says so at
+- **Ayn stays when the window manager leaves**, as the palette does, and says so at
   Info. The restarted window manager's startup command finds it already running.
 - **No live re-read of the file except on `config.reloaded`.** The daemon only
   publishes that when it accepted the file, which is the right gate.
@@ -675,7 +679,7 @@ booleans per device, a registry reader, and one connection that sends two comman
 
 - **Which program** is in the log (`camera in use by ms-teams.exe`) and not in the
   context. A context is a boolean by design; the report attributes the pin to
-  `rasid.exe`, and the log has the rest.
+  `ayn.exe`, and the log has the rest.
 - **No Teams, Zoom, OBS or calendar.** Each is a vendor SDK or a scrape, and each is
   the same shape as this: a held connection and two commands. The README says so.
 
@@ -687,10 +691,10 @@ booleans per device, a registry reader, and one connection that sends two comman
 | shubbak.exe | 4.83 MB | 4.86 MB | +30 KB |
 | taj.exe | 5.01 MB | 5.01 MB | 0 |
 | dalil.exe | 5.08 MB | 5.08 MB | 0 |
-| rasid.exe | - | 4.43 MB | new |
+| ayn.exe | - | 4.43 MB | new |
 
-The daemon, the bar and the palette are untouched. The CLI carries `Rasid.Core` for
-`check-config` and the `rasid-exit` verb. The watcher is the smallest of the five:
+The daemon, the bar and the palette are untouched. The CLI carries `Ayn.Core` for
+`check-config` and the `ayn-exit` verb. The watcher is the smallest of the five:
 no GDI, no window, one P/Invoke.
 
 The watcher idle, published build, thirty seconds after start on the real
@@ -701,15 +705,15 @@ window manager will never read itself, against tens of kilobytes had it been bui
 The design holds that the megabytes are the right price for the topic staying outside;
 this is what they come to.
 
-Verified live: `rasid --report` read both stores; with a temporary configuration
+Verified live: `ayn --report` read both stores; with a temporary configuration
 declaring `camera`, `microphone` and `meeting { when { context "camera" } }` and
 `settle 300`, opening the Windows Camera app produced `context --set "camera" --lease`
-and the window manager's report read `pinned: set by rasid.exe (pid 49020), leased to
+and the window manager's report read `pinned: set by ayn.exe (pid 49020), leased to
 that connection`, with `meeting` composed from it, 1.06 s after the app was launched
 including the app's own start; closing it produced `context --auto "camera"` and both
 went. A `--replace` of the daemon with the camera on: `the window manager is shutting
 down`, `went away; holding nothing until it is back`, reconnected, held again - 400 ms
-end to end. `shubbak rasid-exit` stopped it and the log said `rasid stopped`; a
+end to end. `shubbak ayn-exit` stopped it and the log said `ayn stopped`; a
 second call said `no watcher is running`.
 
 **Found on the way:** the README's test count, which CI checks against the tree, had
@@ -805,7 +809,7 @@ that is a record.
 | shubbak.exe | 4.86 MB | 4.90 MB | +40 KB |
 | taj.exe | 5.01 MB | 5.04 MB | +30 KB |
 | dalil.exe | 5.08 MB | 5.12 MB | +38 KB |
-| rasid.exe | 4.43 MB | 4.46 MB | +30 KB |
+| ayn.exe | 4.43 MB | 4.46 MB | +30 KB |
 
 The daemon carries the store, its JSON context, the rebuild and the DTO. The three
 processes with no arrangement code of their own carry the verb - record, parser
@@ -814,9 +818,13 @@ palette adds the completion.
 
 The Phase 4 daemon, measured on the real configuration just before this restart, 48
 minutes up: tick p50 0.02 ms, p99 0.76 ms, allocation p50 0 B, p99 648 B, no
-collections in any generation. The best p99 of the series, on a quiet desk. Nothing
-in this phase runs on the tick: an arrangement is saved or restored when a key is
-pressed, and the store is read once at start.
+collections in any generation. The lowest p99 of the series, and not a speed-up:
+those 48 minutes were the middle of the night with the screen locked, so almost no
+window events reached the daemon, whereas the baseline was 11 hours of daytime use.
+A p99 is a measure of the busiest ticks in the window, and this window had none. The
+claim the series can make is no regression; a like-for-like figure needs a working
+day on this build. Nothing in this phase runs on the tick: an arrangement is saved or
+restored when a key is pressed, and the store is read once at start.
 
 Verified live, on an empty workspace with three Notepad windows so nothing of the
 user's was touched: `arrangement --save demo` wrote the file with process, class,
@@ -843,19 +851,24 @@ Five phases, tag `pre-contexts` (`73fc04a`) to the commit that ships this sectio
 | 1 | ffd7028 | named monitors, re-homing, topology probe, `move-workspace --monitor` | 5.74 MB | 0.02 / 1.01 ms (1 h 14 m) | |
 | 2 | fe5d512 | contexts core: config, engine, `context` verb, effects, reports | 6.05 MB | 0.02 / 1.01 ms (38 min) | 1749 declared |
 | 3 | e6da993 | bar `rule context=`, `{{ contexts }}`, palette pill, `from="contexts"` | 6.05 MB | daemon untouched | +22 |
-| 4 | 69f9b83 | Rasid, the reference provider; a fifth executable | 6.05 MB | 0.02 / 0.76 ms (48 min) | 1774 |
+| 4 | 69f9b83 | Ayn, the reference provider; a fifth executable | 6.05 MB | 0.02 / 0.76 ms (48 min) | 1774 |
 | 5 | this | saved arrangements; `away`; a stable title hash | 6.26 MB | 0.02 / - (2 min; settles next run) | 1800 |
 
 Working set of the daemon across the series: 41.3 MB at the baseline after 11 h, 45.6
 MB after 38 min on Phase 2, 27-33 MB in the first minutes after each restart; the
 spread of a process that has or has not yet painted much, not a trend. The bar and
-the palette are within a few megabytes of where they started. Rasid, when it runs, is
+the palette are within a few megabytes of where they started. Ayn, when it runs, is
 14.4 MB resident and holds no timer.
 
 What the six performance rules came to: no new wake-up was added in any phase; the
 context engine allocates nothing when nothing changed and is pinned by a test; the
 keyboard hook does one lookup as before; there is no window catalogue; every new
-probe sits behind an existing gate; and every phase's numbers are above. The one
+probe sits behind an existing gate; and every phase's numbers are above. Read the
+tick column as "unchanged", not "faster": the p50 moved by one unit of the counter's
+resolution and the p99 tracks how busy the desk was in each window - the baseline was
+a full working day, the later figures were quiet evenings and one locked night. The
+series added nothing to the tick that is paid when its features are unused, and that
+is all the column shows. The one
 prediction that was wrong was the binary: 200-400 KB expected for the whole feature,
 640 KB delivered for the daemon, most of it the closed, typed vocabulary of
 conditions and effects and the JSON for their reports - the price of a config that

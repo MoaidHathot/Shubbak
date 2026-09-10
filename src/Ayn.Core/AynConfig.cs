@@ -1,7 +1,7 @@
 using Shubbak.Config;
 using Shubbak.Config.Kdl;
 
-namespace Rasid.Core;
+namespace Ayn.Core;
 
 /// <summary>
 /// The watcher's own settings: which context to hold for which device, and how long
@@ -22,7 +22,7 @@ namespace Rasid.Core;
 /// on-exit twice. Nullable rather than zero-for-unsaid, because zero is a value
 /// somebody can mean: believe it at once.
 /// </param>
-public sealed record RasidConfig(
+public sealed record AynConfig(
     string? Camera = "camera",
     string? Microphone = "microphone",
     TimeSpan? Settle = null)
@@ -45,13 +45,13 @@ public sealed record RasidConfig(
     public bool WatchesAnything => Camera is not null || Microphone is not null;
 }
 
-/// <summary>The result of reading the <c>rasid</c> section.</summary>
+/// <summary>The result of reading the <c>ayn</c> section.</summary>
 /// <param name="Config">What was read, with defaults for anything not said.</param>
 /// <param name="Diagnostics">What was wrong with it. Warnings only; nothing here is fatal.</param>
-public sealed record RasidConfigLoad(RasidConfig Config, IReadOnlyList<Diagnostic> Diagnostics);
+public sealed record AynConfigLoad(AynConfig Config, IReadOnlyList<Diagnostic> Diagnostics);
 
 /// <summary>
-/// Reads the <c>rasid</c> section of the shared configuration file.
+/// Reads the <c>ayn</c> section of the shared configuration file.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -66,7 +66,7 @@ public sealed record RasidConfigLoad(RasidConfig Config, IReadOnlyList<Diagnosti
 /// <c>microphone</c>.
 /// </para>
 /// </remarks>
-public static class RasidConfigLoader
+public static class AynConfigLoader
 {
     /// <summary>Every setting the section accepts, for the unknown-setting warning.</summary>
     public static IReadOnlyList<string> KnownKeys { get; } = ["camera", "microphone", "settle"];
@@ -74,31 +74,31 @@ public static class RasidConfigLoader
     /// <summary>The longest a change may be asked to hold before it is believed.</summary>
     public const int MaxSettleMilliseconds = 10_000;
 
-    public static RasidConfig Load(string source) => Validate(source).Config;
+    public static AynConfig Load(string source) => Validate(source).Config;
 
-    public static RasidConfigLoad Validate(string source)
+    public static AynConfigLoad Validate(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
 
         List<Diagnostic> diagnostics = [];
         KdlParseResult parsed = KdlParser.Parse(source);
 
-        if (parsed.HasErrors) return new RasidConfigLoad(new RasidConfig(), diagnostics);
+        if (parsed.HasErrors) return new AynConfigLoad(new AynConfig(), diagnostics);
 
-        RasidConfig config = parsed.Document.Node("rasid") is { } node
+        AynConfig config = parsed.Document.Node("ayn") is { } node
             ? Read(node, diagnostics)
-            : new RasidConfig();
+            : new AynConfig();
 
-        return new RasidConfigLoad(config, diagnostics);
+        return new AynConfigLoad(config, diagnostics);
     }
 
-    private static RasidConfig Read(KdlNode node, List<Diagnostic> diagnostics)
+    private static AynConfig Read(KdlNode node, List<Diagnostic> diagnostics)
     {
         WarnAboutUnknown(node, diagnostics);
 
-        var defaults = new RasidConfig();
+        var defaults = new AynConfig();
 
-        return new RasidConfig(
+        return new AynConfig(
             ContextName(node, "camera", defaults.Camera, diagnostics),
             ContextName(node, "microphone", defaults.Microphone, diagnostics),
             Settle(node, diagnostics));
@@ -124,7 +124,7 @@ public static class RasidConfigLoader
         if (name.Length == 0)
         {
             diagnostics.Add(Diagnostic.Warning(
-                "RAS0002",
+                "AYN0002",
                 $"'{key}' names no context; the default '{fallback}' is used.",
                 value.Span,
                 $"Write {key} \"{fallback}\" to name the context, or {key} #false to leave the {key} alone."));
@@ -142,9 +142,9 @@ public static class RasidConfigLoader
         if (!value.TryAsInt(out int milliseconds))
         {
             diagnostics.Add(Diagnostic.Warning(
-                "RAS0003",
+                "AYN0003",
                 $"'settle' should be a whole number of milliseconds, not '{value.AsString()}'; " +
-                $"the default of {RasidConfig.DefaultSettle.TotalMilliseconds:F0} is used.",
+                $"the default of {AynConfig.DefaultSettle.TotalMilliseconds:F0} is used.",
                 value.Span));
 
             return null;
@@ -155,7 +155,7 @@ public static class RasidConfigLoader
             int clamped = Math.Clamp(milliseconds, 0, MaxSettleMilliseconds);
 
             diagnostics.Add(Diagnostic.Warning(
-                "RAS0004",
+                "AYN0004",
                 $"'settle' is {milliseconds}; it is kept between 0 and {MaxSettleMilliseconds}, so {clamped} is used.",
                 value.Span));
 
@@ -176,8 +176,8 @@ public static class RasidConfigLoader
             if (KnownKeys.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
 
             diagnostics.Add(Diagnostic.Warning(
-                "RAS0001",
-                $"Unknown setting '{name}' in 'rasid'; it will be ignored.",
+                "AYN0001",
+                $"Unknown setting '{name}' in 'ayn'; it will be ignored.",
                 span,
                 Suggestion.Closest(name, KnownKeys) is { } guess ? $"Did you mean '{guess}'?" : null));
         }

@@ -1,13 +1,13 @@
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
-using Rasid.Core;
+using Ayn.Core;
 using Shubbak.Core.Diagnostics;
 using System.Security.AccessControl;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.System.Registry;
 
-namespace Rasid;
+namespace Ayn;
 
 /// <summary>
 /// The consent store as Windows keeps it, and a way to be woken when it changes.

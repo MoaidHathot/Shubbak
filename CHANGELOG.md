@@ -107,13 +107,13 @@ schedule and breaking either is a different kind of event:
   of them. Both processes receive `context.changed` and re-read the snapshot, which
   lists the contexts in the window manager's own order.
 
-- **Rasid, the camera and microphone watcher: a fifth executable, and optional.** It
+- **Ayn, the camera and microphone watcher: a fifth executable, and optional.** It
   watches the record Windows keeps of which programs have the camera or the microphone
   open - the same one the privacy indicator in the tray reads - and while any program
   does, it holds a context on the window manager with `--lease`, so the pin dies with
-  Rasid's connection and a crashed watcher leaves nothing behind. When the window
-  manager restarts, Rasid notices and holds again within a second. The file says what
-  a meeting does; Rasid supplies `camera` and `microphone` and never needs to know.
+  Ayn's connection and a crashed watcher leaves nothing behind. When the window
+  manager restarts, Ayn notices and holds again within a second. The file says what
+  a meeting does; Ayn supplies `camera` and `microphone` and never needs to know.
 
   ```kdl
   contexts {
@@ -121,7 +121,7 @@ schedule and breaking either is a different kind of event:
       context "meeting" { when { context "camera" } ... }
   }
 
-  rasid {
+  ayn {
       camera "camera"        // #false to leave a device alone
       microphone "microphone"
       settle 500             // ms a change must last before it is believed
@@ -132,8 +132,8 @@ schedule and breaking either is a different kind of event:
   while a change is waiting out its settle time - a call opens and closes the camera
   several times while setting up, and a context that flapped with it would run its
   on-enter and on-exit twice. Every setting has a default, so the section can be left
-  out; `check-config` reads it (`RAS0001`-`RAS0004`, warnings only). `rasid --report`
-  prints what Windows says is using each device right now; `shubbak rasid-exit` stops
+  out; `check-config` reads it (`AYN0001`-`AYN0004`, warnings only). `ayn --report`
+  prints what Windows says is using each device right now; `shubbak ayn-exit` stops
   it, through a named event since it has no window to close. Renaming a context under
   a running watcher on `wm-reload-config` hands the old name back and holds the new.
 

@@ -1,11 +1,11 @@
-using Rasid.Core;
+using Ayn.Core;
 
-namespace Rasid.Core.Tests;
+namespace Ayn.Core.Tests;
 
 /// <summary>Tests for what the watcher decides to tell the window manager.</summary>
 public sealed class ProviderTests
 {
-    private static readonly RasidConfig Defaults = new(Settle: TimeSpan.FromMilliseconds(500));
+    private static readonly AynConfig Defaults = new(Settle: TimeSpan.FromMilliseconds(500));
 
     private static Reading Camera(params string[] apps) => new(apps, []);
 
@@ -120,7 +120,7 @@ public sealed class ProviderTests
     [Fact]
     public void ADeviceTurnedOffInTheFileIsWatchedForNothing()
     {
-        var provider = new Provider(new RasidConfig(Camera: null, Microphone: "mic", Settle: TimeSpan.FromMilliseconds(100)));
+        var provider = new Provider(new AynConfig(Camera: null, Microphone: "mic", Settle: TimeSpan.FromMilliseconds(100)));
 
         provider.Observe(new Reading(["Teams.exe"], ["Teams.exe"]), 0);
 
@@ -219,7 +219,7 @@ public sealed class ProviderTests
     [Fact]
     public void ContextNamesAreQuotedInTheCommand()
     {
-        var provider = new Provider(new RasidConfig(Camera: "on air", Settle: TimeSpan.FromMilliseconds(1)));
+        var provider = new Provider(new AynConfig(Camera: "on air", Settle: TimeSpan.FromMilliseconds(1)));
 
         provider.Observe(Camera("obs64.exe"), 0);
 
@@ -285,13 +285,13 @@ public sealed class ConsentStoreTests
     }
 }
 
-/// <summary>Tests for the rasid section of the configuration.</summary>
-public sealed class RasidConfigLoaderTests
+/// <summary>Tests for the ayn section of the configuration.</summary>
+public sealed class AynConfigLoaderTests
 {
     [Fact]
     public void NoSectionMeansBothDevicesUnderTheirOwnNames()
     {
-        RasidConfig config = RasidConfigLoader.Load("general { }");
+        AynConfig config = AynConfigLoader.Load("general { }");
 
         Assert.Equal("camera", config.Camera);
         Assert.Equal("microphone", config.Microphone);
@@ -302,8 +302,8 @@ public sealed class RasidConfigLoaderTests
     [Fact]
     public void TheNamesAndTheSettleTimeAreRead()
     {
-        RasidConfigLoad load = RasidConfigLoader.Validate("""
-            rasid {
+        AynConfigLoad load = AynConfigLoader.Validate("""
+            ayn {
                 camera "on-camera"
                 microphone "on-mic"
                 settle 1200
@@ -319,22 +319,22 @@ public sealed class RasidConfigLoaderTests
     [Fact]
     public void FalseTurnsADeviceOff()
     {
-        RasidConfig config = RasidConfigLoader.Load("rasid { camera #false }");
+        AynConfig config = AynConfigLoader.Load("ayn { camera #false }");
 
         Assert.Null(config.Camera);
         Assert.Equal("microphone", config.Microphone);
         Assert.True(config.WatchesAnything);
 
-        Assert.False(RasidConfigLoader.Load("rasid { camera #false; microphone #false }").WatchesAnything);
+        Assert.False(AynConfigLoader.Load("ayn { camera #false; microphone #false }").WatchesAnything);
     }
 
     [Fact]
     public void AnEmptyNameIsASlipNotASwitch()
     {
-        RasidConfigLoad load = RasidConfigLoader.Validate("rasid { camera \"\" }");
+        AynConfigLoad load = AynConfigLoader.Validate("ayn { camera \"\" }");
 
         Shubbak.Config.Diagnostic warning = Assert.Single(load.Diagnostics);
-        Assert.Equal("RAS0002", warning.Code);
+        Assert.Equal("AYN0002", warning.Code);
         Assert.Contains("#false", warning.Hint!, StringComparison.Ordinal);
         Assert.Equal("camera", load.Config.Camera);
     }
@@ -342,20 +342,20 @@ public sealed class RasidConfigLoaderTests
     [Fact]
     public void AMistypedSettingIsReportedWithAGuess()
     {
-        RasidConfigLoad load = RasidConfigLoader.Validate("rasid { camara \"c\" }");
+        AynConfigLoad load = AynConfigLoader.Validate("ayn { camara \"c\" }");
 
         Shubbak.Config.Diagnostic warning = Assert.Single(load.Diagnostics);
-        Assert.Equal("RAS0001", warning.Code);
+        Assert.Equal("AYN0001", warning.Code);
         Assert.Contains("camera", warning.Hint!, StringComparison.Ordinal);
     }
 
     [Theory]
-    [InlineData("settle \"soon\"", "RAS0003", 500)]
-    [InlineData("settle 60000", "RAS0004", 10000)]
-    [InlineData("settle -5", "RAS0004", 0)]
+    [InlineData("settle \"soon\"", "AYN0003", 500)]
+    [InlineData("settle 60000", "AYN0004", 10000)]
+    [InlineData("settle -5", "AYN0004", 0)]
     public void ASettleTimeThatIsNotANumberOrIsOutOfRangeIsReportedAndRepaired(string setting, string code, int expected)
     {
-        RasidConfigLoad load = RasidConfigLoader.Validate($"rasid {{ {setting} }}");
+        AynConfigLoad load = AynConfigLoader.Validate($"ayn {{ {setting} }}");
 
         Assert.Equal(code, Assert.Single(load.Diagnostics).Code);
         Assert.Equal(TimeSpan.FromMilliseconds(expected), load.Config.EffectiveSettle);
@@ -364,7 +364,7 @@ public sealed class RasidConfigLoaderTests
     [Fact]
     public void PropertiesAndChildrenAreBothAccepted()
     {
-        RasidConfig config = RasidConfigLoader.Load("rasid camera=\"c\" microphone=\"m\" settle=250");
+        AynConfig config = AynConfigLoader.Load("ayn camera=\"c\" microphone=\"m\" settle=250");
 
         Assert.Equal("c", config.Camera);
         Assert.Equal("m", config.Microphone);
@@ -376,7 +376,7 @@ public sealed class RasidConfigLoaderTests
     {
         // The window manager's loader reports the syntax error; this one stays quiet
         // rather than saying it twice.
-        RasidConfigLoad load = RasidConfigLoader.Validate("rasid { camera \"c\" ");
+        AynConfigLoad load = AynConfigLoader.Validate("ayn { camera \"c\" ");
 
         Assert.Empty(load.Diagnostics);
         Assert.Equal("camera", load.Config.Camera);

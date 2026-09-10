@@ -57,14 +57,14 @@ public sealed class ContextReportTextTests
     public void APinnedContextSaysWhoAndForHowLong()
     {
         var meeting = new ContextReport(
-            "meeting", true, "pinned", External: true, "set by rasid.exe (pid 7)",
-            Pin: "set", SetBy: "rasid.exe (pid 7)", SetAgoMs: 1200, ExpiresInMs: 3800, Leased: true,
+            "meeting", true, "pinned", External: true, "set by ayn.exe (pid 7)",
+            Pin: "set", SetBy: "ayn.exe (pid 7)", SetAgoMs: 1200, ExpiresInMs: 3800, Leased: true,
             LingerRemainingMs: null, When: [], Effects: []);
 
         string text = ContextReportText.Format([meeting]);
 
-        Assert.Contains("* meeting  active, external  (pinned: set by rasid.exe (pid 7))", text, StringComparison.Ordinal);
-        Assert.Contains("pinned set by rasid.exe (pid 7) 1.2 s ago, expires in 3.8 s, leased to that connection", text, StringComparison.Ordinal);
+        Assert.Contains("* meeting  active, external  (pinned: set by ayn.exe (pid 7))", text, StringComparison.Ordinal);
+        Assert.Contains("pinned set by ayn.exe (pid 7) 1.2 s ago, expires in 3.8 s, leased to that connection", text, StringComparison.Ordinal);
 
         // External and effect-free is a flag by design, so no "changes nothing" nag.
         Assert.DoesNotContain("changes nothing", text, StringComparison.Ordinal);

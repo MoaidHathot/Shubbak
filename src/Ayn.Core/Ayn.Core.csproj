@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <!--
-    Rasid.Core - what the watcher decides, with no registry and no pipe.
+    Ayn.Core - what the watcher decides, with no registry and no pipe.
 
     Everything here takes readings and a clock and hands back the commands to send.
     The registry and the pipe are the two things a test cannot have, so they stay in
@@ -14,7 +14,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>Rasid.Core</RootNamespace>
+    <RootNamespace>Ayn.Core</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>

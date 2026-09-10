@@ -1,7 +1,7 @@
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
 
-namespace Rasid;
+namespace Ayn;
 
 /// <summary>How a command fared.</summary>
 internal enum SendOutcome

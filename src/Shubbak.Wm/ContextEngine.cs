@@ -25,7 +25,7 @@ internal readonly record struct ContextFacts(
     UserActivity? Activity);
 
 /// <summary>Who asked for a pin, for the report and for a lease.</summary>
-/// <param name="Description">Who, in words: <c>rasid.exe (pid 1234)</c>, or <c>a keybinding or rule</c>.</param>
+/// <param name="Description">Who, in words: <c>ayn.exe (pid 1234)</c>, or <c>a keybinding or rule</c>.</param>
 /// <param name="ConnectionId">The pipe connection the request came over, or null for one that did not.</param>
 internal readonly record struct PinOrigin(string Description, long? ConnectionId)
 {

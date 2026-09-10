@@ -244,7 +244,7 @@ function Add-SearchGlyph {
 }
 
 <#
-    Rasid - the observer, so an eye.
+    Ayn - the eye, which is what it is called.
 
     An almond outline with a filled pupil. Stroked rather than filled, like the
     glass: a filled almond at 16 pixels is a blob with a hole in it, and a stroked
@@ -569,7 +569,7 @@ Build-Icon -Name 'shubbak-wm' -Top '#2E7D8F' -Bottom '#1B4A57' -Glyph ${function
 Build-Icon -Name 'shubbak'    -Top '#4A5A63' -Bottom '#2B3940' -Glyph ${function:Add-TilesGlyph}
 Build-Icon -Name 'taj'        -Top '#C99A2E' -Bottom '#8A6416' -Glyph ${function:Add-CrownGlyph}
 Build-Icon -Name 'dalil'      -Top '#4F7BA8' -Bottom '#2C4A68' -Glyph ${function:Add-SearchGlyph}
-Build-Icon -Name 'rasid'      -Top '#5E9A6A' -Bottom '#34593C' -Glyph ${function:Add-EyeGlyph}
+Build-Icon -Name 'ayn'      -Top '#5E9A6A' -Bottom '#34593C' -Glyph ${function:Add-EyeGlyph}
 
 Build-SocialCard -Name 'social-card' -Width $CardWidth -Height $CardHeight -Margin $CardMargin
 

@@ -1,4 +1,4 @@
-namespace Rasid.Core;
+namespace Ayn.Core;
 
 /// <summary>A device Windows keeps a consent record for.</summary>
 public enum DeviceKind

@@ -72,7 +72,7 @@ internal static class Program
                 "restore" => Restore(args),
                 "taj-exit" => CloseWindowsOfClass("TajBarWindow", "bar"),
                 "dalil-exit" => CloseWindowsOfClass("DalilPaletteWindow", "palette"),
-                "rasid-exit" => StopWatcher(),
+                "ayn-exit" => StopWatcher(),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
@@ -144,13 +144,13 @@ internal static class Program
     /// <remarks>
     /// It holds a named event open and waits on it; setting the event is the request.
     /// Then the mutex it holds is watched until it lets go, so that a script running
-    /// <c>rasid-exit</c> and then starting a new one does not race the old one out
+    /// <c>ayn-exit</c> and then starting a new one does not race the old one out
     /// of the door. Not over IPC, for the same reason the other two are not: this has
     /// to work when the window manager is gone.
     /// </remarks>
     private static int StopWatcher()
     {
-        if (!EventWaitHandle.TryOpenExisting(IpcProtocol.StopEventNameFor("rasid"), out EventWaitHandle? stop))
+        if (!EventWaitHandle.TryOpenExisting(IpcProtocol.StopEventNameFor("ayn"), out EventWaitHandle? stop))
         {
             Console.Error.WriteLine("shubbak: no watcher is running.");
             return 2;
@@ -158,7 +158,7 @@ internal static class Program
 
         using (stop) stop.Set();
 
-        string mutex = IpcProtocol.InstanceMutexNameFor("rasid");
+        string mutex = IpcProtocol.InstanceMutexNameFor("ayn");
 
         for (int waited = 0; waited < 5000; waited += 50)
         {
@@ -863,7 +863,7 @@ internal static class Program
 
         // The watcher's section, for the same reason. Warnings only; nothing in it is
         // fatal, since every setting has a default.
-        IReadOnlyList<Diagnostic> watcherDiagnostics = Rasid.Core.RasidConfigLoader.Validate(source).Diagnostics;
+        IReadOnlyList<Diagnostic> watcherDiagnostics = Ayn.Core.AynConfigLoader.Validate(source).Diagnostics;
 
         foreach (Diagnostic diagnostic in watcherDiagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
@@ -961,7 +961,7 @@ internal static class Program
                                these refuse to start a second copy of themselves,
                                so this is how you stop the one that is running.
 
-          rasid-exit           Stop the camera and microphone watcher. It has no
+          ayn-exit           Stop the camera and microphone watcher. It has no
                                window, so it is asked through a named event and
                                waited for; its leases on the window manager are
                                released the moment its connection closes.

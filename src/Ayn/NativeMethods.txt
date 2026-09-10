@@ -1,4 +1,4 @@
-// CsWin32 generation manifest for Rasid.
+// CsWin32 generation manifest for Ayn.
 //
 // One function. The consent store is read with Microsoft.Win32.Registry, which the
 // CLI already uses for the Run key; what the framework does not wrap is being told

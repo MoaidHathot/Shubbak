@@ -258,8 +258,8 @@ public sealed class ContextEngineTests
         (ContextEngine engine, WindowManager wm) = Load(Presenting);
         engine.Evaluate(Facts(wm), T0);
 
-        var rasid = new PinOrigin("rasid.exe (pid 7)", ConnectionId: 12);
-        Assert.True(engine.Pin("presenting", ContextAction.Set, null, lease: true, rasid, T0).Accepted);
+        var ayn = new PinOrigin("ayn.exe (pid 7)", ConnectionId: 12);
+        Assert.True(engine.Pin("presenting", ContextAction.Set, null, lease: true, ayn, T0).Accepted);
         Assert.True(Assert.Single(engine.Evaluate(Facts(wm), T0)).Active);
 
         // Another connection going away releases nothing.
@@ -305,7 +305,7 @@ public sealed class ContextEngineTests
         Assert.Empty(engine.Evaluate(Facts(wm), T0));
         Assert.False(engine.IsActive("meeting"));
 
-        engine.Pin("meeting", ContextAction.Set, TimeSpan.FromSeconds(5), false, new PinOrigin("rasid.exe (pid 7)", 3), T0);
+        engine.Pin("meeting", ContextAction.Set, TimeSpan.FromSeconds(5), false, new PinOrigin("ayn.exe (pid 7)", 3), T0);
         Assert.True(Assert.Single(engine.Evaluate(Facts(wm), T0)).Active);
 
         ContextTransition off = Assert.Single(engine.Evaluate(Facts(wm), T0 + Ms(5000)));
@@ -561,7 +561,7 @@ public sealed class ContextEngineTests
             """);
 
         engine.Evaluate(Facts(wm), T0);
-        engine.Pin("meeting", ContextAction.Set, TimeSpan.FromSeconds(10), lease: true, new PinOrigin("rasid.exe (pid 7)", 5), T0);
+        engine.Pin("meeting", ContextAction.Set, TimeSpan.FromSeconds(10), lease: true, new PinOrigin("ayn.exe (pid 7)", 5), T0);
         engine.Evaluate(Facts(wm), T0 + Ms(100));
 
         IReadOnlyList<ContextReport> report = engine.Report(Facts(wm), T0 + Ms(1100));
@@ -586,7 +586,7 @@ public sealed class ContextEngineTests
         Assert.True(meeting.External);
         Assert.Equal("pinned", meeting.Source);
         Assert.Equal("set", meeting.Pin);
-        Assert.Equal("rasid.exe (pid 7)", meeting.SetBy);
+        Assert.Equal("ayn.exe (pid 7)", meeting.SetBy);
         Assert.Equal(1100, meeting.SetAgoMs);
         Assert.Equal(8900, meeting.ExpiresInMs);
         Assert.True(meeting.Leased);

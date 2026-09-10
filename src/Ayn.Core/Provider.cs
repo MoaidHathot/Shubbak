@@ -1,4 +1,4 @@
-namespace Rasid.Core;
+namespace Ayn.Core;
 
 /// <summary>
 /// One thing to tell the window manager.
@@ -17,7 +17,7 @@ public sealed record ProviderAction(string Context, bool Hold, string Because)
     /// makes a crashed watcher harmless: the pin dies with the connection that made
     /// it, so the window manager is never left believing a meeting is on. Handing back
     /// with <c>--auto</c> rather than <c>--clear</c> leaves no pin at all, so the
-    /// report says <c>nothing has set it</c> rather than <c>cleared by rasid.exe</c>
+    /// report says <c>nothing has set it</c> rather than <c>cleared by ayn.exe</c>
     /// - and a context somebody else also sets is theirs again rather than held off by
     /// us.
     /// </para>
@@ -52,16 +52,16 @@ public sealed record ProviderAction(string Context, bool Hold, string Because)
 public sealed class Provider
 {
     private readonly Device[] _devices;
-    private RasidConfig _config;
+    private AynConfig _config;
 
-    public Provider(RasidConfig config)
+    public Provider(AynConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _devices = [new Device(DeviceKind.Camera), new Device(DeviceKind.Microphone)];
     }
 
     /// <summary>The settings in force.</summary>
-    public RasidConfig Config => _config;
+    public AynConfig Config => _config;
 
     /// <summary>
     /// A fresh reading of the store.
@@ -164,7 +164,7 @@ public sealed class Provider
     /// longer use, so a renamed context is not left pinned under its old name. The
     /// holds under the new names follow from <see cref="Due"/>.
     /// </returns>
-    public IReadOnlyList<ProviderAction> Reconfigure(RasidConfig config)
+    public IReadOnlyList<ProviderAction> Reconfigure(AynConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
 

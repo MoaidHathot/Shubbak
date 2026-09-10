@@ -1,13 +1,13 @@
-using Rasid.Core;
+using Ayn.Core;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
 using Shubbak.Native;
 
-namespace Rasid;
+namespace Ayn;
 
 /// <summary>
-/// Rasid: watches the camera and the microphone, and tells the window manager.
+/// Ayn: watches the camera and the microphone, and tells the window manager.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -61,29 +61,29 @@ internal static class Program
         // happen to end up with two: the watcher survives the window manager
         // restarting, and the restarted window manager runs its startup commands.
         using SingleInstanceLock instance = SingleInstanceLock.Claim(
-            IpcProtocol.InstanceMutexNameFor("rasid"));
+            IpcProtocol.InstanceMutexNameFor("ayn"));
 
         if (!instance.Held && instance.Certain)
         {
             ConsoleHost.Ensure();
-            Console.Error.WriteLine("rasid: a watcher is already running.");
-            Console.Error.WriteLine("hint: `shubbak rasid-exit` stops it.");
+            Console.Error.WriteLine("ayn: a watcher is already running.");
+            Console.Error.WriteLine("hint: `shubbak ayn-exit` stops it.");
 
             Log.Info(LogCategory.Wm, "another watcher is already running; leaving it to it");
             return 1;
         }
 
-        RasidConfig config = LoadConfig();
+        AynConfig config = LoadConfig();
 
         if (!config.WatchesAnything)
         {
-            Log.Info(LogCategory.Wm, "both the camera and the microphone are turned off in the rasid section; nothing to watch");
+            Log.Info(LogCategory.Wm, "both the camera and the microphone are turned off in the ayn section; nothing to watch");
             ConsoleHost.Ensure();
-            Console.Error.WriteLine("rasid: the rasid section turns off both the camera and the microphone; nothing to watch.");
+            Console.Error.WriteLine("ayn: the ayn section turns off both the camera and the microphone; nothing to watch.");
             return 0;
         }
 
-        using var stop = new EventWaitHandle(false, EventResetMode.ManualReset, IpcProtocol.StopEventNameFor("rasid"));
+        using var stop = new EventWaitHandle(false, EventResetMode.ManualReset, IpcProtocol.StopEventNameFor("ayn"));
 
         Console.CancelKeyPress += (_, e) =>
         {
@@ -97,7 +97,7 @@ internal static class Program
         {
             Log.Error(LogCategory.Wm, "the consent store could not be opened under either hive; there is nothing to watch");
             ConsoleHost.Ensure();
-            Console.Error.WriteLine("rasid: the consent store could not be opened; is this Windows 10 1903 or later?");
+            Console.Error.WriteLine("ayn: the consent store could not be opened; is this Windows 10 1903 or later?");
             return 1;
         }
 
@@ -105,7 +105,7 @@ internal static class Program
         connection.Start();
 
         Log.Info(LogCategory.Wm,
-            $"rasid is watching {Describe(config)} across {store.Count} key(s); " +
+            $"ayn is watching {Describe(config)} across {store.Count} key(s); " +
             $"a change is believed after {config.EffectiveSettle.TotalMilliseconds:F0} ms");
 
         try
@@ -115,7 +115,7 @@ internal static class Program
         finally
         {
             connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
-            Log.Info(LogCategory.Wm, "rasid stopped");
+            Log.Info(LogCategory.Wm, "ayn stopped");
             Log.CloseFile();
         }
 
@@ -131,7 +131,7 @@ internal static class Program
     /// every wake, including a wake for nothing - a timeout - since a timeout is
     /// precisely a settle time expiring.
     /// </remarks>
-    private static void Run(RasidConfig config, RegistryConsentStore store, WmConnection connection, WaitHandle stop)
+    private static void Run(AynConfig config, RegistryConsentStore store, WmConnection connection, WaitHandle stop)
     {
         var provider = new Provider(config);
 
@@ -224,7 +224,7 @@ internal static class Program
 
     private static void Reconfigure(Provider provider, WmConnection connection)
     {
-        RasidConfig config = LoadConfig();
+        AynConfig config = LoadConfig();
 
         foreach (ProviderAction release in provider.Reconfigure(config))
         {
@@ -237,15 +237,15 @@ internal static class Program
         Log.Info(LogCategory.Config, $"reloaded; watching {Describe(config)}");
     }
 
-    private static RasidConfig LoadConfig()
+    private static AynConfig LoadConfig()
     {
         try
         {
             ConfigLocation location = ConfigPathResolver.Resolve(s_configPath);
 
-            if (!location.Found || location.Path is not { } path) return new RasidConfig();
+            if (!location.Found || location.Path is not { } path) return new AynConfig();
 
-            RasidConfigLoad load = RasidConfigLoader.Validate(File.ReadAllText(path));
+            AynConfigLoad load = AynConfigLoader.Validate(File.ReadAllText(path));
             ConfigDiagnostics.Report(load.Diagnostics, path, "the watcher's settings");
 
             return load.Config;
@@ -253,7 +253,7 @@ internal static class Program
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Log.Warn(LogCategory.Config, $"could not read the configuration: {ex.Message}; using the defaults");
-            return new RasidConfig();
+            return new AynConfig();
         }
     }
 
@@ -263,7 +263,7 @@ internal static class Program
 
         if (store.Count == 0)
         {
-            Console.Error.WriteLine("rasid: the consent store could not be opened under either hive.");
+            Console.Error.WriteLine("ayn: the consent store could not be opened under either hive.");
             return 1;
         }
 
@@ -280,7 +280,7 @@ internal static class Program
         return 0;
     }
 
-    private static string Describe(RasidConfig config)
+    private static string Describe(AynConfig config)
     {
         List<string> parts = [];
 
@@ -295,7 +295,7 @@ internal static class Program
         string file = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "Shubbak",
-            "rasid.log");
+            "ayn.log");
 
         try
         {
@@ -305,7 +305,7 @@ internal static class Program
                 Log.Level = shared.LogLevel;
 
                 if (shared.LogFile is { Length: > 0 } configured)
-                    file = Path.Combine(Path.GetDirectoryName(configured) ?? string.Empty, "rasid.log");
+                    file = Path.Combine(Path.GetDirectoryName(configured) ?? string.Empty, "ayn.log");
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -339,19 +339,19 @@ internal static class Program
     {
         Console.WriteLine(ShubbakVersion.Banner);
         Console.WriteLine();
-        Console.WriteLine("Rasid watches the camera and the microphone and holds a context on the");
+        Console.WriteLine("Ayn watches the camera and the microphone and holds a context on the");
         Console.WriteLine("window manager while a program has either open.");
         Console.WriteLine();
-        Console.WriteLine("usage: rasid [options]");
+        Console.WriteLine("usage: ayn [options]");
         Console.WriteLine();
         Console.WriteLine("options:");
-        Console.WriteLine("  --config <path>     the shubbak.kdl to read the rasid section from");
+        Console.WriteLine("  --config <path>     the shubbak.kdl to read the ayn section from");
         Console.WriteLine("  --log-level <level> trace, debug, info, warn, error");
         Console.WriteLine("  --quiet             do not echo the log to the console");
         Console.WriteLine("  --report            print what Windows says is using each device, and exit");
         Console.WriteLine("  --version           print the version");
         Console.WriteLine("  --help              this");
         Console.WriteLine();
-        Console.WriteLine("`shubbak rasid-exit` stops a running watcher.");
+        Console.WriteLine("`shubbak ayn-exit` stops a running watcher.");
     }
 }

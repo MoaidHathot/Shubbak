@@ -34,7 +34,7 @@ public class InstanceNameTests
             IpcProtocol.InstanceMutexName,
             StringComparison.Ordinal);
 
-        foreach (string component in new[] { "wm", "taj", "dalil", "rasid" })
+        foreach (string component in new[] { "wm", "taj", "dalil", "ayn" })
         {
             Assert.DoesNotContain(
                 $"-v{IpcProtocol.ProtocolVersion}-",
@@ -71,7 +71,7 @@ public class InstanceNameTests
         // would mean two people signed in at once could not each run Shubbak.
         Assert.StartsWith(@"Local\", IpcProtocol.InstanceMutexName, StringComparison.Ordinal);
 
-        foreach (string component in new[] { "wm", "taj", "dalil", "rasid" })
+        foreach (string component in new[] { "wm", "taj", "dalil", "ayn" })
             Assert.StartsWith(@"Local\", IpcProtocol.InstanceMutexNameFor(component), StringComparison.Ordinal);
     }
 
@@ -85,7 +85,7 @@ public class InstanceNameTests
 
         Assert.False(string.IsNullOrWhiteSpace(account));
 
-        foreach (string component in new[] { "wm", "taj", "dalil", "rasid" })
+        foreach (string component in new[] { "wm", "taj", "dalil", "ayn" })
             Assert.EndsWith(account, IpcProtocol.InstanceMutexNameFor(component), StringComparison.Ordinal);
     }
 

@@ -20,7 +20,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Rasid.Core\Rasid.Core.csproj" />
+    <ProjectReference Include="..\..\src\Ayn.Core\Ayn.Core.csproj" />
   </ItemGroup>
 
 </Project>

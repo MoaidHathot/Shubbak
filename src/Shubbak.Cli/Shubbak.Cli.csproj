@@ -38,7 +38,7 @@
 
     <!-- And the watcher's, for the same reason again. Pure: a config record and a
          state machine, no registry and no pipe. -->
-    <ProjectReference Include="..\Rasid.Core\Rasid.Core.csproj" />
+    <ProjectReference Include="..\Ayn.Core\Ayn.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
