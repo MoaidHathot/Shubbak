@@ -58,7 +58,7 @@ jobs:
       - name: Publish (NativeAOT)
         shell: pwsh
         run: |
-          foreach ($project in 'Shubbak.Wm', 'Shubbak.Cli', 'Taj', 'Dalil', 'Rasid') {
+          foreach ($project in 'Shubbak.Wm', 'Shubbak.Cli', 'Taj', 'Dalil', 'Ayn') {
             Write-Output "::group::publish $project"
             dotnet publish "src/$project" `
               --configuration Release `
@@ -92,7 +92,7 @@ jobs:
             'shubbak'    = 'artifacts/publish/Shubbak.Cli/shubbak.exe'
             'taj'        = 'artifacts/publish/Taj/taj.exe'
             'dalil'      = 'artifacts/publish/Dalil/dalil.exe'
-            'rasid'      = 'artifacts/publish/Rasid/rasid.exe'
+            'ayn'      = 'artifacts/publish/Ayn/ayn.exe'
           }
 
           foreach ($name in $binaries.Keys) {
@@ -127,7 +127,7 @@ jobs:
             'artifacts/publish/Shubbak.Wm/shubbak-wm.exe' = 2
             'artifacts/publish/Taj/taj.exe'               = 2
             'artifacts/publish/Dalil/dalil.exe'           = 2
-            'artifacts/publish/Rasid/rasid.exe'           = 2
+            'artifacts/publish/Ayn/ayn.exe'           = 2
             'artifacts/publish/Shubbak.Cli/shubbak.exe'   = 3
           }
 
