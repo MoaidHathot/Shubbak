@@ -126,6 +126,13 @@ public static class TajConfigLoader
 
         List<BarRule> rules = [];
 
+        // The names the other half of the file declares, so a rule that matches on a
+        // context nobody declared can be said to be one - the same check the window
+        // manager's loader makes for a `context` command, from the same document. Read
+        // as names only: the bar has no use for what a context does, and parsing that
+        // here would mean two loaders disagreeing about one section.
+        List<string> declaredContexts = DeclaredContexts(parsed.Document);
+
         foreach (KdlNode node in bar.ChildrenNamed("rule"))
         {
             string? profileName = SettingText(node, "use") ?? node.Argument(0)?.AsString();
@@ -172,11 +179,33 @@ public static class TajConfigLoader
                 }
             }
 
+            string? context = SettingText(node, "context");
+
+            // A warning, not an error, and the rule is kept: the rule is correct as
+            // written and can never match, which is worth saying but not worth losing
+            // the bar over. The window manager's loader gives an undeclared name in a
+            // `context` command the same treatment.
+            if (context is not null &&
+                !declaredContexts.Contains(context, StringComparer.OrdinalIgnoreCase))
+            {
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0020",
+                    $"Bar rule matches on context '{context}', which the contexts section does not declare; " +
+                    "it will never apply.",
+                    Setting(node, "context")?.Span ?? node.Span,
+                    declaredContexts.Count == 0
+                        ? "No contexts are declared. Add a contexts { } section with a context of that name."
+                        : Suggestion.Closest(context, declaredContexts) is { } guess
+                            ? $"Did you mean '{guess}'?"
+                            : $"Declared: {string.Join(", ", declaredContexts)}."));
+            }
+
             rules.Add(new BarRule(
                 profileName,
                 SettingText(node, "workspace"),
                 monitorIndex,
-                monitorName));
+                monitorName,
+                context));
         }
 
         BarProfile fallbackProfile =
@@ -303,7 +332,29 @@ public static class TajConfigLoader
     private static readonly string[] KnownSourceKeys =
         ["kind", "format", "command", "interval", "timezone"];
 
-    private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor"];
+    private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor", "context"];
+
+    /// <summary>
+    /// The names the <c>contexts</c> section declares, in order, from the same document
+    /// the bar was read from.
+    /// </summary>
+    /// <remarks>
+    /// Names only, and nothing is reported about the section: whether a context is
+    /// well-formed is the window manager's loader's business, and it says so with its
+    /// own codes. Reporting it here as well would show every mistake twice.
+    /// </remarks>
+    private static List<string> DeclaredContexts(KdlDocument document)
+    {
+        if (document.Node("contexts") is not { } section) return [];
+
+        List<string> names = [];
+
+        foreach (KdlNode context in section.ChildrenNamed("context"))
+            if (context.Argument(0)?.AsString() is { Length: > 0 } name)
+                names.Add(name);
+
+        return names;
+    }
 
     /// <summary>The settings a widget of the given kind accepts, or null if it is not a widget.</summary>
     /// <remarks>

@@ -479,3 +479,111 @@ undeclared name and for `--lease` from the command line, each with its hint.
 
 **Found on the way:** Dalil kept its process across a `--replace` for the fourth time
 and reconnected on its own; still not this feature's problem. Nothing else.
+
+### Phase 3
+
+The two consumers. Small by design: the pipe already served everything they needed,
+which was the claim the symmetry in "The line" made, and this phase is the test of
+it. Neither process learned a new query beyond `contexts` for the palette's
+completions, and neither parses a `context.changed` payload.
+
+**How it is shaped, and why:**
+
+- **Both re-read the snapshot on `context.changed` rather than patching from the
+  payload.** The payload names the one context that flipped; the snapshot lists every
+  context in force in declaration order, which is the order they cascade in. A list
+  assembled from arrivals would drift from it in order and, after a missed event, in
+  content. Contexts flip seconds or minutes apart; one `query state` each time costs
+  nothing worth saving, and it means the bar, the palette and `shubbak status` never
+  disagree about the order.
+- **The bar raises `ContextsChanged` before `ActiveWorkspaceChanged` on the same
+  refresh.** The workspace handler is what picks the profile, and it reads the
+  contexts the bar was last told about. The other order picked a profile with stale
+  contexts and corrected it a moment later - two log lines and a rebuild for one
+  flip.
+- **A bar rule's `context=` is an attribute like `workspace=` and `monitor=`, and
+  every attribute has to hold.** No negation: first match wins, so "not presenting" is
+  written by putting the context's rule first and the general rule after it. The
+  loader reads the declared names off the same document - names only, from the
+  `contexts` node, so the bar's loader never disagrees with the window manager's about
+  what a context means - and warns (`TAJ0020`) with a guess for a rule on one nobody
+  declared. A warning and the rule kept, since the rule is correct as written and can
+  never match, which is worth saying but not worth losing the bar over.
+- **`{{ contexts }}` is one value, joined with a comma and a space.** The way
+  `shubbak status` spells the same list. Empty when none hold, so the widget hides.
+  Not one value per context: a `when value=` on the joined string matches only when
+  exactly one holds, but a profile rule covers "change the bar while presenting"
+  properly and per-context keys would have been a second way to say the same thing.
+- **The palette's pill precedence moved into `WmStatus.Pill()`.** Offline, suspended,
+  paused, binding mode, contexts - each quieter than the one before, and the box has
+  room for one. It lived inline in the renderer, untestable; now it is a method on the
+  record with a test per step, and the renderer calls it.
+- **`from="contexts"` offers every declared context, held or not.** The action is how
+  the others are turned on. `CompletionSources` gained `Contexts`, appended and
+  optional like `Monitors` before it; the composer maps `--clear`, `--toggle` and
+  `--auto` to the context name, and `--set` already meant "this verb's own argument".
+  Dalil's `WmStatus` gained `Contexts` the same way. Nothing that constructed either
+  had to change.
+- **Dalil says so when the window manager leaves.** It stays and reconnects, which is
+  deliberate and documented in 0.9.1-palette - a restarted window manager without a
+  palette is what that avoids. But it did so silently: no line at any level, so a log
+  read as an event that never arrived, and the note above called it a problem four
+  times. One `Info` line in `Dispatch`, and the behaviour is unchanged.
+
+**Not done, deliberately:**
+
+- **No palette mode for contexts.** A mode is a prefix character, a place in the tab
+  ring, a help entry and a test that every mode reaches its own rows; the verb with
+  completion and a `param from="contexts"` cover toggling, and `shubbak contexts` is
+  where the reasons are. If a list with reasons in the palette turns out to be wanted,
+  `query contexts` already returns everything it would show.
+- **No `when of="contexts"` per-context matching on the bar.** See above.
+- **Taj does not validate `context=` against the window manager.** It validates
+  against the file, which is the same file. A context declared in the file and
+  refused by the window manager's loader is reported by that loader.
+
+**Measured** (release, NativeAOT, same SDK):
+
+| binary | Phase 2 | Phase 3 | delta |
+|---|---|---|---|
+| shubbak-wm.exe | 6.05 MB | 6.05 MB | 0 |
+| shubbak.exe | 4.83 MB | 4.83 MB | +2 KB |
+| taj.exe | 5.01 MB | 5.01 MB | +4 KB |
+| dalil.exe | 5.08 MB | 5.08 MB | +7 KB |
+
+The daemon is untouched, which is the point of the phase. The bar and the palette
+grew by the size of a rule attribute, a pill precedence and a completion source.
+
+Runtime cost lands on the two consumers, not the daemon: each bar makes one extra
+`query state` per context flip - two bars, so two queries per flip, seconds or
+minutes apart - and the palette makes one extra `query contexts` per open. Idle
+cost is nothing: neither process does anything between events it did not do before.
+Working sets a minute after a restart on the real config: shubbak-wm 27.3 MB, taj
+21.8, dalil 19.0; before the restart, after 38 minutes and 51 minutes respectively,
+taj was 39.3 and dalil 20.2, which is the ordinary spread of a bar that has painted a
+while and a palette that has been opened.
+
+The Phase 2 daemon, measured on the real configuration - no `contexts` section -
+just before this restart, 38 minutes up: tick p50 0.02 ms, p99 1.01 ms, allocation
+p50 0 B, one gen0 collection. Identical to Phase 1 settled. That is the "two
+comparisons per tick" claim from Phase 2, measured.
+
+Verified live, with a temporary copy of the real configuration carrying three
+contexts, `rule use="presentation" context="video"`, a `{{ contexts }}` widget beside
+the binding-mode pill, and an action asking `from="contexts"`: `check-config` on a
+rule naming an undeclared context printed `TAJ0020` with a caret under the name and
+`Declared: video, meeting, two-screens`; `context --set video` switched both bars to
+`presentation` once each, the log line reading `in context video, two-screens`, and
+`--auto` switched both back once; the palette opened on the temporary configuration,
+read its lists including the new query with no warning, took `context --tog` and
+closed. The bar's widget and the palette's pill were not inspected by eye - the
+values behind them are the ones the log lines and the snapshot showed, and the
+drawing is the same code that draws the binding mode.
+
+**Found on the way:** the daemon's `--config` does not reach the processes its
+`startup-command` launches; they resolve their own path. Obvious once seen - each
+process reads the file itself - but the Phase 1 and Phase 2 live runs were made with
+the daemon on a temporary copy and the bar and palette on the real file, which did
+not matter then and would have hidden everything here. Restarted both with
+`--config` by hand. Worth a line in the README's testing notes if anyone else does
+this; not worth plumbing, since the answer for a real user is "edit the file".

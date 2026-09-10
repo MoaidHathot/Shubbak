@@ -39,7 +39,7 @@ public sealed class WmConnection : IAsyncDisposable
     private const string Topics =
         IpcProtocol.SignalTopic +
         ",window.managed,window.unmanaged,window.focused,window.state_changed," +
-        "workspace.activated,config.reloaded,wm.paused,wm.suspended," +
+        "workspace.activated,config.reloaded,wm.paused,wm.suspended,context.changed," +
         IpcProtocol.ShutdownTopic + "," + IpcProtocol.ResyncTopic;
 
     private readonly CancellationTokenSource _stopping = new();
@@ -246,6 +246,12 @@ public sealed class WmConnection : IAsyncDisposable
             StateSnapshot? state = await QueryAsync(
                 client, "state", IpcJsonContext.Default.StateSnapshot);
 
+            // Every context the configuration declares, for completing the context verb
+            // and for a prompt written from="contexts". The snapshot names only the ones
+            // that hold, and the verb is how the others are turned on.
+            IReadOnlyList<ContextReport> contexts = await QueryAsync(
+                client, "contexts", IpcJsonContext.Default.IReadOnlyListContextReport) ?? [];
+
             // The focused workspace is what "bring it here" means, and only the
             // workspace list knows which it is. Its monitor is what "near me" means.
             WorkspaceInfo? focused = workspaces.FirstOrDefault(w => w.Focused);
@@ -268,7 +274,8 @@ public sealed class WmConnection : IAsyncDisposable
                 state?.Paused ?? false,
                 state?.BindingMode,
                 state?.Suspended ?? false,
-                Connected: true);
+                Connected: true,
+                Contexts: state?.Contexts);
 
             var completions = new CompletionSources(
                 names,
@@ -282,7 +289,8 @@ public sealed class WmConnection : IAsyncDisposable
                 [
                     .. monitors.SelectMany(m => m.Names ?? []).Distinct(StringComparer.OrdinalIgnoreCase),
                     .. monitors.Select((_, index) => index.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                ]);
+                ],
+                [.. contexts.Select(c => c.Name)]);
 
             IReadOnlyList<PaletteEntry> ownActions =
                 PaletteEntries.ForMacros(macros ?? [], completions, labels);
@@ -447,6 +455,12 @@ public sealed class WmConnection : IAsyncDisposable
                 break;
 
             case IpcProtocol.ShutdownTopic:
+                // Said out loud, because what happens next looks like nothing: the
+                // palette stays - deliberately, it reconnects when the window manager
+                // is back, and a restarted window manager without a palette is the
+                // thing this avoids - and a log with no line here read as an event
+                // that never arrived.
+                Log.Info(LogCategory.Ipc, "the window manager is shutting down; the palette stays and reconnects when it returns");
                 ShuttingDown?.Invoke();
                 break;
 

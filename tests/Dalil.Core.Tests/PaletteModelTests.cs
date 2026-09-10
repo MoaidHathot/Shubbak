@@ -369,6 +369,36 @@ public sealed class PaletteModelTests
         Assert.True(model.Status.Paused);
         Assert.Equal("resize", model.Status.BindingMode);
     }
+
+    [Fact]
+    public void ThePillSaysTheMostAlarmingThingAndOnlyThat()
+    {
+        // Offline beats suspended beats paused beats a binding mode beats a context:
+        // each is quieter than the one before, and the box has room for one.
+        Assert.Equal(("offline", true), WmStatus.Offline.Pill());
+        Assert.Equal(("suspended", true),
+            new WmStatus(Paused: true, BindingMode: "resize", Suspended: true, Contexts: ["presenting"]).Pill());
+        Assert.Equal(("paused", false),
+            new WmStatus(Paused: true, BindingMode: "resize", Contexts: ["presenting"]).Pill());
+        Assert.Equal(("resize", false),
+            new WmStatus(Paused: false, BindingMode: "resize", Contexts: ["presenting"]).Pill());
+        Assert.Equal(("presenting", false),
+            new WmStatus(Paused: false, BindingMode: null, Contexts: ["presenting"]).Pill());
+    }
+
+    [Fact]
+    public void SeveralContextsAreNamedTogetherInTheWindowManagersOrder()
+    {
+        Assert.Equal(("presenting, docked", false),
+            new WmStatus(Paused: false, BindingMode: null, Contexts: ["presenting", "docked"]).Pill());
+    }
+
+    [Fact]
+    public void NothingToSayIsNoPill()
+    {
+        Assert.Equal((null, false), WmStatus.Unknown.Pill());
+        Assert.Equal((null, false), new WmStatus(Paused: false, BindingMode: "", Contexts: []).Pill());
+    }
     [Fact]
     public void EveryModeCanBeNamedBySignal()
     {

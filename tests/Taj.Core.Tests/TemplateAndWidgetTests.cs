@@ -527,4 +527,144 @@ public sealed class BarProfileSelectorTests
 
         Assert.Equal("minimal", selector.Select("1", 0).Name);
     }
+
+    [Fact]
+    public void MatchesOnAContext()
+    {
+        // The contexts the window manager holds arrive with the snapshot, so a bar rule
+        // can say the same word the contexts section declares.
+        BarProfileSelector selector = Selector(new BarRule("presentation", Context: "presenting"));
+
+        Assert.Equal("presentation", selector.Select("1", 0, [], ["presenting"]).Name);
+        Assert.Equal("presentation", selector.Select("1", 0, [], ["docked", "PRESENTING"]).Name);
+        Assert.Equal("default", selector.Select("1", 0, [], ["docked"]).Name);
+
+        // Told nothing about contexts - an older window manager, or none held - a rule
+        // that wants one does not match, rather than matching everything.
+        Assert.Equal("default", selector.Select("1", 0).Name);
+        Assert.Equal("default", selector.Select("1", 0, [], []).Name);
+    }
+
+    [Fact]
+    public void AContextAndAWorkspaceTogetherBothHaveToHold()
+    {
+        BarProfileSelector selector = Selector(
+            new BarRule("presentation", Workspace: ";", Context: "presenting"));
+
+        Assert.Equal("presentation", selector.Select(";", 0, [], ["presenting"]).Name);
+        Assert.Equal("default", selector.Select(";", 0, [], ["docked"]).Name);
+        Assert.Equal("default", selector.Select("1", 0, [], ["presenting"]).Name);
+    }
+
+    [Fact]
+    public void AContextRuleBeforeAGeneralOneIsHowNotPresentingIsWritten()
+    {
+        // No negation on a bar rule: first match wins, so the rule for the context goes
+        // first and the general rule after it covers every other case.
+        BarProfileSelector selector = Selector(
+            new BarRule("presentation", Context: "presenting"),
+            new BarRule("minimal", Workspace: "1"));
+
+        Assert.Equal("presentation", selector.Select("1", 0, [], ["presenting"]).Name);
+        Assert.Equal("minimal", selector.Select("1", 0, [], []).Name);
+    }
+
+    [Fact]
+    public void TheLoaderReadsAContext()
+    {
+        (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            contexts {
+                context "presenting" { }
+            }
+            bar {
+                profile "default" { height 26 }
+                profile "minimal" { height 20 }
+                rule use="minimal" context="presenting"
+                rule use="minimal" context="presenting" monitor="projector"
+            }
+            """);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.DoesNotContain(diagnostics, d => d.Code == "TAJ0020");
+        Assert.Equal(2, config.Rules.Count);
+
+        Assert.Equal("presenting", config.Rules[0].Context);
+        Assert.Null(config.Rules[0].MonitorName);
+
+        Assert.Equal("presenting", config.Rules[1].Context);
+        Assert.Equal("projector", config.Rules[1].MonitorName);
+    }
+
+    [Fact]
+    public void ARuleOnAContextNobodyDeclaresIsReportedAndKept()
+    {
+        // A warning with a guess, and the rule stays: it is correct as written and can
+        // never match, which is worth saying and not worth losing the bar over.
+        (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            contexts {
+                context "presenting" { }
+                context "docked" { }
+            }
+            bar {
+                profile "default" { height 26 }
+                rule use="default" context="presentng"
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(diagnostics, d => d.Code == "TAJ0020");
+        Assert.Equal(DiagnosticSeverity.Warning, warning.Severity);
+        Assert.Contains("presentng", warning.Message, StringComparison.Ordinal);
+        Assert.Contains("presenting", warning.Hint!, StringComparison.Ordinal);
+        Assert.Equal("presentng", Assert.Single(config.Rules).Context);
+    }
+
+    [Fact]
+    public void ARuleOnAContextWhenNoneAreDeclaredSaysWhereToDeclareOne()
+    {
+        (_, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" { height 26 }
+                rule use="default" context="presenting"
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(diagnostics, d => d.Code == "TAJ0020");
+        Assert.Contains("contexts { }", warning.Hint!, StringComparison.Ordinal);
+    }
+}
+
+/// <summary>Tests for what the bar says about the contexts the window manager holds.</summary>
+public sealed class ActiveContextsTests
+{
+    [Fact]
+    public void NothingHeldIsAnEmptyValueSoTheWidgetHides()
+    {
+        Assert.Equal(string.Empty, ActiveContexts.Label(null));
+        Assert.Equal(string.Empty, ActiveContexts.Label([]));
+    }
+
+    [Fact]
+    public void TheNamesAreJoinedTheWayTheCommandLineJoinsThem()
+    {
+        Assert.Equal("presenting", ActiveContexts.Label(["presenting"]));
+        Assert.Equal("presenting, docked", ActiveContexts.Label(["presenting", "docked"]));
+    }
+
+    [Fact]
+    public void TheKeyIsTheOneTemplatesUse()
+    {
+        Assert.Equal("contexts", ActiveContexts.Key);
+    }
+
+    [Fact]
+    public void TwoAnswersAreTheSameOnlyWhenTheyAgreeInContentAndOrder()
+    {
+        Assert.True(ActiveContexts.Same([], []));
+        Assert.True(ActiveContexts.Same(["a", "b"], ["a", "b"]));
+
+        Assert.False(ActiveContexts.Same(null, []));
+        Assert.False(ActiveContexts.Same(["a"], ["a", "b"]));
+        Assert.False(ActiveContexts.Same(["a", "b"], ["b", "a"]));
+        Assert.False(ActiveContexts.Same(["a"], ["A"]));
+    }
 }

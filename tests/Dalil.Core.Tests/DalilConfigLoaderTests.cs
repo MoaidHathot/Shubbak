@@ -398,6 +398,43 @@ public sealed class DalilConfigLoaderTests
                 """).Prompts).Source);
     }
 
+    [Theory]
+    [InlineData("contexts")]
+    [InlineData("context")]
+    public void TheDeclaredContextsAreAListToChooseFrom(string from)
+    {
+        Assert.Equal(
+            MacroParamSource.Contexts,
+            Assert.Single(Macro($$"""
+                dalil { action "C" { param "c" from="{{from}}"; context --toggle "{c}" } }
+                """).Prompts).Source);
+    }
+
+    [Fact]
+    public void APromptOnContextsOffersEveryDeclaredOneHeldOrNot()
+    {
+        // The whole declared list, not the active ones: the action is how the others
+        // are turned on, and a picker of things already on is a picker of nothing.
+        CompletionSources desktop = new(["1"], ["splith"], [], [], null, ["presenting", "docked"]);
+
+        PaletteEntry row = Assert.Single(PaletteEntries.ForMacros(
+            [Macro("""
+                dalil {
+                    action "Toggle a context" {
+                        param "c" from="contexts"
+                        context --toggle "{c}"
+                    }
+                }
+                """)],
+            desktop,
+            labels: null));
+
+        Assert.True(row.Prompts);
+        Assert.Equal(
+            ["context --toggle presenting", "context --toggle docked"],
+            row.ResolveActions().Select(a => a.Command));
+    }
+
     [Fact]
     public void AskingTurnsOneRowIntoAPickerRatherThanIntoNineteen()
     {

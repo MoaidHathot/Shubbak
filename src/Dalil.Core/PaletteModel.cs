@@ -229,17 +229,55 @@ public sealed record PaletteEntry(
 /// "nothing to show": a dead daemon and a slow one looked identical before this
 /// existed, and the empty list confidently blamed the wrong one.
 /// </param>
+/// <param name="Contexts">
+/// The contexts the window manager holds, in its order, or null for none. A context
+/// changes the configuration in force - gaps, keys, where a workspace lives - and a
+/// palette that shows the keys of a configuration that is not the one in force is
+/// wrong in a way nobody can see. Appended and optional, so the callers that predate
+/// it still compile.
+/// </param>
 public readonly record struct WmStatus(
     bool Paused,
     string? BindingMode,
     bool Suspended = false,
-    bool Connected = true)
+    bool Connected = true,
+    IReadOnlyList<string>? Contexts = null)
 {
     /// <summary>Before anything has been read, which is not the same as being offline.</summary>
     public static WmStatus Unknown => new(false, null, false, Connected: true);
 
     /// <summary>The window manager could not be reached.</summary>
     public static WmStatus Offline => new(false, null, false, Connected: false);
+
+    /// <summary>
+    /// The one thing the search box has room to say, and whether it is bad news.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Most alarming first. A palette that cannot reach the window manager is showing
+    /// a list that may be minutes old, which matters more than anything the window
+    /// manager might have been doing when it was last heard from. Suspended means no
+    /// key works; paused means windows are not arranged; a binding mode means the keys
+    /// mean something else right now; a context means the configuration in force is
+    /// not the one in the file. Each is quieter than the one before, and the box has
+    /// room for one.
+    /// </para>
+    /// <para>
+    /// Held here rather than in the renderer so the precedence can be tested without
+    /// drawing anything.
+    /// </para>
+    /// </remarks>
+    /// <returns>The label, or null when there is nothing to say; and whether it is alarming.</returns>
+    public (string? Label, bool Alarming) Pill()
+    {
+        if (!Connected) return ("offline", true);
+        if (Suspended) return ("suspended", true);
+        if (Paused) return ("paused", false);
+        if (BindingMode is { Length: > 0 } mode) return (mode, false);
+        if (Contexts is { Count: > 0 } contexts) return (string.Join(", ", contexts), false);
+
+        return (null, false);
+    }
 }
 
 /// <summary>An entry that survived filtering, with where it matched.</summary>

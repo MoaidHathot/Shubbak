@@ -522,6 +522,7 @@ public static class PaletteEntries
             MacroParamSource.BindingModes => sources.BindingModes,
             MacroParamSource.Scratchpads => sources.ScratchpadSlots,
             MacroParamSource.Directions => ["left", "right", "up", "down"],
+            MacroParamSource.Contexts => sources.Contexts ?? [],
             _ => prompt.Literals,
         };
 
@@ -533,6 +534,7 @@ public static class PaletteEntries
         MacroParamSource.BindingModes => "binding modes",
         MacroParamSource.Scratchpads => "occupied scratchpad slots",
         MacroParamSource.Directions => "directions",
+        MacroParamSource.Contexts => "contexts",
         _ => "values",
     };
 

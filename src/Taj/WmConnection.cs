@@ -102,10 +102,27 @@ public sealed class WmConnection : IAsyncDisposable
         "binding_mode.changed",
         "wm.paused",
         "wm.suspended",
+        "context.changed",
         "config.reloaded",
         IpcProtocol.ShutdownTopic,
         IpcProtocol.ResyncTopic,
     ]);
+
+    /// <summary>
+    /// Raised when the contexts the window manager holds differ from the last time
+    /// this connection looked, so profiles can switch.
+    /// </summary>
+    /// <remarks>
+    /// The whole list each time, in the window manager's order, rather than the one
+    /// name that changed: a rule asks whether a context is among those held, and the
+    /// list is what answers that. Raised before <see cref="ActiveWorkspaceChanged"/> on
+    /// the same refresh, so the profile picked for the workspace is picked with the
+    /// contexts already known.
+    /// </remarks>
+    public event Action<IReadOnlyList<string>>? ContextsChanged;
+
+    /// <summary>The contexts as the window manager last listed them.</summary>
+    private IReadOnlyList<string>? _lastContexts;
 
     /// <summary>
     /// Raised when the active workspace changes, so profiles can switch.
@@ -397,6 +414,16 @@ public sealed class WmConnection : IAsyncDisposable
                 PublishStatus();
                 break;
 
+            case "context.changed":
+                // Re-read rather than patched from the payload, which names only the
+                // context that flipped. The snapshot lists every context that holds in
+                // the window manager's own order, and a list assembled here from
+                // arrivals would drift from it in order and, after a missed event, in
+                // content. Contexts flip seconds or minutes apart; one query each time
+                // costs nothing worth saving.
+                await RefreshAsync(client).ConfigureAwait(false);
+                break;
+
             case "layout.changed":
                 await RefreshAsync(client).ConfigureAwait(false);
                 break;
@@ -559,6 +586,18 @@ public sealed class WmConnection : IAsyncDisposable
             _paused = state.Paused;
             _suspended = state.Suspended;
             PublishStatus();
+
+            // Before the workspace, so that a rule asking for both is judged with both
+            // known: the workspace handler picks the profile, and it reads the contexts
+            // the bar was last told about.
+            IReadOnlyList<string> contexts = state.Contexts ?? [];
+            _model.SetValue(ActiveContexts.Key, ActiveContexts.Label(contexts));
+
+            if (!ActiveContexts.Same(_lastContexts, contexts))
+            {
+                _lastContexts = contexts;
+                ContextsChanged?.Invoke(contexts);
+            }
 
             if (active.Length > 0) ActiveWorkspaceChanged?.Invoke(active, monitorIndex, monitorNames);
 

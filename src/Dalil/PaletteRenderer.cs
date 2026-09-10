@@ -288,18 +288,10 @@ internal static class PaletteRenderer
         IRenderer renderer, PaletteModel model, PaletteTheme theme,
         PaletteLayout layout, FontStyle small, Rect box)
     {
-        WmStatus status = model.Status;
-
-        // Most alarming first. A palette that cannot reach the window manager is
-        // showing a list that may be minutes old, which matters more than anything the
-        // window manager might have been doing when it was last heard from.
-        (string? label, bool alarming) = !status.Connected
-            ? ("offline", true)
-            : status.Suspended
-                ? ("suspended", true)
-                : status.Paused
-                    ? ("paused", false)
-                    : status.BindingMode is { Length: > 0 } mode ? (mode, false) : (null, false);
+        // The precedence lives with the status, where it can be tested: most alarming
+        // first, and a held context last, since it is the quietest of the things that
+        // change what the keys do.
+        (string? label, bool alarming) = model.Status.Pill();
 
         if (label is null) return box.Right;
 

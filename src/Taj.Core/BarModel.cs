@@ -355,11 +355,19 @@ public sealed class BarModel : IDisposable
 /// screen in both halves of the file. Written as <c>monitor="dell-left"</c>; a number
 /// in the same place is a position.
 /// </param>
+/// <param name="Context">
+/// Match while the window manager holds a context of this name, or null for any. The
+/// same names the <c>contexts</c> section declares, so a bar can change its shape
+/// for a talk without knowing why the talk was detected - the window manager decided
+/// that, from its <c>when</c> or from somebody's <c>context --set</c>, and the bar
+/// only asks whether it holds.
+/// </param>
 public sealed record BarRule(
     string Profile,
     string? Workspace = null,
     int? MonitorIndex = null,
-    string? MonitorName = null)
+    string? MonitorName = null,
+    string? Context = null)
 {
     /// <summary>Whether this rule applies.</summary>
     /// <param name="activeWorkspace">The workspace the bar's display is showing.</param>
@@ -368,7 +376,15 @@ public sealed record BarRule(
     /// What the window manager's configuration calls that display; empty when nothing
     /// does or the bar has not been told.
     /// </param>
-    public bool Matches(string activeWorkspace, int monitorIndex, IReadOnlyList<string>? monitorNames = null)
+    /// <param name="activeContexts">
+    /// The contexts the window manager currently holds; empty when none do or the bar
+    /// has not been told. A rule that asks for one does not match until it has been.
+    /// </param>
+    public bool Matches(
+        string activeWorkspace,
+        int monitorIndex,
+        IReadOnlyList<string>? monitorNames = null,
+        IReadOnlyList<string>? activeContexts = null)
     {
         if (Workspace is not null &&
             !string.Equals(Workspace, activeWorkspace, StringComparison.OrdinalIgnoreCase))
@@ -378,25 +394,21 @@ public sealed record BarRule(
 
         if (MonitorIndex is not null && MonitorIndex != monitorIndex) return false;
 
-        if (MonitorName is not null)
-        {
-            if (monitorNames is null) return false;
+        if (MonitorName is not null && !Contains(monitorNames, MonitorName)) return false;
 
-            bool named = false;
-
-            foreach (string name in monitorNames)
-            {
-                if (string.Equals(name, MonitorName, StringComparison.OrdinalIgnoreCase))
-                {
-                    named = true;
-                    break;
-                }
-            }
-
-            if (!named) return false;
-        }
+        if (Context is not null && !Contains(activeContexts, Context)) return false;
 
         return true;
+    }
+
+    private static bool Contains(IReadOnlyList<string>? names, string wanted)
+    {
+        if (names is null) return false;
+
+        foreach (string name in names)
+            if (string.Equals(name, wanted, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
     }
 }
 
@@ -425,11 +437,15 @@ public sealed class BarProfileSelector
     }
 
     /// <summary>The profile to use, first matching rule wins.</summary>
-    public BarProfile Select(string activeWorkspace, int monitorIndex, IReadOnlyList<string>? monitorNames = null)
+    public BarProfile Select(
+        string activeWorkspace,
+        int monitorIndex,
+        IReadOnlyList<string>? monitorNames = null,
+        IReadOnlyList<string>? activeContexts = null)
     {
         foreach (BarRule rule in _rules)
         {
-            if (!rule.Matches(activeWorkspace, monitorIndex, monitorNames)) continue;
+            if (!rule.Matches(activeWorkspace, monitorIndex, monitorNames, activeContexts)) continue;
             if (_profiles.TryGetValue(rule.Profile, out BarProfile? profile)) return profile;
         }
 

@@ -29,6 +29,9 @@ public enum MacroParamSource
     /// <summary>The four compass directions, which are the same everywhere.</summary>
     Directions,
 
+    /// <summary>Every context the configuration declares, held or not.</summary>
+    Contexts,
+
     /// <summary>Exactly what was written beside the parameter, and nothing else.</summary>
     Literals,
 }

@@ -507,7 +507,9 @@ line, not a plugin.
 
 Zones are flex containers. Profiles can `extend` each other, so a slim
 "presentation" variant costs five lines instead of a duplicate. A `rule` picks the
-profile at runtime by workspace or monitor, and switching is a pointer swap.
+profile at runtime by workspace, monitor or context — `rule use="presentation"
+context="presenting"` — and switching is a pointer swap. `{{ contexts }}` names the
+contexts the window manager holds, and is empty when none do.
 
 **Why it doesn't show stale titles.** The bar consumes the window manager's event
 stream and never inspects windows itself. `EVENT_OBJECT_NAMECHANGE` fires on things
@@ -623,8 +625,8 @@ dalil {
 
 Enter opens the picker; Escape goes back one question rather than dismissing. Choices
 come `from=` a list the palette already holds — `workspaces`, `layouts`,
-`binding-modes`, `scratchpads`, `directions` — or from `values="a b c"` when you want
-a set the window manager doesn't know. Workspaces are shown as `3 — Code`, because a
+`binding-modes`, `scratchpads`, `directions`, `contexts` — or from `values="a b c"`
+when you want a set the window manager doesn't know. Workspaces are shown as `3 — Code`, because a
 picker reading `\` is not one anybody can choose from.
 
 The checking is real: a placeholder nothing declares is an error with a line and a
@@ -648,7 +650,9 @@ looking at: `unmanaged`, `minimised`, `cloaked`, `floating`, `fullscreen`, `stic
 in the dim text, so you don't have to open anything to find out why. The search box
 tells you when tiling is paused, when a binding mode is eating your keys, when the
 window manager has suspended itself, and when it can't be reached at all — because
-all four look exactly like a crash from the outside.
+all four look exactly like a crash from the outside — and, quieter than any of those,
+which contexts it holds, because the keys in force are then not the ones in the file.
+Typing `context --toggle ` completes the declared names.
 
 Dalil is opened by a **signal**, not by a hard-wired command — which means Shubbak
 doesn't know Dalil exists. That's the same extension point anything else can use.

@@ -13,12 +13,18 @@ namespace Dalil.Core;
 /// configuration gives it, then its position. Appended and optional, so the callers
 /// that predate it still compile.
 /// </param>
+/// <param name="Contexts">
+/// Every context the configuration declares, held or not, for the <c>context</c>
+/// verb. All of them rather than the active ones, because the verb is how a context
+/// is turned on. Appended and optional, like <paramref name="Monitors"/>.
+/// </param>
 public sealed record CompletionSources(
     IReadOnlyList<string> Workspaces,
     IReadOnlyList<string> Layouts,
     IReadOnlyList<string> BindingModes,
     IReadOnlyList<string> ScratchpadSlots,
-    IReadOnlyList<string>? Monitors = null)
+    IReadOnlyList<string>? Monitors = null,
+    IReadOnlyList<string>? Contexts = null)
 {
     public static CompletionSources None { get; } = new([], [], [], []);
 }
@@ -216,8 +222,12 @@ public static class CommandComposer
                 "--name" => CommandArgument.BindingMode,
                 "--monitor" => CommandArgument.MonitorName,
 
+                // The context verb's four ways of naming what to do with a context;
+                // each is followed by the name.
+                "--clear" or "--toggle" or "--auto" => CommandArgument.ContextName,
+
                 // Whatever this verb's own argument is: --set means "the value" for
-                // layout and for split alike.
+                // layout and for split alike, and the name for context.
                 "--set" => spec.Arguments[0],
                 _ => null,
             };
@@ -235,6 +245,7 @@ public static class CommandComposer
             CommandArgument.BindingMode => sources.BindingModes,
             CommandArgument.ScratchpadSlot => sources.ScratchpadSlots,
             CommandArgument.MonitorName => sources.Monitors ?? [],
+            CommandArgument.ContextName => sources.Contexts ?? [],
 
             // An axis, an amount, a window handle, a signal name, a command line:
             // nothing finite to offer, and a guess would be worse than silence.

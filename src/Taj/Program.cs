@@ -53,6 +53,9 @@ internal static class Program
 
         /// <summary>What the window manager's configuration calls its display, as last reported.</summary>
         public IReadOnlyList<string> MonitorNames { get; set; } = [];
+
+        /// <summary>The contexts the window manager holds, as last reported.</summary>
+        public IReadOnlyList<string> Contexts { get; set; } = [];
     }
 
     private static readonly List<Bar> s_bars = [];
@@ -343,6 +346,14 @@ internal static class Program
             SelectProfile(bar);
         };
 
+        // Same shape as the workspace: remembered on the bar so a reload can re-pick
+        // its profile, and the profile re-picked at once because a rule may name it.
+        connection.ContextsChanged += contexts =>
+        {
+            bar.Contexts = contexts;
+            SelectProfile(bar);
+        };
+
         connection.MonitorsChanged += monitors =>
         {
             s_pendingMonitors = monitors;
@@ -477,7 +488,7 @@ internal static class Program
     private static void SelectProfile(Bar bar)
     {
         BarModel model = bar.Model;
-        BarProfile chosen = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames);
+        BarProfile chosen = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames, bar.Contexts);
 
         if (ReferenceEquals(chosen, model.Profile)) return;
 
@@ -488,7 +499,8 @@ internal static class Program
         // wrong profile was chosen, the right one was built badly, or the
         // window failed to resize.
         Log.Info(LogCategory.Config,
-            $"{bar.Window.Label} -> profile \"{chosen.Name}\" on workspace \"{bar.Workspace}\" " +
+            $"{bar.Window.Label} -> profile \"{chosen.Name}\" on workspace \"{bar.Workspace}\"" +
+            (bar.Contexts.Count > 0 ? $" in context {string.Join(", ", bar.Contexts)}" : string.Empty) + " " +
             $"(height {chosen.Height}, zones: " +
             $"{string.Join(", ", chosen.Zones.Select(z => $"{z.Id}/{z.Widgets.Count}w/grow{z.Grow}"))})");
     }
@@ -560,7 +572,7 @@ internal static class Program
             // Forced through, rather than going via SelectProfile: the profile object
             // is new after a reload even when it is the same profile by name, and the
             // reference check would otherwise skip it.
-            model.Profile = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames);
+            model.Profile = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames, bar.Contexts);
 
             model.SetValue("config", Problems(problems));
         }

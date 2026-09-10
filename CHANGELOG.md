@@ -95,6 +95,18 @@ schedule and breaking either is a different kind of event:
   whether it is leased. `shubbak status` names the active contexts, the tray tooltip
   shows them, and `diagnose` has a section.
 
+- **The bar and the palette know about contexts.** A bar `rule` takes `context=`
+  beside `workspace=` and `monitor=`, so `rule use="presentation" context="presenting"`
+  slims the bar down for a talk however the talk was detected; every attribute on a
+  rule has to hold, and a rule on a context the `contexts` section does not declare is
+  pointed out at load (`TAJ0020`) rather than silently never matching. `{{ contexts }}`
+  names the contexts in force, joined the way `shubbak status` joins them, and is empty
+  when none are. The palette's search box shows them in its pill, quieter than a
+  binding mode and much quieter than "offline"; typing `context --toggle ` completes
+  the declared names; and a `param` can ask `from="contexts"`, so one row toggles any
+  of them. Both processes receive `context.changed` and re-read the snapshot, which
+  lists the contexts in the window manager's own order.
+
 - **Monitors can be named by what they are, and workspaces bound to the name.**
   `monitor=1` on a workspace is a position in the order Windows reports displays, and
   Windows reorders that on replug, on DisplayPort wake and on a driver restart - which

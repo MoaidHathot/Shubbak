@@ -158,7 +158,43 @@ public sealed class CommandComposerTests
         Workspaces: ["1", "2", "code", "mail"],
         Layouts: ["splith", "splitv", "fibonacci", "grid"],
         BindingModes: ["resize", "pause"],
-        ScratchpadSlots: ["notes", "term"]);
+        ScratchpadSlots: ["notes", "term"],
+        Contexts: ["presenting", "docked", "meeting"]);
+
+    [Theory]
+    [InlineData("context --set ")]
+    [InlineData("context --clear ")]
+    [InlineData("context --toggle ")]
+    [InlineData("context --auto ")]
+    public void EveryWayOfNamingWhatToDoWithAContextIsFollowedByItsName(string typed)
+    {
+        IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose(typed, Sources());
+
+        // Every declared context, held or not: the verb is how the others are turned on.
+        Assert.Contains(rows, r => r.Command == typed + "presenting");
+        Assert.Contains(rows, r => r.Command == typed + "meeting");
+        Assert.DoesNotContain(rows, r => r.Command == typed + "code");
+    }
+
+    [Fact]
+    public void AContextNameNarrowsAsItIsTyped()
+    {
+        IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose("context --toggle d", Sources());
+
+        Assert.Contains(rows, r => r.Command == "context --toggle docked");
+        Assert.DoesNotContain(rows, r => r.Command == "context --toggle presenting");
+    }
+
+    [Fact]
+    public void AnOlderWindowManagerOffersNoContexts()
+    {
+        // The list is optional on the record so older callers compile, and a palette
+        // talking to a daemon that has never heard of contexts offers nothing rather
+        // than guessing.
+        IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose("context --set ", CompletionSources.None);
+
+        Assert.DoesNotContain(rows, r => r.Secondary.StartsWith("complete", StringComparison.Ordinal));
+    }
 
     [Fact]
     public void ArgumentsAreCompletedFromTheRightSource()
