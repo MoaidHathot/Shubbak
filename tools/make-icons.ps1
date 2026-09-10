@@ -244,6 +244,62 @@ function Add-SearchGlyph {
 }
 
 <#
+    Rasid - the observer, so an eye.
+
+    An almond outline with a filled pupil. Stroked rather than filled, like the
+    glass: a filled almond at 16 pixels is a blob with a hole in it, and a stroked
+    one keeps its two arcs.
+#>
+function Add-EyeGlyph {
+    param($Graphics, [int] $Size)
+
+    $colour = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
+    $thickness = [Math]::Max(1.5, $Size * 0.09)
+
+    $pen = New-Object System.Drawing.Pen($colour, $thickness)
+    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+
+    $left = $Size * 0.18
+    $right = $Size * 0.82
+    $middle = $Size * 0.5
+    $lidRise = $Size * 0.26
+
+    # Two arcs meeting at the corners. Each is a bezier from corner to corner with
+    # its control points pulled towards the lid, which is what makes an almond
+    # rather than a lens.
+    $upperControlY = $middle - $lidRise
+    $lowerControlY = $middle + $lidRise
+    $pull = $Size * 0.20
+
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $path.AddBezier(
+        (New-Object System.Drawing.PointF($left, $middle)),
+        (New-Object System.Drawing.PointF(($left + $pull), $upperControlY)),
+        (New-Object System.Drawing.PointF(($right - $pull), $upperControlY)),
+        (New-Object System.Drawing.PointF($right, $middle)))
+    $path.AddBezier(
+        (New-Object System.Drawing.PointF($right, $middle)),
+        (New-Object System.Drawing.PointF(($right - $pull), $lowerControlY)),
+        (New-Object System.Drawing.PointF(($left + $pull), $lowerControlY)),
+        (New-Object System.Drawing.PointF($left, $middle)))
+    $path.CloseFigure()
+
+    $Graphics.DrawPath($pen, $path)
+
+    # The pupil, filled, sized so that a ring of background survives around it at
+    # every size - the gap is what reads as an eye rather than a dot in a shape.
+    $brush = New-Object System.Drawing.SolidBrush($colour)
+    $pupil = $Size * 0.20
+    $Graphics.FillEllipse($brush, ($middle - ($pupil / 2)), ($middle - ($pupil / 2)), $pupil, $pupil)
+
+    $brush.Dispose()
+    $path.Dispose()
+    $pen.Dispose()
+}
+
+<#
     Assembles PNG frames into an ICO.
 
     The format is a six-byte directory header, then one sixteen-byte entry per image,
@@ -513,6 +569,7 @@ Build-Icon -Name 'shubbak-wm' -Top '#2E7D8F' -Bottom '#1B4A57' -Glyph ${function
 Build-Icon -Name 'shubbak'    -Top '#4A5A63' -Bottom '#2B3940' -Glyph ${function:Add-TilesGlyph}
 Build-Icon -Name 'taj'        -Top '#C99A2E' -Bottom '#8A6416' -Glyph ${function:Add-CrownGlyph}
 Build-Icon -Name 'dalil'      -Top '#4F7BA8' -Bottom '#2C4A68' -Glyph ${function:Add-SearchGlyph}
+Build-Icon -Name 'rasid'      -Top '#5E9A6A' -Bottom '#34593C' -Glyph ${function:Add-EyeGlyph}
 
 Build-SocialCard -Name 'social-card' -Width $CardWidth -Height $CardHeight -Margin $CardMargin
 

@@ -5,6 +5,8 @@
   <Folder Name="/src/">
     <Project Path="src/Dalil.Core/Dalil.Core.csproj" />
     <Project Path="src/Dalil/Dalil.csproj" />
+    <Project Path="src/Rasid.Core/Rasid.Core.csproj" />
+    <Project Path="src/Rasid/Rasid.csproj" />
     <Project Path="src/Shubbak.Cli/Shubbak.Cli.csproj" />
     <Project Path="src/Shubbak.Config/Shubbak.Config.csproj" />
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
@@ -19,6 +21,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/Dalil.Core.Tests/Dalil.Core.Tests.csproj" />
     <Project Path="tests/Dalil.Tests/Dalil.Tests.csproj" />
+    <Project Path="tests/Rasid.Core.Tests/Rasid.Core.Tests.csproj" />
     <Project Path="tests/Shubbak.Cli.Tests/Shubbak.Cli.Tests.csproj" />
     <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />

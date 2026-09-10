@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Rasid (راصد, "observer") - the reference provider for external contexts.
+
+    Shubbak observes the desktop, not the applications. Whether the camera is on is a
+    fact about what an application is doing with hardware, so it is not the window
+    manager's to know - and it is also the fact that turns "a meeting is on" from a
+    guess into a signal. This process closes that gap from the outside: it watches the
+    consent store Windows keeps for the camera and the microphone, and while a program
+    has either open it holds a context on the window manager with a lease, so the pin
+    dies with this process and the window manager is never left believing a meeting
+    is on. The configuration says what a meeting does; this process never needs to.
+
+    Its own process rather than a hundred lines in the daemon, because "it is only a
+    hundred lines" is true of every item that would follow it, and is how a window
+    manager grows a weather widget. It exists as much to dogfood the pipe as to
+    detect meetings: if this was painful to write, the pipe was wrong.
+
+    WinExe rather than Exe, like the bar and the palette: a console-subsystem binary
+    started at logon gets a permanent black console window.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>rasid</AssemblyName>
+    <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
+    <AssemblyTitle>Shubbak Rasid</AssemblyTitle>
+    <RootNamespace>Rasid</RootNamespace>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- Regenerate with tools/make-icons.ps1. -->
+    <ApplicationIcon>..\icons\rasid.ico</ApplicationIcon>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <PublishAot Condition="'$(PublishAot)' == ''">false</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Rasid.Core\Rasid.Core.csproj" />
+    <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+    <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
+
+    <!-- For ConsoleHost and SingleInstanceLock, the same two the palette borrows. -->
+    <ProjectReference Include="..\Shubbak.Native\Shubbak.Native.csproj" />
+  </ItemGroup>
+
+</Project>

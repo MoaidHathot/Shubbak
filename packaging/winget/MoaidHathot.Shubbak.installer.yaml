@@ -38,6 +38,8 @@ NestedInstallerFiles:
     PortableCommandAlias: taj
   - RelativeFilePath: dalil.exe
     PortableCommandAlias: dalil
+  - RelativeFilePath: rasid.exe
+    PortableCommandAlias: rasid
 
 ReleaseDate: 2026-08-26
 

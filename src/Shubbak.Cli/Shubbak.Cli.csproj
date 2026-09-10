@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -35,6 +35,10 @@
     -->
     <ProjectReference Include="..\Taj.Core\Taj.Core.csproj" />
     <ProjectReference Include="..\Dalil.Core\Dalil.Core.csproj" />
+
+    <!-- And the watcher's, for the same reason again. Pure: a config record and a
+         state machine, no registry and no pipe. -->
+    <ProjectReference Include="..\Rasid.Core\Rasid.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

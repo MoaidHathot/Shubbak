@@ -370,12 +370,21 @@ contexts {
         when { monitor present="dell-right" }
     }
 
-    // External: nothing on the desktop decides this, so it has no `when`. Another
-    // program - one that watches the camera, the calendar, a call - sets it over
-    // the pipe: `shubbak context --set meeting --ttl 10s` from a script, or a held
-    // connection with --lease so the pin dies with the program. The config says
-    // what a meeting does; the program never needs to know.
+    // External: nothing on the desktop decides these, so they have no `when`.
+    // Another program sets them over the pipe - `shubbak context --set camera
+    // --ttl 10s` from a script, or a held connection with --lease so the pin dies
+    // with the program. Rasid, the watcher that ships beside the bar and the
+    // palette, holds exactly these two while a program has the device open; see
+    // the `rasid` section at the end of the file. Nothing to change here: they are
+    // facts, and "meeting" below is the policy.
+    context "camera" { }
+    context "microphone" { }
+
+    // A meeting is the camera being on, or whatever else you decide it is - a
+    // calendar, a call, a Stream Deck key - composed from facts that arrive from
+    // outside. The config says what a meeting does; the program never needs to know.
     context "meeting" {
+        when { context "camera" }
         window-effects { focused-colour "#f38ba8" }
     }
 
@@ -953,4 +962,30 @@ dalil {
 
     font      "Segoe UI"
     font-size 15
+}
+// ---------------------------------------------------------------------------
+// Rasid - the camera and microphone watcher
+// ---------------------------------------------------------------------------
+//
+// Its own process, started however you start the bar and the palette - a
+// startup-command, a shortcut, by hand. It reads this section and nothing else in
+// this file, and sleeps on a registry notification: the record Windows keeps of
+// which programs have the camera or the microphone open, the same one the privacy
+// indicator in the tray reads. While any program has one open it holds the named
+// context on the window manager with a lease, so the pin dies with rasid and a
+// crashed watcher leaves nothing behind. `rasid --report` prints what Windows says
+// right now; `shubbak rasid-exit` stops it.
+//
+// Every setting has a default, so the section can be left out entirely.
+
+rasid {
+    // The contexts to hold. #false leaves a device alone; the names must be
+    // declared in `contexts` above, or the window manager refuses them and rasid
+    // says so once in its log.
+    camera "camera"
+    microphone "microphone"
+
+    // How long a change must last before it is believed, in milliseconds. A call
+    // opens and closes the camera several times while it is setting up.
+    settle 500
 }

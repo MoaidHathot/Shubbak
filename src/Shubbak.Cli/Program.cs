@@ -71,6 +71,7 @@ internal static class Program
                 "restore" => Restore(args),
                 "taj-exit" => CloseWindowsOfClass("TajBarWindow", "bar"),
                 "dalil-exit" => CloseWindowsOfClass("DalilPaletteWindow", "palette"),
+                "rasid-exit" => StopWatcher(),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
@@ -134,6 +135,43 @@ internal static class Program
 
         Console.WriteLine($"closed {closed} {what} window(s)");
         return 0;
+    }
+
+    /// <summary>
+    /// Stops the watcher, which has no window to close.
+    /// </summary>
+    /// <remarks>
+    /// It holds a named event open and waits on it; setting the event is the request.
+    /// Then the mutex it holds is watched until it lets go, so that a script running
+    /// <c>rasid-exit</c> and then starting a new one does not race the old one out
+    /// of the door. Not over IPC, for the same reason the other two are not: this has
+    /// to work when the window manager is gone.
+    /// </remarks>
+    private static int StopWatcher()
+    {
+        if (!EventWaitHandle.TryOpenExisting(IpcProtocol.StopEventNameFor("rasid"), out EventWaitHandle? stop))
+        {
+            Console.Error.WriteLine("shubbak: no watcher is running.");
+            return 2;
+        }
+
+        using (stop) stop.Set();
+
+        string mutex = IpcProtocol.InstanceMutexNameFor("rasid");
+
+        for (int waited = 0; waited < 5000; waited += 50)
+        {
+            if (SingleInstanceLock.IsHeldByAnyone(mutex) is false)
+            {
+                Console.WriteLine("stopped the watcher");
+                return 0;
+            }
+
+            Thread.Sleep(50);
+        }
+
+        Console.Error.WriteLine("shubbak: asked the watcher to stop, but it is still running after 5 s.");
+        return 1;
     }
 
     /// <summary>Brings back windows that some earlier run left concealed.</summary>
@@ -789,13 +827,22 @@ internal static class Program
         foreach (Diagnostic diagnostic in paletteDiagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
 
+        // The watcher's section, for the same reason. Warnings only; nothing in it is
+        // fatal, since every setting has a default.
+        IReadOnlyList<Diagnostic> watcherDiagnostics = Rasid.Core.RasidConfigLoader.Validate(source).Diagnostics;
+
+        foreach (Diagnostic diagnostic in watcherDiagnostics)
+            Console.Error.Write(diagnostic.Render(source, path));
+
         int errors = result.Errors.Count() +
             barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error) +
-            paletteDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
+            paletteDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error) +
+            watcherDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Error);
 
         int warnings = result.Warnings.Count() +
             barDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning) +
-            paletteDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
+            paletteDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning) +
+            watcherDiagnostics.Count(d => d.Severity == DiagnosticSeverity.Warning);
 
         Console.WriteLine(
             errors == 0 && warnings == 0
@@ -879,6 +926,11 @@ internal static class Program
           dalil-exit           Close the command palette, the same way. Both of
                                these refuse to start a second copy of themselves,
                                so this is how you stop the one that is running.
+
+          rasid-exit           Stop the camera and microphone watcher. It has no
+                               window, so it is asked through a named event and
+                               waited for; its leases on the window manager are
+                               released the moment its connection closes.
 
           autostart <action>   Whether the window manager starts when you log in.
                                enable | disable | status

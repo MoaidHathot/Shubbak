@@ -587,3 +587,133 @@ the daemon on a temporary copy and the bar and palette on the real file, which d
 not matter then and would have hidden everything here. Restarted both with
 `--config` by hand. Worth a line in the README's testing notes if anyone else does
 this; not worth plumbing, since the answer for a real user is "edit the file".
+
+### Phase 4
+
+Rasid, the reference provider. The design note said it exists as much to dogfood
+the pipe as to detect meetings: if it was painful to write, the pipe was wrong. It
+was not painful. The whole provider is a config record, a state machine of two
+booleans per device, a registry reader, and one connection that sends two commands.
+
+**How it is shaped, and why:**
+
+- **Two projects, like the bar and the palette.** `Rasid.Core` is pure: the `rasid`
+  section, the consent-store model, and `Provider`, which takes readings and a clock
+  and hands back commands. The registry and the pipe live in `Rasid`, the host, and
+  are the two things a test cannot have. Thirty-one tests cover the debounce, the
+  flicker, the lost lease, the rename under a running watcher, and the spelling of
+  every command; the host is a hundred and fifty lines of wiring.
+- **The consent store, not a device API.** Windows writes `LastUsedTimeStart` and
+  `LastUsedTimeStop` for every program that opens a camera or microphone through the
+  capture pipeline, packaged or not, under
+  `CapabilityAccessManager\ConsentStore\{webcam,microphone}`, so that the settings
+  page can say "currently in use". A start with no stop is the device open. It is the
+  same signal the shell's own privacy indicator reads, it names the program, and it
+  costs a registry read. Both hives are watched; the machine's is where a few services
+  and older installers land.
+- **Woken, not polled.** `RegNotifyChangeKeyValue` on each key with an event, the
+  whole subtree, names and values both. Re-armed before the read on every wake, or a
+  change landing between the two would be missed. Between wakes the process holds no
+  timer, unless a change is waiting out its settle time, in which case it sleeps
+  exactly that long. The one P/Invoke in the process; `Microsoft.Win32.Registry` does
+  the reading, as the CLI's autostart already did.
+- **Settle, on the provider's side.** A call opens and closes the camera several
+  times while it enumerates devices. The window manager's `linger` covers the way
+  down; nothing covered the way up, and a provider that set and released three times
+  in a second would make the window manager's log look like a fault. So a change is
+  believed after it has held for `settle` (500 ms by default), and a change that
+  reverses itself inside that time is never reported at all. A test pins each.
+- **`--lease` up, `--auto` down.** The lease is what makes a crashed watcher
+  harmless. Handing back with `--auto` rather than `--clear` leaves no pin, so the
+  report says `nothing has set it` and a context somebody else also sets is theirs
+  again rather than held off by us.
+- **Two connections, because one cannot do both jobs.** A subscribed connection
+  carries nothing else, by the protocol's rule, and the connection that holds a lease
+  must stay open. So commands go over one client, opened on first use and kept, and
+  `config.reloaded` and `wm.shutdown` arrive over a second that reconnects for as
+  long as the process runs - the palette's pump, minus the payloads. **This is the
+  pipe's one rough edge for a provider:** the second connection exists only to learn
+  that the file was reloaded and that the window manager left. A protocol that let a
+  subscribed connection also send would make a provider one connection, and that
+  would be a v3 change or an appended capability; noted, not done.
+- **The lost lease is a state, not an event.** When the events connection ends the
+  loop is told, drops the commands client, and tells the provider to forget what was
+  asserted. The next flush holds again whatever is still in use, at once - the settle
+  time was served the first time round - and nothing for a device that went quiet,
+  since there is no pin left on the new window manager to hand back. A daemon
+  restart with the camera on was measured at 400 ms from the shutdown notice to the
+  new pin.
+- **Refusals are said once and treated as sent.** The likeliest one - a context the
+  file does not declare - would repeat on every change until somebody declares it. A
+  reload or a reconnect asks again.
+- **`rasid-exit` through a named event.** The bar and the palette are stopped with
+  `WM_CLOSE`; a process with no window has nothing to close, so it holds
+  `Local\shubbak-rasid-stop-<SID>` open and the CLI sets it, then waits for the
+  instance mutex to be released so a script that stops and restarts does not race.
+  `IpcProtocol.StopEventNameFor` sits beside `InstanceMutexNameFor`; a naming
+  helper, not a wire change.
+- **`--report`.** What Windows says is using each device right now, the same reading
+  the watcher acts on, for the person wondering why a meeting was or was not
+  noticed. On this machine: fourteen programs have used the camera, twenty-six the
+  microphone, none open.
+- **Zero is a value.** The first cut used `TimeSpan` with zero for "unsaid" and a
+  test for `settle 0` caught it: zero means believe at once, and a person can mean
+  that. Nullable now.
+
+**Decided along the way:**
+
+- **`camera #false` turns a device off; `camera ""` is a slip** (`RAS0002`), because
+  an empty name is far more likely a mistake than a decision.
+- **Rasid stays when the window manager leaves**, as the palette does, and says so at
+  Info. The restarted window manager's startup command finds it already running.
+- **No live re-read of the file except on `config.reloaded`.** The daemon only
+  publishes that when it accepted the file, which is the right gate.
+- **Not started on this desk yet.** The real configuration declares no `camera`
+  context; adding one and the `startup-command` is the user's call.
+
+**Not done, deliberately:**
+
+- **Which program** is in the log (`camera in use by ms-teams.exe`) and not in the
+  context. A context is a boolean by design; the report attributes the pin to
+  `rasid.exe`, and the log has the rest.
+- **No Teams, Zoom, OBS or calendar.** Each is a vendor SDK or a scrape, and each is
+  the same shape as this: a held connection and two commands. The README says so.
+
+**Measured** (release, NativeAOT):
+
+| binary | Phase 3 | Phase 4 | delta |
+|---|---|---|---|
+| shubbak-wm.exe | 6.05 MB | 6.05 MB | 0 |
+| shubbak.exe | 4.83 MB | 4.86 MB | +30 KB |
+| taj.exe | 5.01 MB | 5.01 MB | 0 |
+| dalil.exe | 5.08 MB | 5.08 MB | 0 |
+| rasid.exe | - | 4.43 MB | new |
+
+The daemon, the bar and the palette are untouched. The CLI carries `Rasid.Core` for
+`check-config` and the `rasid-exit` verb. The watcher is the smallest of the five:
+no GDI, no window, one P/Invoke.
+
+The watcher idle, published build, thirty seconds after start on the real
+configuration: working set 14.4 MB, private 5.5 MB, six threads, 0.02 s of CPU - all
+of it start-up - and no timer running. That is the "one material cost is a process"
+line from the performance rules, measured: fourteen megabytes resident for a fact the
+window manager will never read itself, against tens of kilobytes had it been built in.
+The design holds that the megabytes are the right price for the topic staying outside;
+this is what they come to.
+
+Verified live: `rasid --report` read both stores; with a temporary configuration
+declaring `camera`, `microphone` and `meeting { when { context "camera" } }` and
+`settle 300`, opening the Windows Camera app produced `context --set "camera" --lease`
+and the window manager's report read `pinned: set by rasid.exe (pid 49020), leased to
+that connection`, with `meeting` composed from it, 1.06 s after the app was launched
+including the app's own start; closing it produced `context --auto "camera"` and both
+went. A `--replace` of the daemon with the camera on: `the window manager is shutting
+down`, `went away; holding nothing until it is back`, reconnected, held again - 400 ms
+end to end. `shubbak rasid-exit` stopped it and the log said `rasid stopped`; a
+second call said `no watcher is running`.
+
+**Found on the way:** the README's test count, which CI checks against the tree, had
+been 1576 since before Phase 0 and the tree said 1749; every push since had been
+failing that one check. Corrected to the counted figure (1774 with this phase) and
+the project count to ten. The `Dalil does not leave on wm.shutdown` caveat under Phase
+0 is resolved: deliberate, documented, and since Phase 3 logged.

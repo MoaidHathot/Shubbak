@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Rasid.Core - what the watcher decides, with no registry and no pipe.
+
+    Everything here takes readings and a clock and hands back the commands to send.
+    The registry and the pipe are the two things a test cannot have, so they stay in
+    the host; the debounce, the reconnect, the renaming of a context under a running
+    watcher, and the spelling of every command are all here, where a test can hold
+    them to account.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Rasid.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />
+    <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
+  </ItemGroup>
+
+</Project>

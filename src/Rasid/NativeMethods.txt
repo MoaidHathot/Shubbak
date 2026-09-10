@@ -1,0 +1,7 @@
+// CsWin32 generation manifest for Rasid.
+//
+// One function. The consent store is read with Microsoft.Win32.Registry, which the
+// CLI already uses for the Run key; what the framework does not wrap is being told
+// when a key changes, and that is the whole reason this process can sleep.
+RegNotifyChangeKeyValue
+REG_NOTIFY_FILTER

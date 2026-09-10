@@ -27,7 +27,8 @@
         "shubbak.exe",
         "shubbak-wm.exe",
         "taj.exe",
-        "dalil.exe"
+        "dalil.exe",
+        "rasid.exe"
     ],
     "persist": [],
     "checkver": {

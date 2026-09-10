@@ -195,10 +195,10 @@ Drag a tiled window onto the middle of another to **swap** them, or near an edge
 **insert** beside it. Drag a border to resize, and the resize is written back into
 the tree's ratios, so the next layout pass respects it instead of undoing it.
 
-### It's four small executables and no runtime
+### It's five small executables and no runtime
 
-`shubbak-wm`, `shubbak`, `taj`, `dalil`: around 19 MB total, under 9 MB zipped,
-compiled ahead-of-time with NativeAOT. Nothing to install first.
+`shubbak-wm`, `shubbak`, `taj`, `dalil`, `rasid`: around 25 MB total, under 11 MB
+zipped, compiled ahead-of-time with NativeAOT. Nothing to install first.
 
 ## Install
 
@@ -216,7 +216,7 @@ scoop install shubbak
 ```
 
 **Or just grab the zip** from [Releases](https://github.com/MoaidHathot/Shubbak/releases)
-and unpack it anywhere. It's four self-contained executables with no prerequisites.
+and unpack it anywhere. It's five self-contained executables with no prerequisites.
 
 ### A heads-up before you start
 
@@ -429,7 +429,8 @@ context with no `when` that another program sets: `shubbak context --set meeting
 --ttl 10s` from any script, or a held pipe connection with `--lease` so the fact dies
 with the process that supplied it. The config says what a meeting *does*; the program
 supplying the fact never needs to know. Pins beat detection (`--set`, `--clear`,
-`--toggle`); `--auto` hands a context back to its conditions.
+`--toggle`); `--auto` hands a context back to its conditions. [Rasid](#rasid--the-watcher)
+is the reference provider: it supplies `camera` and `microphone` and nothing else.
 
 `shubbak contexts` says why each one is the way it is, condition by condition, and who
 pinned what — the same answer `inspect` gives for a window that didn't tile.
@@ -657,6 +658,44 @@ Typing `context --toggle ` completes the declared names.
 Dalil is opened by a **signal**, not by a hard-wired command — which means Shubbak
 doesn't know Dalil exists. That's the same extension point anything else can use.
 
+## Rasid — the watcher
+
+<img src="docs/assets/rasid.png" width="72" align="right" alt="" />
+
+**Rasid** (راصد, *"observer"*) is the smallest of the five, and optional. It watches
+the record Windows keeps of which programs have the camera or the microphone open —
+the same one the privacy indicator in the tray reads — and while any program does, it
+holds a context on the window manager:
+
+```kdl
+contexts {
+    context "camera" { }        // external: nothing in the file sets it, rasid does
+    context "meeting" {
+        when { context "camera" }
+        window-effects { focused-colour "#f38ba8" }
+        bindings { bind "alt+shift+q" { } }
+    }
+}
+
+rasid {
+    camera "camera"             // the context to hold; #false to ignore the camera
+    microphone "microphone"
+    settle 500                  // ms a change must last before it is believed
+}
+```
+
+The pin is made with `--lease`, so it dies with Rasid's connection: a watcher that
+crashes leaves nothing behind, and a window manager that restarts is told again within
+a second. The file says what a meeting *does*; Rasid never needs to know. That
+division is the point of it — Shubbak observes the desktop, not the applications,
+and whether the camera is on is a fact about an application. Anything with the same
+shape — Teams presence, OBS recording, a calendar — is written the same way: hold a
+pipe connection open and say `context --set <name> --lease`.
+
+`rasid --report` prints what Windows says is using each device right now, which is
+the same reading the watcher acts on. `shubbak rasid-exit` stops it. It sleeps on a
+registry notification and holds no timer between changes.
+
 ## Scripting it
 
 Everything the CLI and the palette do goes over one named pipe, `shubbak-v2-<SID>`,
@@ -734,7 +773,7 @@ Beyond that, `shubbak diagnose -o report.md` gives you one file to attach to an
 issue.
 
 **Where are my logs?**
-Each process writes its own — `shubbak.log`, `taj.log`, `dalil.log`. Crashes are
+Each process writes its own — `shubbak.log`, `taj.log`, `dalil.log`, `rasid.log`. Crashes are
 written automatically to `%LOCALAPPDATA%\Shubbak\crash-<timestamp>.md`.
 
 **Does it survive a reboot?**
@@ -762,7 +801,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1576 test methods**, around 700 ms to run. Everything except the platform layer
+**1774 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -782,8 +821,8 @@ Not the obvious choice for a window manager, so it was measured rather than assu
   2.5–5.3% of frame time** and Win32 taking the rest. The unbatched control group
   dropped 33–42% of frames with *identical* managed code — so `DeferWindowPos`
   batching, not language choice, is what decides whether motion looks smooth.
-- **Distribution** — four single-file NativeAOT executables, ~19 MB total, under
-  9 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
+- **Distribution** — five single-file NativeAOT executables, ~25 MB total, under
+  11 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
 
 ## Building
 
@@ -822,7 +861,9 @@ src/
   Taj/              bar host
   Dalil.Core/       fuzzy matching, palette model                     — no Win32
   Dalil/            the palette
-tests/              1576 test methods across 9 projects
+  Rasid.Core/       the watcher's decisions: debounce, leases, config  — no Win32
+  Rasid/            the camera and microphone watcher
+tests/              1774 test methods across 10 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```

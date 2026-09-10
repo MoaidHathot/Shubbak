@@ -548,9 +548,22 @@ public static class IpcProtocol
     /// installed copy running while a build from source is started.
     /// </para>
     /// </remarks>
-    /// <param name="component">Which program is being counted: <c>wm</c>, <c>taj</c>, <c>dalil</c>.</param>
+    /// <param name="component">Which program is being counted: <c>wm</c>, <c>taj</c>, <c>dalil</c>, <c>rasid</c>.</param>
     public static string InstanceMutexNameFor(string component) =>
         $@"Local\shubbak-{component}-{Account}";
+
+    /// <summary>
+    /// The name of the event a windowless component waits on to be told to leave.
+    /// </summary>
+    /// <remarks>
+    /// The bar and the palette are stopped by closing their windows, which the CLI
+    /// does with <c>WM_CLOSE</c>. A component with no window has nothing to close, so
+    /// it holds a named event open instead and <c>shubbak &lt;component&gt;-exit</c>
+    /// sets it. Per account and unversioned for the same reasons as the mutex, and
+    /// named after it so the two are found together.
+    /// </remarks>
+    public static string StopEventNameFor(string component) =>
+        $@"Local\shubbak-{component}-stop-{Account}";
 
     /// <summary>Messages are newline-delimited JSON.</summary>
     public const char MessageTerminator = '\n';
