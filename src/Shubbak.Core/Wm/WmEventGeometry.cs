@@ -85,6 +85,10 @@ public static class WmEventGeometry
         // dirty itself, before this is raised; this is the announcement.
         ContextChanged => false,
 
+        // The account of a restore. The LayoutChanged raised beside it is what moves
+        // the windows; this says how many.
+        ArrangementRestored => false,
+
         _ => true,
     };
 

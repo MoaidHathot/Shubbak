@@ -717,3 +717,146 @@ been 1576 since before Phase 0 and the tree said 1749; every push since had been
 failing that one check. Corrected to the counted figure (1774 with this phase) and
 the project count to ten. The `Dalil does not leave on wm.shutdown` caveat under Phase
 0 is resolved: deliberate, documented, and since Phase 3 logged.
+### Phase 5
+
+Saved arrangements. The last of the five, and the one the motivating list ended with:
+demos that need the same arrangement of windows back after they have been dragged
+around. Everything else in this note is about facts arriving; this is the one thing
+that is a record.
+
+**How it is shaped, and why:**
+
+- **It records what the session file deliberately does not, and the reason is the
+  moment each is applied.** The session file says which workspace a window belongs to
+  and is applied while windows arrive in whatever order Windows enumerates them at
+  start-up - no order to rebuild a tree in. An arrangement is asked for by name when
+  every window is already here, and so it can record the shape: containers, layouts,
+  ratios, and which window sits in each leaf. Both identify a window by process and
+  class, with the title hashed and the path kept, for the reasons the session file
+  already gave.
+- **Capture is pure and lives in Core beside the session store.** Only what tiles: a
+  floating window is in the tree and takes no part in dividing it. A container left
+  with one child by that omission is recorded as the child at the container's share,
+  which is what the tree would have done itself. A `stackalloc` for the ratios and a
+  handful of small allocations per save, which happens when somebody presses a key.
+- **Restore is a state-machine operation with three decisions written down.** Only
+  the windows on the workspace, and only the ones that tile: an arrangement says how
+  a workspace is divided, not which windows belong on it, and pulling a window in
+  from another workspace because it matched would take something the user put there
+  on purpose. A recorded window that is not open is left out and its share goes to
+  its siblings; a container left with one child becomes the child. A window the
+  arrangement never knew stays after the rebuilt tree, with the share it would have
+  had as one more child - so the recorded pair keep their 0.6 / 0.4 inside two
+  thirds and the stranger has a third. Nothing is hidden and nothing is moved off the
+  workspace; the worst a restore can do to a window it does not know is put it last.
+- **Refused rather than done as a no-op when nothing recorded is here.** A restore
+  that quietly rearranged nothing would leave the person pressing the key again.
+- **Matching is greedy in recorded order, best score first, each window once.**
+  Process and class must agree; the title hash and the path each add one. The
+  ambiguity is between windows of one program, and those two are there to settle it;
+  a test pins that two Firefox windows swapped by hand come back to their own sides.
+- **`ContainerNode.SetRatios` is new and internal.** Setting a recorded set of shares
+  one at a time through `SetChildRatio` scaled each earlier one as the next was
+  applied; the whole set at once, then normalise, is what a rebuild needs and what
+  nothing else did.
+- **A host action, like `context`, with the answer routed back.** Two of the three
+  actions touch a file and the third needs what the file says, so the executor hands
+  all three to the host; the daemon intercepts them in `RunCommand` as it does the
+  pin, so the pipe reply carries "no arrangement called X, saved: a, b" rather than a
+  bare success. The store is loaded once at start and rewritten on save or delete;
+  the file is `arrangements.json` beside the session file, written the same atomic
+  way.
+- **One new topic, `arrangement.restored`, inert.** The `LayoutChanged` raised beside
+  it is what moves the windows; this is the account: placed, missing, kept. A restore
+  that found only some of its windows is a success with a number in it, and the
+  number is what a script or a log wants. The daemon logs the same line.
+- **`ArrangementInfo` on the wire carries milliseconds, not a `DateTimeOffset`.** The
+  first cut carried the struct and every client grew 62 KB for the ISO-8601 converter
+  it pulled in; as a `long`, like every other time on the wire, half of that came
+  back. The other half is the verb itself, which every client parses.
+
+**Found on the way:**
+
+- **The session file's title hash never survived a restart.** `string.GetHashCode` is
+  seeded per process; a hash written by one window manager could never match in the
+  next, so the tiebreaker it exists to be had never broken a tie across a restart.
+  FNV-1a now, shared by both files; a test pins the number for one string so the
+  algorithm cannot drift.
+- **`system-state` did not know "away".** The Native tests first ran on a locked
+  machine at five in the morning and said the probe had failed. It had answered
+  `QUNS_NOT_PRESENT`, and the mapping called that `Unknown`. It is `Away` now, with a
+  wire name, and a full-screen Store app (`QUNS_APP`) is `FullScreenApp` rather than
+  `Unknown` too. The snapshot said `activity = away` the moment the daemon restarted.
+- **Under the lock screen, window-targeted commands are refused.** The real foreground
+  window is the lock app, which is unmanaged, and the gate that stops a command
+  running against a window the user is not looking at stops all of them. Correct, and
+  it meant the live shaping of a tree by `split`, `move` and `resize` could not be
+  driven while the screen was locked; the nested shape was verified by writing an
+  arrangement to the file and restoring it instead, which exercises the same rebuild.
+- **A copy over a just-exited daemon's binary produced a file of the right length and
+  the wrong hash**, and Windows refused to start it as corrupt. Re-copied and
+  verified by hash before starting. The deploy step now compares hashes.
+
+**Measured** (release, NativeAOT):
+
+| binary | Phase 4 | Phase 5 | delta |
+|---|---|---|---|
+| shubbak-wm.exe | 6.05 MB | 6.26 MB | +209 KB |
+| shubbak.exe | 4.86 MB | 4.90 MB | +40 KB |
+| taj.exe | 5.01 MB | 5.04 MB | +30 KB |
+| dalil.exe | 5.08 MB | 5.12 MB | +38 KB |
+| rasid.exe | 4.43 MB | 4.46 MB | +30 KB |
+
+The daemon carries the store, its JSON context, the rebuild and the DTO. The three
+processes with no arrangement code of their own carry the verb - record, parser
+case, catalogue entry - and the `ArrangementInfo` DTO, at about 30 KB each; the
+palette adds the completion.
+
+The Phase 4 daemon, measured on the real configuration just before this restart, 48
+minutes up: tick p50 0.02 ms, p99 0.76 ms, allocation p50 0 B, p99 648 B, no
+collections in any generation. The best p99 of the series, on a quiet desk. Nothing
+in this phase runs on the tick: an arrangement is saved or restored when a key is
+pressed, and the store is read once at start.
+
+Verified live, on an empty workspace with three Notepad windows so nothing of the
+user's was touched: `arrangement --save demo` wrote the file with process, class,
+hash and path and no title; `--restore demo` on a tree that had grown a
+single-child container flattened it, with `layout.changed` and
+`arrangement.restored {"placed":3,"missing":0,"kept":0}` on the wire; a hand-written
+nested arrangement - `[0.6 | splitv 0.4 [0.3 / 0.7]]` - loaded on restart and
+restored onto the three flat windows gave exactly that tree, 2292 px beside 1528,
+630 above 1471; every refusal named the case (`No arrangement called "nope". Saved:
+demo, nested.`; `Nothing tiles on workspace "5"`); `--delete` twice said so the
+second time; `arrangements` listed and then said `no arrangements saved`. The
+Notepads were closed and the focus returned to where it had been.
+
+---
+
+## The series, in one table
+
+Five phases, tag `pre-contexts` (`73fc04a`) to the commit that ships this section.
+
+| phase | commit | what | daemon binary | tick p50 / p99 | tests |
+|---|---|---|---|---|---|
+| baseline | 73fc04a | 0.9.0 in `dist\`, 11 h 36 m up | 5.62 MB | 0.03 / 1.09 ms | 1576 methods (README) |
+| 0 | 3fe9ca1 | publish what was known: `window.native_fullscreen`, `wm.environment`, `binding.fired` | 5.67 MB | 0.01 / 1.34 ms (fresh) | |
+| 1 | ffd7028 | named monitors, re-homing, topology probe, `move-workspace --monitor` | 5.74 MB | 0.02 / 1.01 ms (1 h 14 m) | |
+| 2 | fe5d512 | contexts core: config, engine, `context` verb, effects, reports | 6.05 MB | 0.02 / 1.01 ms (38 min) | 1749 declared |
+| 3 | e6da993 | bar `rule context=`, `{{ contexts }}`, palette pill, `from="contexts"` | 6.05 MB | daemon untouched | +22 |
+| 4 | 69f9b83 | Rasid, the reference provider; a fifth executable | 6.05 MB | 0.02 / 0.76 ms (48 min) | 1774 |
+| 5 | this | saved arrangements; `away`; a stable title hash | 6.26 MB | 0.02 / - (2 min; settles next run) | 1800 |
+
+Working set of the daemon across the series: 41.3 MB at the baseline after 11 h, 45.6
+MB after 38 min on Phase 2, 27-33 MB in the first minutes after each restart; the
+spread of a process that has or has not yet painted much, not a trend. The bar and
+the palette are within a few megabytes of where they started. Rasid, when it runs, is
+14.4 MB resident and holds no timer.
+
+What the six performance rules came to: no new wake-up was added in any phase; the
+context engine allocates nothing when nothing changed and is pinned by a test; the
+keyboard hook does one lookup as before; there is no window catalogue; every new
+probe sits behind an existing gate; and every phase's numbers are above. The one
+prediction that was wrong was the binary: 200-400 KB expected for the whole feature,
+640 KB delivered for the daemon, most of it the closed, typed vocabulary of
+conditions and effects and the JSON for their reports - the price of a config that
+talks back rather than a string bag.

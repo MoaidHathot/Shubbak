@@ -49,6 +49,9 @@ public enum CommandArgument
 
     /// <summary>The name of a context declared in the config.</summary>
     ContextName,
+
+    /// <summary>The name of a saved arrangement.</summary>
+    ArrangementName,
 }
 
 /// <summary>One command verb, as a user types it.</summary>
@@ -174,6 +177,8 @@ public static class CommandCatalogue
         Spec("wm-toggle-pause", "Stop rearranging windows, or start again"),
 
         Spec("context", "Hold a context on or off, or let its conditions decide", [CommandArgument.ContextName]),
+
+        Spec("arrangement", "Save the workspace's tree of windows under a name, or put it back", [CommandArgument.ArrangementName]),
 
         // Worded to make the difference from pause findable, because the two are one
         // word apart and do very different things. Pause keeps the keyboard; suspend

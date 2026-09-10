@@ -315,9 +315,19 @@ public sealed class WmDaemon : IDisposable
     /// <summary>Where the session is stored; null uses the default location.</summary>
     private readonly string? _sessionPath;
 
+    /// <summary>
+    /// The recorded arrangements, read once at start and rewritten on every save or
+    /// delete. Kept beside the session file.
+    /// </summary>
+    private readonly ArrangementStore _arrangements;
+
     public WmDaemon(string? sessionPath = null)
     {
         _sessionPath = sessionPath;
+        _arrangements = new ArrangementStore(sessionPath is null
+            ? null
+            : Path.Combine(Path.GetDirectoryName(sessionPath) ?? string.Empty, "arrangements.json"));
+        _arrangements.Load();
         _wm = new WindowManager();
         _executor = new CommandExecutor(_wm);
     }
@@ -2635,6 +2645,11 @@ public sealed class WmDaemon : IDisposable
             if (outcome.Action == HostAction.Context && outcome.Payload is { } payload)
                 outcome = PinContext(CommandExecutor.Decode(payload));
 
+            // The other one. Whether the arrangement exists, whether anything in it is
+            // here, how many were placed: all of it is the answer.
+            if (outcome.Action == HostAction.Arrangement && outcome.Payload is { } arrangement)
+                outcome = ArrangeWorkspace(CommandExecutor.DecodeArrangement(arrangement));
+
             Publish(outcome.Result);
             PerformHostAction(outcome);
 
@@ -2865,6 +2880,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case HostAction.Context:
+            case HostAction.Arrangement:
                 // Already handled in RunCommand, which needed the answer.
                 break;
 
@@ -2902,6 +2918,97 @@ public sealed class WmDaemon : IDisposable
     /// says so.
     /// </para>
     /// </remarks>
+    /// <summary>
+    /// Saves, restores or deletes a named arrangement of the focused workspace.
+    /// </summary>
+    /// <remarks>
+    /// The file is the host's; the tree is the state machine's. A save reads the tree
+    /// and writes the file; a restore reads the file and hands the tree to
+    /// <see cref="WindowManager.RestoreArrangement"/>, whose events say how it went.
+    /// </remarks>
+    private CommandOutcome ArrangeWorkspace(ArrangementCommand command)
+    {
+        switch (command.Action)
+        {
+            case ArrangementAction.Save:
+            {
+                if (_wm.FocusedWorkspace is not { } workspace)
+                    return Refused("arrangement", "No focused workspace to record.");
+
+                Arrangement? recorded = Arrangements.Capture(workspace, command.Arrangement, DateTimeOffset.Now);
+
+                if (recorded is null)
+                {
+                    return Refused("arrangement",
+                        $"Nothing tiles on workspace \"{workspace.Name}\", so there is nothing to record.");
+                }
+
+                bool replaced = _arrangements.Find(command.Arrangement) is not null;
+                _arrangements.Put(recorded);
+
+                if (!_arrangements.Save())
+                    return Refused("arrangement", "The arrangements file could not be written; see the log.");
+
+                Log.Info(LogCategory.Wm,
+                    $"arrangement \"{recorded.Name}\" {(replaced ? "replaced" : "saved")}: " +
+                    $"{recorded.WindowCount} window(s) on workspace \"{workspace.Name}\", layout {recorded.Layout}");
+
+                return new CommandOutcome(new WmResult(true, []));
+            }
+
+            case ArrangementAction.Restore:
+            {
+                if (_arrangements.Find(command.Arrangement) is not { } recorded)
+                    return Refused("arrangement", NoSuchArrangement(command.Arrangement));
+
+                CommandOutcome outcome = new(_wm.RestoreArrangement(recorded));
+
+                foreach (WmEvent raised in outcome.Result.Events)
+                {
+                    if (raised is ArrangementRestored restored)
+                    {
+                        Log.Info(LogCategory.Wm,
+                            $"arrangement \"{restored.Name}\" restored on workspace \"{restored.Workspace}\": " +
+                            $"{restored.Placed} placed, {restored.Missing} not open, {restored.Kept} other window(s) kept at the end");
+                    }
+                }
+
+                return outcome;
+            }
+
+            case ArrangementAction.Delete:
+            {
+                if (!_arrangements.Remove(command.Arrangement))
+                    return Refused("arrangement", NoSuchArrangement(command.Arrangement));
+
+                if (!_arrangements.Save())
+                    return Refused("arrangement", "The arrangements file could not be written; see the log.");
+
+                Log.Info(LogCategory.Wm, $"arrangement \"{command.Arrangement}\" deleted");
+                return new CommandOutcome(new WmResult(true, []));
+            }
+
+            default:
+                return Refused("arrangement", $"Unknown arrangement action {command.Action}.");
+        }
+    }
+
+    private string NoSuchArrangement(string name) =>
+        _arrangements.All.Count == 0
+            ? $"No arrangement called \"{name}\"; none are saved yet. " +
+              "arrangement --save <name> records the focused workspace's tree."
+            : $"No arrangement called \"{name}\". Saved: {string.Join(", ", _arrangements.All.Select(a => a.Name))}.";
+
+    private static CommandOutcome Refused(string command, string reason)
+    {
+        Log.Warn(LogCategory.Command, $"{command}: {reason}");
+        return new CommandOutcome(new WmResult(false, [new CommandRejected(command, reason)]));
+    }
+
+    /// <summary>Every saved arrangement, for <c>query arrangements</c>.</summary>
+    internal IReadOnlyList<ArrangementInfo> DescribeArrangements() =>
+        [.. _arrangements.All.Select(a => new ArrangementInfo(a.Name, a.Workspace, a.WindowCount, a.SavedAt.ToUnixTimeMilliseconds()))];
+
     private CommandOutcome PinContext(ContextCommand command)
     {
         PinOrigin origin = _commandOrigin is { } from

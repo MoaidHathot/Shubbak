@@ -131,7 +131,11 @@ public abstract record WmCommand
 
         // The same, for a context: a toggle that flips at the repeat rate, and a set or
         // clear whose on-enter and on-exit commands would run dozens of times.
-        ContextCommand);
+        ContextCommand or
+
+        // Saving at the repeat rate writes the same file dozens of times; restoring at
+        // it rebuilds the tree dozens of times, and animates every one.
+        ArrangementCommand);
 }
 
 // ---- focus -----------------------------------------------------------------
@@ -449,6 +453,38 @@ public sealed record ContextCommand(
     bool Lease = false) : WmCommand
 {
     public override string Name => "context";
+}
+
+/// <summary>What <c>arrangement</c> does with the named arrangement.</summary>
+public enum ArrangementAction
+{
+    /// <summary>Record the focused workspace's tree under the name, replacing any earlier one.</summary>
+    Save,
+
+    /// <summary>Put the focused workspace's windows back into the recorded tree.</summary>
+    Restore,
+
+    /// <summary>Forget the recorded tree.</summary>
+    Delete,
+}
+
+/// <summary>
+/// <c>arrangement --save|--restore|--delete &lt;name&gt;</c>
+/// </summary>
+/// <param name="Arrangement">The name the tree is kept under.</param>
+/// <param name="Action">What to do with it.</param>
+/// <remarks>
+/// A host action, because two of the three touch a file and the third needs what the
+/// file says. The state machine does the rebuilding, through
+/// <see cref="Wm.WindowManager.RestoreArrangement"/>, once the host has read the tree
+/// back; what it records is exactly what the session file deliberately does not - the
+/// containers, their layouts and their ratios - because a demo that needs its windows
+/// back where they were needs the shape, and the session file is about which
+/// workspace a window belongs to.
+/// </remarks>
+public sealed record ArrangementCommand(string Arrangement, ArrangementAction Action) : WmCommand
+{
+    public override string Name => "arrangement";
 }
 
 /// <summary><c>wm-toggle-pause</c></summary>

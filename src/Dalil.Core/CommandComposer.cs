@@ -18,13 +18,18 @@ namespace Dalil.Core;
 /// verb. All of them rather than the active ones, because the verb is how a context
 /// is turned on. Appended and optional, like <paramref name="Monitors"/>.
 /// </param>
+/// <param name="Arrangements">
+/// Every saved arrangement, by name, for the <c>arrangement</c> verb. Appended and
+/// optional, like the two before it.
+/// </param>
 public sealed record CompletionSources(
     IReadOnlyList<string> Workspaces,
     IReadOnlyList<string> Layouts,
     IReadOnlyList<string> BindingModes,
     IReadOnlyList<string> ScratchpadSlots,
     IReadOnlyList<string>? Monitors = null,
-    IReadOnlyList<string>? Contexts = null)
+    IReadOnlyList<string>? Contexts = null,
+    IReadOnlyList<string>? Arrangements = null)
 {
     public static CompletionSources None { get; } = new([], [], [], []);
 }
@@ -226,6 +231,11 @@ public static class CommandComposer
                 // each is followed by the name.
                 "--clear" or "--toggle" or "--auto" => CommandArgument.ContextName,
 
+                // The arrangement verb's three. --save takes a new name as often as an
+                // old one, and completes the old ones anyway: re-saving "demo" after a
+                // tweak is the ordinary case, and a new name is typed straight past them.
+                "--save" or "--restore" or "--delete" => CommandArgument.ArrangementName,
+
                 // Whatever this verb's own argument is: --set means "the value" for
                 // layout and for split alike, and the name for context.
                 "--set" => spec.Arguments[0],
@@ -246,6 +256,7 @@ public static class CommandComposer
             CommandArgument.ScratchpadSlot => sources.ScratchpadSlots,
             CommandArgument.MonitorName => sources.Monitors ?? [],
             CommandArgument.ContextName => sources.Contexts ?? [],
+            CommandArgument.ArrangementName => sources.Arrangements ?? [],
 
             // An axis, an amount, a window handle, a signal name, a command line:
             // nothing finite to offer, and a guess would be worse than silence.

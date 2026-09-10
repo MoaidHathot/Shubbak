@@ -100,6 +100,9 @@ public sealed class WmEventGeometryTests
         Assert.False(new BindingFired("alt+r", "resize", ["resize", "resize"]).AffectsGeometry());
         Assert.False(new ContextChanged("presenting", true, "detected", "a slide show is up").AffectsGeometry());
         Assert.False(new ContextChanged("presenting", false, "pinned", "cleared by a command").AffectsGeometry());
+
+        // The account of a restore; the LayoutChanged raised beside it moves the windows.
+        Assert.False(new ArrangementRestored("demo", "1", 3, 1, 0).AffectsGeometry());
     }
 
     [Fact]
@@ -253,6 +256,7 @@ public sealed class WmEventGeometryTests
                 nameof(BindingFired),
                 nameof(BindingModeChanged),
                 nameof(CommandRejected),
+                nameof(ArrangementRestored),
                 nameof(ConfigReloaded),
                 nameof(ContainerResized),
                 nameof(ContextChanged),

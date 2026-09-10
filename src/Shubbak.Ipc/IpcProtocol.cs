@@ -299,6 +299,15 @@ public sealed record AppReport(
     IReadOnlyList<string> FailedMatchers);
 
 /// <summary>
+/// One saved arrangement, as <c>query arrangements</c> lists them.
+/// </summary>
+/// <param name="Name">What it is called.</param>
+/// <param name="Workspace">The workspace it was recorded from.</param>
+/// <param name="Windows">How many windows it records.</param>
+/// <param name="SavedAtUnixMs">When it was recorded, in milliseconds since the Unix epoch, like every other time on the wire.</param>
+public sealed record ArrangementInfo(string Name, string Workspace, int Windows, long SavedAtUnixMs);
+
+/// <summary>
 /// One context, as <c>query contexts</c> and <c>shubbak contexts</c> describe it: whether
 /// it holds, why, and who decided.
 /// </summary>
@@ -404,6 +413,7 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(WhenReport))]
 [JsonSerializable(typeof(ConditionReport))]
 [JsonSerializable(typeof(IReadOnlyList<ContextReport>))]
+[JsonSerializable(typeof(IReadOnlyList<ArrangementInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<WindowInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<WorkspaceInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<MonitorInfoDto>))]
@@ -645,6 +655,7 @@ public static class IpcProtocol
         "wm.suspended",
         "wm.environment",
         "context.changed",
+        "arrangement.restored",
         SignalTopic,
         ShutdownTopic,
         ResyncTopic,

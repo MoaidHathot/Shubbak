@@ -65,6 +65,11 @@ public sealed class WindowTargetedCommandTests
     [InlineData("wm-resume")]
     [InlineData("wm-toggle-suspend")]
     [InlineData("wm-toggle-pause")]
+
+    // The arrangement is of the workspace, and restoring one from an unmanaged window
+    // - the palette, say - is the ordinary way to ask for it.
+    [InlineData("arrangement --save demo")]
+    [InlineData("arrangement --restore demo")]
     public void ACommandThatDoesNotActOnAWindowSaysThatToo(string text)
     {
         // These stay useful from an unmanaged window. Moving focus out of one is

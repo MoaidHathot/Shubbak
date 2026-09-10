@@ -1629,6 +1629,184 @@ public sealed class WindowManager
         return Complete();
     }
 
+    /// <summary>
+    /// Puts the focused workspace's windows back into a recorded tree.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the windows on the workspace, and only the ones that tile. An arrangement
+    /// says how a workspace is divided, not which windows belong on it; pulling a
+    /// window in from another workspace because it matched would take something the
+    /// user put there on purpose. So each recorded window is matched against what is
+    /// here - process and class, with the title and the path breaking ties, each
+    /// window claimed once - and a recorded window that is not here is left out, its
+    /// share going to its siblings. A container left with one child by that is
+    /// replaced by the child, as the tree would do itself.
+    /// </para>
+    /// <para>
+    /// Windows on the workspace that the arrangement does not mention stay, after the
+    /// rebuilt tree, each with the share it would have had as one more child. Nothing
+    /// is hidden and nothing is moved off the workspace; the worst a restore can do to
+    /// a window it does not know is put it last.
+    /// </para>
+    /// <para>
+    /// Refused, rather than done as a no-op, when nothing recorded is here: a restore
+    /// that quietly rearranged nothing would leave the person pressing the key again.
+    /// </para>
+    /// </remarks>
+    public WmResult RestoreArrangement(Arrangement arrangement)
+    {
+        ArgumentNullException.ThrowIfNull(arrangement);
+
+        WorkspaceNode? workspace = FocusedWorkspace;
+        if (workspace is null) return Reject("arrangement", "No focused workspace.");
+
+        List<WindowNode> candidates = [];
+
+        foreach (WindowNode window in workspace.DescendantWindows())
+            if (window.ParticipatesInTiling) candidates.Add(window);
+
+        if (candidates.Count == 0)
+            return Reject("arrangement", $"Nothing tiles on workspace \"{workspace.Name}\", so there is nothing to arrange.");
+
+        // Match in recorded order, best fit first, each window once. Greedy is enough:
+        // the ambiguity is between windows of one program, and the title hash and the
+        // path are there to settle it.
+        Dictionary<ArrangementNode, WindowNode> placed = new(ReferenceEqualityComparer.Instance);
+        HashSet<WindowNode> claimed = [];
+        int missing = 0;
+
+        foreach (ArrangementNode leaf in Leaves(arrangement.Children))
+        {
+            WindowNode? best = null;
+            int bestScore = 0;
+
+            foreach (WindowNode candidate in candidates)
+            {
+                if (claimed.Contains(candidate)) continue;
+
+                int score = leaf.Score(candidate);
+                if (score > bestScore) (best, bestScore) = (candidate, score);
+            }
+
+            if (best is null)
+            {
+                missing++;
+                continue;
+            }
+
+            placed[leaf] = best;
+            claimed.Add(best);
+        }
+
+        if (placed.Count == 0)
+        {
+            return Reject("arrangement",
+                $"Nothing in \"{arrangement.Name}\" is open on workspace \"{workspace.Name}\".");
+        }
+
+        // Take the matched windows out first, letting the tree tidy what they leave,
+        // then build the recorded shape from them and put it at the front.
+        foreach (WindowNode window in placed.Values) TreeOps.Detach(window);
+
+        List<(Node Node, double Ratio)> rebuilt = [];
+
+        foreach (ArrangementNode recorded in arrangement.Children)
+            if (Build(recorded, placed) is { } built) rebuilt.Add((built, recorded.Ratio));
+
+        int kept = workspace.Children.Count;
+
+        for (int i = 0; i < rebuilt.Count; i++) workspace.Insert(i, rebuilt[i].Node);
+
+        if (LayoutRegistry.TryResolve(arrangement.Layout, out ILayout? layout)) workspace.Layout = layout;
+
+        // The recorded shares, scaled to leave room for what was kept, which shares
+        // the rest in the proportions it already had. Every child of the workspace
+        // gets a share as if it had always been one of n + k.
+        Span<double> ratios = workspace.Children.Count <= 64
+            ? stackalloc double[workspace.Children.Count]
+            : new double[workspace.Children.Count];
+
+        double recordedTotal = 0;
+        foreach ((_, double ratio) in rebuilt) recordedTotal += ratio;
+
+        double keptTotal = 0;
+        for (int i = rebuilt.Count; i < workspace.Children.Count; i++) keptTotal += workspace.Children[i].SizeRatio;
+
+        double recordedShare = (double)rebuilt.Count / (rebuilt.Count + kept);
+
+        for (int i = 0; i < rebuilt.Count; i++)
+            ratios[i] = recordedTotal > 0 ? rebuilt[i].Ratio / recordedTotal * recordedShare : recordedShare / rebuilt.Count;
+
+        for (int i = rebuilt.Count; i < workspace.Children.Count; i++)
+        {
+            ratios[i] = keptTotal > 0
+                ? workspace.Children[i].SizeRatio / keptTotal * (1 - recordedShare)
+                : (1 - recordedShare) / kept;
+        }
+
+        workspace.SetRatios(ratios);
+
+        Emit(new LayoutChanged(workspace, workspace.Layout.Name));
+        Emit(new ArrangementRestored(arrangement.Name, workspace.Name, placed.Count, missing, kept));
+
+        return Complete();
+    }
+
+    /// <summary>
+    /// Builds one recorded node from the windows matched to it, or null when none of
+    /// its windows are here.
+    /// </summary>
+    private static Node? Build(ArrangementNode recorded, Dictionary<ArrangementNode, WindowNode> placed)
+    {
+        if (!recorded.IsContainer)
+            return placed.TryGetValue(recorded, out WindowNode? window) ? window : null;
+
+        List<(Node Node, double Ratio)> children = [];
+
+        foreach (ArrangementNode child in recorded.Children ?? [])
+            if (Build(child, placed) is { } built) children.Add((built, child.Ratio));
+
+        switch (children.Count)
+        {
+            case 0:
+                return null;
+
+            case 1:
+                // A container with one child is the child; the tree would flatten it.
+                return children[0].Node;
+
+            default:
+                var container = new ContainerNode(
+                    LayoutRegistry.TryResolve(recorded.Layout!, out ILayout? layout) ? layout : LayoutRegistry.Default);
+
+                Span<double> ratios = children.Count <= 64 ? stackalloc double[children.Count] : new double[children.Count];
+
+                for (int i = 0; i < children.Count; i++)
+                {
+                    container.Add(children[i].Node);
+                    ratios[i] = children[i].Ratio;
+                }
+
+                container.SetRatios(ratios);
+                return container;
+        }
+    }
+
+    private static IEnumerable<ArrangementNode> Leaves(IReadOnlyList<ArrangementNode> nodes)
+    {
+        foreach (ArrangementNode node in nodes)
+        {
+            if (!node.IsContainer)
+            {
+                yield return node;
+                continue;
+            }
+
+            foreach (ArrangementNode leaf in Leaves(node.Children ?? [])) yield return leaf;
+        }
+    }
+
     // ---- window state ------------------------------------------------------
 
     /// <summary>Sets a window's state, emitting a transition event.</summary>

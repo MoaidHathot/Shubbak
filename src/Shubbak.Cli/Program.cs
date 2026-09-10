@@ -66,6 +66,7 @@ internal static class Program
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "monitors" => await MonitorsAsync().ConfigureAwait(false),
                 "contexts" => await ContextsAsync().ConfigureAwait(false),
+                "arrangements" => await ArrangementsAsync().ConfigureAwait(false),
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "restore" => Restore(args),
@@ -398,6 +399,39 @@ internal static class Program
             response.Data, IpcJsonContext.Default.IReadOnlyListContextReport);
 
         Console.Write(ContextReportText.Format(contexts ?? []));
+
+        return 0;
+    }
+
+    private static async Task<int> ArrangementsAsync()
+    {
+        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+        IpcResponse response = await client.SendAsync("query", "arrangements").ConfigureAwait(false);
+
+        if (!response.Ok || response.Data is null)
+        {
+            Console.Error.WriteLine($"shubbak: {response.Error}");
+            return 1;
+        }
+
+        IReadOnlyList<ArrangementInfo> arrangements = System.Text.Json.JsonSerializer.Deserialize(
+            response.Data, IpcJsonContext.Default.IReadOnlyListArrangementInfo) ?? [];
+
+        if (arrangements.Count == 0)
+        {
+            Console.WriteLine("no arrangements saved");
+            Console.WriteLine("hint: arrangement --save <name> records the focused workspace's tree of windows");
+            return 0;
+        }
+
+        int width = arrangements.Max(a => a.Name.Length);
+
+        foreach (ArrangementInfo arrangement in arrangements)
+        {
+            Console.WriteLine(
+                $"{arrangement.Name.PadRight(width)}  {arrangement.Windows} window(s) on workspace \"{arrangement.Workspace}\", " +
+                $"saved {DateTimeOffset.FromUnixTimeMilliseconds(arrangement.SavedAtUnixMs).ToLocalTime():yyyy-MM-dd HH:mm}");
+        }
 
         return 0;
     }
@@ -997,7 +1031,7 @@ internal static class Program
           query [what]         Print state as JSON.
                                what: state (default), windows, all-windows,
                                      workspaces, monitors, focused, layouts,
-                                     commands, bindings, contexts
+                                     commands, bindings, contexts, arrangements
           layouts              List the available layouts.
           monitors             Describe each display, with a `monitor` definition
                                ready to paste into the config. Displays are named
@@ -1005,6 +1039,7 @@ internal static class Program
                                there however Windows renumbers them.
           contexts             Say which contexts hold and why, condition by
                                condition, and who pinned what.
+          arrangements         List the saved arrangements.
 
           all-windows lists every window on the desktop, not only the managed
           ones, with the reason each unmanaged window was passed over. It is the
@@ -1026,6 +1061,21 @@ internal static class Program
           decides it, and setting it over the pipe is how another program tells
           Shubbak about a meeting, a call, a recording. The config says what the
           context does; the program never needs to know.
+
+        ARRANGEMENTS
+          arrangement --save <name>     Record the focused workspace's tree of windows -
+                                        containers, layouts, ratios, and which window
+                                        sits where - under that name.
+          arrangement --restore <name>  Put the windows that are on the workspace back
+                                        into that tree. Windows not in it stay, at the
+                                        end; windows in it that are not open are left
+                                        out. Refused when none of them are open.
+          arrangement --delete <name>   Forget it.
+
+          Windows are recorded by process and class, never by title, and matched the
+          same way; the session file records which workspace a window belongs to, and
+          an arrangement records the shape - the two things a demo needs after its
+          windows have been dragged about.
 
         EVENTS
           sub [topics]         Tail the event stream. Comma-separated topics, or

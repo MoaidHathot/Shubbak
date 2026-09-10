@@ -177,6 +177,7 @@ public sealed class StateProjectionTests
     [InlineData(UserActivity.FullScreenApp, "fullscreen-app")]
     [InlineData(UserActivity.Presenting, "presenting")]
     [InlineData(UserActivity.QuietTime, "quiet-time")]
+    [InlineData(UserActivity.Away, "away")]
     public void EveryActivityHasAStableWireNameThatReadsBack(UserActivity activity, string wire)
     {
         // Spelt out rather than derived, so renaming a member cannot change what a
@@ -264,6 +265,20 @@ public sealed class StateProjectionTests
             payload);
         Assert.Equal("context.changed", new ContextChanged("x", false, "pinned", "r").Topic);
         Assert.Contains("context.changed", IpcProtocol.Topics);
+    }
+
+    [Fact]
+    public void ARestoredArrangementIsAnnouncedWithItsAccount()
+    {
+        WindowManager wm = WithOneWorkspace(out _);
+
+        string payload = StateProjection.Payload(new ArrangementRestored("demo", "1", 3, 1, 2), wm);
+
+        Assert.Equal(
+            "{\"name\":\"demo\",\"workspace\":\"1\",\"placed\":3,\"missing\":1,\"kept\":2}",
+            payload);
+        Assert.Equal("arrangement.restored", new ArrangementRestored("d", "1", 0, 0, 0).Topic);
+        Assert.Contains("arrangement.restored", IpcProtocol.Topics);
     }
 
     [Fact]

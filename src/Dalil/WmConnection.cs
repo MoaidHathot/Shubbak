@@ -252,6 +252,11 @@ public sealed class WmConnection : IAsyncDisposable
             IReadOnlyList<ContextReport> contexts = await QueryAsync(
                 client, "contexts", IpcJsonContext.Default.IReadOnlyListContextReport) ?? [];
 
+            // Every saved arrangement, for completing the arrangement verb and for a
+            // prompt written from="arrangements".
+            IReadOnlyList<ArrangementInfo> arrangements = await QueryAsync(
+                client, "arrangements", IpcJsonContext.Default.IReadOnlyListArrangementInfo) ?? [];
+
             // The focused workspace is what "bring it here" means, and only the
             // workspace list knows which it is. Its monitor is what "near me" means.
             WorkspaceInfo? focused = workspaces.FirstOrDefault(w => w.Focused);
@@ -290,7 +295,8 @@ public sealed class WmConnection : IAsyncDisposable
                     .. monitors.SelectMany(m => m.Names ?? []).Distinct(StringComparer.OrdinalIgnoreCase),
                     .. monitors.Select((_, index) => index.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 ],
-                [.. contexts.Select(c => c.Name)]);
+                [.. contexts.Select(c => c.Name)],
+                [.. arrangements.Select(a => a.Name)]);
 
             IReadOnlyList<PaletteEntry> ownActions =
                 PaletteEntries.ForMacros(macros ?? [], completions, labels);

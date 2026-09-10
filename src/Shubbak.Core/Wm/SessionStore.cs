@@ -456,10 +456,35 @@ public sealed class SessionStore
     /// Hashes a title for identification.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Deliberately not a cryptographic hash and deliberately not reversible: the
     /// point is to compare titles without storing them, because titles contain
     /// document names, URLs and file paths.
+    /// </para>
+    /// <para>
+    /// Deliberately not <c>string.GetHashCode</c> either, which the runtime seeds
+    /// differently in every process: a hash written by one window manager and read by
+    /// the next could never match, so the tiebreaker it exists to be was never breaking
+    /// a tie across a restart. FNV-1a over the upper-cased characters is stable, cheap,
+    /// and as good as a tiebreaker needs to be. Shared with the arrangements file,
+    /// which records a title the same way for the same reason.
+    /// </para>
     /// </remarks>
-    private static int HashTitle(string title) =>
-        string.IsNullOrEmpty(title) ? 0 : title.GetHashCode(StringComparison.OrdinalIgnoreCase);
+    internal static int HashTitle(string title)
+    {
+        if (string.IsNullOrEmpty(title)) return 0;
+
+        const uint Offset = 2166136261;
+        const uint Prime = 16777619;
+
+        uint hash = Offset;
+
+        foreach (char c in title)
+        {
+            hash ^= char.ToUpperInvariant(c);
+            hash *= Prime;
+        }
+
+        return unchecked((int)hash);
+    }
 }

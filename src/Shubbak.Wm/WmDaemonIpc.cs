@@ -300,13 +300,16 @@ internal sealed partial class WmDaemonIpc
                 "contexts" => JsonSerializer.Serialize(
                     _daemon.ReportContexts(), IpcJsonContext.Default.IReadOnlyListContextReport),
 
+                "arrangements" => JsonSerializer.Serialize(
+                    _daemon.DescribeArrangements(), IpcJsonContext.Default.IReadOnlyListArrangementInfo),
+
                 _ => string.Empty,
             };
 
             return json.Length == 0
                 ? new IpcResponse(request.Id, false, null,
                     $"unknown query '{what}'. Try: state, windows, all-windows, workspaces, " +
-                    "monitors, focused, layouts, commands, bindings, contexts")
+                    "monitors, focused, layouts, commands, bindings, contexts, arrangements")
                 : new IpcResponse(request.Id, true, json);
         });
     }

@@ -339,6 +339,24 @@ public sealed record ContextChanged(string Name, bool Active, string Source, str
 }
 
 /// <summary>
+/// A saved arrangement was put back on a workspace.
+/// </summary>
+/// <param name="Name">The arrangement.</param>
+/// <param name="Workspace">The workspace it was put back on.</param>
+/// <param name="Placed">How many of its windows were found and placed.</param>
+/// <param name="Missing">How many of its windows were not open on the workspace.</param>
+/// <param name="Kept">How many windows on the workspace were not in it, and stayed at the end.</param>
+/// <remarks>
+/// The geometry change is announced by the <see cref="LayoutChanged"/> raised beside
+/// it; this is the account. A restore that found only some of its windows is a
+/// success with a number in it, and the number is what a script or a log wants.
+/// </remarks>
+public sealed record ArrangementRestored(string Name, string Workspace, int Placed, int Missing, int Kept) : WmEvent
+{
+    public override string Topic => "arrangement.restored";
+}
+
+/// <summary>
 /// The configuration was re-read from disk.
 /// </summary>
 /// <remarks>

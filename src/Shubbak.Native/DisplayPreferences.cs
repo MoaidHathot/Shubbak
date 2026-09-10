@@ -146,6 +146,17 @@ public static class DisplayPreferences
             QUERY_USER_NOTIFICATION_STATE.QUNS_PRESENTATION_MODE => UserActivity.Presenting,
             QUERY_USER_NOTIFICATION_STATE.QUNS_QUIET_TIME => UserActivity.QuietTime,
             QUERY_USER_NOTIFICATION_STATE.QUNS_ACCEPTS_NOTIFICATIONS => UserActivity.Ordinary,
+
+            // Locked, screen saver, or another user's session in front. An answer, not
+            // a failure: the tests said the probe had failed the first time they ran on
+            // a locked machine, and it had answered perfectly well.
+            QUERY_USER_NOTIFICATION_STATE.QUNS_NOT_PRESENT => UserActivity.Away,
+
+            // A Store app in the immersive full-screen mode. Not Direct3D exclusive, so
+            // not a game as far as the shell can tell; the same thing a full-screen
+            // window is to a window manager.
+            QUERY_USER_NOTIFICATION_STATE.QUNS_APP => UserActivity.FullScreenApp,
+
             _ => UserActivity.Unknown,
         };
     }

@@ -86,6 +86,18 @@ public enum HostAction
     /// client asked for - and the pin is one of those facts.
     /// </remarks>
     Context,
+
+    /// <summary>
+    /// Save, restore or delete a named arrangement of the focused workspace. The
+    /// payload is the encoded <see cref="ArrangementCommand"/>; see
+    /// <see cref="CommandExecutor.DecodeArrangement"/>.
+    /// </summary>
+    /// <remarks>
+    /// A host action because arrangements live in a file, and the state machine has
+    /// no file. The host reads or writes it and, for a restore, hands the tree back to
+    /// the state machine to rebuild.
+    /// </remarks>
+    Arrangement,
 }
 
 /// <summary>The outcome of executing one command.</summary>
@@ -201,6 +213,7 @@ public sealed class CommandExecutor
             // A pin on a context, for the same reason: the facts that decide a context
             // are the host's.
             ContextCommand c => Host(HostAction.Context, Encode(c)),
+            ArrangementCommand c => Host(HostAction.Arrangement, Encode(c)),
 
             // Only meaningful inside a window rule, where the rule engine consumes it
             // before execution. Reaching here means it was bound to a key by mistake.
@@ -280,6 +293,28 @@ public sealed class CommandExecutor
             : null;
 
         return new ContextCommand(parts[1], action, ttl, parts[3].Length > 0);
+    }
+
+    /// <summary>Flattens an arrangement command into the single string a host action carries.</summary>
+    /// <remarks>Tab-separated, like the others: the action, then the name.</remarks>
+    public static string Encode(ArrangementCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        return command.Action.ToString() + '\t' + command.Arrangement;
+    }
+
+    /// <summary>Reads an arrangement command back out of a host-action payload.</summary>
+    public static ArrangementCommand DecodeArrangement(string payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        string[] parts = payload.Split('\t');
+
+        if (parts.Length != 2 || !Enum.TryParse(parts[0], out ArrangementAction action))
+            throw new FormatException($"Not an arrangement payload: '{payload}'.");
+
+        return new ArrangementCommand(parts[1], action);
     }
 
     private static CommandOutcome Rejected(WmCommand command, string reason) =>

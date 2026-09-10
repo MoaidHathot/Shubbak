@@ -435,9 +435,26 @@ is the reference provider: it supplies `camera` and `microphone` and nothing els
 `shubbak contexts` says why each one is the way it is, condition by condition, and who
 pinned what — the same answer `inspect` gives for a window that didn't tile.
 
+### Saved arrangements
+
+A demo whose windows have been dragged about wants them back where they were:
+
+```
+shubbak arrangement --save demo       # the focused workspace's tree, under a name
+shubbak arrangement --restore demo    # put the windows that are here back into it
+```
+
+An arrangement records what the session file deliberately doesn't — the containers,
+their layouts and their ratios, and which window sits in each leaf, by process and
+class, never by title. Restoring rearranges only the windows on the workspace: one
+that isn't open is left out and its share goes to its siblings; one the arrangement
+never knew stays, at the end, with the share it would have had as one more child.
+`shubbak arrangements` lists them, `arrangement.restored` on the event stream says how
+many were placed, and the palette completes the names.
+
 ### Commands
 
-34 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
+35 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
 
 **Focus & movement** — `focus` `focus-window` `focus-recent-window` `move`
 `move-workspace` `resize` `equalise` `split` `toggle-tiling-direction`
@@ -450,6 +467,8 @@ pinned what — the same answer `inspect` gives for a window that didn't tile.
 **Management** — `ignore` `manage` `toggle-managed`
 
 **Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`)
+
+**Arrangements** — `arrangement` (`--save` `--restore` `--delete`)
 
 **The window manager itself** — `wm-enable-binding-mode` `wm-disable-binding-mode`
 `wm-toggle-pause` `wm-suspend` `wm-resume` `wm-toggle-suspend` `wm-reload-config`
@@ -709,7 +728,7 @@ shubbak sub                  # tail every event
 shubbak sub window.focused,workspace.activated
 ```
 
-**27 event topics** you can subscribe to:
+**28 event topics** you can subscribe to:
 
 ```
 window.managed       window.unmanaged      window.focused      window.title_changed
@@ -719,7 +738,7 @@ layout.changed       container.resized
 monitor.added        monitor.removed       monitor.changed
 binding_mode.changed binding.fired         command.rejected    config.reloaded
 wm.paused            wm.suspended          wm.environment      wm.shutdown         wm.resync
-context.changed      signal
+context.changed      arrangement.restored signal
 ```
 
 Three of those exist purely so that things outside the daemon can know what it
@@ -801,7 +820,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1774 test methods**, around 700 ms to run. Everything except the platform layer
+**1800 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -863,7 +882,7 @@ src/
   Dalil/            the palette
   Rasid.Core/       the watcher's decisions: debounce, leases, config  — no Win32
   Rasid/            the camera and microphone watcher
-tests/              1774 test methods across 10 projects
+tests/              1800 test methods across 10 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```

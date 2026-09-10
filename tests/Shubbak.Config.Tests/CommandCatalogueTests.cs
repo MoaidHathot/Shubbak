@@ -162,6 +162,7 @@ public sealed class CommandCatalogueTests
             "shell-exec" => "shell-exec pwsh",
             "wm-enable-binding-mode" => "wm-enable-binding-mode resize",
             "context" => "context --set presenting",
+            "arrangement" => "arrangement --save demo",
             _ => verb,
         };
 

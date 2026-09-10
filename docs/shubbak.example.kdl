@@ -325,7 +325,7 @@ workspaces {
 //   display-topology "extend"        internal, clone, extend, external (Win+P)
 //   remote-session
 //   system-state "presenting"        ordinary, presenting, fullscreen-app,
-//                                    fullscreen-game, quiet-time
+//                                    fullscreen-game, quiet-time, away
 //   context "meeting"                another context holds
 //
 // What a context can change: gaps, window-effects, animation (each a delta on
@@ -499,6 +499,13 @@ keybindings {
     // pin beats whatever the conditions say until --auto takes it off.
     bind "alt+shift+u" { context --toggle "presenting" }
     bind "alt+ctrl+u"  { context --auto "presenting" }
+
+    // A demo whose windows have been dragged about, back where they were. --save
+    // records the focused workspace's tree - containers, layouts, ratios, which
+    // window sits where, by process and class - and --restore puts the windows that
+    // are on the workspace back into it. `shubbak arrangements` lists what is saved.
+    bind "alt+shift+d" { arrangement --save "demo" }
+    bind "alt+ctrl+d"  { arrangement --restore "demo" }
 
     // Tags: make a window a member of several workspaces at once. Unlike `move`,
     // which relocates a window, tagging means "I want this here too" - the window

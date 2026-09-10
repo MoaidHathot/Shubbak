@@ -1725,7 +1725,7 @@ public sealed class ConfigLoader
                 "SHB0448",
                 $"'{word}' is not a system state.",
                 argument.Span,
-                "One of: ordinary, presenting, fullscreen-app, fullscreen-game, quiet-time."));
+                "One of: ordinary, presenting, fullscreen-app, fullscreen-game, quiet-time, away."));
         }
 
         if (states.Count == 0)
@@ -1735,7 +1735,7 @@ public sealed class ConfigLoader
                 Report(Diagnostic.Error(
                     "SHB0448", "'system-state' does not say which.", node.Span,
                     "Write system-state \"presenting\"; one of ordinary, presenting, fullscreen-app, " +
-                    "fullscreen-game, quiet-time."));
+                    "fullscreen-game, quiet-time, away."));
             }
 
             return null;

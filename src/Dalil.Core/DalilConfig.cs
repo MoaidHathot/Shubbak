@@ -32,6 +32,9 @@ public enum MacroParamSource
     /// <summary>Every context the configuration declares, held or not.</summary>
     Contexts,
 
+    /// <summary>Every saved arrangement, by name.</summary>
+    Arrangements,
+
     /// <summary>Exactly what was written beside the parameter, and nothing else.</summary>
     Literals,
 }

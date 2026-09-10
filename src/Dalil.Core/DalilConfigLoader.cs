@@ -528,7 +528,7 @@ public static class DalilConfigLoader
     /// plural, hyphenated ones a user writes and the enum members are neither.
     /// </remarks>
     private static readonly string[] s_paramSources =
-        ["workspaces", "layouts", "binding-modes", "scratchpads", "directions", "contexts"];
+        ["workspaces", "layouts", "binding-modes", "scratchpads", "directions", "contexts", "arrangements"];
 
     /// <summary>
     /// Reads the questions an action asks before it runs.
@@ -536,7 +536,7 @@ public static class DalilConfigLoader
     /// <remarks>
     /// <para>
     /// A source name rather than a query, because the point of the feature is that
-    /// nobody should have to know how the palette gets its workspace list. All six
+    /// nobody should have to know how the palette gets its workspace list. All seven
     /// lists are ones the palette already holds for argument completion, so a prompt
     /// is a lookup into something already in memory.
     /// </para>
@@ -634,6 +634,7 @@ public static class DalilConfigLoader
         "scratchpads" or "scratchpad" or "slots" => MacroParamSource.Scratchpads,
         "directions" or "direction" => MacroParamSource.Directions,
         "contexts" or "context" => MacroParamSource.Contexts,
+        "arrangements" or "arrangement" => MacroParamSource.Arrangements,
         _ => null,
     };
 

@@ -261,6 +261,27 @@ public class ContainerNode : Node
     }
 
     /// <summary>
+    /// Sets every child's ratio at once, in child order, and normalises.
+    /// </summary>
+    /// <remarks>
+    /// For rebuilding a recorded tree, where the whole set of shares is known and
+    /// setting them one at a time through <see cref="SetChildRatio"/> would scale
+    /// each earlier one as the next was applied. Ratios are clamped by the setter and
+    /// rescaled to sum to one, so a recorded set that no longer sums to one - because
+    /// a window in it is gone - still divides the whole width.
+    /// </remarks>
+    internal void SetRatios(ReadOnlySpan<double> ratios)
+    {
+        if (ratios.Length != _children.Count)
+            throw new ArgumentException($"Expected {_children.Count} ratios, got {ratios.Length}.", nameof(ratios));
+
+        for (int i = 0; i < ratios.Length; i++)
+            _children[i].SizeRatio = ratios[i];
+
+        Normalise();
+    }
+
+    /// <summary>
     /// Rescales children so their ratios sum to exactly 1.0.
     /// </summary>
     /// <remarks>

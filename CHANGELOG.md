@@ -142,6 +142,35 @@ schedule and breaking either is a different kind of event:
   it needed twice - a second connection, because a subscribed one cannot send - is
   noted in the design note as the pipe's remaining rough edge.
 
+- **Saved arrangements: `arrangement --save|--restore|--delete <name>`.** A demo whose
+  windows have been dragged about wants them back where they were. `--save` records the
+  focused workspace's tree - the containers, their layouts, their ratios, and which
+  window sits in each leaf - which is exactly what the session file deliberately does
+  not: the session file says which workspace a window belongs to and is applied while
+  windows arrive in whatever order Windows enumerates them; an arrangement is asked for
+  by name when every window is already here, and so can record the shape.
+
+  Windows are recorded by process and class, with the title hashed and the path kept,
+  as the session file records them and for the same reasons. Restoring rearranges only
+  the windows on the workspace, and only the ones that tile: a recorded window that is
+  not open is left out and its share goes to its siblings, a container left with one
+  child becomes the child, and a window the arrangement never knew stays after the
+  rebuilt tree with the share it would have had as one more child. Nothing is pulled
+  in from another workspace, nothing is hidden. A restore that finds none of its
+  windows is refused rather than quietly done.
+
+  `shubbak arrangements` lists what is saved; `query arrangements` is the same over
+  the pipe; `arrangement.restored` on the event stream says how many were placed, how
+  many were not open and how many were kept; the palette completes the names and a
+  `param` can ask `from="arrangements"`. The file is `arrangements.json` beside the
+  session file, written the same atomic way. Parser codes `SHB0321` and `SHB0322`.
+
+- **`system-state "away"`.** The shell's "user not present" state - the session locked,
+  the screen saver up, another user's session in front - was reported as `unknown`, the
+  word for a probe that failed, until the tests first ran on a locked machine and said
+  the probe had failed when it had answered. It has a name now, and a full-screen Store
+  app is reported as `fullscreen-app` rather than `unknown` too.
+
 - **Monitors can be named by what they are, and workspaces bound to the name.**
   `monitor=1` on a workspace is a position in the order Windows reports displays, and
   Windows reorders that on replug, on DisplayPort wake and on a driver restart - which
@@ -464,6 +493,13 @@ schedule and breaking either is a different kind of event:
   | `shubbak-wm` | — | **0.000 ms/s** |
 
 ### Fixed
+
+- **The session file's title hash now survives a restart.** It was `string.GetHashCode`,
+  which the runtime seeds differently in every process, so a hash written by one window
+  manager could never match in the next and the tiebreaker it exists to be never broke
+  a tie across a restart. It is a stable FNV-1a now, shared with the arrangements file.
+  Session files written before this carry hashes that will not match once; nothing
+  else about them changes.
 
 - **Taj lost its strip of screen when Explorer restarted, and every window tiled over
   the top of it.** Restart the shell - after a hang, or by hand - and the bar goes on

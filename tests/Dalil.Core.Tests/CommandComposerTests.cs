@@ -159,7 +159,31 @@ public sealed class CommandComposerTests
         Layouts: ["splith", "splitv", "fibonacci", "grid"],
         BindingModes: ["resize", "pause"],
         ScratchpadSlots: ["notes", "term"],
-        Contexts: ["presenting", "docked", "meeting"]);
+        Contexts: ["presenting", "docked", "meeting"],
+        Arrangements: ["demo", "deep-work"]);
+
+    [Theory]
+    [InlineData("arrangement --save ")]
+    [InlineData("arrangement --restore ")]
+    [InlineData("arrangement --delete ")]
+    public void TheSavedArrangementsAreOfferedForEveryActionIncludingSave(string typed)
+    {
+        // Save too: re-saving "demo" after a tweak is the ordinary case, and a new name
+        // is typed straight past the offers.
+        IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose(typed, Sources());
+
+        Assert.Contains(rows, r => r.Command == typed + "demo");
+        Assert.Contains(rows, r => r.Command == typed + "deep-work");
+    }
+
+    [Fact]
+    public void ANewArrangementNameStillRunsAsTyped()
+    {
+        IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose("arrangement --save talk", Sources());
+
+        Assert.Contains(rows, r => r.Command == "arrangement --save talk" && r.Rank == long.MaxValue);
+        Assert.DoesNotContain(rows, r => r.Secondary.StartsWith("complete", StringComparison.Ordinal));
+    }
 
     [Theory]
     [InlineData("context --set ")]

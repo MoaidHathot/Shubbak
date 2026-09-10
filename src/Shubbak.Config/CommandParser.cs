@@ -296,6 +296,9 @@ public static class CommandParser
                 command = new DisableBindingModeCommand();
                 return true;
 
+            case "arrangement":
+                return ParseArrangement(rest, text, span, out command, out diagnostic);
+
             case "context":
                 return ParseContext(rest, text, span, out command, out diagnostic);
 
@@ -615,6 +618,68 @@ public static class CommandParser
         }
 
         command = new ContextCommand(name, action.Value, ttl, lease);
+        return true;
+    }
+
+    /// <summary>
+    /// <c>arrangement --save|--restore|--delete &lt;name&gt;</c>. The name may follow the
+    /// flag or stand on its own.
+    /// </summary>
+    private static bool ParseArrangement(
+        ReadOnlySpan<string> rest, string text, TextSpan span,
+        out WmCommand? command, out Diagnostic? diagnostic)
+    {
+        command = null;
+        diagnostic = null;
+
+        (ArrangementAction Action, string Flag)[] verbs =
+        [
+            (ArrangementAction.Save, "--save"),
+            (ArrangementAction.Restore, "--restore"),
+            (ArrangementAction.Delete, "--delete"),
+        ];
+
+        ArrangementAction? action = null;
+        string? name = null;
+        int given = 0;
+
+        foreach ((ArrangementAction candidate, string flag) in verbs)
+        {
+            if (!Flag(rest, flag)) continue;
+
+            given++;
+            action = candidate;
+            name = Value(rest, flag);
+        }
+
+        if (given > 1)
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0321", $"'{text}' asks for more than one of --save, --restore and --delete.", span,
+                "Write one of them: arrangement --save demo, or arrangement --restore demo.");
+            return false;
+        }
+
+        if (action is null)
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0321", $"'{text}' does not say what to do with the arrangement.", span,
+                "Write arrangement --save demo to record the workspace's tree under that name, " +
+                "--restore demo to put it back, or --delete demo to forget it.");
+            return false;
+        }
+
+        name ??= Positional(rest);
+
+        if (name is null || name.StartsWith("--", StringComparison.Ordinal))
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0322", $"'{text}' does not name an arrangement.", span,
+                "Write arrangement --save demo; the name is yours to choose.");
+            return false;
+        }
+
+        command = new ArrangementCommand(name, action.Value);
         return true;
     }
 

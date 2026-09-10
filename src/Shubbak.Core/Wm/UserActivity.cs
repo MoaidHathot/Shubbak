@@ -36,6 +36,18 @@ public enum UserActivity
 
     /// <summary>The first hour after a new user logs in for the first time.</summary>
     QuietTime,
+
+    /// <summary>
+    /// Nobody is there: the session is locked, the screen saver is up, or another
+    /// user's session is in front.
+    /// </summary>
+    /// <remarks>
+    /// Was reported as <see cref="Unknown"/> until the first time the tests ran on a
+    /// locked machine and said the probe had failed. It had not; it had answered, and
+    /// the answer is a state a context can reasonably key off - lock the screen and
+    /// have the bar go dark, say - so it has a name.
+    /// </remarks>
+    Away,
 }
 
 /// <summary>
@@ -57,6 +69,7 @@ public static class UserActivityNames
         UserActivity.FullScreenApp => "fullscreen-app",
         UserActivity.Presenting => "presenting",
         UserActivity.QuietTime => "quiet-time",
+        UserActivity.Away => "away",
         _ => "unknown",
     };
 
@@ -68,6 +81,7 @@ public static class UserActivityNames
         "fullscreen-app" => UserActivity.FullScreenApp,
         "presenting" => UserActivity.Presenting,
         "quiet-time" => UserActivity.QuietTime,
+        "away" => UserActivity.Away,
         "unknown" => UserActivity.Unknown,
         _ => null,
     };

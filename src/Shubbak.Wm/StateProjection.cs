@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Shubbak.Core.Tree;
 using Shubbak.Core.Wm;
@@ -164,6 +165,13 @@ internal static class StateProjection
                 $"\"active\":{(e.Active ? "true" : "false")}," +
                 $"\"source\":{JsonString(e.Source)}," +
                 $"\"reason\":{JsonString(e.Reason)}}}",
+
+            ArrangementRestored e =>
+                $"{{\"name\":{JsonString(e.Name)}," +
+                $"\"workspace\":{JsonString(e.Workspace)}," +
+                $"\"placed\":{e.Placed.ToString(CultureInfo.InvariantCulture)}," +
+                $"\"missing\":{e.Missing.ToString(CultureInfo.InvariantCulture)}," +
+                $"\"kept\":{e.Kept.ToString(CultureInfo.InvariantCulture)}}}",
 
             // The same shape as one entry of `query bindings`, so a client that
             // already reads those reads this.
