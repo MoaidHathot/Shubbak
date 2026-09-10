@@ -58,21 +58,38 @@ public interface IConsentStore
     IReadOnlyList<ConsentEntry> Read(DeviceKind device);
 }
 
-/// <summary>What the store said about both devices at one moment.</summary>
+/// <summary>What the desk said about both devices at one moment.</summary>
 /// <param name="CameraApps">Programs with the camera open.</param>
 /// <param name="MicrophoneApps">Programs with the microphone open.</param>
-public sealed record Reading(IReadOnlyList<string> CameraApps, IReadOnlyList<string> MicrophoneApps)
+/// <param name="MicrophoneMuted">
+/// Whether the default microphone is muted at the system level, or null when there is
+/// no microphone to ask - which counts as not muted, so a context held for it is let
+/// go rather than left hanging on a device that was unplugged.
+/// </param>
+public sealed record Reading(
+    IReadOnlyList<string> CameraApps,
+    IReadOnlyList<string> MicrophoneApps,
+    bool? MicrophoneMuted = null)
 {
-    /// <summary>Nothing open anywhere.</summary>
+    /// <summary>Nothing open anywhere, nothing muted.</summary>
     public static Reading Idle { get; } = new([], []);
 
-    /// <summary>Takes a reading from a store.</summary>
-    public static Reading From(IConsentStore store)
+    /// <summary>Takes a reading from a store. The mute state comes from elsewhere; see the host.</summary>
+    public static Reading From(IConsentStore store, bool? microphoneMuted = null)
     {
         ArgumentNullException.ThrowIfNull(store);
 
-        return new Reading(InUse(store.Read(DeviceKind.Camera)), InUse(store.Read(DeviceKind.Microphone)));
+        return new Reading(InUse(store.Read(DeviceKind.Camera)), InUse(store.Read(DeviceKind.Microphone)), microphoneMuted);
     }
+
+    /// <summary>Whether a fact holds in this reading.</summary>
+    public bool Holds(Fact fact) => fact switch
+    {
+        Fact.CameraInUse => CameraApps.Count > 0,
+        Fact.MicrophoneInUse => MicrophoneApps.Count > 0,
+        Fact.MicrophoneMuted => MicrophoneMuted == true,
+        _ => false,
+    };
 
     /// <summary>The programs using a device, or empty when it is not watched.</summary>
     public IReadOnlyList<string> AppsFor(DeviceKind device) => device switch

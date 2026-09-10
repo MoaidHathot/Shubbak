@@ -208,6 +208,8 @@ public static class TajConfigLoader
                 context));
         }
 
+        WarnAboutUndeclaredContextSources(bar, declaredContexts, diagnostics);
+
         BarProfile fallbackProfile =
             profiles.TryGetValue("default", out BarProfile? named) ? named : profiles.Values.First();
 
@@ -309,7 +311,7 @@ public static class TajConfigLoader
     /// write one or the other and being told off for either would be absurd.
     /// </remarks>
     private static readonly string[] CommonWidgetKeys =
-        ["id", "font-size", "bold", "italic", "colour", "color", "background", "radius"];
+        ["id", "font", "font-size", "bold", "italic", "colour", "color", "background", "radius"];
 
     private static readonly string[] KnownWorkspacesKeys =
     [
@@ -327,12 +329,65 @@ public static class TajConfigLoader
 
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
     private static readonly string[] KnownConditionKeys =
-        ["value", "not", "of", "font-size", "bold", "italic", "colour", "color", "background"];
+        ["value", "not", "of", "font", "font-size", "bold", "italic", "colour", "color", "background"];
 
     private static readonly string[] KnownSourceKeys =
         ["kind", "format", "command", "interval", "timezone"];
 
     private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor", "context"];
+
+    /// <summary>
+    /// Reports a <c>{{ context.x }}</c> or <c>when of="context.x"</c> that names a context
+    /// the <c>contexts</c> section does not declare.
+    /// </summary>
+    /// <remarks>
+    /// The same check a rule's <c>context=</c> gets, for the same reason: the widget is
+    /// correct as written and will never show anything, and the symptom - an icon that
+    /// never appears - looks exactly like a widget that was never written. A warning,
+    /// because the bar still builds. Walked over the KDL rather than the built widgets
+    /// so it needs nothing the widgets do not already say.
+    /// </remarks>
+    private static void WarnAboutUndeclaredContextSources(
+        KdlNode bar, List<string> declaredContexts, List<Diagnostic> diagnostics)
+    {
+        foreach (KdlNode profile in bar.ChildrenNamed("profile"))
+        {
+            foreach (KdlNode zone in profile.ChildrenNamed("zone"))
+            {
+                foreach (KdlNode widget in zone.ChildrenNamed("text"))
+                {
+                    if ((SettingText(widget, "template") ?? widget.Argument(0)?.AsString()) is { } template)
+                    {
+                        foreach (string source in Template.Dependencies(template))
+                            Check(source, Setting(widget, "template")?.Span ?? widget.Span);
+                    }
+
+                    foreach (KdlNode condition in widget.ChildrenNamed("when"))
+                    {
+                        if (Setting(condition, "of") is { } of) Check(of.AsString(), of.Span);
+                    }
+                }
+            }
+        }
+
+        void Check(string source, TextSpan span)
+        {
+            if (!source.StartsWith(ActiveContexts.KeyPrefix, StringComparison.Ordinal)) return;
+
+            string name = source[ActiveContexts.KeyPrefix.Length..];
+            if (declaredContexts.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
+
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0021",
+                $"'{source}' reads context '{name}', which the contexts section does not declare; it will always be empty.",
+                span,
+                declaredContexts.Count == 0
+                    ? "No contexts are declared. Add a contexts { } section with a context of that name."
+                    : Suggestion.Closest(name, declaredContexts) is { } guess
+                        ? $"Did you mean 'context.{guess}'?"
+                        : $"Declared: {string.Join(", ", declaredContexts)}."));
+        }
+    }
 
     /// <summary>
     /// The names the <c>contexts</c> section declares, in order, from the same document
@@ -569,6 +624,7 @@ public static class TajConfigLoader
 
             var font = baseFont with
             {
+                Family = SettingText(child, "font") ?? baseFont.Family,
                 Size = SettingInt(child, "font-size") ?? baseFont.Size,
                 Bold = SettingBool(child, "bold") ?? baseFont.Bold,
                 Italic = SettingBool(child, "italic") ?? baseFont.Italic,
@@ -603,8 +659,11 @@ public static class TajConfigLoader
         // have always supported size, weight and slant - the built-in default profile
         // bolds its own clock - but no config key reached them, so a user's config
         // could not reproduce what Taj shipped with.
+        // The family too, per widget: an icon font on one widget - Segoe Fluent
+        // Icons for a camera glyph - beside text in the profile's face on the rest.
         var widgetFont = font with
         {
+            Family = SettingText(node, "font") ?? font.Family,
             Size = SettingInt(node, "font-size") ?? font.Size,
             Bold = SettingBool(node, "bold") ?? font.Bold,
             Italic = SettingBool(node, "italic") ?? font.Italic,

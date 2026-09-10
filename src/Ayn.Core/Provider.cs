@@ -1,6 +1,54 @@
 namespace Ayn.Core;
 
 /// <summary>
+/// The facts the watcher can supply, each a context the window manager holds while
+/// the fact is true.
+/// </summary>
+/// <remarks>
+/// Named <c>subject-state</c>, so the facts about one device sort together and the
+/// next device slots in without renaming: <c>camera-in-use</c>, <c>microphone-in-use</c>,
+/// <c>microphone-muted</c>. A fact is a boolean and nothing more. What a meeting is,
+/// and what one should do to the desktop, is composed from these in the file.
+/// </remarks>
+public enum Fact
+{
+    /// <summary>A program has the camera open.</summary>
+    CameraInUse,
+
+    /// <summary>A program has the microphone open.</summary>
+    MicrophoneInUse,
+
+    /// <summary>The default microphone is muted at the system level.</summary>
+    MicrophoneMuted,
+}
+
+/// <summary>The names a <see cref="Fact"/> goes by outside the process.</summary>
+public static class FactNames
+{
+    /// <summary>The fact's name, as the file and the log spell it.</summary>
+    public static string Wire(this Fact fact) => fact switch
+    {
+        Fact.CameraInUse => "camera-in-use",
+        Fact.MicrophoneInUse => "microphone-in-use",
+        Fact.MicrophoneMuted => "microphone-muted",
+        _ => fact.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>
+    /// Whether a change to the fact waits out the settle time before it is believed.
+    /// </summary>
+    /// <remarks>
+    /// Use does: a call opens and closes the devices several times while it sets up.
+    /// Mute does not: it changes when a person presses a key, and a person who pressed
+    /// the key wants the icon now.
+    /// </remarks>
+    public static bool Settles(this Fact fact) => fact != Fact.MicrophoneMuted;
+
+    /// <summary>Every fact, in a stable order.</summary>
+    public static IReadOnlyList<Fact> All { get; } = [Fact.CameraInUse, Fact.MicrophoneInUse, Fact.MicrophoneMuted];
+}
+
+/// <summary>
 /// One thing to tell the window manager.
 /// </summary>
 /// <param name="Context">The context concerned.</param>
@@ -17,8 +65,8 @@ public sealed record ProviderAction(string Context, bool Hold, string Because)
     /// makes a crashed watcher harmless: the pin dies with the connection that made
     /// it, so the window manager is never left believing a meeting is on. Handing back
     /// with <c>--auto</c> rather than <c>--clear</c> leaves no pin at all, so the
-    /// report says <c>nothing has set it</c> rather than <c>cleared by ayn.exe</c>
-    /// - and a context somebody else also sets is theirs again rather than held off by
+    /// report says <c>nothing has set it</c> rather than <c>cleared by ayn.exe</c> -
+    /// and a context somebody else also sets is theirs again rather than held off by
     /// us.
     /// </para>
     /// <para>
@@ -31,64 +79,70 @@ public sealed record ProviderAction(string Context, bool Hold, string Because)
 }
 
 /// <summary>
-/// Decides what to tell the window manager from what the consent store says.
+/// Decides what to tell the window manager from what the desk says.
 /// </summary>
 /// <remarks>
 /// <para>
 /// Pure: readings and a clock in, commands out. The host feeds it every time the
-/// registry changes and asks what is due; the debounce, the recovery after a lost
-/// connection and a rename of the context under a running watcher are all here, where
-/// a test can hold them to account, and the registry and the pipe are not.
+/// registry or the audio endpoint changes and asks what is due; the debounce, the
+/// recovery after a lost connection and a rename of a context under a running watcher
+/// are all here, where a test can hold them to account, and the registry, the
+/// endpoint and the pipe are not.
 /// </para>
 /// <para>
-/// Two states per device: what the store says (<em>wanted</em>) and what the window
-/// manager has been told (<em>asserted</em>). A change to the first is believed only
-/// after it has held for the settle time, because a call opens and closes the camera
-/// several times while it sets up, and a context that flapped with it would run its
-/// on-enter and on-exit twice - the same reason the window manager's own contexts
-/// linger. A change that reverses itself inside the settle time is never reported.
+/// Two states per fact: what the desk says (<em>wanted</em>) and what the window
+/// manager has been told (<em>asserted</em>). For the facts that settle, a change to
+/// the first is believed only after it has held for the settle time, because a call
+/// opens and closes the camera several times while it sets up, and a context that
+/// flapped with it would run its on-enter and on-exit twice - the same reason the
+/// window manager's own contexts linger. A change that reverses itself inside the
+/// settle time is never reported.
 /// </para>
 /// </remarks>
 public sealed class Provider
 {
-    private readonly Device[] _devices;
+    private readonly Slot[] _slots;
     private AynConfig _config;
 
     public Provider(AynConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
-        _devices = [new Device(DeviceKind.Camera), new Device(DeviceKind.Microphone)];
+        _slots = [.. FactNames.All.Select(fact => new Slot(fact))];
     }
 
     /// <summary>The settings in force.</summary>
     public AynConfig Config => _config;
 
     /// <summary>
-    /// A fresh reading of the store.
+    /// A fresh reading of the desk.
     /// </summary>
-    /// <param name="reading">What the store says now.</param>
+    /// <param name="reading">What the desk says now.</param>
     /// <param name="now">The clock, in milliseconds; only differences matter.</param>
     public void Observe(Reading reading, long now)
     {
         ArgumentNullException.ThrowIfNull(reading);
 
-        foreach (Device device in _devices)
+        foreach (Slot slot in _slots)
         {
-            IReadOnlyList<string> apps = reading.AppsFor(device.Kind);
-            bool wanted = apps.Count > 0;
+            bool wanted = reading.Holds(slot.Fact);
 
-            device.Apps = apps;
+            slot.Apps = slot.Fact switch
+            {
+                Fact.CameraInUse => reading.CameraApps,
+                Fact.MicrophoneInUse => reading.MicrophoneApps,
+                _ => [],
+            };
 
-            if (wanted == device.Wanted) continue;
+            if (wanted == slot.Wanted) continue;
 
-            device.Wanted = wanted;
-            device.WantedSince = now;
+            slot.Wanted = wanted;
+            slot.WantedSince = now;
         }
     }
 
     /// <summary>
-    /// What to tell the window manager now: every device whose wanted state has held
-    /// for the settle time and differs from what was last asserted.
+    /// What to tell the window manager now: every fact whose wanted state has held
+    /// long enough and differs from what was last asserted.
     /// </summary>
     /// <remarks>
     /// Handing an action out marks it asserted. The host sends it; if the send fails
@@ -98,20 +152,15 @@ public sealed class Provider
     {
         List<ProviderAction>? due = null;
 
-        foreach (Device device in _devices)
+        foreach (Slot slot in _slots)
         {
-            if (_config.ContextFor(device.Kind) is not { } context) continue;
-            if (device.Wanted == device.Asserted) continue;
-            if (now - device.WantedSince < SettleMilliseconds) continue;
+            if (_config.ContextFor(slot.Fact) is not { } context) continue;
+            if (slot.Wanted == slot.Asserted) continue;
+            if (slot.Fact.Settles() && now - slot.WantedSince < SettleMilliseconds) continue;
 
-            device.Asserted = device.Wanted;
+            slot.Asserted = slot.Wanted;
 
-            (due ??= []).Add(new ProviderAction(
-                context,
-                device.Wanted,
-                device.Wanted
-                    ? $"{Name(device.Kind)} in use by {string.Join(", ", device.Apps)}"
-                    : $"{Name(device.Kind)} no longer in use"));
+            (due ??= []).Add(new ProviderAction(context, slot.Wanted, Because(slot)));
         }
 
         return due ?? (IReadOnlyList<ProviderAction>)[];
@@ -123,18 +172,18 @@ public sealed class Provider
     /// <remarks>
     /// The host waits exactly this long and no longer, so a change is reported the
     /// moment it has held long enough rather than on the next unrelated wake-up -
-    /// and, when nothing is pending, the host waits for the registry alone.
+    /// and, when nothing is pending, the host waits for the desk alone.
     /// </remarks>
     public TimeSpan? Pending(long now)
     {
         long? soonest = null;
 
-        foreach (Device device in _devices)
+        foreach (Slot slot in _slots)
         {
-            if (_config.ContextFor(device.Kind) is null) continue;
-            if (device.Wanted == device.Asserted) continue;
+            if (_config.ContextFor(slot.Fact) is null) continue;
+            if (slot.Wanted == slot.Asserted) continue;
 
-            long due = device.WantedSince + SettleMilliseconds - now;
+            long due = slot.Fact.Settles() ? slot.WantedSince + SettleMilliseconds - now : 0;
             if (soonest is null || due < soonest) soonest = due;
         }
 
@@ -147,13 +196,13 @@ public sealed class Provider
     /// <remarks>
     /// Nothing is asserted any more; the window manager has already released the pins
     /// itself, or has restarted and never had them. The next <see cref="Due"/> hands
-    /// back a hold for every device still in use, at once - the settle time was
-    /// served the first time round - and nothing for a device that has gone quiet,
-    /// since there is no pin left to hand back.
+    /// back a hold for every fact still true, at once - the settle time was served the
+    /// first time round - and nothing for a fact that has gone false, since there is no
+    /// pin left to hand back.
     /// </remarks>
     public void Forget()
     {
-        foreach (Device device in _devices) device.Asserted = false;
+        foreach (Slot slot in _slots) slot.Asserted = false;
     }
 
     /// <summary>
@@ -170,22 +219,22 @@ public sealed class Provider
 
         List<ProviderAction>? released = null;
 
-        foreach (Device device in _devices)
+        foreach (Slot slot in _slots)
         {
-            string? before = _config.ContextFor(device.Kind);
-            string? after = config.ContextFor(device.Kind);
+            string? before = _config.ContextFor(slot.Fact);
+            string? after = config.ContextFor(slot.Fact);
 
             if (string.Equals(before, after, StringComparison.Ordinal)) continue;
 
-            if (device.Asserted && before is not null)
+            if (slot.Asserted && before is not null)
             {
                 (released ??= []).Add(new ProviderAction(
-                    before, false, $"{Name(device.Kind)} is now reported as \"{after ?? "nothing"}\""));
+                    before, false, $"{slot.Fact.Wire()} is now reported as \"{after ?? "nothing"}\""));
             }
 
             // Whatever was asserted was under the old name. The new one starts from
             // nothing, and the settle time has already been served.
-            device.Asserted = false;
+            slot.Asserted = false;
         }
 
         _config = config;
@@ -193,30 +242,93 @@ public sealed class Provider
         return released ?? (IReadOnlyList<ProviderAction>)[];
     }
 
-    /// <summary>Whether a device is currently believed to be in use.</summary>
-    public bool IsHeld(DeviceKind kind)
+    /// <summary>Whether a fact is currently held on the window manager.</summary>
+    public bool IsHeld(Fact fact)
     {
-        foreach (Device device in _devices)
-            if (device.Kind == kind) return device.Asserted;
+        foreach (Slot slot in _slots)
+            if (slot.Fact == fact) return slot.Asserted;
 
         return false;
     }
 
     private long SettleMilliseconds => (long)_config.EffectiveSettle.TotalMilliseconds;
 
-    private static string Name(DeviceKind kind) => kind switch
+    private static string Because(Slot slot) => (slot.Fact, slot.Wanted) switch
     {
-        DeviceKind.Camera => "camera",
-        DeviceKind.Microphone => "microphone",
-        _ => kind.ToString().ToLowerInvariant(),
+        (Fact.CameraInUse, true) => $"camera in use by {string.Join(", ", slot.Apps)}",
+        (Fact.CameraInUse, false) => "camera no longer in use",
+        (Fact.MicrophoneInUse, true) => $"microphone in use by {string.Join(", ", slot.Apps)}",
+        (Fact.MicrophoneInUse, false) => "microphone no longer in use",
+        (Fact.MicrophoneMuted, true) => "microphone muted",
+        (Fact.MicrophoneMuted, false) => "microphone unmuted",
+        _ => slot.Fact.Wire(),
     };
 
-    private sealed class Device(DeviceKind kind)
+    private sealed class Slot(Fact fact)
     {
-        public DeviceKind Kind { get; } = kind;
+        public Fact Fact { get; } = fact;
         public bool Wanted { get; set; }
         public long WantedSince { get; set; }
         public bool Asserted { get; set; }
         public IReadOnlyList<string> Apps { get; set; } = [];
+    }
+}
+
+/// <summary>
+/// What a <c>signal "ayn" ...</c> asks for.
+/// </summary>
+/// <param name="Subject">What to act on: <c>microphone</c>.</param>
+/// <param name="Verb">What to do: <c>mute</c>, <c>unmute</c>, <c>toggle-mute</c>.</param>
+/// <remarks>
+/// Subject then verb, so the next subject slots in beside this one and a keybinding
+/// reads as a sentence: <c>signal "ayn" "microphone" "toggle-mute"</c>. The window
+/// manager carries the words without reading them, exactly as it carries the
+/// palette's; this is what makes the bar's mute button possible without the window
+/// manager learning the word.
+/// </remarks>
+public sealed record SignalRequest(string Subject, string Verb)
+{
+    /// <summary>The subjects and verbs understood, for the refusal.</summary>
+    public static IReadOnlyList<string> Accepted { get; } =
+        ["microphone mute", "microphone unmute", "microphone toggle-mute"];
+
+    /// <summary>
+    /// Reads the arguments after the signal's name, or says why they cannot be.
+    /// </summary>
+    public static SignalRequest? Parse(IReadOnlyList<string> arguments, out string? refusal)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        refusal = null;
+
+        if (arguments.Count == 0)
+        {
+            refusal = $"the signal says nothing to do. One of: {string.Join(", ", Accepted)}.";
+            return null;
+        }
+
+        string subject = arguments[0].ToLowerInvariant();
+        string verb = arguments.Count > 1 ? arguments[1].ToLowerInvariant() : string.Empty;
+
+        if (subject is not ("microphone" or "mic"))
+        {
+            refusal = $"'{arguments[0]}' is not something ayn acts on. One of: {string.Join(", ", Accepted)}.";
+            return null;
+        }
+
+        verb = verb switch
+        {
+            "toggle" or "toggle-mute" => "toggle-mute",
+            "mute" or "unmute" => verb,
+            _ => string.Empty,
+        };
+
+        if (verb.Length == 0)
+        {
+            refusal = $"the signal does not say what to do with the microphone. One of: mute, unmute, toggle-mute.";
+            return null;
+        }
+
+        return new SignalRequest("microphone", verb);
     }
 }

@@ -1,5 +1,8 @@
+using Ayn.Core;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
+using System.Collections.Concurrent;
+using System.Text.Json;
 
 namespace Ayn;
 
@@ -40,7 +43,10 @@ internal sealed class WmConnection : IAsyncDisposable
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(2);
 
-    private const string Topics = "config.reloaded," + IpcProtocol.ShutdownTopic;
+    private const string Topics = "config.reloaded," + IpcProtocol.SignalTopic + "," + IpcProtocol.ShutdownTopic;
+
+    /// <summary>The signal this process answers to: <c>signal "ayn" ...</c>.</summary>
+    public const string SignalName = "ayn";
 
     private readonly CancellationTokenSource _stopping = new();
     private IpcClient? _commands;
@@ -52,6 +58,20 @@ internal sealed class WmConnection : IAsyncDisposable
 
     /// <summary>The window manager re-read the configuration file.</summary>
     public AutoResetEvent Reloaded { get; } = new(false);
+
+    /// <summary>Somebody raised <c>signal "ayn" ...</c>; the requests are in <see cref="Requests"/>.</summary>
+    public AutoResetEvent Signalled { get; } = new(false);
+
+    /// <summary>
+    /// What the signals asked for, in order. Queued by the pump, drained by the loop.
+    /// </summary>
+    /// <remarks>
+    /// The bar's mute button and a keybinding both arrive here: the window manager
+    /// carries <c>signal "ayn" "microphone" "toggle-mute"</c> without reading it, as it
+    /// carries the palette's, which is how the bar gets a mute button without the
+    /// window manager learning the word.
+    /// </remarks>
+    public ConcurrentQueue<SignalRequest> Requests { get; } = new();
 
     /// <summary>Whether a commands connection is currently open.</summary>
     public bool IsConnected => _commands is not null;
@@ -165,6 +185,10 @@ internal sealed class WmConnection : IAsyncDisposable
                                 Reloaded.Set();
                                 break;
 
+                            case IpcProtocol.SignalTopic:
+                                OnSignal(events.Current.Data);
+                                break;
+
                             case IpcProtocol.ShutdownTopic:
                                 Log.Info(LogCategory.Ipc, "the window manager is shutting down; the watcher stays and reconnects when it returns");
                                 break;
@@ -205,6 +229,46 @@ internal sealed class WmConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>Reads a signal payload; ours are queued, everyone else's are ignored.</summary>
+    /// <remarks>
+    /// Hand-parsed, as the palette parses the same payload: two fields, and a DTO in
+    /// the protocol for them would make every client that does not care carry it.
+    /// </remarks>
+    private void OnSignal(string json)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(json);
+
+            if (!document.RootElement.TryGetProperty("name", out JsonElement name) ||
+                !string.Equals(name.GetString(), SignalName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            List<string> arguments = [];
+
+            if (document.RootElement.TryGetProperty("arguments", out JsonElement list))
+                foreach (JsonElement argument in list.EnumerateArray())
+                    if (argument.GetString() is { } value)
+                        arguments.Add(value);
+
+            if (SignalRequest.Parse(arguments, out string? refusal) is { } request)
+            {
+                Requests.Enqueue(request);
+                Signalled.Set();
+            }
+            else
+            {
+                Log.Warn(LogCategory.Ipc, $"signal \"{SignalName}\" {string.Join(" ", arguments)}: {refusal}");
+            }
+        }
+        catch (JsonException ex)
+        {
+            Log.Debug(LogCategory.Ipc, $"malformed signal payload: {ex.Message}");
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
@@ -228,5 +292,6 @@ internal sealed class WmConnection : IAsyncDisposable
         _stopping.Dispose();
         Lost.Dispose();
         Reloaded.Dispose();
+        Signalled.Dispose();
     }
 }

@@ -430,7 +430,8 @@ context with no `when` that another program sets: `shubbak context --set meeting
 with the process that supplied it. The config says what a meeting *does*; the program
 supplying the fact never needs to know. Pins beat detection (`--set`, `--clear`,
 `--toggle`); `--auto` hands a context back to its conditions. [Ayn](#ayn--the-watcher)
-is the reference provider: it supplies `camera` and `microphone` and nothing else.
+is the reference provider: it supplies `camera-in-use`, `microphone-in-use` and
+`microphone-muted`, and nothing else.
 
 `shubbak contexts` says why each one is the way it is, condition by condition, and who
 pinned what — the same answer `inspect` gives for a window that didn't tile.
@@ -520,16 +521,19 @@ sources rather than from a catalogue you have to wait for someone to grow:
 | Something Taj has never heard of | Any program that writes lines to stdout |
 | Genuinely custom drawing | One `IWidget` implementation |
 
-Templates get filters — `truncate:N` `upper` `lower` `trim` `default:X` `pad:N`
-`replace:from,to` `icon` `state-icon` — and a `when { }` block for conditional
+Templates get filters — `truncate:N` `upper` `lower` `trim` `default:X` `then:X`
+`pad:N` `replace:from,to` `icon` `state-icon` — and a `when { }` block for conditional
 styling, so "colour the keyboard indicator red when I'm in the wrong language" is a
-line, not a plugin.
+line, not a plugin. A widget can have a `font=` of its own, which is how one widget
+draws a glyph from Segoe Fluent Icons beside text in the profile's face.
 
 Zones are flex containers. Profiles can `extend` each other, so a slim
 "presentation" variant costs five lines instead of a duplicate. A `rule` picks the
 profile at runtime by workspace, monitor or context — `rule use="presentation"
 context="presenting"` — and switching is a pointer swap. `{{ contexts }}` names the
-contexts the window manager holds, and is empty when none do.
+contexts the window manager holds, and is empty when none do; `{{ context.meeting }}`
+is `meeting` while that one holds and empty otherwise, so `{{ context.meeting |
+then:\u{E720} }}` is a microphone glyph that appears for the call and leaves with it.
 
 **Why it doesn't show stale titles.** The bar consumes the window manager's event
 stream and never inspects windows itself. `EVENT_OBJECT_NAMECHANGE` fires on things
@@ -681,39 +685,51 @@ doesn't know Dalil exists. That's the same extension point anything else can use
 
 <img src="docs/assets/ayn.png" width="72" align="right" alt="" />
 
-**Ayn** (عين, *"eye"*) is the smallest of the five, and optional. It watches
-the record Windows keeps of which programs have the camera or the microphone open —
-the same one the privacy indicator in the tray reads — and while any program does, it
-holds a context on the window manager:
+**Ayn** (عين, *"eye"*) is the smallest of the five, and optional. It supplies three
+facts, each a context the window manager holds while the fact is true: `camera-in-use`
+and `microphone-in-use`, from the record Windows keeps of which programs have a device
+open — the one the privacy indicator in the tray reads — and `microphone-muted`, from
+the default microphone's mute switch — the one the Sound settings toggle.
 
 ```kdl
 contexts {
-    context "camera" { }        // external: nothing in the file sets it, ayn does
-    context "meeting" {
-        when { context "camera" }
-        window-effects { focused-colour "#f38ba8" }
+    context "camera-in-use" { }         // facts: nothing in the file sets them, ayn does
+    context "microphone-in-use" { }
+    context "microphone-muted" { }
+
+    context "meeting" {                 // policy: yours to write
+        when { context "microphone-in-use" }
         bindings { bind "alt+shift+q" { } }
     }
+    context "meeting-muted" { when { context "meeting"; context "microphone-muted" } }
 }
 
 ayn {
-    camera "camera"             // the context to hold; #false to ignore the camera
-    microphone "microphone"
-    settle 500                  // ms a change must last before it is believed
+    camera     { in-use "camera-in-use" }
+    microphone { in-use "microphone-in-use"; muted "microphone-muted" }
+    settle 500                          // ms a change of use must last; mute is instant
 }
 ```
 
-The pin is made with `--lease`, so it dies with Ayn's connection: a watcher that
-crashes leaves nothing behind, and a window manager that restarts is told again within
-a second. The file says what a meeting *does*; Ayn never needs to know. That
-division is the point of it — Shubbak observes the desktop, not the applications,
-and whether the camera is on is a fact about an application. Anything with the same
-shape — Teams presence, OBS recording, a calendar — is written the same way: hold a
-pipe connection open and say `context --set <name> --lease`.
+It also *acts*, on one thing: `signal "ayn" "microphone" "mute" | "unmute" |
+"toggle-mute"` from a keybinding, the bar or the palette flips the system mute, and
+the endpoint's own change notification turns that into the context — so a bar widget
+that reads `{{ context.meeting-muted | then:\u{EC54} }}` with `on-click="signal ayn
+microphone unmute"` is a mute button, and the window manager never learns the word.
+This is the system's mute: a call's own mute button is the call's and invisible from
+here, but Teams and its kind notice this one and say "muted by your system".
 
-`ayn --report` prints what Windows says is using each device right now, which is
-the same reading the watcher acts on. `shubbak ayn-exit` stops it. It sleeps on a
-registry notification and holds no timer between changes.
+The pins are made with `--lease`, so they die with Ayn's connection: a watcher that
+crashes leaves nothing behind, and a window manager that restarts is told again within
+a second. The file says what a meeting *does*; Ayn never needs to know. That division
+is the point of it — Shubbak observes the desktop, not the applications, and whether
+the camera is on is a fact about an application. Anything with the same shape — Teams
+presence, OBS recording, a calendar — is written the same way: hold a pipe connection
+open and say `context --set <name> --lease`.
+
+`ayn --report` prints what Windows says about each device right now, which is the
+same reading the watcher acts on. `shubbak ayn-exit` stops it. It sleeps on a registry
+notification and two Core Audio callbacks and holds no timer between changes.
 
 ## Scripting it
 
@@ -820,7 +836,7 @@ symptom, and `shubbak diagnose` is the fastest way to tell me about it.
 | P4 | Taj — the bar | done |
 | P5 | Tags, scratchpad, session persistence | done |
 
-**1800 test methods**, around 700 ms to run. Everything except the platform layer
+**1812 test methods**, around 700 ms to run. Everything except the platform layer
 and the renderer runs headless, so the entire behavioural surface — tree, layout,
 focus, animation, tags, sessions, the state machine — is testable in milliseconds
 with no window manager running.
@@ -882,7 +898,7 @@ src/
   Dalil/            the palette
   Ayn.Core/       the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/            the camera and microphone watcher
-tests/              1800 test methods across 10 projects
+tests/              1812 test methods across 10 projects
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests
 ```

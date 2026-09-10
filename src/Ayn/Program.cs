@@ -46,11 +46,15 @@ internal static class Program
 
         s_configPath = Value(args, "--config") ?? Value(args, "-c");
 
-        ConfigureLogging(args);
+        // A report opens no log file. It runs beside a watcher that has the file open,
+        // and opening it again rotates the live log out from under that watcher.
+        bool report = args.Contains("--report", StringComparer.Ordinal);
+
+        ConfigureLogging(args, toFile: !report);
 
         // What Windows says right now, and nothing else. For a person wondering why a
         // meeting was or was not noticed: this is the same reading the watcher acts on.
-        if (args.Contains("--report", StringComparer.Ordinal))
+        if (report)
         {
             ConsoleHost.Ensure();
             return Report();
@@ -77,9 +81,9 @@ internal static class Program
 
         if (!config.WatchesAnything)
         {
-            Log.Info(LogCategory.Wm, "both the camera and the microphone are turned off in the ayn section; nothing to watch");
+            Log.Info(LogCategory.Wm, "every fact is turned off in the ayn section; nothing to watch");
             ConsoleHost.Ensure();
-            Console.Error.WriteLine("ayn: the ayn section turns off both the camera and the microphone; nothing to watch.");
+            Console.Error.WriteLine("ayn: the ayn section turns off every fact; nothing to watch.");
             return 0;
         }
 
@@ -91,9 +95,11 @@ internal static class Program
             stop.Set();
         };
 
+        // Each source is opened only if a fact needs it: a file that says
+        // `microphone { muted #false }` never touches Core Audio.
         using var store = new RegistryConsentStore();
 
-        if (store.Count == 0)
+        if (config.NeedsConsentStore && store.Count == 0)
         {
             Log.Error(LogCategory.Wm, "the consent store could not be opened under either hive; there is nothing to watch");
             ConsoleHost.Ensure();
@@ -101,16 +107,21 @@ internal static class Program
             return 1;
         }
 
+        using var endpoint = new AudioEndpoint();
+
+        if (config.NeedsAudioEndpoint && !endpoint.Open())
+            Log.Warn(LogCategory.Wm, "Core Audio is not available; the microphone's mute will not be reported");
+
         var connection = new WmConnection();
         connection.Start();
 
         Log.Info(LogCategory.Wm,
-            $"ayn is watching {Describe(config)} across {store.Count} key(s); " +
-            $"a change is believed after {config.EffectiveSettle.TotalMilliseconds:F0} ms");
+            $"ayn is watching {Describe(config)}; " +
+            $"a change of use is believed after {config.EffectiveSettle.TotalMilliseconds:F0} ms, a mute at once");
 
         try
         {
-            Run(config, store, connection, stop);
+            Run(config, store, endpoint, connection, stop);
         }
         finally
         {
@@ -126,24 +137,38 @@ internal static class Program
     /// The loop: sleep until something happens, tell the provider, send what is due.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// Everything that can wake it is a handle: a stop request, the window manager
+    /// leaving, a reload, a signal, the microphone's mute or default device changing,
+    /// and one event per watched registry key. Between wakes it waits with no timeout,
+    /// unless a change is waiting out its settle time or the window manager is
+    /// unreachable with something to say, in which case it waits exactly that long.
+    /// No thread of ours spins, and no timer ticks.
+    /// </para>
+    /// <para>
     /// The registry is re-armed before it is read, or a change landing between the two
     /// would be missed until the next one. The provider is asked what is due after
     /// every wake, including a wake for nothing - a timeout - since a timeout is
     /// precisely a settle time expiring.
+    /// </para>
     /// </remarks>
-    private static void Run(AynConfig config, RegistryConsentStore store, WmConnection connection, WaitHandle stop)
+    private static void Run(
+        AynConfig config, RegistryConsentStore store, AudioEndpoint endpoint, WmConnection connection, WaitHandle stop)
     {
         var provider = new Provider(config);
 
         const int StopIndex = 0;
         const int LostIndex = 1;
         const int ReloadedIndex = 2;
-        const int FirstRegistryIndex = 3;
+        const int SignalledIndex = 3;
+        const int AudioIndex = 4;
+        const int FirstRegistryIndex = 5;
 
-        WaitHandle[] handles = [stop, connection.Lost, connection.Reloaded, .. store.Changed];
+        WaitHandle[] handles =
+            [stop, connection.Lost, connection.Reloaded, connection.Signalled, AudioEndpoint.Changed, .. store.Changed];
 
         store.Arm();
-        provider.Observe(Reading.From(store), Environment.TickCount64);
+        provider.Observe(Reading.From(store, endpoint.IsMuted()), Environment.TickCount64);
 
         // While the window manager cannot be reached and there is something to tell it,
         // try again about once a second; otherwise sleep until the registry speaks.
@@ -183,15 +208,63 @@ internal static class Program
                     Reconfigure(provider, connection);
                     break;
 
+                case SignalledIndex:
+                    // Somebody asked for the mute to change. Done, not observed: the
+                    // endpoint answers with its own change notification, which is the
+                    // next wake, and the provider learns the new state from that - so
+                    // a request and a change made in the Sound settings take the same
+                    // path and there is one copy of the truth.
+                    while (connection.Requests.TryDequeue(out SignalRequest? request))
+                        Act(request, endpoint);
+                    break;
+
+                case AudioIndex:
+                    if (AudioEndpoint.TakeDefaultDeviceChanged())
+                    {
+                        Log.Info(LogCategory.Wm, "the default microphone changed; asking the new one");
+                        endpoint.Resolve();
+                    }
+
+                    provider.Observe(Reading.From(store, endpoint.IsMuted()), now);
+                    break;
+
                 case WaitHandle.WaitTimeout:
                     break;
 
                 default:
                     store.Arm(woke - FirstRegistryIndex);
-                    provider.Observe(Reading.From(store), now);
+                    provider.Observe(Reading.From(store, endpoint.IsMuted()), now);
                     break;
             }
         }
+    }
+
+    /// <summary>Does what a signal asked: mutes, unmutes or flips the microphone.</summary>
+    private static void Act(SignalRequest request, AudioEndpoint endpoint)
+    {
+        if (!endpoint.HasDevice)
+        {
+            Log.Warn(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: there is no microphone to act on");
+            return;
+        }
+
+        bool? muted = endpoint.IsMuted();
+
+        bool wanted = request.Verb switch
+        {
+            "mute" => true,
+            "unmute" => false,
+            _ => muted != true,
+        };
+
+        if (muted == wanted)
+        {
+            Log.Debug(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: already {(wanted ? "muted" : "unmuted")}");
+            return;
+        }
+
+        if (endpoint.SetMuted(wanted))
+            Log.Info(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: microphone {(wanted ? "muted" : "unmuted")}");
     }
 
     /// <summary>Sends everything due. True if something could not be sent and should be retried.</summary>
@@ -277,6 +350,21 @@ internal static class Program
                 : $"{device.ToString().ToLowerInvariant()}: not in use ({entries.Count} program(s) have used it)");
         }
 
+        using var endpoint = new AudioEndpoint();
+
+        if (!endpoint.Open())
+        {
+            Console.WriteLine("microphone mute: Core Audio is not available");
+            return 0;
+        }
+
+        Console.WriteLine(endpoint.IsMuted() switch
+        {
+            true => "microphone mute: muted",
+            false => "microphone mute: not muted",
+            null => "microphone mute: no microphone",
+        });
+
         return 0;
     }
 
@@ -284,13 +372,16 @@ internal static class Program
     {
         List<string> parts = [];
 
-        if (config.Camera is { } camera) parts.Add($"the camera as \"{camera}\"");
-        if (config.Microphone is { } microphone) parts.Add($"the microphone as \"{microphone}\"");
+        foreach (Fact fact in FactNames.All)
+        {
+            if (config.ContextFor(fact) is { } context)
+                parts.Add(string.Equals(context, fact.Wire(), StringComparison.Ordinal) ? context : $"{fact.Wire()} as \"{context}\"");
+        }
 
-        return parts.Count == 0 ? "nothing" : string.Join(" and ", parts);
+        return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
     }
 
-    private static void ConfigureLogging(string[] args)
+    private static void ConfigureLogging(string[] args, bool toFile)
     {
         string file = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -318,6 +409,8 @@ internal static class Program
 
         Log.ToConsole = ConsoleHost.HasOutput && !args.Contains("--quiet", StringComparer.Ordinal);
 
+        if (!toFile) return;
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
@@ -340,7 +433,11 @@ internal static class Program
         Console.WriteLine(ShubbakVersion.Banner);
         Console.WriteLine();
         Console.WriteLine("Ayn watches the camera and the microphone and holds a context on the");
-        Console.WriteLine("window manager while a program has either open.");
+        Console.WriteLine("window manager for each fact while it is true: camera-in-use,");
+        Console.WriteLine("microphone-in-use, microphone-muted.");
+        Console.WriteLine();
+        Console.WriteLine("It also answers `signal \"ayn\" \"microphone\" \"mute\" | \"unmute\" | \"toggle-mute\"`");
+        Console.WriteLine("from a keybinding, the bar or the palette, by flipping the system mute.");
         Console.WriteLine();
         Console.WriteLine("usage: ayn [options]");
         Console.WriteLine();
@@ -348,7 +445,7 @@ internal static class Program
         Console.WriteLine("  --config <path>     the shubbak.kdl to read the ayn section from");
         Console.WriteLine("  --log-level <level> trace, debug, info, warn, error");
         Console.WriteLine("  --quiet             do not echo the log to the console");
-        Console.WriteLine("  --report            print what Windows says is using each device, and exit");
+        Console.WriteLine("  --report            print what Windows says about each device now, and exit");
         Console.WriteLine("  --version           print the version");
         Console.WriteLine("  --help              this");
         Console.WriteLine();

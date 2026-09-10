@@ -73,6 +73,10 @@ public sealed class TemplateTests
     [InlineData("{{ empty | default:none }}", "none")]
     [InlineData("{{ clock | default:none }}", "14:30")]
     [InlineData("{{ clock | replace::,h }}", "14h30")]
+    [InlineData("{{ clock | then:\uE720 }}", "\uE720")]
+    [InlineData("{{ empty | then:\uE720 }}", "")]
+    [InlineData("{{ nothing | then:on }}", "")]
+    [InlineData("{{ clock | then:on | upper }}", "ON")]
     public void FiltersApplyAndChain(string template, string expected)
     {
         Assert.Equal(expected, Template.Render(template, Values));
@@ -666,5 +670,114 @@ public sealed class ActiveContextsTests
         Assert.False(ActiveContexts.Same(["a"], ["a", "b"]));
         Assert.False(ActiveContexts.Same(["a", "b"], ["b", "a"]));
         Assert.False(ActiveContexts.Same(["a"], ["A"]));
+    }
+
+    [Fact]
+    public void EachContextGetsAValueOfItsOwnThatEmptiesWhenItDrops()
+    {
+        // The first answer: every context that holds is written as its name.
+        Assert.Equal(
+            [new("context.camera-in-use", "camera-in-use"), new("context.meeting", "meeting")],
+            ActiveContexts.Changes(null, ["camera-in-use", "meeting"]));
+
+        // The camera goes: its key is written empty once, so the widget showing it hides.
+        Assert.Equal(
+            [new("context.meeting", "meeting"), new("context.camera-in-use", "")],
+            ActiveContexts.Changes(["camera-in-use", "meeting"], ["meeting"]));
+
+        // Nothing held before and nothing now: nothing to write.
+        Assert.Empty(ActiveContexts.Changes([], []));
+    }
+
+    [Fact]
+    public void TheKeysAreTheOnesTemplatesUse()
+    {
+        Assert.Equal("context.meeting", ActiveContexts.KeyFor("meeting"));
+        Assert.Equal("context.", ActiveContexts.KeyPrefix);
+    }
+}
+
+/// <summary>Tests for typography and icons per widget.</summary>
+public sealed class WidgetFontTests
+{
+    [Fact]
+    public void AWidgetCanUseAFontFamilyOfItsOwn()
+    {
+        // An icon font on one widget beside text in the profile's face on the rest:
+        // the camera glyph is in Segoe Fluent Icons and the clock is not.
+        (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            contexts { context "camera-in-use" { } }
+            bar {
+                profile "default" {
+                    height 30
+                    font "Segoe UI"
+                    zone "right" {
+                        text id="camera" template="{{ context.camera-in-use | then:\uE722 }}" font="Segoe Fluent Icons" {
+                            when of="context.camera-in-use" value="camera-in-use" colour="#f38ba8" font="Segoe MDL2 Assets"
+                        }
+                        text id="clock" template="{{ clock }}"
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.DoesNotContain(diagnostics, d => d.Code is "TAJ0016" or "TAJ0017" or "TAJ0021");
+
+        var zone = config.Profiles["default"].Zones.Single();
+        var camera = Assert.IsType<TemplateWidget>(zone.Widgets[0]);
+        var clock = Assert.IsType<TemplateWidget>(zone.Widgets[1]);
+
+        Assert.Equal("Segoe Fluent Icons", camera.Style.Font.Family);
+        Assert.Equal("Segoe MDL2 Assets", camera.Conditions.Single().Style.Font.Family);
+        Assert.Equal("Segoe UI", clock.Style.Font.Family);
+    }
+
+    [Fact]
+    public void AWidgetReadingAContextNobodyDeclaresIsPointedOut()
+    {
+        (_, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            contexts { context "camera-in-use" { } context "meeting" { } }
+            bar {
+                profile "default" {
+                    height 30
+                    zone "right" {
+                        text template="{{ context.camera-on | then:x }}"
+                        text template="{{ clock }}" {
+                            when of="context.meting" value="meeting" colour="#f38ba8"
+                        }
+                    }
+                }
+            }
+            """);
+
+        Diagnostic[] warnings = [.. diagnostics.Where(d => d.Code == "TAJ0021")];
+
+        Assert.Equal(2, warnings.Length);
+        Assert.All(warnings, w => Assert.Equal(DiagnosticSeverity.Warning, w.Severity));
+        // Too far from any name for a guess, so the declared list; one letter off, so a guess.
+        Assert.Contains("camera-on", warnings[0].Message, StringComparison.Ordinal);
+        Assert.Contains("Declared: camera-in-use, meeting", warnings[0].Hint!, StringComparison.Ordinal);
+        Assert.Contains("context.meeting", warnings[1].Hint!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ADeclaredContextSourceIsSilentAndSoIsEveryOtherSource()
+    {
+        (_, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            contexts { context "meeting" { } }
+            bar {
+                profile "default" {
+                    height 30
+                    zone "right" {
+                        text template="{{ context.meeting | then:x }} {{ contexts }} {{ clock }}" {
+                            when of="binding_mode" value="resize" colour="#f38ba8"
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(diagnostics, d => d.Code == "TAJ0021");
     }
 }

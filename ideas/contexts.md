@@ -838,6 +838,112 @@ demo, nested.`; `Nothing tiles on workspace "5"`); `--delete` twice said so the
 second time; `arrangements` listed and then said `no arrangements saved`. The
 Notepads were closed and the focus returned to where it had been.
 
+### Phase 6
+
+Not in the plan: asked for after the five shipped. Icons on the bar for a meeting,
+for the camera, for the microphone and its mute, and a mute button. It is the first
+thing built *on* the series rather than *as* it, and so the first test of whether the
+pieces compose without new ones.
+
+**What it took, and where each piece went:**
+
+- **Two facts the watcher did not have, and a name scheme for facts.** The mute is a
+  system fact - the default microphone's endpoint mute, the switch the Sound settings
+  toggle - which is the same topic as the two the watcher already supplied, so it went
+  to Ayn and not to the daemon. With three facts the flat names would not do:
+  `camera`, `microphone` and then what for the mute? Facts are `subject-state` now -
+  `camera-in-use`, `microphone-in-use`, `microphone-muted` - so the ones about one
+  device sort together and a `speaker-muted` slots in without renaming; the `ayn`
+  section nests by subject the same way. The names were unreleased, so the rename
+  cost nothing but the user's file.
+- **Core Audio by hand.** `IMMDeviceEnumerator`, the default communications capture
+  device with the console device as fallback, `IAudioEndpointVolume` for `GetMute`
+  and `SetMute`, and the two callbacks - `IAudioEndpointVolumeCallback` for the mute
+  and `IMMNotificationClient` for the default device changing - as objects we *are*:
+  a pointer to a vtable of `[UnmanagedCallersOnly]` functions, allocated once, freed
+  after unregistering. Raw vtables as the shell's view collection is reached, because
+  the callbacks are the reason and no generator makes those. Each callback does one
+  thing: sets an event the loop already waits on. The loop reads the endpoint rather
+  than remembering what the callback said, so there is one copy of the truth.
+- **The mute is never settled.** The settle time exists because a call opens and
+  closes the devices while enumerating them. A mute changes when a person presses a
+  key, and that person wants the icon now. `Fact.Settles()` says which is which.
+- **A signal is how the bar mutes.** `signal "ayn" "microphone" "mute" | "unmute" |
+  "toggle-mute"`: subject then verb, so the next subject slots in and the line reads
+  as a sentence. The window manager carries the words without reading them, exactly
+  as it carries the palette's; Ayn subscribes to `signal` on its events connection,
+  parses the arguments in Core where a test can see, and the loop does the deed. It
+  does not then update the provider: the endpoint's own change notification is the
+  next wake, so a request from the bar and a change made in the Sound settings take
+  one path. **The window manager never learned the word "mute".** That was the test
+  of the line, and it passed.
+- **One bar widget per context.** `{{ contexts }}` was a joined list, which can be
+  read but cannot light one icon. Now every context has a source of its own,
+  `context.<name>`, set to the name while it holds and written empty once when it
+  drops - the empty write is what hides the widget. A new filter, `then:X`, is the
+  other half of `default:X`: something when there is a value, nothing when there is
+  not. A widget and a `when` block take a `font=`, so one widget draws from Segoe
+  Fluent Icons beside text in the profile's face. `TAJ0021` points out a
+  `context.x` the file does not declare, with a guess, the way `TAJ0020` does for a
+  rule.
+- **Policy stayed in the file, and got sharper.** A meeting is the microphone being
+  open: Teams and its kind keep the device open for the whole call, muted in-app or
+  not, so it is the reliable "in a call" signal where the camera would miss every
+  audio-only call. "Muted, but only while in a meeting" is
+  `when { context "meeting"; context "microphone-muted" }`. And the first cut of the
+  bar showed a transparent microphone beside the red one, still holding its width -
+  fixed with no code, by a twin context with the condition negated,
+  `when { context "meeting"; !context "microphone-muted" }`, so exactly one of the
+  two holds during a meeting and the bar shows exactly one glyph. The composition
+  the design promised, doing the work a `when` colour could not.
+
+**Found on the way:**
+
+- **`ayn --report` opened the live log and truncated it under the running watcher.**
+  Every process opens its log with rotation on start; a second instance of the same
+  process, even one that only prints and exits, rotates the first one's file out
+  from under it, and the first one's later writes left a hole of zero bytes. A
+  report opens no log file now. The same would bite any of the five run twice.
+- **KDL v2 spells a Unicode escape `\u{E722}`,** and the config parser said so with
+  the caret under the offending `\u` - the first time the file talked back to its
+  own author's assistant. Recorded because it will happen to everyone who pastes a
+  glyph code from the Fluent Icons page.
+- **The Debug build is not the measurement.** 41.8 MB resident and 0.31 s of CPU in
+  two minutes, most of it the JIT; the published build below is a different program
+  in that respect, and the numbers in this note are always from `dist\`.
+
+**Measured** (release, NativeAOT):
+
+| binary | Phase 5 | Phase 6 | delta |
+|---|---|---|---|
+| shubbak-wm.exe | 6.26 MB | 6.26 MB | 0 |
+| shubbak.exe | 4.90 MB | 4.90 MB | +10 KB |
+| taj.exe | 5.04 MB | 5.05 MB | +6 KB |
+| dalil.exe | 5.12 MB | 5.12 MB | 0 |
+| ayn.exe | 4.46 MB | 4.52 MB | +66 KB |
+
+The daemon and the palette did not change by a byte of source; the CLI carries the
+new section's loader for `check-config`; the bar carries a filter, a key and a
+warning; the watcher carries Core Audio.
+
+The watcher idle, published build, on the real configuration: working set 17.7 MB,
+private 6.8 MB, five threads, 239 handles - and **0 ms of CPU over 120 seconds**,
+measured against the palette's 0 ms, the bar's 359 ms (its half-second clock) and
+the daemon's 94 ms (its tick). A first sample had shown 15 ms in a minute; that was
+the tail of the toggles just made and the log writer flushing them, and a clean
+window showed none. There is no loop: the process waits on eight handles - stop,
+the window manager leaving, a reload, a signal, the endpoint's callback, and one per
+watched registry key - with no timeout unless a change of use is waiting out its
+settle time.
+
+Verified live, and this time by eye: the bar was photographed. With `meeting` pinned
+a green microphone glyph appeared between the second clock and the layout icon;
+`signal ayn microphone toggle-mute` turned it into a red pill with the mic-off glyph
+1.2 s later (the round trip itself was measured at 160 ms from signal to
+`microphone-muted` holding, most of it Core Audio's notification); toggling back
+brought the green one back; `--auto` on the meeting removed both. `ayn --report`
+said `microphone mute: muted` while it was. Refusals: `signal ayn camera mute` and
+`signal ayn microphone louder` each logged one line naming what is accepted.
 ---
 
 ## The series, in one table
@@ -852,7 +958,8 @@ Five phases, tag `pre-contexts` (`73fc04a`) to the commit that ships this sectio
 | 2 | fe5d512 | contexts core: config, engine, `context` verb, effects, reports | 6.05 MB | 0.02 / 1.01 ms (38 min) | 1749 declared |
 | 3 | e6da993 | bar `rule context=`, `{{ contexts }}`, palette pill, `from="contexts"` | 6.05 MB | daemon untouched | +22 |
 | 4 | 69f9b83 | Ayn, the reference provider; a fifth executable | 6.05 MB | 0.02 / 0.76 ms (48 min) | 1774 |
-| 5 | this | saved arrangements; `away`; a stable title hash | 6.26 MB | 0.02 / - (2 min; settles next run) | 1800 |
+| 5 | 941866f | saved arrangements; `away`; a stable title hash | 6.26 MB | 0.02 / - (2 min) | 1800 |
+| 6 | this | bar icons per context, `then:`, `font=`; Ayn: three facts, mute, signals | 6.26 MB | daemon untouched | 1812 |
 
 Working set of the daemon across the series: 41.3 MB at the baseline after 11 h, 45.6
 MB after 38 min on Phase 2, 27-33 MB in the first minutes after each restart; the

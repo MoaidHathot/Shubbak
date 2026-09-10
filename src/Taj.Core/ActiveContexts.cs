@@ -22,6 +22,52 @@ public static class ActiveContexts
     public const string Key = "contexts";
 
     /// <summary>
+    /// The prefix of the one-value-per-context sources: <c>context.presenting</c> is
+    /// <c>presenting</c> while that context holds and empty when it does not.
+    /// </summary>
+    /// <remarks>
+    /// The joined list is for reading; this is for one widget per context - an icon
+    /// that shows while the camera is on, another while a meeting is muted - which a
+    /// <c>when value=</c> on the joined string cannot do once two contexts hold at
+    /// once. Empty rather than absent when a context drops, so the widget that was
+    /// showing it hides, and so a <c>when of=</c> on it sees a change.
+    /// </remarks>
+    public const string KeyPrefix = "context.";
+
+    /// <summary>The source name for one context.</summary>
+    public static string KeyFor(string name) => KeyPrefix + name;
+
+    /// <summary>
+    /// The per-context values to publish when the list changes: every context that
+    /// holds now set to its name, and every context that held before and does not now
+    /// set to empty.
+    /// </summary>
+    /// <remarks>
+    /// Only what changed or holds is written. A context that never held has no key,
+    /// and a template naming it reads empty anyway; a context that dropped must be
+    /// written empty once, or its widget would stay lit.
+    /// </remarks>
+    public static IReadOnlyList<KeyValuePair<string, string>> Changes(
+        IReadOnlyList<string>? before, IReadOnlyList<string> after)
+    {
+        ArgumentNullException.ThrowIfNull(after);
+
+        List<KeyValuePair<string, string>> changes = [];
+
+        foreach (string name in after)
+            changes.Add(new KeyValuePair<string, string>(KeyFor(name), name));
+
+        if (before is not null)
+        {
+            foreach (string name in before)
+                if (!after.Contains(name, StringComparer.Ordinal))
+                    changes.Add(new KeyValuePair<string, string>(KeyFor(name), string.Empty));
+        }
+
+        return changes;
+    }
+
+    /// <summary>
     /// The names as one value, in the order the window manager listed them.
     /// </summary>
     /// <remarks>

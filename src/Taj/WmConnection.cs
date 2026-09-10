@@ -595,6 +595,11 @@ public sealed class WmConnection : IAsyncDisposable
 
             if (!ActiveContexts.Same(_lastContexts, contexts))
             {
+                // One value per context as well as the joined list, so a widget can
+                // show an icon for one of them; the model drops unchanged writes.
+                foreach ((string key, string value) in ActiveContexts.Changes(_lastContexts, contexts))
+                    _model.SetValue(key, value);
+
                 _lastContexts = contexts;
                 ContextsChanged?.Invoke(contexts);
             }

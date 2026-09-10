@@ -107,40 +107,65 @@ schedule and breaking either is a different kind of event:
   of them. Both processes receive `context.changed` and re-read the snapshot, which
   lists the contexts in the window manager's own order.
 
-- **Ayn, the camera and microphone watcher: a fifth executable, and optional.** It
-  watches the record Windows keeps of which programs have the camera or the microphone
-  open - the same one the privacy indicator in the tray reads - and while any program
-  does, it holds a context on the window manager with `--lease`, so the pin dies with
-  Ayn's connection and a crashed watcher leaves nothing behind. When the window
-  manager restarts, Ayn notices and holds again within a second. The file says what
-  a meeting does; Ayn supplies `camera` and `microphone` and never needs to know.
+- **Ayn, the eye: a fifth executable, and optional.** It supplies three facts, each a
+  context the window manager holds while the fact is true, with `--lease` so the pin
+  dies with Ayn's connection and a crashed watcher leaves nothing behind: `camera-in-use`
+  and `microphone-in-use`, from the record Windows keeps of which programs have a device
+  open - the same one the privacy indicator in the tray reads - and `microphone-muted`,
+  from the default microphone's mute switch - the one the Sound settings toggle. Facts
+  are named `subject-state`, so the ones about one device sit together and the next
+  device slots in. The file says what a meeting does; Ayn never needs to know.
 
   ```kdl
   contexts {
-      context "camera" { }
-      context "meeting" { when { context "camera" } ... }
+      context "camera-in-use" { }
+      context "microphone-in-use" { }
+      context "microphone-muted" { }
+      context "meeting"       { when { context "microphone-in-use" } ... }
+      context "meeting-muted" { when { context "meeting"; context "microphone-muted" } }
   }
 
   ayn {
-      camera "camera"        // #false to leave a device alone
-      microphone "microphone"
-      settle 500             // ms a change must last before it is believed
+      camera     { in-use "camera-in-use" }              // camera #false: say nothing about it
+      microphone { in-use "microphone-in-use"; muted "microphone-muted" }
+      settle 500                                         // ms a change of use must last
   }
   ```
 
-  It sleeps on `RegNotifyChangeKeyValue` and holds no timer between changes, except
-  while a change is waiting out its settle time - a call opens and closes the camera
-  several times while setting up, and a context that flapped with it would run its
-  on-enter and on-exit twice. Every setting has a default, so the section can be left
-  out; `check-config` reads it (`AYN0001`-`AYN0004`, warnings only). `ayn --report`
-  prints what Windows says is using each device right now; `shubbak ayn-exit` stops
-  it, through a named event since it has no window to close. Renaming a context under
-  a running watcher on `wm-reload-config` hands the old name back and holds the new.
+  It also acts, on one thing: `signal "ayn" "microphone" "mute" | "unmute" |
+  "toggle-mute"` from a keybinding, the bar or the palette flips the system mute, and
+  the endpoint's own change notification turns that into the context - the same path a
+  change made in the Sound settings takes, so there is one copy of the truth. That is
+  the system's mute; a call's own mute button is the call's and invisible from here,
+  but Teams and its kind notice this one and say "muted by your system".
+
+  It sleeps on `RegNotifyChangeKeyValue` and two Core Audio callbacks and holds no
+  timer between changes, except while a change of use is waiting out its settle time
+  - a call opens and closes the camera several times while setting up, and a context
+  that flapped with it would run its on-enter and on-exit twice. The mute is never
+  settled: a person who pressed the key wants the icon now. When the window manager
+  restarts, Ayn notices and holds again within a second. Every setting has a default,
+  so the section can be left out; `check-config` reads it (`AYN0001`-`AYN0005`,
+  warnings only, the last for a context the file names but does not declare). `ayn
+  --report` prints what Windows says about each device right now, and opens no log
+  file; `shubbak ayn-exit` stops it, through a named event since it has no window to
+  close. Renaming a context under a running watcher on `wm-reload-config` hands the old
+  name back and holds the new.
 
   It exists as much to prove the pipe as to detect meetings: everything a provider
   needs turned out to be one held connection sending two commands, and the one thing
   it needed twice - a second connection, because a subscribed one cannot send - is
   noted in the design note as the pipe's remaining rough edge.
+
+- **One bar widget per context, and an icon font for it.** `{{ context.meeting }}` is
+  `meeting` while that context holds and empty otherwise - one source per context
+  beside the joined `{{ contexts }}` - and the new `then:X` filter turns a non-empty
+  value into `X`, so `{{ context.camera-in-use | then:\u{E722} }}` is a camera glyph
+  that appears while the camera is on and leaves with it. A widget, or a `when` block,
+  can name a `font=` of its own, which is how one widget draws from Segoe Fluent Icons
+  beside text in the profile's face; with `on-click="signal ayn microphone toggle-mute"`
+  that widget is a mute button. A template or `when of=` reading a `context.x` the
+  file does not declare is pointed out at load (`TAJ0021`), with a guess.
 
 - **Saved arrangements: `arrangement --save|--restore|--delete <name>`.** A demo whose
   windows have been dragged about wants them back where they were. `--save` records the

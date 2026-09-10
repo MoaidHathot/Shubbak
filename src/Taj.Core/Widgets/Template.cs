@@ -128,6 +128,13 @@ public static class Template
             case "default":
                 return input.Length == 0 ? argument : input;
 
+            case "then":
+                // The other half of `default`: something when there is a value, nothing
+                // when there is not. What turns `{{ context.camera-in-use }}` into an
+                // icon that is there while the camera is on and gone when it is not -
+                // the widget hides on empty, so the value only has to be non-empty.
+                return input.Length == 0 ? string.Empty : argument;
+
             case "pad":
             {
                 if (!int.TryParse(argument, out int width)) return input;

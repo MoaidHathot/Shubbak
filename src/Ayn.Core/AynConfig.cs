@@ -4,27 +4,30 @@ using Shubbak.Config.Kdl;
 namespace Ayn.Core;
 
 /// <summary>
-/// The watcher's own settings: which context to hold for which device, and how long
-/// a change has to last before it is believed.
+/// The watcher's own settings: which context to hold for which fact, and how long a
+/// change has to last before it is believed.
 /// </summary>
-/// <param name="Camera">
-/// The context held while any program has the camera open, or null to leave the
-/// camera alone.
-/// </param>
-/// <param name="Microphone">
-/// The context held while any program has the microphone open, or null to leave the
-/// microphone alone.
-/// </param>
+/// <param name="CameraInUse">The context held while any program has the camera open, or null to say nothing about it.</param>
+/// <param name="MicrophoneInUse">The context held while any program has the microphone open, or null.</param>
+/// <param name="MicrophoneMuted">The context held while the default microphone is muted at the system level, or null.</param>
 /// <param name="Settle">
-/// How long a device has to stay in its new state before the window manager is told,
+/// How long a device has to stay in or out of use before the window manager is told,
 /// or null for the default. A call opens and closes the camera several times while it
 /// is setting up, and a context that flapped with it would run its on-enter and
 /// on-exit twice. Nullable rather than zero-for-unsaid, because zero is a value
-/// somebody can mean: believe it at once.
+/// somebody can mean: believe it at once. Mute is never settled: a person who pressed
+/// the key wants the icon now.
 /// </param>
+/// <remarks>
+/// Facts are named <c>subject-state</c> - <c>camera-in-use</c>, <c>microphone-muted</c>
+/// - so that the ones about one device sort together and the next device slots in
+/// without anything being renamed. The defaults are those names; the file can rename
+/// any of them or turn any of them off.
+/// </remarks>
 public sealed record AynConfig(
-    string? Camera = "camera",
-    string? Microphone = "microphone",
+    string? CameraInUse = "camera-in-use",
+    string? MicrophoneInUse = "microphone-in-use",
+    string? MicrophoneMuted = "microphone-muted",
     TimeSpan? Settle = null)
 {
     /// <summary>What <see cref="Settle"/> is when the file does not say.</summary>
@@ -33,16 +36,23 @@ public sealed record AynConfig(
     /// <summary>The settle time, with the default applied.</summary>
     public TimeSpan EffectiveSettle => Settle ?? DefaultSettle;
 
-    /// <summary>The context for a device, or null when that device is not watched.</summary>
-    public string? ContextFor(DeviceKind device) => device switch
+    /// <summary>The context for a fact, or null when that fact is not reported.</summary>
+    public string? ContextFor(Fact fact) => fact switch
     {
-        DeviceKind.Camera => Camera,
-        DeviceKind.Microphone => Microphone,
+        Fact.CameraInUse => CameraInUse,
+        Fact.MicrophoneInUse => MicrophoneInUse,
+        Fact.MicrophoneMuted => MicrophoneMuted,
         _ => null,
     };
 
-    /// <summary>Whether anything is watched at all.</summary>
-    public bool WatchesAnything => Camera is not null || Microphone is not null;
+    /// <summary>Whether anything is reported at all.</summary>
+    public bool WatchesAnything => CameraInUse is not null || MicrophoneInUse is not null || MicrophoneMuted is not null;
+
+    /// <summary>Whether the consent store needs watching: either device's use is reported.</summary>
+    public bool NeedsConsentStore => CameraInUse is not null || MicrophoneInUse is not null;
+
+    /// <summary>Whether the audio endpoint needs watching: the microphone's mute is reported.</summary>
+    public bool NeedsAudioEndpoint => MicrophoneMuted is not null;
 }
 
 /// <summary>The result of reading the <c>ayn</c> section.</summary>
@@ -60,16 +70,32 @@ public sealed record AynConfigLoad(AynConfig Config, IReadOnlyList<Diagnostic> D
 /// not noticed.
 /// </para>
 /// <para>
-/// The KDL parser's own diagnostics are not repeated here: the window manager's
+/// Nested by subject, so the next device slots in beside these two:
+/// </para>
+/// <code>
+/// ayn {
+///     camera     { in-use "camera-in-use" }
+///     microphone { in-use "microphone-in-use"; muted "microphone-muted" }
+///     settle 500
+/// }
+/// </code>
+/// <para>
+/// <c>camera #false</c> turns a whole device off; <c>muted #false</c> turns one fact
+/// off. The KDL parser's own diagnostics are not repeated here: the window manager's
 /// loader reports them, and <c>shubbak check-config</c> runs both. A missing section
-/// means the defaults, which watch both devices under the names <c>camera</c> and
-/// <c>microphone</c>.
+/// means the defaults, which report all three facts under their own names.
 /// </para>
 /// </remarks>
 public static class AynConfigLoader
 {
     /// <summary>Every setting the section accepts, for the unknown-setting warning.</summary>
     public static IReadOnlyList<string> KnownKeys { get; } = ["camera", "microphone", "settle"];
+
+    /// <summary>What a <c>camera</c> block accepts.</summary>
+    public static IReadOnlyList<string> KnownCameraKeys { get; } = ["in-use"];
+
+    /// <summary>What a <c>microphone</c> block accepts.</summary>
+    public static IReadOnlyList<string> KnownMicrophoneKeys { get; } = ["in-use", "muted"];
 
     /// <summary>The longest a change may be asked to hold before it is believed.</summary>
     public const int MaxSettleMilliseconds = 10_000;
@@ -86,34 +112,71 @@ public static class AynConfigLoader
         if (parsed.HasErrors) return new AynConfigLoad(new AynConfig(), diagnostics);
 
         AynConfig config = parsed.Document.Node("ayn") is { } node
-            ? Read(node, diagnostics)
+            ? Read(node, DeclaredContexts(parsed.Document), diagnostics)
             : new AynConfig();
 
         return new AynConfigLoad(config, diagnostics);
     }
 
-    private static AynConfig Read(KdlNode node, List<Diagnostic> diagnostics)
+    private static AynConfig Read(KdlNode node, List<string> declaredContexts, List<Diagnostic> diagnostics)
     {
-        WarnAboutUnknown(node, diagnostics);
+        WarnAboutUnknown(node, KnownKeys, "ayn", diagnostics);
 
         var defaults = new AynConfig();
 
-        return new AynConfig(
-            ContextName(node, "camera", defaults.Camera, diagnostics),
-            ContextName(node, "microphone", defaults.Microphone, diagnostics),
-            Settle(node, diagnostics));
+        (string? cameraInUse, _) = Device(node, "camera", KnownCameraKeys, defaults.CameraInUse, null, declaredContexts, diagnostics);
+        (string? microphoneInUse, string? microphoneMuted) = Device(
+            node, "microphone", KnownMicrophoneKeys, defaults.MicrophoneInUse, defaults.MicrophoneMuted, declaredContexts, diagnostics);
+
+        return new AynConfig(cameraInUse, microphoneInUse, microphoneMuted, Settle(node, diagnostics));
+    }
+
+    /// <summary>
+    /// One device's block: <c>camera { in-use "..." }</c>, or <c>camera #false</c> for
+    /// none of it.
+    /// </summary>
+    private static (string? InUse, string? Muted) Device(
+        KdlNode parent, string device, IReadOnlyList<string> known,
+        string? inUseDefault, string? mutedDefault,
+        List<string> declaredContexts, List<Diagnostic> diagnostics)
+    {
+        KdlNode? node = parent.Child(device);
+
+        if (node is null)
+        {
+            // Property form: camera=#false.
+            if (parent.Property(device) is { } flag && flag.TryAsBool(out bool on) && !on) return (null, null);
+
+            return (inUseDefault, mutedDefault);
+        }
+
+        if (node.Argument(0) is { } argument && argument.TryAsBool(out bool enabled))
+            return enabled ? (inUseDefault, mutedDefault) : (null, null);
+
+        WarnAboutUnknown(node, known, device, diagnostics);
+
+        string? inUse = ContextName(node, "in-use", inUseDefault, device, declaredContexts, diagnostics);
+        string? muted = mutedDefault is null
+            ? null
+            : ContextName(node, "muted", mutedDefault, device, declaredContexts, diagnostics);
+
+        return (inUse, muted);
     }
 
     /// <summary>
     /// A context name, or null for <c>#false</c>, or the default when unsaid.
     /// </summary>
     /// <remarks>
-    /// <c>camera #false</c> is how a device is left alone: the watcher still runs for
-    /// the other one, and says nothing about this one. An empty string is refused
-    /// rather than read as "off", because <c>camera ""</c> is far more likely a slip
-    /// than a decision.
+    /// An empty string is refused rather than read as "off", because <c>in-use ""</c>
+    /// is far more likely a slip than a decision. A name the file's <c>contexts</c>
+    /// section does not declare is pointed out here rather than found in the log
+    /// after the window manager refused it - but only for a name the file wrote: the
+    /// defaults are not warned about, or a file with no interest in the watcher would
+    /// be told about three contexts it never mentioned.
     /// </remarks>
-    private static string? ContextName(KdlNode node, string key, string? fallback, List<Diagnostic> diagnostics)
+    private static string? ContextName(
+        KdlNode node, string key, string? fallback, string device,
+        List<string> declaredContexts, List<Diagnostic> diagnostics)
     {
         if (Setting(node, key) is not { } value) return fallback;
 
@@ -125,11 +188,25 @@ public static class AynConfigLoader
         {
             diagnostics.Add(Diagnostic.Warning(
                 "AYN0002",
-                $"'{key}' names no context; the default '{fallback}' is used.",
+                $"'{device} {key}' names no context; the default '{fallback}' is used.",
                 value.Span,
-                $"Write {key} \"{fallback}\" to name the context, or {key} #false to leave the {key} alone."));
+                $"Write {key} \"{fallback}\" to name the context, or {key} #false to say nothing about it."));
 
             return fallback;
+        }
+
+        if (!declaredContexts.Contains(name, StringComparer.OrdinalIgnoreCase))
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "AYN0005",
+                $"'{device} {key}' names context '{name}', which the contexts section does not declare; " +
+                "the window manager will refuse to hold it.",
+                value.Span,
+                declaredContexts.Count == 0
+                    ? $"Add a contexts {{ }} section with context \"{name}\" {{ }} in it."
+                    : Suggestion.Closest(name, declaredContexts) is { } guess
+                        ? $"Did you mean '{guess}'?"
+                        : $"Declared: {string.Join(", ", declaredContexts)}."));
         }
 
         return name;
@@ -165,7 +242,22 @@ public static class AynConfigLoader
         return TimeSpan.FromMilliseconds(milliseconds);
     }
 
-    private static void WarnAboutUnknown(KdlNode node, List<Diagnostic> diagnostics)
+    /// <summary>The names the <c>contexts</c> section declares, from the same document.</summary>
+    private static List<string> DeclaredContexts(KdlDocument document)
+    {
+        List<string> names = [];
+
+        if (document.Node("contexts") is { } section)
+        {
+            foreach (KdlNode context in section.ChildrenNamed("context"))
+                if (context.Argument(0)?.AsString() is { Length: > 0 } name)
+                    names.Add(name);
+        }
+
+        return names;
+    }
+
+    private static void WarnAboutUnknown(KdlNode node, IReadOnlyList<string> known, string where, List<Diagnostic> diagnostics)
     {
         foreach (KdlNode child in node.Children) Warn(child.Name, child.NameSpan);
 
@@ -173,13 +265,13 @@ public static class AynConfigLoader
 
         void Warn(string name, TextSpan span)
         {
-            if (KnownKeys.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
+            if (known.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
 
             diagnostics.Add(Diagnostic.Warning(
                 "AYN0001",
-                $"Unknown setting '{name}' in 'ayn'; it will be ignored.",
+                $"Unknown setting '{name}' in '{where}'; it will be ignored.",
                 span,
-                Suggestion.Closest(name, KnownKeys) is { } guess ? $"Did you mean '{guess}'?" : null));
+                Suggestion.Closest(name, known) is { } guess ? $"Did you mean '{guess}'?" : null));
         }
     }
 
