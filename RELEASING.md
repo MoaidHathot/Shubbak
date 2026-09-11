@@ -34,12 +34,26 @@ secret key ever exists anywhere. This is done once.
    Public Trust certificate profile. Note the account's region endpoint
    (`https://<region>.codesigning.azure.net`), the account name and the profile name.
 2. **Entra**: an app registration with a federated credential for GitHub Actions.
-   Issuer `https://token.actions.githubusercontent.com`, subject
-   `repo:MoaidHathot/Shubbak:environment:release`, audience `api://AzureADTokenExchange`.
-   The subject is the *environment*, not the tag: a federated credential matches its
-   subject exactly, and one per tag would be one per release.
+   Issuer `https://token.actions.githubusercontent.com`, audience
+   `api://AzureADTokenExchange`, and the subject **exactly as GitHub presents it**,
+   which carries the owner's and the repository's numeric ids:
+
+   ```
+   repo:MoaidHathot@8770486/Shubbak@1318753817:environment:release
+   ```
+
+   A federated credential matches its subject character for character. The plain
+   `repo:MoaidHathot/Shubbak:environment:release` from older guides is refused with
+   `AADSTS700213`; the `azure/login` step prints the subject it presented, which is the
+   one to copy. It names the *environment*, not the tag, because one credential per tag
+   would be one per release. The ids are `gh api users/MoaidHathot --jq .id` and
+   `gh api repos/MoaidHathot/Shubbak --jq .id`.
+
+   On Windows, pass the credential's JSON to `az` as a file - inline JSON loses its
+   quotes going through the `az.cmd` wrapper and fails to parse.
 3. **Role**: the app registration gets **Artifact Signing Certificate Profile Signer** on
-   the certificate profile (or the account).
+   the certificate profile (or the account). Nothing else: that one assignment is also
+   what makes the subscription visible to `azure/login`, so no Reader role is needed.
 4. **GitHub**: Settings → Environments → `release` (create it; no protection rules are
    needed, though a required reviewer is a reasonable one). On that environment, or on
    the repository:
