@@ -115,7 +115,7 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity quiet
+        run: dotnet test --no-build --configuration Release --verbosity quiet --logger "console;verbosity=minimal"
 
       # Five portable executables plus the uiAccess window manager, for x64 and for
       # ARM64, each checked: the right machine type, the right subsystem, the right

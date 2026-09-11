@@ -203,4 +203,41 @@ public sealed class IpcClientConcurrencyTests
 
         try { await pending; } catch (OperationCanceledException) { }
     }
+
+    [Fact]
+    public async Task ARequestQueuedBehindTheSubscriptionHandshakeIsRefusedToo()
+    {
+        // The window the check on the way in cannot see. The handshake is itself a
+        // request and holds the turn; a request arriving meanwhile finds the connection
+        // not yet streaming and queues behind it; the handshake completes and the
+        // subscription starts reading; the queued request's turn comes. It used to be
+        // let through - onto a stream the subscription was already reading - and the
+        // two raced each other for lines. Whichever lost threw "the stream is currently
+        // in use", which is the right exception type for the wrong reason, or read the
+        // other's answer. Now the handshake claims the stream before letting go of the
+        // turn, and the request is refused for the reason it should be.
+        string pipe = IsolatedPipe();
+
+        await using IpcServer server = StartServer(pipe, request =>
+            Task.FromResult(new IpcResponse(request.Id, Ok: true)));
+
+        await using IpcClient client = await ConnectAsync(pipe);
+        using var stop = new CancellationTokenSource();
+
+        IAsyncEnumerator<IpcEvent> events = client.SubscribeAsync("*", stop.Token).GetAsyncEnumerator();
+
+        // Starts the handshake, which takes the turn and holds it until the server
+        // answers. The request below is sent before that answer can have arrived.
+        ValueTask<bool> pending = events.MoveNextAsync();
+
+        InvalidOperationException refusal =
+            await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync("ping"));
+
+        // The refusal, and not StreamReader's complaint about a concurrent read.
+        Assert.Contains("subscription", refusal.Message, StringComparison.Ordinal);
+
+        await stop.CancelAsync();
+
+        try { await pending; } catch (OperationCanceledException) { }
+    }
 }

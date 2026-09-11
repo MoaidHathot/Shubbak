@@ -14,6 +14,47 @@ schedule and breaking either is a different kind of event:
   discarded rather than misread.
 
 ## [Unreleased]
+
+### Fixed
+
+- **Closing an IPC connection could throw, and Dalil read one of the throws as a refused
+  subscription.** `IpcClient.DisposeAsync` disposed its writer, disposing a writer
+  flushes, and a flush asks the pipe how it is. A client whose last request had failed
+  because the window manager left got `IOException: Pipe is broken`; a client disposed
+  while its last write was still being accounted for - the bytes long since in the pipe
+  and acted on, the task that wrote them not yet run to its end - got
+  `InvalidOperationException: The stream is currently in use`. Every caller had grown
+  a different catch around it. Dalil's caught the second as "the window manager refused
+  the subscription", warned that `shubbak-wm` was probably too old, and backed off for
+  thirty seconds. The client now disposes the pipe and nothing else, since the writer
+  never holds anything back, and its pending operations fail where they were awaited.
+  Found by `IpcSubscriberGateTests.OnlyTheTopicsAskedForCount` failing one run in ten
+  on the ARM64 runner; reproduced one run in eighty on a loaded x64; now three tests
+  that build each state by construction and failed every time on the old code.
+
+- **A request sent while a subscription's handshake was still in flight was let onto the
+  stream.** Sending on a subscribed connection is refused, but the flag that says so
+  was set after the handshake, and the handshake holds the turn - so a request that
+  queued behind it found the connection not yet streaming, waited its turn, and was
+  then let onto a stream the subscription had started reading. The two raced for
+  lines; whichever lost threw the right exception for the wrong reason, or read the
+  other's answer. The handshake now claims the stream before letting go of the turn,
+  and the check is repeated under it.
+
+- **Taj said nothing when the window manager's pipe closed under it.** A read that meets
+  the closed end of a pipe reports the end of the stream, not an error, so the pump
+  loop ended, went round and reconnected without a line in the log to account for the
+  gap. It now says so. The clean case - a shutdown notice, then the close - was already
+  logged from the notice.
+
+### Changed
+
+- **CI prints why a test failed.** `dotnet test --verbosity quiet` quiets the console
+  logger too, and at quiet it prints a failing test's name and nothing else - which is
+  how a failure on the ARM64 runner came to be undiagnosable from its own log. The
+  console logger is now named at `minimal`, which prints failures in full and passes
+  not at all.
+
 ## [0.10.0] - 2026-09-11
 
 Everything since 0.9.0, which was tagged and never published - so this is the first

@@ -298,6 +298,16 @@ public sealed class WmConnection : IAsyncDisposable
                 {
                     await HandleEventAsync(client, notification).ConfigureAwait(false);
                 }
+
+                // The stream ending without an exception is the pipe closing under the
+                // subscription: the window manager went without saying so, or said so
+                // and the notice was lost - it does not flush its outboxes on the way
+                // out. Said here because nothing else says it. A read that meets the end
+                // of the pipe reports the end of the stream, not an error, so this loop
+                // ended, went round and reconnected without a line in the log to explain
+                // the gap. The clean case announces itself from the shutdown event.
+                if (!_shutdown.IsCancellationRequested)
+                    Log.Info(LogCategory.Ipc, "the window manager closed the connection");
             }
             catch (OperationCanceledException)
             {

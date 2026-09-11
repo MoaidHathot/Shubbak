@@ -50,7 +50,8 @@ public sealed class IpcClient : IAsyncDisposable
     /// <see cref="_turn"/> cannot cover without blocking every request for the life of
     /// the subscription. Sending on a subscribed connection is therefore refused
     /// outright: it is a mistake in the caller, and a loud one is worth more than a
-    /// corrupted stream.
+    /// corrupted stream. Set while the handshake still holds the turn, so that the
+    /// refusal also reaches a request that was already queued behind the handshake.
     /// </remarks>
     private bool _streaming;
 
@@ -117,18 +118,29 @@ public sealed class IpcClient : IAsyncDisposable
     /// a time; see <see cref="_turn"/> for what interleaving them did.
     /// </para>
     /// </remarks>
-    public async Task<IpcResponse> SendAsync(
-        string method, string? payload = null, CancellationToken token = default)
+    public Task<IpcResponse> SendAsync(
+        string method, string? payload = null, CancellationToken token = default) =>
+        SendAsync(method, payload, claimStream: false, token);
+
+    /// <summary>
+    /// <see cref="SendAsync(string, string?, CancellationToken)"/>, with the one thing a
+    /// subscription's handshake needs that an ordinary request must not have.
+    /// </summary>
+    /// <param name="method">What to do; see <see cref="IpcRequest.Method"/>.</param>
+    /// <param name="payload">The method's argument.</param>
+    /// <param name="claimStream">
+    /// Whether a successful reply takes the connection over for a subscription. Decided
+    /// here, under the turn, and not by the caller afterwards: see the second check of
+    /// <see cref="_streaming"/> below for why the moment matters.
+    /// </param>
+    /// <param name="token">Abandons the request.</param>
+    private async Task<IpcResponse> SendAsync(
+        string method, string? payload, bool claimStream, CancellationToken token)
     {
         if (_writer is null || _reader is null)
             throw new InvalidOperationException("Not connected.");
 
-        if (_streaming)
-        {
-            throw new InvalidOperationException(
-                "This connection is streaming a subscription and cannot carry requests. " +
-                "Open a second connection for them.");
-        }
+        if (_streaming) throw StreamingRefusal();
 
         using var timeout = new CancellationTokenSource(ResponseTimeout);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
@@ -139,6 +151,14 @@ public sealed class IpcClient : IAsyncDisposable
 
         try
         {
+            // Checked again, under the turn. The check on the way in is a courtesy; this
+            // one is the guarantee. A subscription's handshake is itself a request, and it
+            // claims the stream before letting go of the turn - so a request that queued
+            // behind the handshake finds the connection spoken for when its turn comes.
+            // Without this it was let onto a stream the subscription had already started
+            // reading, and the two raced each other for lines.
+            if (_streaming) throw StreamingRefusal();
+
             // Checked under the turn, never before it: while a request is in flight the
             // flag is true of that request rather than of the connection, so a caller
             // reading it on the way in would refuse a connection that is perfectly well.
@@ -148,6 +168,9 @@ public sealed class IpcClient : IAsyncDisposable
             IpcResponse response = await ExchangeAsync(method, payload, linked.Token).ConfigureAwait(false);
 
             _broken = false;
+
+            if (claimStream && response.Ok) _streaming = true;
+
             return response;
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
@@ -160,6 +183,10 @@ public sealed class IpcClient : IAsyncDisposable
             _turn.Release();
         }
     }
+
+    private static InvalidOperationException StreamingRefusal() => new(
+        "This connection is streaming a subscription and cannot carry requests. " +
+        "Open a second connection for them.");
 
     /// <summary>
     /// Set when an exchange did not finish, so the stream is no longer at a boundary.
@@ -236,8 +263,8 @@ public sealed class IpcClient : IAsyncDisposable
     /// <param name="token">Stops the stream.</param>
     /// <remarks>
     /// Takes the connection over. Once subscribed it owns the reader for good, so
-    /// <see cref="SendAsync"/> on the same client is refused rather than allowed to
-    /// race the event loop for lines.
+    /// <see cref="SendAsync(string, string?, CancellationToken)"/> on the same client is
+    /// refused rather than allowed to race the event loop for lines.
     /// </remarks>
     public async IAsyncEnumerable<IpcEvent> SubscribeAsync(
         string? topics,
@@ -247,15 +274,12 @@ public sealed class IpcClient : IAsyncDisposable
 
         // Checked, because the server can refuse - an unknown topic can never fire, so
         // accepting the refusal quietly leaves the caller waiting for something that
-        // was never going to arrive.
-        IpcResponse response = await SendAsync("subscribe", topics ?? "*", token).ConfigureAwait(false);
+        // was never going to arrive. A reply that is accepted takes the connection over
+        // before the handshake lets go of the turn; see SendAsync.
+        IpcResponse response = await SendAsync("subscribe", topics ?? "*", claimStream: true, token).ConfigureAwait(false);
 
         if (!response.Ok)
             throw new InvalidOperationException(response.Error ?? "the subscription was refused.");
-
-        // After the handshake, not before: the handshake is itself a request and has to
-        // go through the ordinary path.
-        _streaming = true;
 
         while (!token.IsCancellationRequested)
         {
@@ -277,10 +301,37 @@ public sealed class IpcClient : IAsyncDisposable
         }
     }
 
+    /// <summary>Closes the connection. Does not throw for the state the connection is in.</summary>
+    /// <remarks>
+    /// <para>
+    /// The pipe is disposed; the reader and writer over it are not, and that is the
+    /// point of this method. Neither owns the pipe and neither holds anything - the
+    /// writer flushes on every write, so its buffer is empty the moment a call returns.
+    /// All that disposing them does is flush once more, and a flush asks the pipe how it
+    /// is. Broken, because a request failed after the window manager left - a write to a
+    /// closed pipe is what marks it so; a read that meets the closed end merely reports
+    /// the end of the stream - is an <see cref="IOException"/>. A write still being
+    /// accounted for is an <see cref="InvalidOperationException"/>: the bytes are long
+    /// since in the pipe and the server has acted on them, but the task that wrote them
+    /// has not run its last continuation, and the writer refuses a second operation
+    /// until it has. Under load that is exactly the moment a caller that has seen the
+    /// server respond decides it is done.
+    /// </para>
+    /// <para>
+    /// Each of those was an exception out of <c>DisposeAsync</c>, at the one moment a
+    /// caller has nothing left to do with one, and every caller had grown its own catch
+    /// around this to say so - a different list of exception types in each. There is
+    /// nothing to be saved by asking, so it is not asked.
+    /// </para>
+    /// <para>
+    /// Closing the pipe is what ends whatever was still going on: a subscription's
+    /// pending read, a request whose reply had not come. Those fail with an
+    /// <see cref="IOException"/> or <see cref="ObjectDisposedException"/> where they were
+    /// awaited, which is the right place for them.
+    /// </para>
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
-        if (_writer is not null) await _writer.DisposeAsync().ConfigureAwait(false);
-        _reader?.Dispose();
         if (_pipe is not null) await _pipe.DisposeAsync().ConfigureAwait(false);
 
         _turn.Dispose();
