@@ -117,9 +117,10 @@ jobs:
             "exists=true" >> $env:GITHUB_OUTPUT
           }
           catch {
-            Write-Output 'MoaidHathot.Shubbak is not in winget-pkgs yet. Submit the first version by hand:'
+            Write-Output 'MoaidHathot.Shubbak is not in winget-pkgs yet. Submit the first version by hand, as the bot account (see RELEASING.md):'
             Write-Output '  winget validate --manifest packaging\winget'
-            Write-Output '  wingetcreate submit --token <pat> packaging\winget'
+            Write-Output '  wingetcreate token --store'
+            Write-Output '  wingetcreate submit packaging\winget'
             "exists=false" >> $env:GITHUB_OUTPUT
           }
 

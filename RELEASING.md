@@ -94,20 +94,63 @@ personal access token with the `public_repo` scope - fine-grained tokens are not
 supported - and a fork of `microsoft/winget-pkgs` under the account the token belongs
 to. `public_repo` is write access to *every* public repository that account owns,
 which for the maintainer's own account is a great deal more than one pull request
-against `winget-pkgs` needs, and the token is handed to a third-party action. So:
+against `winget-pkgs` needs, and the token is handed to a third-party action. So the
+token belongs to an account that owns nothing else:
 
-1. a separate GitHub account that owns nothing but a fork of `microsoft/winget-pkgs`;
-2. its classic token, `public_repo` only, as the `WINGET_TOKEN` repository secret;
-3. its username as the `WINGET_FORK_USER` repository variable, which the workflow
-   passes to the action as `fork-user`. Until the variable is set the workflow falls
-   back to the repository owner, which works but with the wider blast radius above.
+1. **The account.** Sign out, create a second GitHub account - GitHub's terms allow one
+   free *machine account* alongside a personal one, "used exclusively for performing
+   automated tasks" - with a mailbox you control, a name that says what it is
+   (`shubbak-bot`, say), two-factor authentication on, and nothing in its profile
+   that matters. It never needs to be a collaborator on this repository.
+2. **The fork.** Signed in as the bot, fork `microsoft/winget-pkgs`. Default branch
+   only is fine. Komac, which `winget-releaser` runs, brings the fork up to date with
+   upstream before it branches, so the fork is never maintained by hand.
+3. **The token.** As the bot: Settings → Developer settings → Personal access tokens →
+   **Tokens (classic)** → Generate. Scope `public_repo` and nothing else. Give it an
+   expiry and put the date in a calendar: when it lapses the workflow's last step fails,
+   which is how you find out, and the fix is a new token in the same secret.
+4. **This repository.** Settings → Secrets and variables → Actions:
 
-See "After publishing" below for what the token is used for.
+   | Kind | Name | Value |
+   |---|---|---|
+   | secret | `WINGET_TOKEN` | the bot's token |
+   | variable | `WINGET_FORK_USER` | the bot's username |
+
+   `WINGET_FORK_USER` is what the workflow passes to the action as `fork-user`. Until
+   it is set the workflow falls back to the repository owner, which works only if the
+   fork and the token are the owner's - the wider blast radius above.
+
+The first submission of the package is made by hand and needs the same account; see
+"After publishing" below.
 
 Every action in `.github/workflows` is pinned to a commit rather than a version tag,
 because a tag can be moved by whoever controls the action's repository and two of the
 steps hold credentials. `.github/dependabot.yml` opens a pull request when an action
-publishes a new version; merging it is how the pins move.
+publishes a new version; merging it is how the pins move. The repository setting
+*Require actions to be pinned to a full-length commit SHA* refuses a workflow that
+is not, so an unpinned `@v4` cannot be merged back in by accident.
+
+## Once: the repository settings
+
+What stands between a token that can push and the things a push must not do. All of
+it is under Settings → Rules → Rulesets and Settings → Actions → General, and all of
+it is reversible there; none of it gets in the way of the ordinary day, which is a
+fast-forward push to `main` and, on release day, one annotated tag.
+
+| Where | Setting | Why |
+|---|---|---|
+| Ruleset `protect main` | `main`: block force pushes, block deletion. **No bypass.** | A rewrite of `main` is a deliberate act that should begin with editing this rule, not with `--force`. Fast-forward pushes - yours, and the one `winget.yml` makes - are unaffected. |
+| Ruleset `release tags` | `refs/tags/v*`: restrict creation, update and deletion. Bypass: repository admin. | Only the owner can create a release tag, and nobody can move or delete one without meaning to. `prepare-release.ps1 -Tag -Push` is the owner and goes through; a compromised token with `contents: write` does not. Closes the one gap left after the `release` environment's rules, which decide who may *run* the signing but not who may *name* a release. |
+| Actions → General | Require actions to be pinned to a full-length commit SHA | See above. |
+| Actions → General | Fork pull request workflows: require approval for **all** outside collaborators | `build.yml` runs the pull request's code on a Windows runner. It has no secrets and a read-only token, so the exposure is the runner and the minutes, and one click per pull request from a stranger is a fair price for deciding. |
+| Actions → General | Workflow permissions: read | Already so. Workflows that write - the release, the manifest commit - say so in their own `permissions:` block. |
+| Environment `release` | Required reviewer; deployment branches and tags: `main`, `v*` | See the signing setup above. |
+
+Not set, and why: **signed commits** are not required, because commits here are not
+signed and requiring them would refuse every push until they were - worth doing, but
+as its own change; **pull requests before merging** are not required, because a
+single maintainer pushing to `main` is the way this repository works and `winget.yml`
+commits to `main` directly, and the rule would stop both.
 
 ## 1. Write the changelog as you go
 
@@ -233,19 +276,29 @@ Publishing the release triggers `.github/workflows/winget.yml`, which:
   zip to the right installer entries).
 
 **The first submission is manual**, because the update tooling can only update a
-package that exists. Download the `winget/` directory from the workflow artefact - or
-take the committed `packaging/winget` after the workflow above has run - and:
+package that exists. It is made *as the bot account*, so that the fork it uses is the
+one `winget-releaser` will look for afterwards, and it is made after the release is
+published, so that the manifests carry the hashes of files anybody can download. Take
+the committed `packaging/winget` once the workflow above has run - or the `winget/`
+directory from the workflow artefact - and:
 
 ```
+winget install Microsoft.WingetCreate
 winget validate --manifest packaging\winget
-wingetcreate submit --token <pat> packaging\winget
+wingetcreate token --store
+wingetcreate submit packaging\winget
 ```
 
-`wingetcreate` forks `microsoft/winget-pkgs` to the token's account and opens the pull
-request from there - use the `WINGET_TOKEN` account's token here too, so the fork
-lands where `winget-releaser` will look for it. Then watch the pull request: the bot
-validates the manifests, downloads both installers, checks the hashes, installs them
-in a VM and reports.
+`token --store` with no token opens GitHub's device sign-in: sign in as the bot. That
+keeps the token off the command line and out of the shell's history, which the tool's
+own documentation warns `--token` does not. `submit` uses the bot's existing fork of
+`microsoft/winget-pkgs`, pushes a branch and opens the pull request from there. Then
+watch it: the repository's bot validates the manifests, downloads all four installers,
+checks the hashes, installs them in a VM and reports; a new package also waits for a
+moderator, who may ask about the publisher, the URLs or the licence, and that has taken
+anywhere from a day to a couple of weeks. Once it is merged, `winget search shubbak`
+finds it within a day, and every release after this one is a pull request the
+workflow opens on its own.
 
 ### The icon winget will not show
 
