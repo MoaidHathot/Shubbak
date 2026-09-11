@@ -144,6 +144,9 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # Only the Azure CLI credential, which azure/login has just produced. The rest
+          # cannot apply on a runner and would each fail before it was tried.
+          exclude-environment-credential: true
 
       - name: Check the signatures on the executables
         if: env.SIGNING_ENABLED == 'true'
@@ -174,6 +177,9 @@ jobs:
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
+          # Only the Azure CLI credential, which azure/login has just produced. The rest
+          # cannot apply on a runner and would each fail before it was tried.
+          exclude-environment-credential: true
 
       - name: Check the signatures on the MSIs
         if: env.SIGNING_ENABLED == 'true'
