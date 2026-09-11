@@ -25,8 +25,12 @@ env:
 jobs:
   build:
     # Windows, and not by preference: the platform layer is Win32 and the tests
-    # create real windows to check what Shubbak does to them.
+    # create real windows to check what Shubbak does to them. x64, and it also
+    # cross-compiles the ARM64 release below; the ARM64 job then runs what it built.
     runs-on: windows-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +38,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      - name: Read the version
+        id: version
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content Directory.Build.props)
+          "version=$($props.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim())" >> $env:GITHUB_OUTPUT
 
       # Everything that carries the version - the application manifests, the winget and
       # Scoop manifests and their URLs, the MSI's UpgradeCode - is compared against
@@ -77,15 +88,6 @@ jobs:
         shell: pwsh
         run: ./tools/check-doc-snippets.ps1
 
-      # The release, unsigned: publishes the five executables and the uiAccess window
-      # manager and checks each (version reported, PE subsystem, embedded manifest),
-      # packs the zip, builds the MSI with ICE validation, hashes, and fills and
-      # validates the package manifests. The same script the release workflow runs,
-      # so the two cannot disagree about what a release is.
-      - name: Build the release artefacts
-        shell: pwsh
-        run: ./tools/build-release.ps1 -SkipTests
-
       # The architecture page quotes a test count in two places. It has been corrected
       # by hand four times and was wrong on each of the four occasions somebody looked -
       # the last time within the same commit that added this check, because the count
@@ -114,8 +116,27 @@ jobs:
 
           Write-Output "Documented test count is correct: $declared"
 
+      # The release, unsigned, for both architectures: publishes the five executables
+      # and the uiAccess window manager for each and checks them (machine type, PE
+      # subsystem, embedded manifest, and the reported version where this machine can
+      # run them), packs the zips, builds the MSIs - the x64 one with ICE validation -
+      # hashes, and fills and validates the package manifests. The same script the
+      # release workflow runs, so the two cannot disagree about what a release is.
+      - name: Build the release artefacts
+        shell: pwsh
+        run: ./tools/build-release.ps1 -SkipTests
+
+      # Install it, check everything it claims to put on the machine, uninstall it,
+      # check it is all gone. The runner is elevated and disposable, which is exactly
+      # what an installer test wants. The window manager inside is the uiAccess build
+      # and is not started; it would refuse to, unsigned.
+      - name: Install and uninstall the x64 MSI
+        shell: pwsh
+        run: ./tools/test-msi.ps1 -Path artifacts/shubbak-${{ steps.version.outputs.version }}-win-x64.msi -Version ${{ steps.version.outputs.version }}
+
       # Unsigned, so not for anybody else - but exactly what a release would contain,
-      # which makes it the thing to install on a test machine before tagging.
+      # which makes it the thing to install on a test machine before tagging. Also
+      # what the ARM64 job below picks up.
       - name: Upload the unsigned artefacts
         uses: actions/upload-artifact@v4
         with:
@@ -124,7 +145,73 @@ jobs:
             artifacts/shubbak-*.zip
             artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
+            artifacts/SHA256SUMS.txt
             artifacts/winget/
             artifacts/bucket/
           retention-days: 7
           if-no-files-found: error
+
+  arm64:
+    # The ARM64 binaries are cross-compiled above; this is where they run. Two things
+    # happen here that cannot happen on x64: the tests run natively, so the platform
+    # layer is exercised on the architecture people will actually use it on, and the
+    # ARM64 MSI is installed and uninstalled for real - which stands in for the ICE
+    # validation an x64 machine cannot perform on it.
+    runs-on: windows-11-arm
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # ShubbakRid is the architecture the executables, the test hosts and the one
+      # architecture-specific library are built for; see Directory.Build.props. The SDK
+      # refuses a RuntimeIdentifier at the solution level (NETSDK1134), which is why it
+      # is a property of its own.
+      - name: Restore
+        run: dotnet restore -p:ShubbakRid=win-arm64
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release -p:ShubbakRid=win-arm64
+
+      # Natively: the test hosts are ARM64 processes loading ARM64-compiled Win32
+      # bindings, so the platform layer is exercised on the architecture people will
+      # run it on rather than through emulation.
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity quiet -p:ShubbakRid=win-arm64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: shubbak-unsigned-${{ github.sha }}
+          path: artifacts
+
+      # The five cross-compiled executables, run on the machine they were built for.
+      - name: Run the ARM64 binaries
+        shell: pwsh
+        run: |
+          $version = '${{ needs.build.outputs.version }}'
+          $dir = 'artifacts/unpacked-arm64'
+          Expand-Archive "artifacts/shubbak-$version-win-arm64.zip" -DestinationPath $dir -Force
+
+          foreach ($name in 'shubbak', 'shubbak-wm', 'taj', 'dalil', 'ayn') {
+            $exe = Join-Path $dir "$name.exe"
+            $bytes = [System.IO.File]::ReadAllBytes($exe)
+            $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+            $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+            if ($machine -ne 0xAA64) { throw ("{0}.exe has machine type 0x{1:X4}; expected ARM64 (0xAA64)." -f $name, $machine) }
+
+            $out = New-TemporaryFile
+            $p = Start-Process -FilePath $exe -ArgumentList '--version' -RedirectStandardOutput $out -NoNewWindow -Wait -PassThru
+            $reported = (Get-Content $out -Raw).Trim()
+            Remove-Item $out -Force
+            if ($p.ExitCode -ne 0) { throw "$name --version exited $($p.ExitCode)." }
+            if ($reported -ne "Shubbak $version") { throw "$name reports '$reported'; expected 'Shubbak $version'." }
+            Write-Output "$name.exe -> $reported (ARM64)"
+          }
+
+      - name: Install and uninstall the ARM64 MSI
+        shell: pwsh
+        run: ./tools/test-msi.ps1 -Path artifacts/shubbak-${{ needs.build.outputs.version }}-win-arm64.msi -Version ${{ needs.build.outputs.version }}

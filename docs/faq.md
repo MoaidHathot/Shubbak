@@ -50,8 +50,10 @@ MoaidHathot.Shubbak --scope user`, Scoop and the zip need no elevation and work 
 same, minus that one ability.
 
 **Does it run on ARM64 Windows?**
-The x64 build runs on Windows 11 on ARM through the built-in emulation. A native ARM64
-build is planned; the code compiles for it already, and the packaging is what remains.
+Natively. Every release ships an ARM64 MSI and zip beside the x64 ones, and winget and
+Scoop pick the one for your machine. The tests run on an ARM64 machine in CI; the
+performance numbers in [Architecture](architecture.md#why-net) were taken on x64 and
+have not been repeated there yet.
 
 **Why .NET?**
 It was measured rather than assumed; the numbers are in

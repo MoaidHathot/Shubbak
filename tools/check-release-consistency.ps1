@@ -28,6 +28,12 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $failures = [System.Collections.Generic.List[string]]::new()
 
+. (Join-Path $PSScriptRoot 'WingetManifest.ps1')
+
+# The architectures a release ships, as winget spells them and as the runtime
+# identifiers spell them. Every package manifest must name exactly these.
+$architectures = [ordered]@{ 'x64' = 'win-x64'; 'arm64' = 'win-arm64' }
+
 function Read-Text([string] $relative) {
     [System.IO.File]::ReadAllText((Join-Path $root $relative))
 }
@@ -75,9 +81,9 @@ foreach ($file in Get-ChildItem (Join-Path $root 'packaging\winget') -Filter '*.
 
     foreach ($match in [regex]::Matches($text, '(?m)^\s*InstallerUrl:\s*(\S+)')) {
         $url = $match.Groups[1].Value
-        Check ($url -match "/releases/download/v$escaped/shubbak-$escaped-win-x64\.(msi|zip)$") `
+        Check ($url -match "/releases/download/v$escaped/shubbak-$escaped-win-(x64|arm64)\.(msi|zip)$") `
             "$relative installer URL names v$version ($url)" `
-            "The asset URL must be .../releases/download/v$version/shubbak-$version-win-x64.<msi|zip>."
+            "The asset URL must be .../releases/download/v$version/shubbak-$version-win-<x64|arm64>.<msi|zip>."
     }
 
     foreach ($match in [regex]::Matches($text, 'github\.com/MoaidHathot/Shubbak/blob/v(\d+\.\d+\.\d+)/')) {
@@ -88,13 +94,38 @@ foreach ($file in Get-ChildItem (Join-Path $root 'packaging\winget') -Filter '*.
     }
 }
 
+# winget: one MSI and one zip per architecture, each URL naming the architecture of
+# the entry it sits in. A hash under the wrong architecture would validate and then
+# fail on every install.
+$installers = @(Read-WingetInstallers -Path (Join-Path $root 'packaging\winget\MoaidHathot.Shubbak.installer.yaml'))
+foreach ($arch in $architectures.Keys) {
+    foreach ($type in 'wix', 'zip') {
+        $entry = $installers | Where-Object { $_.Architecture -eq $arch -and $_.InstallerType -eq $type }
+        Check (@($entry).Count -eq 1) "winget manifest has one $arch $type installer" "Add or deduplicate the $arch $type entry under Installers."
+        if (@($entry).Count -eq 1) {
+            $suffix = "-$($architectures[$arch])." + $(if ($type -eq 'zip') { 'zip' } else { 'msi' })
+            Check ($entry.InstallerUrl -and $entry.InstallerUrl.EndsWith($suffix)) `
+                "winget $arch $type entry points at a $suffix asset" `
+                "The InstallerUrl under Architecture: $arch, InstallerType: $type must end in $suffix."
+        }
+    }
+}
+Check (@($installers).Count -eq 2 * $architectures.Count) 'winget manifest has no other installers' "Expected $(2 * $architectures.Count) entries, found $(@($installers).Count)."
+
 # Scoop.
 $scoopText = Read-Text 'bucket\shubbak.json'
 $scoop = $scoopText | ConvertFrom-Json
 Check ($scoop.version -eq $version) 'bucket\shubbak.json has version' "Set `"version`": `"$version`"."
-Check ($scoop.architecture.'64bit'.url -match "/releases/download/v$escaped/shubbak-$escaped-win-x64\.zip$") `
-    'bucket\shubbak.json URL names the version' `
-    "The URL must be .../releases/download/v$version/shubbak-$version-win-x64.zip."
+$scoopBlocks = @{ '64bit' = 'win-x64'; 'arm64' = 'win-arm64' }
+foreach ($block in $scoopBlocks.Keys) {
+    $rid = $scoopBlocks[$block]
+    Check ($null -ne $scoop.architecture.$block -and $scoop.architecture.$block.url -match "/releases/download/v$escaped/shubbak-$escaped-$rid\.zip$") `
+        "bucket\shubbak.json $block URL names v$version and $rid" `
+        "The $block URL must be .../releases/download/v$version/shubbak-$version-$rid.zip."
+    Check ($null -ne $scoop.autoupdate.architecture.$block -and $scoop.autoupdate.architecture.$block.url -like "*shubbak-`$version-$rid.zip") `
+        "bucket\shubbak.json autoupdate has a $block block" `
+        "Add autoupdate.architecture.$block with the `$version URL for $rid."
+}
 
 # The WiX project reads $(Version) directly and needs no check. The MSI's UpgradeCode
 # must match what the winget manifest says it is, or winget cannot correlate an
@@ -108,7 +139,7 @@ Check ($wxsUpgrade -and $wxsUpgrade -eq $yamlUpgrade) `
     "Package.wxs has $wxsUpgrade; the installer manifest has $yamlUpgrade. They must be the same GUID, and it must never change."
 
 # Informational: placeholders are expected in the templates and filled by the build.
-if ($installerYaml -match "'0{64}'|'F{64}'") {
+if (@($installers | Where-Object { Test-PlaceholderHash $_.InstallerSha256 }).Count -gt 0) {
     Write-Output 'note  packaging\winget still has placeholder hashes; tools\build-release.ps1 fills them.'
 }
 

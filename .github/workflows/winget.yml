@@ -68,7 +68,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir artifacts `
-            --pattern 'shubbak-*-win-x64.msi' --pattern 'shubbak-*-win-x64.zip'
+            --pattern 'shubbak-*-win-x64.msi' --pattern 'shubbak-*-win-x64.zip' `
+            --pattern 'shubbak-*-win-arm64.msi' --pattern 'shubbak-*-win-arm64.zip'
           Get-ChildItem artifacts
 
       - name: Fill the manifests from the published packages
@@ -121,6 +122,6 @@ jobs:
         with:
           identifier: MoaidHathot.Shubbak
           release-tag: ${{ env.TAG }}
-          # Both installers, and nothing else: the symbols archive must not be matched.
-          installers-regex: 'shubbak-[\d.]+-win-x64\.(msi|zip)$'
+          # The four installers, and nothing else: the symbols archives must not match.
+          installers-regex: 'shubbak-[\d.]+-win-(x64|arm64)\.(msi|zip)$'
           token: ${{ secrets.WINGET_TOKEN }}

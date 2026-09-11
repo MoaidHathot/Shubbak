@@ -111,9 +111,11 @@ jobs:
       - name: Test
         run: dotnet test --no-build --configuration Release --verbosity quiet
 
-      # Five portable executables plus the uiAccess window manager, each checked: it
-      # reports the expected version, has the right subsystem, carries the right
-      # manifest. The uiAccess one is not run - it cannot start outside Program Files.
+      # Five portable executables plus the uiAccess window manager, for x64 and for
+      # ARM64, each checked: the right machine type, the right subsystem, the right
+      # manifest, and the right reported version where this runner can run it. The
+      # ARM64 binaries are cross-compiled and cannot run here; build.yml runs them on
+      # an ARM64 runner on every push, which is why a release does not have to.
       - name: Publish (NativeAOT)
         shell: pwsh
         run: ./tools/build-release.ps1 -Publish -SkipTests
@@ -148,15 +150,18 @@ jobs:
         shell: pwsh
         run: ./tools/check-signatures.ps1 (Get-ChildItem artifacts/publish, artifacts/publish-uiaccess -Recurse -Filter *.exe).FullName
 
-      # The zip is packed from the signed binaries, and the MSI is built from them, so
-      # both contain exactly what was checked above.
+      # The zips are packed from the signed binaries, and the MSIs are built from them,
+      # so all of them contain exactly what was checked above. ICE validation runs on
+      # the x64 MSI; Windows Installer on this runner cannot open the ARM64 one, and the
+      # authoring is the same.
       - name: Stage and pack
         shell: pwsh
         run: ./tools/build-release.ps1 -Stage -Pack
 
-      # The MSI itself, as a file. Only the copy at the top of artifacts/, which is the
-      # one that ships; the build output under artifacts/msi is not recursed into.
-      - name: Sign the MSI
+      # The MSIs themselves, as files. Only the copies at the top of artifacts/, which
+      # are the ones that ship; the build output under artifacts/msi is not recursed
+      # into.
+      - name: Sign the MSIs
         if: env.SIGNING_ENABLED == 'true'
         uses: azure/artifact-signing-action@v2
         with:
@@ -170,7 +175,7 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Check the signature on the MSI
+      - name: Check the signatures on the MSIs
         if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
         run: ./tools/check-signatures.ps1 (Get-ChildItem artifacts -Filter *.msi).FullName
@@ -188,11 +193,12 @@ jobs:
       - name: Upload the build artefacts
         uses: actions/upload-artifact@v4
         with:
-          name: shubbak-${{ steps.version.outputs.version }}-win-x64
+          name: shubbak-${{ steps.version.outputs.version }}
           path: |
             artifacts/shubbak-*.zip
             artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
+            artifacts/SHA256SUMS.txt
             artifacts/winget/
             artifacts/bucket/
           if-no-files-found: error
@@ -209,6 +215,7 @@ jobs:
             artifacts/shubbak-*.zip
             artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
+            artifacts/SHA256SUMS.txt
           body: |
             ## Install
 
@@ -217,8 +224,9 @@ jobs:
             ```
 
             That installs the MSI to `Program Files`, which is what lets Shubbak tile windows
-            that belong to elevated processes without running elevated itself. For a portable
-            install under your own profile, with no administrator prompt:
+            that belong to elevated processes without running elevated itself. winget picks
+            the build for your machine: x64, or native ARM64. For a portable install under
+            your own profile, with no administrator prompt:
 
             ```
             winget install MoaidHathot.Shubbak --scope user
@@ -243,8 +251,7 @@ jobs:
             `SHA256`:
 
             ```
-            ${{ steps.manifests.outputs.msi_sha256 }}  shubbak-${{ steps.version.outputs.version }}-win-x64.msi
-            ${{ steps.manifests.outputs.zip_sha256 }}  shubbak-${{ steps.version.outputs.version }}-win-x64.zip
+            ${{ steps.manifests.outputs.sha256sums }}
             ```
 
             Every executable and the MSI are Authenticode signed. The certificate is new,

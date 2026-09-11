@@ -43,10 +43,11 @@ scoop install shubbak
 Portable, like `--scope user`.
 
 **The zip or the MSI by hand**, from
-[Releases](https://github.com/MoaidHathot/Shubbak/releases). The zip unpacks anywhere
-and needs nothing else installed; add its folder to your `PATH` if you want to type
-`shubbak` from any terminal, and read [about the signature](#about-the-signature)
-below.
+[Releases](https://github.com/MoaidHathot/Shubbak/releases). Each comes for x64
+(`-win-x64`) and for ARM64 (`-win-arm64`); winget and Scoop pick the right one for the
+machine, and by hand you do. The zip unpacks anywhere and needs nothing else
+installed; add its folder to your `PATH` if you want to type `shubbak` from any
+terminal, and read [about the signature](#about-the-signature) below.
 
 Then **open a new terminal**: the one you installed from still has the `PATH` it
 started with.

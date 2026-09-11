@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <!--
@@ -23,8 +23,8 @@
     <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
     <AssemblyTitle>Shubbak Window Manager</AssemblyTitle>
     <RootNamespace>Shubbak.Wm</RootNamespace>
-    <Platforms>x64</Platforms>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(ShubbakRid)</RuntimeIdentifier>
 
     <!--
       Regenerate with tools/make-icons.ps1. Without one, Task Manager's Startup tab

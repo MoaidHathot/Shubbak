@@ -34,4 +34,21 @@
     <Version>0.10.0</Version>
   </PropertyGroup>
 
+  <!--
+    The architecture the executables and the test hosts are built for when nothing
+    says otherwise: x64, which is what every developer machine so far has been.
+
+    Each executable and test project takes this as its RuntimeIdentifier unless one
+    was given, so `dotnet build -p:ShubbakRid=win-arm64` builds and tests the whole
+    solution natively on an ARM64 machine - which is what the ARM64 job in CI does.
+    A property of its own rather than RuntimeIdentifier itself because the SDK
+    refuses a RuntimeIdentifier at the solution level (NETSDK1134); the libraries stay
+    architecture-neutral either way, and a RuntimeIdentifier given to dotnet publish still wins for a
+    single project. Shubbak.Native is the one library that has to be compiled for a
+    concrete architecture, and it follows whichever RID reaches it.
+  -->
+  <PropertyGroup>
+    <ShubbakRid Condition="'$(ShubbakRid)' == ''">win-x64</ShubbakRid>
+  </PropertyGroup>
+
 </Project>

@@ -161,7 +161,9 @@
                 Target="[INSTALLFOLDER]shubbak-wm.exe"
                 WorkingDirectory="INSTALLFOLDER"
                 Icon="ShubbakWm.ico" />
-      <RegistryValue Root="HKCU" Key="Software\Shubbak" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      <RegistryKey Root="HKCU" Key="Software\Shubbak" ForceDeleteOnUninstall="yes">
+        <RegistryValue Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+      </RegistryKey>
     </Component>
 
     <!--
@@ -176,7 +178,7 @@
       which version it is, for anything that wants to know without asking PATH.
     -->
     <Component Id="MachinePath" Directory="INSTALLFOLDER" Guid="{C771C8F1-A8BF-4B5A-BFB6-11D9102A579E}">
-      <RegistryKey Root="HKLM" Key="SOFTWARE\Shubbak">
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Shubbak" ForceDeleteOnUninstall="yes">
         <RegistryValue Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
         <RegistryValue Name="Version" Type="string" Value="[ProductVersion]" />
       </RegistryKey>

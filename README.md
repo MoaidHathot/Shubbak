@@ -97,9 +97,8 @@ scoop bucket add shubbak https://github.com/MoaidHathot/Shubbak
 scoop install shubbak
 ```
 
-Or take the MSI or the zip from [Releases](https://github.com/MoaidHathot/Shubbak/releases).
-The zip unpacks anywhere. Everything is signed. x64 for now; on Windows on ARM it runs
-through the built-in emulation.
+Or take the MSI or the zip from [Releases](https://github.com/MoaidHathot/Shubbak/releases),
+for x64 or for ARM64. The zip unpacks anywhere. Everything is signed.
 
 ## First steps
 

@@ -2,6 +2,7 @@
 
 PackageIdentifier: MoaidHathot.Shubbak
 PackageVersion: 0.10.0
+
 MinimumOSVersion: 10.0.19041.0
 InstallModes:
   - silent
@@ -9,21 +10,33 @@ InstallModes:
 UpgradeBehavior: install
 # Filled by tools/build-release.ps1 with the day the build was made.
 ReleaseDate: 2026-09-11
-# Two ways to install the same version. winget prefers the MSI when both apply and
-# nothing says otherwise, and falls through to the zip for `--scope user`.
+
+# Four ways to install the same version: an MSI and a portable zip, each for x64 and
+# for ARM64. winget picks the native architecture, prefers the MSI when both apply
+# and nothing says otherwise, and falls through to the zip for `--scope user`.
+#
+# The MSIs are per machine, under Program Files, elevation required. They carry the
+# uiAccess build of the window manager, which is what lets Shubbak move windows
+# belonging to elevated processes without running elevated itself - and which
+# Windows honours only for a signed binary installed in exactly that place. The
+# ProductCode changes with every version and every architecture, as a major upgrade
+# requires; the UpgradeCode never does, so an ARM64 machine that once installed the
+# x64 MSI is upgraded to the native one. Hashes and ProductCodes are placeholders
+# here, filled and checked by the release build.
+#
+# The zips are five standalone executables, each exposed as its own command. winget
+# extracts the archive into its Packages directory and puts a symlink for every
+# NestedInstallerFile into its Links directory, which is already on PATH - and that
+# is what lets a bare `taj` in a config file be found. No Scope on those entries:
+# winget does not support the field for portable installers and decides the scope
+# from the command line instead.
 Installers:
-  # The MSI: per machine, under Program Files, elevation required. It carries the
-  # uiAccess build of the window manager, which is what lets Shubbak move windows
-  # belonging to elevated processes without running elevated itself - and which
-  # Windows honours only for a signed binary installed in exactly that place.
   - Architecture: x64
     InstallerType: wix
     Scope: machine
     ElevationRequirement: elevationRequired
     InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-x64.msi
     InstallerSha256: '0000000000000000000000000000000000000000000000000000000000000000'
-    # The ProductCode changes with every version, as a major upgrade requires; the
-    # UpgradeCode never does. Both filled/checked by the release build.
     ProductCode: '{00000000-0000-0000-0000-000000000000}'
     Commands:
       - shubbak
@@ -34,16 +47,6 @@ Installers:
         UpgradeCode: '{FCFFCA55-3741-45D5-9410-3429B9DF9BFD}'
         InstallerType: wix
 
-  # The zip: five standalone executables, each exposed as its own command. winget
-  # extracts the archive into its Packages directory and puts a symlink for every
-  # NestedInstallerFile into its Links directory, which is already on PATH.
-  #
-  # That PATH entry matters more than it looks: the window manager runs whatever is
-  # in `startup-command` through the shell, so a bare `taj` in a config file is
-  # resolved by searching PATH. Without the symlinks it would not be found.
-  #
-  # No Scope on this one - winget does not support the field for portable installers
-  # and decides the scope from the command line instead.
   - Architecture: x64
     InstallerType: zip
     NestedInstallerType: portable
@@ -59,6 +62,40 @@ Installers:
       - RelativeFilePath: ayn.exe
         PortableCommandAlias: ayn
     InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-x64.zip
-    InstallerSha256: 'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF'
+    InstallerSha256: '1111111111111111111111111111111111111111111111111111111111111111'
+
+  - Architecture: arm64
+    InstallerType: wix
+    Scope: machine
+    ElevationRequirement: elevationRequired
+    InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-arm64.msi
+    InstallerSha256: '2222222222222222222222222222222222222222222222222222222222222222'
+    ProductCode: '{00000000-0000-0000-0000-000000000000}'
+    Commands:
+      - shubbak
+    AppsAndFeaturesEntries:
+      - DisplayName: Shubbak
+        Publisher: Moaid Hathot
+        ProductCode: '{00000000-0000-0000-0000-000000000000}'
+        UpgradeCode: '{FCFFCA55-3741-45D5-9410-3429B9DF9BFD}'
+        InstallerType: wix
+
+  - Architecture: arm64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: shubbak.exe
+        PortableCommandAlias: shubbak
+      - RelativeFilePath: shubbak-wm.exe
+        PortableCommandAlias: shubbak-wm
+      - RelativeFilePath: taj.exe
+        PortableCommandAlias: taj
+      - RelativeFilePath: dalil.exe
+        PortableCommandAlias: dalil
+      - RelativeFilePath: ayn.exe
+        PortableCommandAlias: ayn
+    InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-arm64.zip
+    InstallerSha256: '3333333333333333333333333333333333333333333333333333333333333333'
+
 ManifestType: installer
 ManifestVersion: 1.12.0

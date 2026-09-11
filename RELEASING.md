@@ -13,15 +13,16 @@ One tag, `v<version>`, and from it one workflow run that produces:
 
 | Artefact | What it is |
 |---|---|
-| `shubbak-<v>-win-x64.msi` | Per-machine installer: the five executables under `%ProgramFiles%\Shubbak`, on the machine `PATH`, in Apps & Features. Carries the **uiAccess** build of `shubbak-wm`, which is what lets it tile windows of elevated programs without being elevated. Signed. |
-| `shubbak-<v>-win-x64.zip` | The portable build: five executables plus the readme, licence, example config and docs, flat. What Scoop and `winget --scope user` install. Signed executables. |
-| `*.sha256` | One per package. What the manifests carry and what a person downloading by hand can check. |
-| `shubbak-<v>-win-x64-symbols.zip` | The `.pdb` files, for reading a crash report's stack. |
-| `winget/`, `bucket/` | The package manifests with the real hashes, `ProductCode` and date filled in. Only in the workflow's uploaded artefact, not on the release page. |
+| `shubbak-<v>-win-<arch>.msi` | Per-machine installer, one per architecture (`x64`, `arm64`): the five executables under `%ProgramFiles%\Shubbak`, on the machine `PATH`, in Apps & Features. Carries the **uiAccess** build of `shubbak-wm`, which is what lets it tile windows of elevated programs without being elevated. Signed. |
+| `shubbak-<v>-win-<arch>.zip` | The portable build, one per architecture: five executables plus the readme, licence, example config and docs, flat. What Scoop and `winget --scope user` install. Signed executables. |
+| `*.sha256`, `SHA256SUMS.txt` | One per package, and all of them in one file. What the manifests carry and what a person downloading by hand can check. |
+| `shubbak-<v>-win-<arch>-symbols.zip` | The `.pdb` files, for reading a crash report's stack. |
+| `winget/`, `bucket/` | The package manifests with the real hashes, `ProductCode`s and date filled in. Only in the workflow's uploaded artefact, not on the release page. |
 
-winget serves both packages under one identifier, `MoaidHathot.Shubbak`. It prefers
-the MSI when both apply - its built-in precedence puts `msi`/`wix` ahead of
-`portable` - and falls through to the zip for `--scope user`.
+winget serves all four packages under one identifier, `MoaidHathot.Shubbak`. It
+picks the machine's architecture, prefers the MSI when both apply - its built-in
+precedence puts `msi`/`wix` ahead of `portable` - and falls through to the zip for
+`--scope user`.
 
 ## Once: the signing setup
 
@@ -261,40 +262,37 @@ logoff, which is why a logoff now saves the session cleanly too.
 
 ## ARM64
 
-Not shipped yet, and closer than it looks. What is done:
+Every release ships for x64 and for ARM64: two MSIs, two zips, four hashes, one winget
+manifest with four installers and one Scoop manifest with two architecture blocks.
+`tools/build-release.ps1` does both from one tree; `-Rids win-x64` does one, for a
+machine without the ARM64 C++ build tools.
 
-- The code has no architecture-specific paths: no intrinsics, no explicit layouts,
-  and the hand-rolled COM calls use `delegate* unmanaged`, whose calling-convention
-  modifier ARM64 ignores.
-- `Shubbak.Native`, the one project that must compile for a concrete architecture
-  (CsWin32 shapes some Win32 structures per platform), follows the runtime identifier
-  of the executable being built. `dotnet publish -r win-arm64 -p:PublishAot=true`
-  compiles every project for ARM64 and stops only at the platform linker on a machine
-  without the ARM64 C++ build tools - which the `windows-latest` runner image has.
-- GitHub also offers a `windows-11-arm` runner image, so the ARM64 binaries could be
-  started (`--version`, the subsystem check) and the tests run natively.
+How the pieces fit:
 
-What remains, roughly in order:
-
-1. `tools/build-release.ps1`: loop over `win-x64` and `win-arm64`; artefacts become
-   `shubbak-<v>-win-<arch>.{zip,msi}`; the manifest-filling step pairs each
-   `InstallerUrl` with its hash by architecture and extension, not extension alone.
-2. `packaging/msi`: build once per architecture (`InstallerPlatform` `arm64`,
-   `OutputName` per arch). Same `UpgradeCode`; a different `ProductCode` per build as
-   now.
-3. `packaging/winget`: two more `Installers` entries with `Architecture: arm64` (MSI
-   and zip). `bucket/shubbak.json`: an `arm64` block beside `64bit`, in `architecture`
-   and `autoupdate`.
-4. `release.yml`: sign both sets (the folder filters already recurse), upload both.
-   `winget.yml`: the download patterns and `installers-regex` widen to both.
-5. A `windows-11-arm` job in `build.yml` that runs `dotnet test` and starts the ARM64
-   binaries, so an ARM64 build is exercised before it is released.
-6. The performance numbers in ADR 0001 are x64; take them again on ARM64.
-
-Until then the x64 build is what an ARM64 machine gets, and it runs there through
-Windows' x64 emulation: the keyboard hook and the window event hooks are
-out-of-process, so emulation costs CPU, not correctness.
-
+- The code has no architecture-specific paths. `Shubbak.Native`, the executables and
+  the test hosts take their runtime identifier from `ShubbakRid` in
+  `Directory.Build.props` (x64 by default), so `dotnet build -p:ShubbakRid=win-arm64`
+  builds the whole solution natively on an ARM64 machine. The SDK refuses a
+  RuntimeIdentifier at the solution level, which is why it is a property of its own.
+- The release is cross-compiled on an x64 runner, which has the linkers for both.
+  The ARM64 binaries cannot run there, so the publish step checks their PE machine
+  type, subsystem and manifest and skips the `--version` check for them; `build.yml`
+  then runs them for real on a `windows-11-arm` runner on every push, along with the
+  whole test suite natively.
+- The MSI is built once per platform (`InstallerPlatform`), into its own intermediate
+  directory, with the same `UpgradeCode` and a `ProductCode` of its own - so an ARM64
+  machine that once installed the x64 package is upgraded to the native one by the next
+  release. ICE validation runs on the x64 package only: Windows Installer on an x64
+  machine refuses to open an ARM64 package ("not supported by this processor type")
+  before any ICE can run, and the authoring is identical. In its place, the ARM64
+  runner installs the ARM64 MSI silently, checks everything it claims to put on the
+  machine, uninstalls it and checks it is all gone (`tools/test-msi.ps1`); the x64
+  runner does the same with the x64 MSI.
+- `tools/WingetManifest.ps1` walks the installer manifest by architecture and type, so
+  each hash and ProductCode lands in its own entry and a template's placeholders can be
+  told from real values. Scoop's `64bit` and `arm64` blocks are filled the same way.
+- The performance numbers in ADR 0001 were taken on x64 and have not been repeated on
+  ARM64 yet.
 ## Running the tests locally
 
 `Shubbak.Native.Tests` creates real windows and refuses to run while a window manager

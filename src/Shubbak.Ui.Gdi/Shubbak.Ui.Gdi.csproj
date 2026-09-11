@@ -10,7 +10,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <Platforms>x64</Platforms>
+    <Platforms>x64;ARM64</Platforms>
     <RootNamespace>Shubbak.Ui.Gdi</RootNamespace>
   </PropertyGroup>
 

@@ -7,8 +7,8 @@
     <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
     <AssemblyTitle>Shubbak Taj</AssemblyTitle>
     <RootNamespace>Taj</RootNamespace>
-    <Platforms>x64</Platforms>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(ShubbakRid)</RuntimeIdentifier>
     <!-- Regenerate with tools/make-icons.ps1. -->
     <ApplicationIcon>..\icons\taj.ico</ApplicationIcon>
     <!--

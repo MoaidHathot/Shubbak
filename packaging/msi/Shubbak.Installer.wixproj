@@ -15,16 +15,20 @@
     Built with `dotnet build` like everything else. It is deliberately not in the
     solution: its inputs are published binaries, which a plain solution build does not
     produce, and it needs the WiX SDK, which nothing else does. The release workflow
-    and tools/build-release.ps1 build it after publishing.
+    and tools/build-release.ps1 build it after publishing - once per architecture.
 
     Inputs, all MSBuild properties:
 
-      StageDir   A flat directory holding the files to install - the five executables,
-                 LICENSE, shubbak.example.kdl and docs\*.md - as tools/build-release.ps1
-                 lays it out. Defaults to artifacts\stage-msi under the repository.
-      Version    Inherited from Directory.Build.props, like every other project. The
-                 MSI's ProductVersion and its file name both come from here, so the
-                 installer cannot claim a version the binaries inside it do not.
+      StageDir           A flat directory holding the files to install - the five
+                         executables for the architecture, LICENSE, shubbak.example.kdl
+                         and docs\*.md - as tools/build-release.ps1 lays it out.
+      InstallerPlatform  x64 (the default) or arm64. Chooses the package's platform,
+                         the output file name and a separate intermediate directory,
+                         so the two builds cannot mix.
+      Version            Inherited from Directory.Build.props, like every other project.
+                         The MSI's ProductVersion and its file name both come from
+                         here, so the installer cannot claim a version the binaries
+                         inside it do not.
 
     Directory.Build.props is imported here too, on purpose: TreatWarningsAsErrors
     makes a WiX or ICE warning fail the build, which is the right default for a file
@@ -32,16 +36,23 @@
   -->
 
   <PropertyGroup>
-    <OutputName>shubbak-$(Version)-win-x64</OutputName>
+    <InstallerPlatform Condition="'$(InstallerPlatform)' == ''">x64</InstallerPlatform>
+    <OutputName>shubbak-$(Version)-win-$(InstallerPlatform.ToLowerInvariant())</OutputName>
     <OutputType>Package</OutputType>
-    <InstallerPlatform>x64</InstallerPlatform>
-    <StageDir Condition="'$(StageDir)' == ''">$(MSBuildProjectDirectory)\..\..\artifacts\stage-msi</StageDir>
+    <StageDir Condition="'$(StageDir)' == ''">$(MSBuildProjectDirectory)\..\..\artifacts\stage-msi\win-$(InstallerPlatform.ToLowerInvariant())</StageDir>
     <DefineConstants>$(DefineConstants);Version=$(Version);StageDir=$(StageDir)</DefineConstants>
-    <!-- Beside the zip, so the workflow and the scripts find every artefact in one place. -->
+    <!-- Beside the zips, so the workflow and the scripts find every artefact in one place. -->
     <OutputPath>$(MSBuildProjectDirectory)\..\..\artifacts\msi\</OutputPath>
+    <!-- Its own intermediate directory per platform: the two packages are built from one tree in one run. -->
+    <IntermediateOutputPath>obj\$(Configuration)\$(InstallerPlatform.ToLowerInvariant())\</IntermediateOutputPath>
     <!--
-      ICE validation stays on; it is what catches a shortcut without an icon or a
-      component with no key path before a user does.
+      ICE validation stays on by default; it is what catches a shortcut without an
+      icon or a component with no key path before a user does. It needs an elevated
+      process, and it needs Windows Installer to open the package as one it could
+      install: an ARM64 package on an x64 machine is refused with "not supported by
+      this processor type" before any ICE runs. tools/build-release.ps1 turns it off
+      in exactly those two cases and nowhere else; the authoring is the same for both
+      platforms, so the x64 run covers it.
     -->
     <SuppressValidation>false</SuppressValidation>
   </PropertyGroup>

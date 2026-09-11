@@ -46,6 +46,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $today = (Get-Date).ToString('yyyy-MM-dd')
 $utf8 = [System.Text.UTF8Encoding]::new($false)
 
+. (Join-Path $PSScriptRoot 'WingetManifest.ps1')
+
 function Edit-File([string] $relative, [scriptblock] $transform) {
     $path = Join-Path $root $relative
     $before = [System.IO.File]::ReadAllText($path)
@@ -79,24 +81,43 @@ foreach ($manifest in 'src\Shubbak.Wm\app.manifest', 'src\Shubbak.Wm\app.uiacces
 foreach ($file in Get-ChildItem (Join-Path $root 'packaging\winget') -Filter '*.yaml') {
     Edit-File "packaging\winget\$($file.Name)" {
         param($t)
-        $t = [regex]::Replace($t, '(?m)^(PackageVersion:\s*)\d+\.\d+\.\d+\s*$', "`${1}$Version")
-        $t = [regex]::Replace($t, '/releases/download/v\d+\.\d+\.\d+/shubbak-\d+\.\d+\.\d+-win-x64\.', "/releases/download/v$Version/shubbak-$Version-win-x64.")
+        $t = [regex]::Replace($t, '(?m)^(PackageVersion:[ \t]*)\d+\.\d+\.\d+[ \t]*$', "`${1}$Version")
+        $t = [regex]::Replace($t, '/releases/download/v\d+\.\d+\.\d+/shubbak-\d+\.\d+\.\d+-(win-(?:x64|arm64))\.', "/releases/download/v$Version/shubbak-$Version-`${1}.")
         $t = [regex]::Replace($t, 'github\.com/MoaidHathot/Shubbak/blob/v\d+\.\d+\.\d+/', "github.com/MoaidHathot/Shubbak/blob/v$Version/")
-        # Back to placeholders: the hashes and ProductCode of the previous version are
-        # wrong for this one, and a wrong hash looks exactly like a right one.
-        $t = [regex]::Replace($t, "(?m)^(\s*InstallerSha256:\s*)'?[0-9A-Fa-f]{64}'?\s*$", { param($m) $m.Groups[1].Value + "'" + ($(if ($m.Index -lt $t.IndexOf('InstallerType: zip')) { '0' } else { 'F' }) * 64) + "'" })
-        $t = [regex]::Replace($t, "(?m)^(\s*ProductCode:\s*).*$", "`${1}'{00000000-0000-0000-0000-000000000000}'")
-        $t = [regex]::Replace($t, '(?m)^(ReleaseDate:\s*)\d{4}-\d{2}-\d{2}\s*$', "`${1}$today")
         $t
     }
 }
 
+# Back to placeholders, entry by entry: the hashes and ProductCodes of the previous
+# version are wrong for this one, and a wrong hash looks exactly like a right one.
+$installerManifest = Join-Path $root 'packaging\winget\MoaidHathot.Shubbak.installer.yaml'
+$before = [System.IO.File]::ReadAllText($installerManifest)
+Update-WingetInstallerManifest -Path $installerManifest -Resolve {
+    param($field, $arch, $type, $current)
+    switch ($field) {
+        'InstallerSha256' { "'$(Get-PlaceholderHash $arch $type)'" }
+        'ProductCode' { "'$(Get-PlaceholderProductCode)'" }
+        'ReleaseDate' { $today }
+        default { $null }
+    }
+}
+Write-Output ($(if ([System.IO.File]::ReadAllText($installerManifest) -ne $before) { 'edited  ' } else { 'as-is   ' }) + 'packaging\winget\MoaidHathot.Shubbak.installer.yaml (placeholders)')
+
 Edit-File 'bucket\shubbak.json' {
     param($t)
     $t = [regex]::Replace($t, '"version":\s*"\d+\.\d+\.\d+"', "`"version`": `"$Version`"")
-    $t = [regex]::Replace($t, '/releases/download/v\d+\.\d+\.\d+/shubbak-\d+\.\d+\.\d+-win-x64\.zip', "/releases/download/v$Version/shubbak-$Version-win-x64.zip")
-    $t = [regex]::Replace($t, '"hash":\s*"[0-9a-fA-F]{64}"', '"hash": "' + ('0' * 64) + '"')
-    $t
+    $t = [regex]::Replace($t, '/releases/download/v\d+\.\d+\.\d+/shubbak-\d+\.\d+\.\d+-(win-(?:x64|arm64))\.zip', "/releases/download/v$Version/shubbak-$Version-`${1}.zip")
+    # Placeholders per block, matching the winget template's digits for the zips.
+    $lines = $t -split "`n"
+    $arch = $null
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*"(64bit|arm64)":\s*\{') { $arch = if ($Matches[1] -eq '64bit') { 'x64' } else { 'arm64' }; continue }
+        if ($arch -and $lines[$i] -match '^(\s*"hash":\s*")[0-9a-fA-F]{64}(".*)$') {
+            $lines[$i] = $Matches[1] + (Get-PlaceholderHash $arch 'zip') + $Matches[2]
+            $arch = $null
+        }
+    }
+    $lines -join "`n"
 }
 
 

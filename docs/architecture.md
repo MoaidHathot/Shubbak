@@ -35,7 +35,7 @@ src/
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the camera and microphone watcher
-tests/              1830 test methods across 10 projects
+tests/              1831 test methods across 10 projects
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests: one package, the MSI and the portable zip
@@ -50,7 +50,7 @@ replaced behind the `Shubbak.Native` boundary without touching any of the logic.
 
 ## Tests
 
-**1830 test methods**, around 700 ms to run. Everything except the platform layer and
+**1831 test methods**, around 700 ms to run. Everything except the platform layer and
 the renderer runs headless, so the entire behavioural surface — tree, layout, focus,
 animation, tags, sessions, the state machine, the config diagnostics, the palette's
 matching, the bar's model — is testable in milliseconds with no window manager
@@ -77,7 +77,7 @@ Not the obvious choice for a window manager, so it was measured rather than assu
   11 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
 
 The measurements were made on x64. The code has no architecture-specific paths and
-builds for ARM64; the numbers there have not been taken yet.
+ships for ARM64 as well; the numbers there have not been taken yet.
 
 ## Building
 
@@ -118,10 +118,20 @@ the apphost and a shared directory once let one leak into the other.
 
 ### Architectures
 
-Everything targets x64 today. `Shubbak.Native` is the one project that must be
-compiled for a concrete architecture — CsWin32 generates some Win32 structures
-differently per platform — and it follows the runtime identifier of whatever
-executable is being built, so `dotnet publish -r win-arm64 -p:PublishAot=true` works
-given the ARM64 C++ build tools. Shipping ARM64 packages is a matter of running the
-release script once more per architecture; [RELEASING.md](../RELEASING.md#arm64) says
-exactly what is left.
+Shubbak ships for x64 and ARM64, from one tree. The code has no architecture-specific
+paths; what differs is compiled. `Shubbak.Native` is the one project that must be
+built for a concrete architecture — CsWin32 generates some Win32 structures
+differently per platform — and it, the executables and the test hosts all take their
+runtime identifier from `ShubbakRid` in `Directory.Build.props`, x64 unless told
+otherwise:
+
+```
+dotnet build -p:ShubbakRid=win-arm64
+dotnet test  -p:ShubbakRid=win-arm64
+```
+
+is the whole solution, natively, on an ARM64 machine, and is what CI runs there.
+Publishing needs the C++ build tools for the target architecture (the linker), which
+is why the release is built on an x64 runner that has both and the ARM64 binaries are
+then run on an ARM64 runner. `tools/build-release.ps1 -Rids win-x64` gives a complete
+build on a machine without the ARM64 tools.

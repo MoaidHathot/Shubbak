@@ -25,7 +25,19 @@ inspection from the palette.
 
 #### Added
 
-- **An installer.** `shubbak-<version>-win-x64.msi`: the five executables under
+- **ARM64.** Every release now ships for x64 and for ARM64 - an MSI and a zip for
+  each - and winget and Scoop pick the one for the machine. The code had no
+  architecture-specific paths; what had pinned it to x64 was `Shubbak.Native`, the
+  one project CsWin32 must compile for a concrete architecture. It, the executables
+  and the test hosts now take their runtime identifier from one property, so the
+  whole solution builds and tests natively on an ARM64 machine, and CI does exactly
+  that on every push: the cross-compiled ARM64 binaries are run on an ARM64 runner
+  and the ARM64 installer is installed and uninstalled there for real - which stands
+  in for the ICE validation an x64 machine cannot perform on an ARM64 package. The
+  x64 installer gets the same install-and-uninstall test. The performance numbers in
+  ADR 0001 are still x64 numbers.
+
+- **An installer.** `shubbak-<version>-win-<arch>.msi`: the five executables under
   `%ProgramFiles%\Shubbak`, that directory on the machine `PATH`, an entry in Apps &
   Features and one Start Menu entry. It carries the **uiAccess** build of the window
   manager, which is what lets Shubbak move windows belonging to elevated programs -
@@ -145,12 +157,7 @@ inspection from the palette.
   snippet a newcomer copies must not be one the parser then complains about. The
   packages ship the whole `docs/` set.
 
-- **Groundwork for ARM64.** `Shubbak.Native`, the one project that must be compiled
-  for a concrete architecture, follows the runtime identifier of the executable being
-  built instead of being pinned to x64, so `dotnet publish -r win-arm64` compiles
-  every project for ARM64 given the ARM64 C++ build tools. Nothing ships for ARM64
-  yet; RELEASING.md lists what remains, and the x64 build runs on ARM64 Windows
-  through emulation meanwhile.
+
 
 #### Fixed
 
