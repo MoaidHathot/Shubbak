@@ -43,7 +43,7 @@ jobs:
       # main, not the tag: the filled manifests are committed to main. The tag's
       # version must still be main's version, which is checked before anything is
       # written - if main has already moved on, this needs a human.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: main
           fetch-depth: 0
@@ -99,6 +99,13 @@ jobs:
 
       # winget-releaser can only update a package that is already in the community
       # repository. The first release is submitted by hand; from then on this does it.
+      #
+      # The action needs a classic personal access token with public_repo, which is
+      # write access to every public repository the token's owner has - far more than
+      # one pull request against winget-pkgs needs. So the token belongs to a separate
+      # account that owns nothing but a fork of winget-pkgs, and WINGET_FORK_USER
+      # names that account; see RELEASING.md. The action itself is pinned to a commit
+      # rather than a tag, because a tag can be moved and this step holds the token.
       - name: Is the package already in winget-pkgs?
         id: upstream
         shell: pwsh
@@ -118,10 +125,13 @@ jobs:
 
       - name: Open the winget-pkgs pull request
         if: steps.upstream.outputs.exists == 'true' && env.HAS_WINGET_TOKEN == 'true'
-        uses: vedantmgoyal9/winget-releaser@v2
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2 (2024-11-27)
         with:
           identifier: MoaidHathot.Shubbak
           release-tag: ${{ env.TAG }}
           # The four installers, and nothing else: the symbols archives must not match.
           installers-regex: 'shubbak-[\d.]+-win-(x64|arm64)\.(msi|zip)$'
+          # The account holding the winget-pkgs fork, which is the account the token
+          # belongs to. Falls back to the repository owner until the variable is set.
+          fork-user: ${{ vars.WINGET_FORK_USER || github.repository_owner }}
           token: ${{ secrets.WINGET_TOKEN }}

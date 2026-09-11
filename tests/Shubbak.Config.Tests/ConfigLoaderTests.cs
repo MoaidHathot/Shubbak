@@ -335,7 +335,11 @@ public sealed class ConfigLoaderTests
         Assert.Single(result.Config.Rules);
     }
 
-    private static string FindExampleConfig()
+    /// <summary>
+    /// The shipped example config, found by walking up from the test binary to the
+    /// repository. Found rather than written down, because a path is one machine's.
+    /// </summary>
+    internal static string FindExampleConfig()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
 

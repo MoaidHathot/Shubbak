@@ -92,8 +92,9 @@ public sealed class ConfigPathResolverTests : IDisposable
     [Fact]
     public void XdgPathsWithRelativeSegmentsAndForwardSlashesAreNormalised()
     {
-        // Exactly the author's own value:
-        //   XDG_CONFIG_HOME = P:\Github\Neovim-Moaid\configurations/../config/
+        // Exactly the shape of a real value seen in the wild: a dotfiles checkout,
+        // a relative segment, and a forward slash:
+        //   XDG_CONFIG_HOME = C:\Users\me\dotfiles\configurations/../config/
         string expected = WriteConfig(_root);
 
         string awkward = Path.Combine(_root, "sub") + "/../";

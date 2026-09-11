@@ -54,9 +54,22 @@ secret key ever exists anywhere. This is done once.
 3. **Role**: the app registration gets **Artifact Signing Certificate Profile Signer** on
    the certificate profile (or the account). Nothing else: that one assignment is also
    what makes the subscription visible to `azure/login`, so no Reader role is needed.
-4. **GitHub**: Settings → Environments → `release` (create it; no protection rules are
-   needed, though a required reviewer is a reasonable one). On that environment, or on
-   the repository:
+4. **GitHub**: Settings → Environments → `release` (create it). The environment is the
+   gate on the signing identity, so it has two protection rules, and they are not
+   optional:
+
+   - **Required reviewers**: the maintainer. Every run that names the environment
+     waits for approval before its first step, and the OIDC token is not minted
+     until then. Without this, anyone who can push to `main` or dispatch the workflow
+     - or any workflow file that merely says `environment: release` - gets binaries
+     signed under this project's name.
+   - **Deployment branches and tags**: *selected* - the branch `main` and the tag
+     pattern `v*`. Nothing else can even ask.
+
+   A `workflow_dispatch` run from `main` therefore still works, for exercising the
+   pipeline, but only once approved.
+
+   On that environment, or on the repository:
 
    | Kind | Name | Value |
    |---|---|---|
@@ -76,9 +89,25 @@ The certificate is short-lived (three days) and the signature is timestamped by 
 service's own authority, which is what keeps it valid afterwards;
 `tools/check-signatures.ps1` fails the build if a file is signed but not timestamped.
 
-Also once, for the post-release automation: a **classic** personal access token with
-`public_repo` scope as the `WINGET_TOKEN` repository secret, and a fork of
-`microsoft/winget-pkgs` under the same account. See "After publishing" below.
+Also once, for the post-release automation: `winget-releaser` needs a **classic**
+personal access token with the `public_repo` scope - fine-grained tokens are not
+supported - and a fork of `microsoft/winget-pkgs` under the account the token belongs
+to. `public_repo` is write access to *every* public repository that account owns,
+which for the maintainer's own account is a great deal more than one pull request
+against `winget-pkgs` needs, and the token is handed to a third-party action. So:
+
+1. a separate GitHub account that owns nothing but a fork of `microsoft/winget-pkgs`;
+2. its classic token, `public_repo` only, as the `WINGET_TOKEN` repository secret;
+3. its username as the `WINGET_FORK_USER` repository variable, which the workflow
+   passes to the action as `fork-user`. Until the variable is set the workflow falls
+   back to the repository owner, which works but with the wider blast radius above.
+
+See "After publishing" below for what the token is used for.
+
+Every action in `.github/workflows` is pinned to a commit rather than a version tag,
+because a tag can be moved by whoever controls the action's repository and two of the
+steps hold credentials. `.github/dependabot.yml` opens a pull request when an action
+publishes a new version; merging it is how the pins move.
 
 ## 1. Write the changelog as you go
 
@@ -168,8 +197,10 @@ that contains the release edits, and creates the annotated tag; `-Push` pushes i
 which starts the workflow. Annotated rather than lightweight so the tag records who
 made the release and when.
 
-The workflow then, in order: checks the tag against `<Version>` and runs the
-consistency check; refuses if signing is not configured; builds and tests; publishes;
+The workflow then, in order: **waits for the `release` environment's reviewer** - the
+job does not start, and no token is minted, until the run is approved; checks the tag
+against `<Version>` and runs the consistency check; refuses if signing is not
+configured; builds and tests; publishes;
 signs the executables and checks the signatures; stages and packs; builds the MSI;
 signs it; hashes everything and fills the manifests; uploads the artefact; opens a
 **draft** release with the packages and their hashes attached.
@@ -210,9 +241,11 @@ winget validate --manifest packaging\winget
 wingetcreate submit --token <pat> packaging\winget
 ```
 
-`wingetcreate` forks `microsoft/winget-pkgs` to your account and opens the pull
-request from there. Then watch the pull request: the bot validates the manifests,
-downloads both installers, checks the hashes, installs them in a VM and reports.
+`wingetcreate` forks `microsoft/winget-pkgs` to the token's account and opens the pull
+request from there - use the `WINGET_TOKEN` account's token here too, so the fork
+lands where `winget-releaser` will look for it. Then watch the pull request: the bot
+validates the manifests, downloads both installers, checks the hashes, installs them
+in a VM and reports.
 
 ### The icon winget will not show
 

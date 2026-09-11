@@ -298,19 +298,37 @@ public sealed class UnknownBarSettingTests
 
     // ---- the guard against crying wolf -------------------------------------
 
+    /// <summary>
+    /// The configs that are known to be correct: the shipped example, found by walking
+    /// up from the test binary to the repository, and the author's own if
+    /// <c>SHUBBAK_AUTHOR_CONFIG</c> names one that exists. Neither path is written
+    /// here, because a path is one machine's and this file is everyone's - and the
+    /// example is found rather than assumed, so that this runs in CI rather than
+    /// passing there for want of a file.
+    /// </summary>
+    public static TheoryData<string> RealConfigs()
+    {
+        var data = new TheoryData<string>();
+
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            string candidate = System.IO.Path.Combine(directory.FullName, "docs", "shubbak.example.kdl");
+            if (File.Exists(candidate)) { data.Add(candidate); break; }
+        }
+
+        if (Environment.GetEnvironmentVariable("SHUBBAK_AUTHOR_CONFIG") is { Length: > 0 } author && File.Exists(author))
+            data.Add(author);
+
+        return data;
+    }
+
     [Theory]
-    [InlineData(@"W:\Github\Shubbak\docs\shubbak.example.kdl")]
-    [InlineData(@"P:\Github\Neovim-Moaid\config\shubbak\shubbak.kdl")]
+    [MemberData(nameof(RealConfigs))]
     public void ARealConfigProducesNoWarningsAtAll(string path)
     {
         // The check is only worth having if it is silent on configs that are correct.
         // A false positive here trains people to ignore the whole class, which is
         // worse than not warning at all.
-        //
-        // Skipped where the file does not exist, so this does not fail on anyone
-        // else's machine.
-        if (!File.Exists(path)) return;
-
         Assert.DoesNotContain(
             Diagnose(File.ReadAllText(path)),
             d => d.Code.StartsWith("TAJ", StringComparison.Ordinal));

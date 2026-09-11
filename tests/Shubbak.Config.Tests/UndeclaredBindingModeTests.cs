@@ -149,12 +149,8 @@ public sealed class UndeclaredBindingModeTests
     [Fact]
     public void TheRealExampleConfigIsSilent()
     {
-        const string Path = @"W:\Github\Shubbak\docs\shubbak.example.kdl";
-
-        if (!File.Exists(Path)) return;
-
         Assert.DoesNotContain(
-            Diagnose(File.ReadAllText(Path)),
+            Diagnose(File.ReadAllText(ConfigLoaderTests.FindExampleConfig())),
             d => d.Code == "SHB0434");
     }
 }

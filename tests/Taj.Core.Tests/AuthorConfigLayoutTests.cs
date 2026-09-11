@@ -12,12 +12,14 @@ namespace Taj.Core.Tests;
 /// The other bar tests use a copy of the config embedded in the test. A copy can
 /// drift, and when a user reports that the bar still looks wrong the first question
 /// is whether the file on disk says what the test thinks it says. This removes that
-/// question. It is skipped where the file does not exist, so it does not fail on
-/// anyone else's machine.
+/// question. The file is named by the <c>SHUBBAK_AUTHOR_CONFIG</c> environment
+/// variable rather than by a path written here, because the path is one machine's
+/// and this file is everyone's; unset, or pointing at nothing, the tests pass
+/// without running, so they do not fail on anyone else's machine.
 /// </remarks>
 public sealed class AuthorConfigLayoutTests
 {
-    private const string Path = @"P:\Github\Neovim-Moaid\config\shubbak\shubbak.kdl";
+    private static readonly string? Path = Environment.GetEnvironmentVariable("SHUBBAK_AUTHOR_CONFIG");
     private const int BarWidth = 1920;
 
     /// <summary>
@@ -32,7 +34,7 @@ public sealed class AuthorConfigLayoutTests
 
     private static TajConfig? Load()
     {
-        if (!File.Exists(Path)) return null;
+        if (Path is null || !File.Exists(Path)) return null;
 
         (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) =
             TajConfigLoader.Load(File.ReadAllText(Path));

@@ -200,7 +200,8 @@ changes, window drag/resize, minimise/restore.
 
 `EVENT_OBJECT_NAMECHANGE` fired **27 times on the foreground window**, against
 only **13 `EVENT_SYSTEM_FOREGROUND` events** in the same session. Captured
-transitions include tab switches with no focus change in both browsers:
+transitions include tab switches with no focus change in both browsers (titles
+replaced with placeholders; one placeholder is one tab):
 
 ```
 [NAMECHANGE] <Edge: tab B> - Microsoft Edge

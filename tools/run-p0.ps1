@@ -77,6 +77,10 @@ function Invoke-Spike {
         [switch] $ExpectFail
     )
 
+    # The transcript is committed, so it records the executable relative to the
+    # repository rather than wherever this machine happens to keep its clone.
+    $exeForTranscript = [System.IO.Path]::GetRelativePath($repoRoot, $Exe)
+
     Write-Banner "$Label  [$Mode]"
     Write-Host "> $Exe $($Arguments -join ' ')" -ForegroundColor DarkGray
     Write-Host ''
@@ -104,11 +108,11 @@ function Invoke-Spike {
 ## $Label  [$Mode]
 
 ``````
-$Exe $($Arguments -join ' ')
+$exeForTranscript $($Arguments -join ' ')
 ``````
 
 ``````text
-$($output.TrimEnd())
+$($output.TrimEnd().Replace($repoRoot, '.'))
 ``````
 "@
 
@@ -151,11 +155,13 @@ function Measure-Startup {
 }
 
 # ---------------------------------------------------------------------------
+# The transcript is committed as ADR evidence, so it carries what the numbers need
+# for context - OS, core count, SDK - and nothing that names this machine or its
+# owner. Window titles are the spike's job to keep out; see S4WinEventFidelity.
 Add-Content -LiteralPath $transcript -Value @"
 # Shubbak P0 spike results
 
 - Timestamp : $(Get-Date -Format 'o')
-- Machine   : $env:COMPUTERNAME
 - OS        : $([System.Environment]::OSVersion.VersionString)
 - CPU cores : $([System.Environment]::ProcessorCount)
 - SDK       : $(dotnet --version)

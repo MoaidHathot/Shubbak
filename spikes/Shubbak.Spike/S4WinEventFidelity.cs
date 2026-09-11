@@ -35,6 +35,7 @@ internal static class S4WinEventFidelity
     private static HWND s_foreground;
     private static string s_lastForegroundTitle = "";
     private static readonly List<string> s_titleTimeline = [];
+    private static readonly Dictionary<string, int> s_titleIds = [];
     private static LatencyStats s_callbackLatency = null!;
 
     private static readonly (uint Id, string Name)[] Events =
@@ -210,7 +211,7 @@ internal static class S4WinEventFidelity
                         string title = GetTitle(hwnd);
                         s_lastForegroundTitle = title;
                         if (s_titleTimeline.Count < 500)
-                            s_titleTimeline.Add($"[FOREGROUND] {Trunc(title, 70)}");
+                            s_titleTimeline.Add($"[FOREGROUND] {Describe(hwnd, title)}");
                     }
                     else if (eventId == PInvoke.EVENT_OBJECT_NAMECHANGE && hwnd == s_foreground)
                     {
@@ -220,7 +221,7 @@ internal static class S4WinEventFidelity
                         {
                             s_lastForegroundTitle = title;
                             if (s_titleTimeline.Count < 500)
-                                s_titleTimeline.Add($"[NAMECHANGE] {Trunc(title, 70)}");
+                                s_titleTimeline.Add($"[NAMECHANGE] {Describe(hwnd, title)}");
                         }
                     }
                 }
@@ -247,8 +248,39 @@ internal static class S4WinEventFidelity
         }
     }
 
-    private static string Trunc(string s, int n) =>
-        s.Length <= n ? s : string.Concat(s.AsSpan(0, n - 1), "\u2026");
+    /// <summary>
+    /// What the timeline prints in place of a title.
+    /// </summary>
+    /// <remarks>
+    /// The timeline goes into a transcript that is committed as ADR evidence, and a
+    /// window title is what the person at the keyboard was reading - a browser tab,
+    /// a document, a pull request. The finding does not need any of that. It needs to
+    /// know that the title changed, and on what kind of window, so each distinct
+    /// title gets a number that stays with it for the run, and the window class
+    /// names the application without naming the content.
+    /// </remarks>
+    private static string Describe(HWND hwnd, string title)
+    {
+        if (title.Length == 0) return "";
+
+        if (!s_titleIds.TryGetValue(title, out int id))
+        {
+            id = s_titleIds.Count + 1;
+            s_titleIds[title] = id;
+        }
+
+        return $"<{GetClassName(hwnd)}: title #{id}>";
+    }
+
+    private static unsafe string GetClassName(HWND hwnd)
+    {
+        Span<char> buf = stackalloc char[256];
+        fixed (char* p = buf)
+        {
+            int n = PInvoke.GetClassName(hwnd, p, buf.Length);
+            return n > 0 ? new string(p, 0, n) : "?";
+        }
+    }
 
     private static long Sum(Dictionary<uint, long> d)
     {

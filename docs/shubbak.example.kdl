@@ -680,7 +680,7 @@ bar {
     // language, with no Taj source code. This is the extension point that means
     // Taj never has to grow a widget for everything.
     //
-    // source "weather" kind="command" command="pwsh -NoProfile -File P:\\Github\\Neovim-Moaid\\scripts\\weather.ps1"
+    // source "weather" kind="command" command="pwsh -NoProfile -File C:\\Users\\me\\.config\\shubbak\\weather.ps1"
 
     profile "default" {
         height 34
