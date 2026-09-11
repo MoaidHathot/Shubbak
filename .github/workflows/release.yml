@@ -1,26 +1,28 @@
 name: release
 
-# Builds the published artefacts and attaches them to a GitHub release.
+# Builds the published artefacts, signs them, and attaches them to a GitHub release.
 #
 # Everything downstream points here: winget and Scoop both need a stable URL and a
 # SHA256, so this is the thing they consume rather than an alternative to them.
 #
 # Triggered by a tag rather than a push to main, because a release is a deliberate
-# act and the tag is what names it. Run it by hand first with workflow_dispatch if you
-# want the artefacts without publishing anything.
+# act and the tag is what names it. Run it by hand with workflow_dispatch to get the
+# artefacts without publishing anything - that build is not required to be signed,
+# a tag build is.
+#
+# The heavy lifting is in tools/build-release.ps1 so that a maintainer can produce
+# the same zip, MSI and manifests locally before a tag exists. This file adds what
+# only CI has: the credentials to sign, and the permission to publish.
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Attach the artefacts to a GitHub release'
-        type: boolean
-        default: false
 
 permissions:
   contents: write
+  # For the OpenID Connect token that azure/login exchanges for Azure credentials.
+  id-token: write
 
 env:
   DOTNET_NOLOGO: 'true'
@@ -31,6 +33,18 @@ jobs:
     # NativeAOT cannot cross-compile between operating systems, so a Windows binary
     # has to be produced on Windows. This is not a preference.
     runs-on: windows-latest
+
+    # The environment is what gives the OIDC token a stable subject -
+    # repo:<owner>/<repo>:environment:release - which is what the federated credential
+    # in Entra is configured to trust. A tag-based subject would need a new credential
+    # per release. See RELEASING.md for the setup.
+    environment: release
+
+    env:
+      # Secrets cannot be tested in `if:` directly, so their presence is computed once
+      # here. All six are needed to sign; RELEASING.md lists what each one is.
+      SIGNING_ENABLED: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && secrets.AZURE_SUBSCRIPTION_ID != '' && vars.SIGNING_ENDPOINT != '' && vars.SIGNING_ACCOUNT != '' && vars.SIGNING_CERTIFICATE_PROFILE != '' }}
+      IS_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -43,19 +57,20 @@ jobs:
       # tag is written by a human at a different moment. When they disagree, the
       # release is named one thing and contains another - and the only place that ever
       # surfaces is a bug report six months later quoting a version that was never
-      # released. So they are compared before anything is built.
+      # released. So they are compared before anything is built, along with everything
+      # else that carries the version: the manifests, the changelog, the readme.
       - name: Check the tag against the version
         id: version
         shell: pwsh
         run: |
           $props = [xml](Get-Content Directory.Build.props)
-          $version = $props.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          $version = $props.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
 
           if (-not $version) { throw "Directory.Build.props has no <Version>." }
 
           Write-Output "Directory.Build.props: $version"
 
-          if ($env:GITHUB_REF -like 'refs/tags/*') {
+          if ($env:IS_TAG -eq 'true') {
             $tag = $env:GITHUB_REF -replace '^refs/tags/', ''
             Write-Output "tag: $tag"
 
@@ -63,12 +78,27 @@ jobs:
               throw "Tag '$tag' does not match <Version> '$version'. Expected 'v$version'. " +
                     "Either retag or update Directory.Build.props."
             }
+
+            ./tools/check-release-consistency.ps1 -ForRelease
           }
           else {
             Write-Output "Not a tag build; skipping the tag comparison."
+            ./tools/check-release-consistency.ps1
           }
 
           "version=$version" >> $env:GITHUB_OUTPUT
+
+      # A release is signed or it does not happen. An unsigned build from a tag would
+      # be published under the same name as the signed one that should have existed,
+      # and the uiAccess window manager inside the MSI would not even start.
+      - name: Refuse to release unsigned
+        if: env.IS_TAG == 'true' && env.SIGNING_ENABLED != 'true'
+        shell: pwsh
+        run: |
+          throw "This is a tag build but code signing is not configured. " +
+                "Set the AZURE_CLIENT_ID, AZURE_TENANT_ID and AZURE_SUBSCRIPTION_ID secrets and the " +
+                "SIGNING_ENDPOINT, SIGNING_ACCOUNT and SIGNING_CERTIFICATE_PROFILE variables on the " +
+                "'release' environment. See RELEASING.md."
 
       - name: Restore
         run: dotnet restore
@@ -81,116 +111,79 @@ jobs:
       - name: Test
         run: dotnet test --no-build --configuration Release --verbosity quiet
 
-      # Each binary publishes to its own directory. They share none, deliberately:
-      # Shubbak.Wm bakes its manifest into the apphost and MSBuild does not treat
-      # ShubbakUiAccess as an input to it, so a shared output directory is how a
-      # uiAccess apphost survives into a build that did not ask for one - producing a
-      # binary that cannot start, with nothing in the log to say why.
+      # Five portable executables plus the uiAccess window manager, each checked: it
+      # reports the expected version, has the right subsystem, carries the right
+      # manifest. The uiAccess one is not run - it cannot start outside Program Files.
       - name: Publish (NativeAOT)
         shell: pwsh
-        run: |
-          foreach ($project in 'Shubbak.Wm', 'Shubbak.Cli', 'Taj', 'Dalil', 'Ayn') {
-            Write-Output "::group::publish $project"
-            dotnet publish "src/$project" `
-              --configuration Release `
-              --runtime win-x64 `
-              -p:PublishAot=true `
-              --output "artifacts/publish/$project"
-            if ($LASTEXITCODE -ne 0) { throw "publish failed for $project" }
-            Write-Output "::endgroup::"
-          }
+        run: ./tools/build-release.ps1 -Publish -SkipTests
 
-      # A published binary that cannot answer --version is one nobody can identify in a
-      # bug report, and it is the cheapest possible end-to-end check that AOT produced
-      # something that actually runs. Every one of them is asked.
-      - name: Check the binaries run and agree on the version
+      - name: Log in to Azure
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Every executable, before it is packed into anything. Artifact Signing
+      # certificates live for three days, so the timestamp is what keeps the
+      # signature valid after that; the timestamp server is the service's own.
+      - name: Sign the executables
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\artifacts
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Check the signatures on the executables
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: ./tools/check-signatures.ps1 (Get-ChildItem artifacts/publish, artifacts/publish-uiaccess -Recurse -Filter *.exe).FullName
+
+      # The zip is packed from the signed binaries, and the MSI is built from them, so
+      # both contain exactly what was checked above.
+      - name: Stage and pack
+        shell: pwsh
+        run: ./tools/build-release.ps1 -Stage -Pack
+
+      # The MSI itself, as a file. Only the copy at the top of artifacts/, which is the
+      # one that ships; the build output under artifacts/msi is not recursed into.
+      - name: Sign the MSI
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\artifacts
+          files-folder-filter: msi
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Check the signature on the MSI
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: ./tools/check-signatures.ps1 (Get-ChildItem artifacts -Filter *.msi).FullName
+
+      # Hashes are taken last, after signing, because signing changes the files. The
+      # winget and Scoop manifests are filled from them and validated with the real
+      # winget client, which the runner image ships.
+      - name: Hash the packages and fill the manifests
+        id: manifests
         shell: pwsh
         run: |
-          $expected = "Shubbak ${{ steps.version.outputs.version }}"
-          $binaries = @{
-            'shubbak-wm' = 'artifacts/publish/Shubbak.Wm/shubbak-wm.exe'
-            'shubbak'    = 'artifacts/publish/Shubbak.Cli/shubbak.exe'
-            'taj'        = 'artifacts/publish/Taj/taj.exe'
-            'dalil'      = 'artifacts/publish/Dalil/dalil.exe'
-            'ayn'      = 'artifacts/publish/Ayn/ayn.exe'
-          }
-
-          foreach ($name in $binaries.Keys) {
-            $exe = $binaries[$name]
-            if (-not (Test-Path $exe)) { throw "$name did not publish to $exe" }
-
-            # Redirected rather than run inline: three of the four are GUI-subsystem
-            # binaries, so the shell does not wait for them and their output would
-            # arrive after this step had already moved on.
-            $out = New-TemporaryFile
-            $p = Start-Process -FilePath $exe -ArgumentList '--version' `
-                   -RedirectStandardOutput $out -NoNewWindow -Wait -PassThru
-
-            $reported = (Get-Content $out -Raw).Trim()
-            Remove-Item $out -Force
-
-            if ($p.ExitCode -ne 0) { throw "$name --version exited $($p.ExitCode)" }
-            if ($reported -ne $expected) {
-              throw "$name reports '$reported'; expected '$expected'."
-            }
-
-            Write-Output "$name -> $reported"
-          }
-
-      - name: Stage the package
-        id: stage
-        shell: pwsh
-        run: |
-          $version = '${{ steps.version.outputs.version }}'
-          $stage = 'artifacts/stage'
-          $symbols = 'artifacts/symbols'
-
-          New-Item -ItemType Directory -Path $stage, $symbols -Force | Out-Null
-
-          # Only the executables. NativeAOT emits a .pdb roughly four times the size of
-          # the binary it describes, plus an XML doc file per referenced project from
-          # GenerateDocumentationFile - together about 90% of the publish directory and
-          # none of it any use to somebody running a window manager.
-          foreach ($project in 'Shubbak.Wm', 'Shubbak.Cli', 'Taj', 'Dalil', 'Ayn') {
-            Copy-Item "artifacts/publish/$project/*.exe" $stage
-            Copy-Item "artifacts/publish/$project/*.pdb" $symbols -ErrorAction SilentlyContinue
-          }
-
-          # What someone needs in front of them the first time they run it.
-          Copy-Item LICENSE $stage
-          Copy-Item README.md $stage
-          Copy-Item docs/shubbak.example.kdl $stage
-
-          # The pictures the readme points at, at the path it points at them by. The
-          # readme uses relative links so that GitHub renders them, and without these
-          # the copy in the zip would show three broken images to somebody reading it
-          # for the first time. The executables stay at the root either way, which is
-          # the part winget and Scoop name.
-          New-Item -ItemType Directory -Path "$stage/docs/assets" -Force | Out-Null
-          Copy-Item docs/assets/*.png "$stage/docs/assets"
-
-          $flat = Get-ChildItem $stage -File | Select-Object -ExpandProperty Name
-          Write-Output "package contents: $($flat -join ', ')"
-
-          # Flat, with no directory prefix. Both winget's NestedInstallerFiles and
-          # Scoop's bin array name paths inside the archive, and a version-stamped
-          # top-level folder would have to be edited into both on every release.
-          $zip = "artifacts/shubbak-$version-win-x64.zip"
-          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
-
-          $symbolZip = "artifacts/shubbak-$version-win-x64-symbols.zip"
-          Compress-Archive -Path "$symbols/*" -DestinationPath $symbolZip -Force
-
-          # winget will not accept a manifest without one, and it is what tells anyone
-          # downloading by hand that they got what this workflow built.
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
-          Set-Content "$zip.sha256" "$hash  shubbak-$version-win-x64.zip"
-
-          Write-Output "sha256: $hash"
-          Write-Output ("size:   {0:N2} MB" -f ((Get-Item $zip).Length / 1MB))
-
-          "zip=$zip" >> $env:GITHUB_OUTPUT
-          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          ./tools/ensure-winget.ps1
+          ./tools/build-release.ps1 -Manifests
 
       - name: Upload the build artefacts
         uses: actions/upload-artifact@v4
@@ -198,23 +191,37 @@ jobs:
           name: shubbak-${{ steps.version.outputs.version }}-win-x64
           path: |
             artifacts/shubbak-*.zip
+            artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
+            artifacts/winget/
+            artifacts/bucket/
           if-no-files-found: error
 
+      # A draft, on purpose. Read the generated notes, check the artefacts, then publish
+      # by hand. Publishing is what triggers the winget and Scoop update workflow.
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: env.IS_TAG == 'true'
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           generate_release_notes: true
           files: |
             artifacts/shubbak-*.zip
+            artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
           body: |
             ## Install
 
             ```
             winget install MoaidHathot.Shubbak
+            ```
+
+            That installs the MSI to `Program Files`, which is what lets Shubbak tile windows
+            that belong to elevated processes without running elevated itself. For a portable
+            install under your own profile, with no administrator prompt:
+
+            ```
+            winget install MoaidHathot.Shubbak --scope user
             ```
 
             ```
@@ -225,16 +232,21 @@ jobs:
             Or download the zip below, unpack it anywhere, and:
 
             ```
-            shubbak autostart enable
-            shubbak-wm
+            shubbak config init
+            shubbak-wm --foreground
             ```
 
-            `SHA256` of the zip:
+            Then `shubbak autostart enable` once you want it at logon. The
+            [getting started guide](https://github.com/${{ github.repository }}/blob/v${{ steps.version.outputs.version }}/docs/getting-started.md)
+            has the rest.
+
+            `SHA256`:
 
             ```
-            ${{ steps.stage.outputs.sha256 }}
+            ${{ steps.manifests.outputs.msi_sha256 }}  shubbak-${{ steps.version.outputs.version }}-win-x64.msi
+            ${{ steps.manifests.outputs.zip_sha256 }}  shubbak-${{ steps.version.outputs.version }}-win-x64.zip
             ```
 
-            > This build is **not code signed**. SmartScreen will warn on first run,
-            > and `shubbak-wm` cannot move windows belonging to elevated processes
-            > unless you run it elevated. See the README for what that costs and why.
+            Every executable and the MSI are Authenticode signed. The certificate is new,
+            so SmartScreen may still warn the first time you run something downloaded by
+            hand until it has seen enough installs; `winget` installs are not affected.

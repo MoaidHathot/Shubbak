@@ -1,0 +1,126 @@
+name: package managers
+
+# Runs when a release is published, and does the two things that depend on the
+# release being public: it fills the package manifests from the assets people will
+# actually download, and it tells the package managers.
+#
+# For Scoop, committing the filled manifest to main *is* the release - Scoop reads the
+# bucket straight from this repository. For winget, the pull request against
+# microsoft/winget-pkgs is opened here too, once the package exists there; the very
+# first submission has to be made by hand (see RELEASING.md), because the update
+# tooling can only update.
+#
+# The hashes are recomputed from the published assets rather than copied from the
+# build that made them, so what the manifests promise is what a download produces.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The release tag to publish manifests for, e.g. v0.10.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  manifests:
+    runs-on: windows-latest
+
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      HAS_WINGET_TOKEN: ${{ secrets.WINGET_TOKEN != '' }}
+
+    steps:
+      # main, not the tag: the filled manifests are committed to main. The tag's
+      # version must still be main's version, which is checked before anything is
+      # written - if main has already moved on, this needs a human.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Check the tag against main's version
+        id: version
+        shell: pwsh
+        run: |
+          $props = [xml](Get-Content Directory.Build.props)
+          $version = $props.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
+          $tag = $env:TAG
+
+          if ($tag -ne "v$version") {
+            throw "The release is $tag but main is at $version. The manifests for $tag have to be filled and committed by hand: " +
+                  "download the release assets into artifacts/, check out $tag, run tools/build-release.ps1 -Manifests, and commit the results."
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Download the published packages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir artifacts `
+            --pattern 'shubbak-*-win-x64.msi' --pattern 'shubbak-*-win-x64.zip'
+          Get-ChildItem artifacts
+
+      - name: Fill the manifests from the published packages
+        shell: pwsh
+        run: |
+          ./tools/ensure-winget.ps1
+          ./tools/build-release.ps1 -Manifests
+
+      - name: Commit the filled manifests to main
+        shell: pwsh
+        run: |
+          Copy-Item artifacts/winget/*.yaml packaging/winget/ -Force
+          Copy-Item artifacts/bucket/shubbak.json bucket/shubbak.json -Force
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add packaging/winget bucket/shubbak.json
+
+          if (git diff --cached --quiet) {
+            Write-Output 'The manifests on main already match the release; nothing to commit.'
+          }
+          else {
+            git commit -m "Fill the package manifests for $env:TAG" `
+              -m 'Hashes and ProductCode taken from the published release assets. For Scoop this commit is the release.'
+            git push origin main
+          }
+
+      # winget-releaser can only update a package that is already in the community
+      # repository. The first release is submitted by hand; from then on this does it.
+      - name: Is the package already in winget-pkgs?
+        id: upstream
+        shell: pwsh
+        run: |
+          try {
+            Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/m/MoaidHathot/Shubbak' `
+              -Headers @{ 'User-Agent' = 'shubbak-release' } | Out-Null
+            Write-Output 'MoaidHathot.Shubbak exists upstream; the update pull request will be opened.'
+            "exists=true" >> $env:GITHUB_OUTPUT
+          }
+          catch {
+            Write-Output 'MoaidHathot.Shubbak is not in winget-pkgs yet. Submit the first version by hand:'
+            Write-Output '  winget validate --manifest packaging\winget'
+            Write-Output '  wingetcreate submit --token <pat> packaging\winget'
+            "exists=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Open the winget-pkgs pull request
+        if: steps.upstream.outputs.exists == 'true' && env.HAS_WINGET_TOKEN == 'true'
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: MoaidHathot.Shubbak
+          release-tag: ${{ env.TAG }}
+          # Both installers, and nothing else: the symbols archive must not be matched.
+          installers-regex: 'shubbak-[\d.]+-win-x64\.(msi|zip)$'
+          token: ${{ secrets.WINGET_TOKEN }}

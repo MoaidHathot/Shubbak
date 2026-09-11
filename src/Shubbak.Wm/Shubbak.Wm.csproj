@@ -56,17 +56,28 @@
       answer asks the running process rather than assuming, so nothing else changes
       between the two builds.
 
-      Clean before switching. The manifest is baked into the apphost during build and
-      MSBuild does not treat this property as an input to it, so publishing with the
-      flag and then without it silently reuses the first apphost. A uiAccess binary
-      that is not signed and not under Program Files does not start at all - it fails
-      with "A referral was returned from the server" - so a stale one is a build that
-      cannot run, with nothing in the output to say why. Verified, not theorised.
+      The two variants build into separate obj and bin directories. The manifest is
+      baked into the apphost during build and MSBuild does not treat this property as
+      an input to it, so with a shared directory publishing with the flag and then
+      without it silently reused the first apphost. A uiAccess binary that is not
+      signed and not under Program Files does not start at all - it fails with "A
+      referral was returned from the server" - so a stale one was a build that could
+      not run, with nothing in the output to say why. Verified, not theorised; the
+      release workflow publishes both variants from one tree, which is why it is
+      separated here rather than left as "clean before switching".
     -->
     <ShubbakUiAccess Condition="'$(ShubbakUiAccess)' == ''">false</ShubbakUiAccess>
 
     <ApplicationManifest Condition="'$(ShubbakUiAccess)' != 'true'">app.manifest</ApplicationManifest>
     <ApplicationManifest Condition="'$(ShubbakUiAccess)' == 'true'">app.uiaccess.manifest</ApplicationManifest>
+
+    <!--
+      Only the intermediate and output roots move; the SDK still appends the
+      configuration, framework and runtime beneath them. The restore output stays in
+      obj\ - it is the same package graph either way.
+    -->
+    <IntermediateOutputPath Condition="'$(ShubbakUiAccess)' == 'true'">obj\uiaccess\$(Configuration)\</IntermediateOutputPath>
+    <BaseOutputPath Condition="'$(ShubbakUiAccess)' == 'true'">bin\uiaccess\</BaseOutputPath>
   </PropertyGroup>
 
   <!--

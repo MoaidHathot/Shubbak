@@ -14,8 +14,162 @@ schedule and breaking either is a different kind of event:
   discarded rather than misread.
 
 ## [Unreleased]
+## [0.10.0] - 2026-09-11
 
-### Added
+Everything since 0.9.0, which was tagged and never published - so this is the first
+release anybody can install. In five parts, newest first: how it is installed, then
+contexts and the watcher, validation, the palette as a control surface, and
+inspection from the palette.
+
+### Installing it
+
+#### Added
+
+- **An installer.** `shubbak-<version>-win-x64.msi`: the five executables under
+  `%ProgramFiles%\Shubbak`, that directory on the machine `PATH`, an entry in Apps &
+  Features and one Start Menu entry. It carries the **uiAccess** build of the window
+  manager, which is what lets Shubbak move windows belonging to elevated programs -
+  Task Manager, anything run as administrator - without itself running elevated.
+  Windows grants that only to a signed program installed in exactly that place, so it
+  could not be done with a zip. The installer starts nothing and registers nothing to
+  run at logon; `shubbak autostart enable` remains the user's decision, and an
+  installer running elevated is the wrong process to write a per-user Run key from.
+  The config and the session survive an uninstall for the same reason.
+
+- **Code signing.** Every executable and the MSI are Authenticode signed through Azure
+  Artifact Signing, with the release workflow authenticating by OpenID Connect so no
+  key exists to leak. A tag build refuses to run unsigned. The certificate is new, so
+  SmartScreen may still warn about a hand-downloaded file until it has built a
+  reputation; winget installs are not affected.
+
+- **winget serves both.** One identifier, `MoaidHathot.Shubbak`, two installers: the
+  MSI, which winget prefers when both apply, and the portable zip, which
+  `--scope user` gets. Scoop stays portable, as Scoop is.
+
+- **`shubbak stop`.** Stops the window manager, the bar, the palette and the watcher,
+  and waits until each is actually gone. The window manager goes first, over the pipe,
+  so it saves the session and brings every concealed window back; the other three are
+  asked directly, so this works with no window manager running. Non-zero if anything
+  is still there after ten seconds, so a script replacing the executables can tell.
+  Before this it was four commands and a look at Task Manager, because the palette and
+  the watcher deliberately outlive the window manager.
+
+- **A clean exit when Windows asks for one.** The window manager's only window was
+  message-only, which kept it out of `EnumWindows` and also out of reach of
+  `WM_QUERYENDSESSION` and `WM_ENDSESSION`: at logoff it was simply killed, with up to
+  thirty seconds of session unsaved and every concealed window left concealed for the
+  next run to adopt. The window is now a hidden top-level one. The session is saved
+  and the windows un-concealed inside the message itself, because the system may end
+  the process the moment it returns. The bar and the palette answer the same messages.
+
+- **Upgrades in place.** A silent MSI install - what `winget upgrade` runs - closes
+  what holds the files through Restart Manager, and the window manager now registers
+  to be started again afterwards; its startup commands bring back the bar, the palette
+  and the watcher. `MSIRMSHUTDOWN=1` in the package forces anything that ignores the
+  request, so an upgrade never ends in "restart required". Scoop stops everything
+  before an update (or the files could not be replaced) and does not start it again.
+
+- **`docs/getting-started.md`.** Install, first run, the keys, the three companions,
+  upgrading, uninstalling, where things are - in the order a newcomer meets them. It
+  ships in the zip and the MSI, and the package managers' post-install notes point to
+  it.
+
+- **Release tooling.** `tools/build-release.ps1` produces everything a release ships
+  - both builds of the window manager, the zip, the MSI, the hashes, the filled winget
+  and Scoop manifests - locally or in CI, so a release can be inspected before a tag
+  exists. `tools/prepare-release.ps1` sets the version everywhere it is written and
+  dates the changelog; `tools/check-release-consistency.ps1` proves the copies agree,
+  on every push. Publishing a release fills the manifests from the published assets
+  and commits them, and opens the winget-pkgs pull request once the package exists
+  there.
+
+#### Changed
+
+- **The starter config turns everything on.** `shubbak config init` now writes a
+  config that starts the bar, the palette and the watcher, with a small section for
+  each: workspaces, title and clock on the bar, the `paused`, `suspended` and `config`
+  pills, a camera and microphone glyph while one is in use, the palette on
+  `alt+space`, the layout cycle on `alt+shift+space`. A window manager with no bar and
+  no palette was not the thing the readme described, and a newcomer who had to
+  discover three more programs and how to start them had been handed a worse first
+  hour than necessary. The keys are listed at the top of the file. The test that
+  loads the starter now runs it through all four loaders and expects silence from
+  each.
+
+- **`shubbak config init` says what to do next**, and where the annotated example
+  actually is. "Beside this binary" was wrong for a winget install, where the
+  executable on `PATH` is a symlink and the example is a directory away; the link is
+  followed, and when the file is not there either the answer is its address in the
+  repository at this version. The command also uses the same default location the
+  window manager searches, rather than a copy of that logic.
+
+- **"No config file found" says how to make one.** The message listed everywhere it
+  looked and how to point it elsewhere, and never mentioned `shubbak config init` -
+  the only hint that did was reachable only through `--config` naming a missing file.
+  The daemon's log line says the same, and that the defaults bind no keys.
+
+- **A bare `startup-command "taj"` means the `taj` beside the window manager.** It was
+  a `PATH` search, which found nothing in the two cases that matter most: straight
+  after an install, when the terminal the window manager was started from still had
+  its old `PATH`; and with two copies on one machine, when it found whichever sorted
+  first. A bare name is now looked for beside `shubbak-wm.exe` first, which also takes
+  the direct launch path rather than the shell's. Anything with a directory in it is
+  a path and means exactly what it says. The example config starts the three
+  companions this way instead of through a function that existed only on the author's
+  machine.
+
+- **`shubbak autostart status` compares files, not strings.** winget's portable
+  install reaches the executables through symlinks in a second directory, and the
+  registered path and the running copy could differ as text while being one file -
+  which produced "this is not the copy that will start at logon" on an install that
+  was entirely in order.
+
+- **The two builds of the window manager no longer share `obj` and `bin`.** The
+  manifest is baked into the apphost and MSBuild did not treat the uiAccess switch as
+  an input to it, so publishing with the flag and then without silently reused the
+  first apphost. The release builds both from one tree, which is why the separation
+  is in the project rather than in a note saying "clean before switching".
+
+- **`shubbak --help` opens with a GETTING STARTED section**, and the changelog's three
+  interim headings between 0.9.0 and this release are folded into it as sections
+  rather than versions nobody could install.
+- **The readme is a readme again.** What Shubbak is, what is in the box, how to
+  install it and the first three commands - two hundred lines rather than nine
+  hundred. Everything it used to carry moved into `docs/`, mostly word for word:
+  [configuration](docs/configuration.md) (the file, rules, layouts, monitors,
+  contexts, arrangements, commands), a page each for [Taj](docs/taj.md),
+  [Dalil](docs/dalil.md) and [Ayn](docs/ayn.md), [scripting](docs/scripting.md), the
+  [FAQ](docs/faq.md) and [architecture](docs/architecture.md) (why .NET, the layout of
+  the repo, building). Every KDL snippet in the readme and the docs is now loaded
+  through the real parser on every push, and a warning fails the build - the first
+  snippet a newcomer copies must not be one the parser then complains about. The
+  packages ship the whole `docs/` set.
+
+- **Groundwork for ARM64.** `Shubbak.Native`, the one project that must be compiled
+  for a concrete architecture, follows the runtime identifier of the executable being
+  built instead of being pinned to x64, so `dotnet publish -r win-arm64` compiles
+  every project for ARM64 given the ARM64 C++ build tools. Nothing ships for ARM64
+  yet; RELEASING.md lists what remains, and the x64 build runs on ARM64 Windows
+  through emulation meanwhile.
+
+#### Fixed
+
+- **The tray's "Open configuration folder" did nothing for the two people most likely
+  to click it.** With no config yet it logged a warning and opened nothing, although
+  showing where to put one was its stated purpose; it now opens the folder
+  `shubbak config init` would write to, creating it if need be. And it opened the
+  folder through the command-line splitter, so a profile path with a space in it -
+  `C:\Users\John Smith\...` - was cut at the space.
+
+- **The winget manifest listed `ayn.exe` in a zip that did not contain it.** The
+  0.9.0 zip had four executables; the manifest named five. winget's validation extracts
+  the archive and checks every nested file, so that submission would have failed. The
+  manifests are now templates the release build fills and checks, and every push
+  validates them with the real client.
+
+### Contexts, named monitors, arrangements and Ayn
+
+#### Added
 
 - **Contexts: named conditions on the desktop that layer overrides on the config while
   they hold.** A talk from the laptop alone, then on a projector, then docked to two
@@ -394,7 +548,7 @@ schedule and breaking either is a different kind of event:
   anywhere else left the palette running on settings the file no longer contained, with
   nothing anywhere to say so.
 
-### Changed
+#### Changed
 
 - **Taj's bars follow the displays.** They were created once, from the displays present
   at startup, and that was the whole of it: plug in a monitor and it had no bar; unplug
@@ -528,7 +682,7 @@ schedule and breaking either is a different kind of event:
   | `taj` | 5.208 ms/s | **0.104 ms/s** |
   | `shubbak-wm` | — | **0.000 ms/s** |
 
-### Fixed
+#### Fixed
 
 - **The bar's hover highlight lasted half a second.** The tree is rebuilt on every
   model change - the clock, twice a second - and the hovered node belonged to the tree
@@ -677,7 +831,7 @@ schedule and breaking either is a different kind of event:
   matters, and it was the one case with no log. It now defaults beside the window
   manager's, as Dalil always has; the asymmetry was not a decision.
 
-### Added
+#### Added: the configuration indicators
 
 - **`{{ config }}` on the bar.** Empty and invisible while the settings are readable,
   like `paused` and `suspended`; when it appears, the bar is running on what it had
@@ -691,9 +845,9 @@ schedule and breaking either is a different kind of event:
   row is absent when there is nothing wrong, because a row that promises problems and
   lists none teaches you to ignore it.
 
-## [0.9.2-validation]
+### Validation of the whole file
 
-### Added
+#### Added
 
 - **`shubbak check-config` validates the `dalil` section.** It never had. The section
   name was on the window manager's allow-list and its contents were on nobody's, so
@@ -713,7 +867,7 @@ schedule and breaking either is a different kind of event:
   workspace quietly took the primary. It now says so, and says that monitors are
   numbered from 0 in the order `shubbak query monitors` lists them.
 
-### Fixed
+#### Fixed
 
 - **A palette action whose name contains a space could not be run.** The command
   composer emits a row for any term containing a space — that is how a verb and its
@@ -724,14 +878,14 @@ schedule and breaking either is a different kind of event:
   above; rows that only explain now go below, and are still the only row when nothing
   else matched, which is the case they were written for.
 
-## [0.9.1-palette]
+### The palette as a control surface
 
 Dalil stops being a viewer that can also send a few commands, and becomes a control
 surface. Three things drove it: shortcuts that could not be typed on half the world's
 keyboards, a safety setting whose default made almost every key in the palette inert,
 and a list of actions that could do less to a window than a keybinding could.
 
-### Added
+#### Added
 
 - **`Ctrl+1` … `Ctrl+8` jump straight to a mode**, in the order the hint bar draws
   them. Prefixes are faster and cannot be typed at all on several layouts — on German
@@ -791,7 +945,7 @@ and a list of actions that could do less to a window than a keybinding could.
   outside, and a dead daemon and a slow one used to produce an identical empty list
   with identical, confidently wrong, advice.
 
-### Changed
+#### Changed
 
 - **`action-guard` became `confirm-destructive`.** The old setting turned every direct
   chord off at once, and its default left every chord in the palette inert except the
@@ -830,7 +984,7 @@ and a list of actions that could do less to a window than a keybinding could.
   and 183 KiB. The list is only ever read for the selected row, so nothing was traded
   for it — it was work with no reader. Keystroke latency is unchanged at 0.07 ms.
 
-### Fixed
+#### Fixed
 
 - **`Ctrl+U` and `Ctrl+Backspace` no longer eject you from the mode.** Clearing the
   query drops the prefix, which silently moves the palette back to the window list —
@@ -893,7 +1047,7 @@ and a list of actions that could do less to a window than a keybinding could.
 - **`toggle-managed` is no longer marked destructive.** It is a toggle; pressing it
   twice leaves the desktop exactly as it was found.
 
-## [0.9.0-inspection]
+### Inspection from the palette
 
 Inspection, which was the best thing the command line could do and the hardest thing
 in the palette to find.
@@ -904,7 +1058,7 @@ action list, reached by an undocumented key, under a name that did not contain t
 word "inspect". This release makes it findable, makes it readable, and stops the
 palette recovering the report by taking the printed text apart.
 
-### Added
+#### Added
 
 - **`Ctrl+Shift+I` inspects the selected window**, from anywhere in the palette. It is
   the one action the `action-guard` setting does not hold back, and the exemption is
@@ -953,7 +1107,7 @@ palette recovering the report by taking the printed text apart.
   The first two already worked and were written down nowhere, so the one page somebody
   opens to find a key was the one page that did not mention them.
 
-### Changed
+#### Changed
 
 - **The `inspect` IPC method returns a structured `WindowReport` rather than the text
   of one**, and the **IPC protocol version is now 2**.
@@ -987,7 +1141,7 @@ palette recovering the report by taking the printed text apart.
   old name described it better and was findable only by somebody who had already found
   it; the description keeps the old wording, and descriptions are searched too.
 
-### Fixed
+#### Fixed
 
 - **Windows that reopen maximised were tiled while Windows still had them flagged
   maximised.** Store applications — Calculator and Settings among them — remember that
@@ -1126,7 +1280,7 @@ palette recovering the report by taking the printed text apart.
   Slack unfurl is not a failure anybody would see by opening the file. It has to be
   uploaded by hand under Settings → Social preview.
 
-### Internal
+#### Internal
 
 - **A test project for the palette host.** `Dalil.Core` has been tested since it
   existed; the executable had never been, because the decisions lived inside
@@ -1151,8 +1305,12 @@ palette recovering the report by taking the printed text apart.
 
 ## [0.9.0] - 2026-08-27
 
-The first public release: the point at which Shubbak can be installed rather than
-built.
+Tagged, built, and never published: the draft release was discarded while the work
+below was finished, so nobody installed this version. The entry stays because the tag
+exists and the changes did happen. The first release that shipped is the one above.
+
+It was meant as the first public release: the point at which Shubbak can be installed
+rather than built.
 
 Most of what it does predates this entry — tiling, workspaces, the bar, the palette.
 What is new is everything needed to hand it to somebody else: a release zip and the two
@@ -1440,4 +1598,6 @@ to be running twice.
 
 - **x64 only.** There is no ARM64 configuration yet.
 
-[0.9.0]: https://github.com/MoaidHathot/Shubbak/releases/tag/v0.9.0
+[Unreleased]: https://github.com/MoaidHathot/Shubbak/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/MoaidHathot/Shubbak/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/MoaidHathot/Shubbak/tree/v0.9.0

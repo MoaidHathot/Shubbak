@@ -1,41 +1,46 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 
 PackageIdentifier: MoaidHathot.Shubbak
-PackageVersion: 0.9.0
+PackageVersion: 0.10.0
 PackageLocale: en-US
 
 Publisher: Moaid Hathot
 PublisherUrl: https://github.com/MoaidHathot
 PublisherSupportUrl: https://github.com/MoaidHathot/Shubbak/issues
+Author: Moaid Hathot
 
 PackageName: Shubbak
 PackageUrl: https://github.com/MoaidHathot/Shubbak
+Moniker: shubbak
 
 License: MIT
-LicenseUrl: https://github.com/MoaidHathot/Shubbak/blob/main/LICENSE
+LicenseUrl: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/LICENSE
 Copyright: Copyright (c) 2026 Moaid Hathot
 
-ShortDescription: A tiling window manager for Windows, with an animation engine, a status bar and a configuration language that tells you when you have made a mistake.
+ShortDescription: A tiling window manager for Windows, with an animation engine, a status bar, a command palette and a configuration language that tells you when you have made a mistake.
 
 Description: |-
-  Shubbak tiles windows on Windows. It is named for شبّاك, "window"; the status bar
-  is Taj (تاج, crown) and the command palette is Dalil (دليل, guide).
+  Shubbak tiles windows on Windows. It is named for شبّاك, "window"; the status bar is
+  Taj (تاج, crown), the command palette is Dalil (دليل, guide) and the camera and
+  microphone watcher is Ayn (عين, eye). Five small executables, compiled ahead of
+  time, with no runtime to install first.
 
   Layouts are a property of a container rather than of a workspace, so a fibonacci
   region can sit inside a columns region with no special case. Available layouts are
   splith, splitv, fibonacci, fibonacci-v, fibonacci-mirrored, master-left,
   master-right, master-top, master-bottom, grid and monocle.
 
-  Configuration is one KDL file, shared by the window manager and the bar, with
-  diagnostics that point at the problem with a caret rather than reporting a line
+  Configuration is one KDL file, shared by the window manager, the bar and the
+  palette, with diagnostics that point at the problem with a caret rather than a line
   number. Mistakes that other window managers accept silently - a regex wrapped in
   slashes that therefore never matched, a duplicate binding, a rule that would match
-  every window - are reported rather than ignored.
+  every window - are reported rather than ignored. Contexts layer overrides on the
+  config while a condition on the desktop holds: a presentation, a docked monitor, a
+  call with the microphone open.
 
   Windows on inactive workspaces are cloaked rather than hidden, so they still report
   as visible to Win32. If Shubbak exits, crashes or is killed, the next run adopts
-  them and brings them back; hiding them, which is what this originally did, strands
-  them with their process still running.
+  them and brings them back.
 
   `shubbak inspect` prints every matchable attribute of a window, whether Shubbak
   will tile it and why not if it will not, and which rules matched.
@@ -47,40 +52,39 @@ Tags:
   - workspaces
   - productivity
   - keyboard
+  - status-bar
+  - command-palette
   - dotnet
   - kdl
 
-ReleaseNotesUrl: https://github.com/MoaidHathot/Shubbak/blob/main/CHANGELOG.md
+ReleaseNotesUrl: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/CHANGELOG.md
 Documentations:
+  - DocumentLabel: Getting started
+    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/docs/getting-started.md
+  - DocumentLabel: Configuration
+    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/docs/configuration.md
   - DocumentLabel: Troubleshooting
-    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/main/docs/troubleshooting.md
+    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/docs/troubleshooting.md
   - DocumentLabel: Example configuration
-    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/main/docs/shubbak.example.kdl
+    DocumentUrl: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/docs/shubbak.example.kdl
 
-# No Icons field, deliberately. The schema has one and docs/assets/shubbak-wm.png is
-# exactly what it wants, but `winget validate` answers it with "Field usage requires
-# verified publishers" - so it would display nothing here and would put a restricted
-# field in front of a reviewer at submission time. See RELEASING.md.
-#
-# winget shows the icon compiled into the executable regardless, which is the same
-# drawing from the same script.
+# No Icons field: `winget validate` answers it with "Field usage requires verified
+# publishers", so it would display nothing and put a restricted field in front of a
+# reviewer. winget shows the icon compiled into the executable regardless.
 
 InstallationNotes: |-
-  Nothing is running yet. To start the window manager at logon:
+  Nothing is running yet, and there is no config until you write one. In a new terminal
+  (this one has the PATH it started with):
 
-      shubbak autostart enable
+      shubbak config init          write a starter config: keys, the bar, the palette
+      shubbak-wm                   start the window manager now
+      shubbak autostart enable     and have it start at logon from now on
 
-  Or run it now, attached to the current terminal:
+  Installed the default way, Shubbak lives in Program Files and can tile windows that
+  belong to elevated programs. Installed with --scope user it is a portable copy under
+  your profile and cannot; run shubbak-wm elevated if you need those tiled.
 
-      shubbak-wm --foreground
-
-  Configuration is searched for at $SHUBBAK_CONFIG, $XDG_CONFIG_HOME/shubbak/shubbak.kdl,
-  %USERPROFILE%\.config\shubbak\shubbak.kdl and %APPDATA%\shubbak\shubbak.kdl, in that
-  order. Run `shubbak config-path` to see which one is in effect.
-
-  This build is not code signed and is installed under %LOCALAPPDATA%, so it cannot
-  move windows belonging to elevated processes. Run shubbak-wm elevated if you need
-  those tiled.
+  Getting started: https://github.com/MoaidHathot/Shubbak/blob/v0.10.0/docs/getting-started.md
 
 ManifestType: defaultLocale
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0

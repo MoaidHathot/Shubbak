@@ -1,0 +1,53 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <!--
+    The installer: a per-machine MSI that puts the five executables under
+    %ProgramFiles%\Shubbak and adds that directory to the machine PATH.
+
+    It exists for one reason the portable zip cannot serve. Moving windows that belong
+    to elevated processes - Task Manager, anything run as administrator - needs
+    uiAccess, and Windows grants that only to a binary that asks for it in its
+    manifest, carries a trusted Authenticode signature, and lives under Program Files.
+    The zip can satisfy the first two; only an installer can promise the third. So
+    this package carries the uiAccess build of shubbak-wm, and the release workflow
+    signs every file before it is packed.
+
+    Built with `dotnet build` like everything else. It is deliberately not in the
+    solution: its inputs are published binaries, which a plain solution build does not
+    produce, and it needs the WiX SDK, which nothing else does. The release workflow
+    and tools/build-release.ps1 build it after publishing.
+
+    Inputs, all MSBuild properties:
+
+      StageDir   A flat directory holding the files to install - the five executables,
+                 LICENSE, shubbak.example.kdl and docs\*.md - as tools/build-release.ps1
+                 lays it out. Defaults to artifacts\stage-msi under the repository.
+      Version    Inherited from Directory.Build.props, like every other project. The
+                 MSI's ProductVersion and its file name both come from here, so the
+                 installer cannot claim a version the binaries inside it do not.
+
+    Directory.Build.props is imported here too, on purpose: TreatWarningsAsErrors
+    makes a WiX or ICE warning fail the build, which is the right default for a file
+    that runs elevated on other people's machines.
+  -->
+
+  <PropertyGroup>
+    <OutputName>shubbak-$(Version)-win-x64</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <StageDir Condition="'$(StageDir)' == ''">$(MSBuildProjectDirectory)\..\..\artifacts\stage-msi</StageDir>
+    <DefineConstants>$(DefineConstants);Version=$(Version);StageDir=$(StageDir)</DefineConstants>
+    <!-- Beside the zip, so the workflow and the scripts find every artefact in one place. -->
+    <OutputPath>$(MSBuildProjectDirectory)\..\..\artifacts\msi\</OutputPath>
+    <!--
+      ICE validation stays on; it is what catches a shortcut without an icon or a
+      component with no key path before a user does.
+    -->
+    <SuppressValidation>false</SuppressValidation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+
+</Project>

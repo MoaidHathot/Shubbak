@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Shubbak's installer. See Shubbak.Installer.wixproj for why it exists and what it
+  takes as input; this file says what ends up on the machine.
+
+  Everything goes in one directory under Program Files, which is then put on the
+  machine PATH. That directory is the point: uiAccess is honoured only from there,
+  and PATH is what lets `startup-command "taj"` in a config file find the bar. Both
+  are undone by uninstall, and neither touches the user's own files - the config
+  under ~\.config\shubbak and the session under %LOCALAPPDATA%\Shubbak belong to
+  the user, not to the package, and an uninstall that deleted them would be taking
+  something it never gave.
+
+  Nothing is started and nothing is registered to start at logon. Both are the
+  user's decision, made with `shubbak autostart enable`, and an installer running
+  elevated is the wrong process to write a per-user Run key from.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Shubbak"
+           Manufacturer="Moaid Hathot"
+           Version="$(var.Version)"
+           UpgradeCode="{FCFFCA55-3741-45D5-9410-3429B9DF9BFD}"
+           Language="1033"
+           Codepage="1252"
+           Scope="perMachine"
+           InstallerVersion="500"
+           Compressed="yes">
+
+    <!--
+      The UpgradeCode above never changes. It is what lets a newer MSI find and
+      replace an older one, and what winget's AppsAndFeaturesEntries matches on.
+      The ProductCode is generated per build, as a major upgrade requires.
+    -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first to install this one." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!--
+      A silent install - which is how winget runs this - always uses Restart
+      Manager to close whatever holds the files being replaced. That is the running
+      window manager, the bar, the palette and the watcher; all four ask to be
+      closed cleanly and the window manager registers to be started again when the
+      install is done. This property covers the one that does not answer: force it
+      rather than end the upgrade with "restart required", which for a window
+      manager is an answer nobody wants.
+    -->
+    <Property Id="MSIRMSHUTDOWN" Value="1" />
+
+    <!-- Apps and Features. WixUI_Minimal already sets ARPNOMODIFY, since it has no maintenance mode. -->
+    <Property Id="ARPPRODUCTICON" Value="ShubbakWm.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/MoaidHathot/Shubbak" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/MoaidHathot/Shubbak/blob/main/docs/getting-started.md" />
+
+    <Icon Id="ShubbakWm.ico" SourceFile="..\..\src\icons\shubbak-wm.ico" />
+
+    <!--
+      The smallest of the standard dialog sets: licence, install, done. It is only
+      seen by somebody who double-clicks the MSI; winget never shows it.
+    -->
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <Feature Id="Main" Title="Shubbak" Level="1" AllowAbsent="no">
+      <ComponentGroupRef Id="Executables" />
+      <ComponentGroupRef Id="Documents" />
+      <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="MachinePath" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Shubbak">
+        <Directory Id="DocsFolder" Name="docs" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Executables" Directory="INSTALLFOLDER">
+      <!--
+        The window manager is the uiAccess build. tools/build-release.ps1 puts it in
+        the stage directory and checks the manifest it carries before anything is
+        packed, because a wrong one here is a binary that either cannot start or
+        cannot do the one thing this installer exists for.
+      -->
+      <Component>
+        <File Id="ShubbakWm" Source="$(var.StageDir)\shubbak-wm.exe" />
+      </Component>
+      <Component>
+        <File Id="ShubbakCli" Source="$(var.StageDir)\shubbak.exe" />
+      </Component>
+      <Component>
+        <File Id="Taj" Source="$(var.StageDir)\taj.exe" />
+      </Component>
+      <Component>
+        <File Id="Dalil" Source="$(var.StageDir)\dalil.exe" />
+      </Component>
+      <Component>
+        <File Id="Ayn" Source="$(var.StageDir)\ayn.exe" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="Documents">
+      <!--
+        Beside the executables, where `shubbak config init` says it is. The
+        example is the annotated reference; the starter that init writes is
+        deliberately a fraction of it.
+      -->
+      <Component Directory="INSTALLFOLDER">
+        <File Id="ExampleConfig" Source="$(var.StageDir)\shubbak.example.kdl" />
+      </Component>
+      <Component Directory="INSTALLFOLDER">
+        <File Id="License" Source="$(var.StageDir)\LICENSE" />
+      </Component>
+      <!-- The user-facing docs, the same set the readme links to. -->
+      <Component Directory="DocsFolder">
+        <File Id="DocGettingStarted" Source="$(var.StageDir)\docs\getting-started.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocConfiguration" Source="$(var.StageDir)\docs\configuration.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocTaj" Source="$(var.StageDir)\docs\taj.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocDalil" Source="$(var.StageDir)\docs\dalil.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocAyn" Source="$(var.StageDir)\docs\ayn.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocScripting" Source="$(var.StageDir)\docs\scripting.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocFaq" Source="$(var.StageDir)\docs\faq.md" />
+      </Component>
+      <Component Directory="DocsFolder">
+        <File Id="DocTroubleshooting" Source="$(var.StageDir)\docs\troubleshooting.md" />
+      </Component>
+    </ComponentGroup>
+
+    <!--
+      One Start Menu entry, for the window manager, so that "I installed it, now
+      what" has an answer that is not a terminal. The other three are started by the
+      window manager or from a terminal and would only be clutter.
+
+      Its own component with a registry key path, which is the arrangement Windows
+      Installer's validation insists on for a shortcut in the Start Menu: the folder
+      counts as per-user data even in a per-machine install, and per-user data may
+      not share a component with a Program Files file. The key is a marker and
+      nothing reads it.
+    -->
+    <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="{3A0D2C6E-7B1F-4E6A-9C2D-5F8E1B4A7D90}">
+      <Shortcut Id="StartMenuShubbak"
+                Name="Shubbak"
+                Description="Start the Shubbak window manager"
+                Target="[INSTALLFOLDER]shubbak-wm.exe"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="ShubbakWm.ico" />
+      <RegistryValue Root="HKCU" Key="Software\Shubbak" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <!--
+      The machine PATH, appended. Set rather than created so an existing entry is
+      not duplicated on repair, and not permanent so uninstall takes it out again.
+      Windows Installer broadcasts the change; terminals already open keep the
+      PATH they started with, which the installation notes say.
+
+      An explicit GUID because the component has no file to derive one from, and a
+      registry key path because an environment variable cannot be one. The key it
+      writes is also useful in its own right: it says where this install is and
+      which version it is, for anything that wants to know without asking PATH.
+    -->
+    <Component Id="MachinePath" Directory="INSTALLFOLDER" Guid="{C771C8F1-A8BF-4B5A-BFB6-11D9102A579E}">
+      <RegistryKey Root="HKLM" Key="SOFTWARE\Shubbak">
+        <RegistryValue Name="InstallFolder" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <RegistryValue Name="Version" Type="string" Value="[ProductVersion]" />
+      </RegistryKey>
+      <Environment Id="MachinePathEntry"
+                   Name="PATH"
+                   Value="[INSTALLFOLDER]"
+                   Part="last"
+                   Action="set"
+                   System="yes"
+                   Permanent="no"
+                   Separator=";" />
+    </Component>
+  </Fragment>
+
+</Wix>

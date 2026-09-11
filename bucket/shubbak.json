@@ -1,26 +1,29 @@
 {
-    "version": "0.9.0",
-    "description": "A tiling window manager for Windows, with an animation engine, a status bar, and a configuration language that tells you when you have made a mistake.",
+    "version": "0.10.0",
+    "description": "A tiling window manager for Windows, with an animation engine, a status bar, a command palette and a configuration language that tells you when you have made a mistake.",
     "homepage": "https://github.com/MoaidHathot/Shubbak",
     "license": "MIT",
     "notes": [
-        "Shubbak is installed but not running yet.",
+        "Shubbak is installed but not running, and there is no config until you write one:",
         "",
-        "  shubbak autostart enable    start the window manager at logon",
-        "  shubbak-wm --foreground     run it now, attached to this terminal",
+        "  shubbak config init          write a starter config: keys, the bar, the palette",
+        "  shubbak-wm                   start the window manager now",
+        "  shubbak autostart enable     and have it start at logon from now on",
         "",
-        "Configuration is read from $XDG_CONFIG_HOME/shubbak/shubbak.kdl, or",
-        "%USERPROFILE%\\.config\\shubbak\\shubbak.kdl, or %APPDATA%\\shubbak\\shubbak.kdl.",
-        "Run 'shubbak config-path' to see which one is in effect, and start from the",
-        "shubbak.example.kdl in this package.",
+        "Run 'shubbak config-path' to see which file is in effect. The fully annotated",
+        "reference is shubbak.example.kdl, beside the executables.",
         "",
-        "This build is not code signed, so it cannot move windows belonging to",
-        "elevated processes unless you run shubbak-wm elevated too."
+        "This is the portable build, under your profile, so it cannot move windows that",
+        "belong to elevated programs; the MSI from the releases page (or",
+        "'winget install MoaidHathot.Shubbak') can. Run shubbak-wm elevated if you need",
+        "those tiled from here.",
+        "",
+        "Getting started: https://github.com/MoaidHathot/Shubbak/blob/main/docs/getting-started.md"
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.9.0/shubbak-0.9.0-win-x64.zip",
-            "hash": "e4e12ec12c634c1cb33c39d1c1e04561de730b88c39b9fa85f377c91630a681c"
+            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-x64.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
         }
     },
     "bin": [
@@ -30,7 +33,9 @@
         "dalil.exe",
         "ayn.exe"
     ],
-    "persist": [],
+    "pre_uninstall": [
+        "if (Get-Process shubbak-wm, taj, dalil, ayn -ErrorAction SilentlyContinue) { & \"$dir\\shubbak.exe\" stop }"
+    ],
     "checkver": {
         "github": "https://github.com/MoaidHathot/Shubbak"
     },

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Draws the application icons for the four Shubbak executables, and the social card.
+    Draws the application icons for the five Shubbak executables, and the social card.
 
 .DESCRIPTION
     The binaries shipped with no icon at all, which Alt-Tab, the taskbar, Task

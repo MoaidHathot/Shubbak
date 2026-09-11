@@ -6,12 +6,21 @@ name: build
 # nothing noticed for a week - the tests in it were the ones guarding the path where
 # a mistake leaves the keyboard unusable. Building and testing the solution is the
 # cheapest thing that would have caught it, on the commit that introduced it.
+#
+# It also does everything the release workflow does except sign and publish, for the
+# same reason: a release must never be the build that discovers something. Until that
+# was true the readme claimed "single NativeAOT executables" on the strength of a
+# spike, and the binaries that actually shipped had never been AOT compiled in CI.
 
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
 
 jobs:
   build:
@@ -25,6 +34,22 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
+
+      # Everything that carries the version - the application manifests, the winget and
+      # Scoop manifests and their URLs, the MSI's UpgradeCode - is compared against
+      # Directory.Build.props. Each has been wrong at least once when a person did it.
+      - name: Check that every copy of the version agrees
+        shell: pwsh
+        run: ./tools/check-release-consistency.ps1
+
+      # The manifests are templates with placeholder hashes, but everything else in
+      # them - schema, fields, values - is what will be submitted, and the real client
+      # is the only validator that matters.
+      - name: Validate the winget manifests
+        shell: pwsh
+        run: |
+          ./tools/ensure-winget.ps1
+          winget validate --manifest packaging/winget
 
       - name: Restore
         run: dotnet restore
@@ -43,127 +68,29 @@ jobs:
       - name: Validate the example config
         run: dotnet run --project src/Shubbak.Cli --configuration Release --no-build -- check-config docs/shubbak.example.kdl
 
-      # Shubbak ships as NativeAOT, and until this step existed nothing here ever
-      # published it. The analysers were on and warnings were errors, which is a strong
-      # signal but not the same thing as a successful publish - the README claimed
-      # "single NativeAOT executables" on the strength of a spike, and the four
-      # binaries that actually ship had never been AOT compiled in CI at all.
-      #
-      # It is here rather than only in release.yml because a release must not be the
-      # build that discovers the problem.
-      #
-      # Separate output directories per project, deliberately: Shubbak.Wm bakes its
-      # manifest into the apphost and MSBuild does not treat ShubbakUiAccess as an
-      # input to it, so sharing one directory is how a stale apphost survives a switch.
-      - name: Publish (NativeAOT)
+      # The release, unsigned: publishes the five executables and the uiAccess window
+      # manager and checks each (version reported, PE subsystem, embedded manifest),
+      # packs the zip, builds the MSI with ICE validation, hashes, and fills and
+      # validates the package manifests. The same script the release workflow runs,
+      # so the two cannot disagree about what a release is.
+      - name: Build the release artefacts
         shell: pwsh
-        run: |
-          foreach ($project in 'Shubbak.Wm', 'Shubbak.Cli', 'Taj', 'Dalil', 'Ayn') {
-            Write-Output "::group::publish $project"
-            dotnet publish "src/$project" `
-              --configuration Release `
-              --runtime win-x64 `
-              -p:PublishAot=true `
-              --output "artifacts/publish/$project"
-            if ($LASTEXITCODE -ne 0) { throw "publish failed for $project" }
-            Write-Output "::endgroup::"
-          }
+        run: ./tools/build-release.ps1 -SkipTests
 
-      # The four binaries have one version between them, from Directory.Build.props.
-      # Asking each of them is also the cheapest end-to-end proof that what AOT
-      # produced starts and runs - a compiled binary that cannot answer a question is
-      # not evidence of much.
-      #
-      # This exists because --version did not. It fell through the CLI's dispatch, was
-      # sent to the daemon as a window manager command, and answered a version query
-      # with "no window manager is running".
-      - name: Check the binaries run and agree on the version
+      # The documentation shows configuration, and configuration rots. Every KDL block
+      # in the readme and the docs is loaded through the real parser, and a warning
+      # fails the build: the first snippet a newcomer copies must not be one the
+      # parser then complains about.
+      - name: Check the documentation's config snippets
         shell: pwsh
-        run: |
-          $props = [xml](Get-Content Directory.Build.props)
-          $version = $props.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+        run: ./tools/check-doc-snippets.ps1
 
-          if (-not $version) { throw "Directory.Build.props has no <Version>." }
-
-          $expected = "Shubbak $version"
-
-          $binaries = @{
-            'shubbak-wm' = 'artifacts/publish/Shubbak.Wm/shubbak-wm.exe'
-            'shubbak'    = 'artifacts/publish/Shubbak.Cli/shubbak.exe'
-            'taj'        = 'artifacts/publish/Taj/taj.exe'
-            'dalil'      = 'artifacts/publish/Dalil/dalil.exe'
-            'ayn'      = 'artifacts/publish/Ayn/ayn.exe'
-          }
-
-          foreach ($name in $binaries.Keys) {
-            $exe = $binaries[$name]
-            if (-not (Test-Path $exe)) { throw "$name did not publish to $exe" }
-
-            # Redirected rather than run inline: three of the four are GUI-subsystem
-            # binaries, so the shell does not wait for them and their output would
-            # arrive after this step had already finished.
-            $out = New-TemporaryFile
-            $p = Start-Process -FilePath $exe -ArgumentList '--version' `
-                   -RedirectStandardOutput $out -NoNewWindow -Wait -PassThru
-
-            $reported = (Get-Content $out -Raw).Trim()
-            Remove-Item $out -Force
-
-            if ($p.ExitCode -ne 0) { throw "$name --version exited $($p.ExitCode)" }
-            if ($reported -ne $expected) { throw "$name reports '$reported'; expected '$expected'." }
-
-            Write-Output "$name -> $reported"
-          }
-
-      # The daemon is the one binary that must not open a console when the shell
-      # starts it, because it is the one registered to run at logon. That is decided
-      # by a field in the PE header, which is set by OutputType and is invisible in
-      # every other kind of test - so it is read back out of the built file.
-      - name: Check the subsystem of each binary
-        shell: pwsh
-        run: |
-          # 2 = WINDOWS_GUI, 3 = WINDOWS_CUI.
-          $expected = @{
-            'artifacts/publish/Shubbak.Wm/shubbak-wm.exe' = 2
-            'artifacts/publish/Taj/taj.exe'               = 2
-            'artifacts/publish/Dalil/dalil.exe'           = 2
-            'artifacts/publish/Ayn/ayn.exe'           = 2
-            'artifacts/publish/Shubbak.Cli/shubbak.exe'   = 3
-          }
-
-          foreach ($exe in $expected.Keys) {
-            $stream = [System.IO.File]::OpenRead((Resolve-Path $exe))
-            $reader = New-Object System.IO.BinaryReader($stream)
-            try {
-              $stream.Position = 0x3C
-              $peHeader = $reader.ReadInt32()
-              # PE signature (4) + COFF header (20) + subsystem's offset in the
-              # optional header (68).
-              $stream.Position = $peHeader + 4 + 20 + 68
-              $subsystem = $reader.ReadUInt16()
-            }
-            finally {
-              $reader.Dispose()
-              $stream.Dispose()
-            }
-
-            $want = $expected[$exe]
-            $name = Split-Path $exe -Leaf
-
-            if ($subsystem -ne $want) {
-              throw "$name has subsystem $subsystem; expected $want. " +
-                    "A console daemon puts a window on the desktop at every logon."
-            }
-
-            Write-Output "$name -> subsystem $subsystem"
-          }
-
-      # The README quotes a test count in two places. It has been corrected by hand
-      # four times and was wrong on each of the four occasions somebody looked - the
-      # last time within the same commit that added this check, because the count was
-      # taken before the last test file was written. So it is checked rather than
+      # The architecture page quotes a test count in two places. It has been corrected
+      # by hand four times and was wrong on each of the four occasions somebody looked -
+      # the last time within the same commit that added this check, because the count
+      # was taken before the last test file was written. So it is checked rather than
       # remembered.
-      - name: Check the README's test count
+      - name: Check the documented test count
         shell: pwsh
         run: |
           # Recursive: a test in a nested folder would otherwise be invisible to the
@@ -173,15 +100,30 @@ jobs:
 
           $declared = ($files | Select-String -Pattern '^\s*\[(Fact|Theory)' -AllMatches).Count
 
-          $claimed = (Select-String -Path README.md -Pattern '(\d+) test methods' -AllMatches).Matches |
+          $claimed = (Select-String -Path docs/architecture.md -Pattern '(\d+) test methods' -AllMatches).Matches |
               ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique
 
-          if ($claimed.Count -eq 0) { throw "README no longer states a test count; remove this check or restore the figure." }
+          if ($claimed.Count -eq 0) { throw "docs/architecture.md no longer states a test count; remove this check or restore the figure." }
 
           foreach ($n in $claimed) {
             if ($n -ne $declared) {
-              throw "README says $n test methods; the tree declares $declared. Update README.md."
+              throw "docs/architecture.md says $n test methods; the tree declares $declared. Update it."
             }
           }
 
-          Write-Output "README test count is correct: $declared"
+          Write-Output "Documented test count is correct: $declared"
+
+      # Unsigned, so not for anybody else - but exactly what a release would contain,
+      # which makes it the thing to install on a test machine before tagging.
+      - name: Upload the unsigned artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shubbak-unsigned-${{ github.sha }}
+          path: |
+            artifacts/shubbak-*.zip
+            artifacts/shubbak-*.msi
+            artifacts/shubbak-*.sha256
+            artifacts/winget/
+            artifacts/bucket/
+          retention-days: 7
+          if-no-files-found: error
