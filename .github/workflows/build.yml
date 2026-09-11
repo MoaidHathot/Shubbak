@@ -68,6 +68,15 @@ jobs:
       - name: Validate the example config
         run: dotnet run --project src/Shubbak.Cli --configuration Release --no-build -- check-config docs/shubbak.example.kdl
 
+      # The documentation shows configuration, and configuration rots. Every KDL block
+      # in the readme and the docs is loaded through the real parser, and a warning
+      # fails the build: the first snippet a newcomer copies must not be one the
+      # parser then complains about. Before the release build, which replaces the
+      # managed CLI in bin with nothing - a NativeAOT publish has no apphost to leave.
+      - name: Check the documentation's config snippets
+        shell: pwsh
+        run: ./tools/check-doc-snippets.ps1
+
       # The release, unsigned: publishes the five executables and the uiAccess window
       # manager and checks each (version reported, PE subsystem, embedded manifest),
       # packs the zip, builds the MSI with ICE validation, hashes, and fills and
@@ -76,14 +85,6 @@ jobs:
       - name: Build the release artefacts
         shell: pwsh
         run: ./tools/build-release.ps1 -SkipTests
-
-      # The documentation shows configuration, and configuration rots. Every KDL block
-      # in the readme and the docs is loaded through the real parser, and a warning
-      # fails the build: the first snippet a newcomer copies must not be one the
-      # parser then complains about.
-      - name: Check the documentation's config snippets
-        shell: pwsh
-        run: ./tools/check-doc-snippets.ps1
 
       # The architecture page quotes a test count in two places. It has been corrected
       # by hand four times and was wrong on each of the four occasions somebody looked -

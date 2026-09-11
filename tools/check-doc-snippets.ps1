@@ -34,11 +34,21 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 
 if (-not $Cli) {
-    $Cli = Get-ChildItem (Join-Path $root 'src\Shubbak.Cli\bin\Release') -Recurse -Filter 'shubbak.exe' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -notmatch '\\native\\' } |
-        Select-Object -First 1 -ExpandProperty FullName
+    # This machine's architecture, because a tree that has been published for both
+    # holds an ARM64 shubbak.exe too and an x64 machine cannot run that one.
+    $rid = 'win-' + [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
 
-    if (-not $Cli) { throw 'shubbak.exe was not found under src\Shubbak.Cli\bin\Release; build first, or pass -Cli.' }
+    # The published, native CLI when a release build has been made - which is what
+    # ships, and which also survives the publish: a NativeAOT publish removes the
+    # managed apphost that `dotnet build` left in bin, so after tools/build-release.ps1
+    # the artifacts directory is the one place a runnable shubbak.exe is certain to be.
+    $candidates = @(
+        (Join-Path $root "artifacts\publish\$rid\Shubbak.Cli\shubbak.exe"),
+        (Join-Path $root "src\Shubbak.Cli\bin\Release\net10.0-windows10.0.19041.0\$rid\shubbak.exe")
+    )
+    $Cli = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+    if (-not $Cli) { throw "shubbak.exe was not found at any of:`n  $($candidates -join "`n  ")`nBuild first, or pass -Cli." }
 }
 
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("shubbak-doc-snippets-" + [guid]::NewGuid().ToString('N'))
