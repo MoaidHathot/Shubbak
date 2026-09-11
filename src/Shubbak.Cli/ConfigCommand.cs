@@ -1,4 +1,5 @@
 using Shubbak.Config;
+using Shubbak.Core.Diagnostics;
 
 namespace Shubbak.Cli;
 
@@ -16,10 +17,18 @@ namespace Shubbak.Cli;
 /// </para>
 /// <para>
 /// The file written here is deliberately not <c>docs/shubbak.example.kdl</c>. That one
-/// is 600 lines and exists to document every setting with the reasoning behind it,
-/// which is the right thing to read and the wrong thing to inherit: a starter config
-/// should be short enough that a newcomer can hold all of it in their head and delete
-/// the parts they disagree with.
+/// is a thousand lines and exists to document every setting with the reasoning behind
+/// it, which is the right thing to read and the wrong thing to inherit: a starter
+/// config should be short enough that a newcomer can hold all of it in their head and
+/// delete the parts they disagree with.
+/// </para>
+/// <para>
+/// It does, however, turn everything on. The bar, the palette and the watcher are
+/// started from it and each has a small section, because a window manager with no bar
+/// and no palette is not the thing the readme describes, and a newcomer who has to
+/// discover three more programs and how to start them before the desktop looks like
+/// the pictures has been handed a worse first hour than necessary. Deleting a section
+/// and its <c>startup-command</c> line is one edit.
 /// </para>
 /// </remarks>
 internal static class ConfigCommand
@@ -52,7 +61,9 @@ internal static class ConfigCommand
 
     private static int Init(string[] args)
     {
-        string path = Value(args, "--path") ?? DefaultPath();
+        // The same answer the window manager gives for "where would a new config go",
+        // so the file written here is one the resolver finds without a second step.
+        string path = Value(args, "--path") ?? ConfigPathResolver.DefaultWriteLocation();
         bool force = args.Contains("--force", StringComparer.Ordinal);
 
         // Refusing is the only safe default. This is the command a confused user
@@ -79,33 +90,54 @@ internal static class ConfigCommand
 
         Console.WriteLine($"Wrote {path}");
         Console.WriteLine();
-        Console.WriteLine("  shubbak check-config     validate it after editing");
-        Console.WriteLine("  shubbak wm-reload-config apply it without restarting");
+        Console.WriteLine("It starts the window manager's bar, palette and watcher too, and binds the");
+        Console.WriteLine("keys listed at the top of the file. Then:");
         Console.WriteLine();
-        Console.WriteLine("The fully annotated reference is shubbak.example.kdl, beside this binary.");
+        Console.WriteLine("  shubbak-wm                 start the window manager now");
+        Console.WriteLine("  shubbak autostart enable   and have it start at logon");
+        Console.WriteLine("  shubbak check-config       validate the file after editing");
+        Console.WriteLine("  shubbak wm-reload-config   apply it without restarting");
+        Console.WriteLine();
+        Console.WriteLine(ExampleConfigHint());
         return 0;
     }
 
     /// <summary>
-    /// Where a new config goes when nobody said.
+    /// Where the annotated example config actually is, for the closing line.
     /// </summary>
     /// <remarks>
-    /// <c>$XDG_CONFIG_HOME</c> first, because somebody who has set it has said where
-    /// their configuration lives and writing elsewhere would ignore that. Otherwise
-    /// <c>%USERPROFILE%\.config\shubbak</c>, which is the highest-priority location
-    /// the resolver searches that does not depend on an environment variable being
-    /// set - so the file is found by default rather than only after a second step.
+    /// "Beside this binary" was the previous answer, and it is wrong for the install
+    /// most people will have: winget puts a symlink to the executable on PATH and the
+    /// example beside the executable itself, a directory away. So the link is
+    /// followed before looking, and when the file is still not there - a copy of the
+    /// binary on its own somewhere - the answer is the one place it is always kept.
     /// </remarks>
-    private static string DefaultPath()
+    private static string ExampleConfigHint()
     {
-        string? xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+        const string Name = "shubbak.example.kdl";
 
-        string root = string.IsNullOrWhiteSpace(xdg)
-            ? Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config")
-            : xdg;
+        try
+        {
+            if (Environment.ProcessPath is { Length: > 0 } processPath)
+            {
+                var binary = new FileInfo(processPath);
+                string target = binary.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? binary.FullName;
 
-        return Path.Combine(root, "shubbak", "shubbak.kdl");
+                if (Path.GetDirectoryName(target) is { Length: > 0 } directory)
+                {
+                    string example = Path.Combine(directory, Name);
+                    if (File.Exists(example))
+                        return $"The fully annotated reference is {example}";
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Nothing about a hint is worth failing over.
+        }
+
+        return "The fully annotated reference is docs/shubbak.example.kdl in the repository:\n" +
+               $"https://github.com/MoaidHathot/Shubbak/blob/v{ShubbakVersion.Current}/docs/{Name}";
     }
 
     private static string? Value(string[] args, string flag)
@@ -118,8 +150,9 @@ internal static class ConfigCommand
     /// The starter config.
     /// </summary>
     /// <remarks>
-    /// Held to account by a test that loads it through the real parser and asserts it
-    /// produces no diagnostics. A starter config that does not parse would be a
+    /// Held to account by a test that loads it through the real parsers - the window
+    /// manager's, the bar's, the palette's and the watcher's - and asserts none of
+    /// them produce a diagnostic. A starter config that does not parse would be a
     /// uniquely bad first impression, and it is the kind of thing that rots quietly
     /// when a setting is renamed.
     /// </remarks>
@@ -127,13 +160,25 @@ internal static class ConfigCommand
         """
         // Shubbak configuration.
         //
-        // Everything here has a default, so anything you delete keeps working.
-        // The fully annotated reference - every setting, and why it is there - is
-        // shubbak.example.kdl, shipped beside the binaries.
+        // Everything here has a default, so anything you delete keeps working. The
+        // fully annotated reference - every setting, and why it is there - is
+        // shubbak.example.kdl, beside the executables and in the repository.
         //
         //   shubbak check-config       validate this file, with carets
         //   shubbak wm-reload-config   apply it without restarting
         //   shubbak config-path        which file is actually in effect
+        //
+        // The keys, all on Alt:
+        //
+        //   alt + h j k l              focus left / down / up / right
+        //   alt + shift + h j k l      move the window
+        //   alt + u p i o              resize: narrower, wider, shorter, taller
+        //   alt + 1..5                 go to workspace;  alt + shift + 1..5  send the window there
+        //   alt + space                the command palette (Dalil)
+        //   alt + shift + space        cycle the layout;  alt + m  monocle
+        //   alt + shift + m            float / tile the window
+        //   alt + shift + q            close the window
+        //   alt + shift + r            reload this file;  alt + shift + e  exit Shubbak
 
         general {
             // New windows start tiled rather than floating.
@@ -153,15 +198,20 @@ internal static class ConfigCommand
 
             focus-follows-cursor #false
 
-            // Uncomment to start the bar along with the window manager.
-            // startup-command "taj"
+            // The bar, the palette and the watcher are separate programs, started
+            // here when the window manager starts. Each reads its own section of
+            // this file. Delete a line and its section to do without one.
+            startup-command "taj"
+            startup-command "dalil"
+            startup-command "ayn"
         }
 
         gaps {
             inner 6
 
+            // Around the work area, which the bar has already taken its strip from -
+            // so nothing here needs to make room for it.
             outer {
-                // Raise the top gap to reserve room for a bar.
                 top 4
                 right 4
                 bottom 4
@@ -197,16 +247,21 @@ internal static class ConfigCommand
             bind "alt+i" { resize --height -2% }
             bind "alt+o" { resize --height +2% }
 
+            // The palette. Shubbak does not know what a palette is: this raises a
+            // named signal, and Dalil is the program listening for it. (PowerToys Run
+            // also defaults to alt+space; change one of them if you use both.)
+            bind "alt+space" { signal "palette" }
+
             // Layout. --cycle walks a short list ordered so that each entry looks
             // obviously different from the one before it.
-            bind "alt+space" { layout --cycle }
+            bind "alt+shift+space" { layout --cycle }
             bind "alt+m" { layout --set monocle }
             bind "alt+shift+m" { toggle-floating }
 
             bind "alt+shift+q" { close }
 
             // One key re-reads this file for the window manager and tells the bar
-            // to re-read it too.
+            // and the palette to re-read it too.
             bind "alt+shift+r" { wm-reload-config }
             bind "alt+shift+e" { wm-exit }
 
@@ -216,6 +271,71 @@ internal static class ConfigCommand
                 bind "alt+{name}"       { focus --workspace "{name}" }
                 bind "alt+shift+{name}" { move --workspace "{name}" --focus }
             }
+        }
+
+        // Facts the watcher (ayn) supplies while they hold. Nothing in this file
+        // decides them, which is why they have no `when`; declaring them is what
+        // lets the bar below refer to them.
+        contexts {
+            context "camera-in-use" { }
+            context "microphone-in-use" { }
+            context "microphone-muted" { }
+        }
+
+        // Taj, the bar. One per monitor, each reserving its own strip of screen.
+        bar {
+            source "clock" kind="time" format="ddd d MMM HH:mm" interval=500
+
+            profile "default" {
+                height 32
+                background "#1e1e2e"
+                foreground "#cdd6f4"
+                font "Segoe UI"
+                font-size 14
+
+                zone "left" justify="start" gap=4 {
+                    workspaces hide-empty=#true active-background="#8dbcff" active-colour="#1e1e2e"
+                }
+
+                zone "centre" justify="center" grow=1 {
+                    text template="{{ window.title | truncate:90 }}"
+                }
+
+                zone "right" justify="end" gap=12 {
+                    // Empty, and therefore invisible, until something is unusual:
+                    // the keyboard let go, tiling paused, this file unreadable.
+                    // Each is clickable, because each is a state the keyboard may
+                    // not be able to get you out of.
+                    text template="{{ suspended }}" colour="#1e1e2e" background="#f38ba8" on-click="wm-resume"
+                    text template="{{ paused }}"    colour="#1e1e2e" background="#f9e2af" on-click="wm-toggle-pause"
+                    text template="{{ config }}"    colour="#1e1e2e" background="#fab387" on-click="wm-reload-config"
+
+                    // A camera or microphone in use, as a glyph from the icon font
+                    // Windows ships; muted shows the crossed-out one. Clicking the
+                    // microphone asks the watcher to flip the system mute.
+                    text template="{{ context.camera-in-use | then:\u{E722} }}" font="Segoe MDL2 Assets" colour="#a6e3a1"
+                    text template="{{ context.microphone-in-use | then:\u{E720} }}" font="Segoe MDL2 Assets" colour="#a6e3a1" on-click="signal ayn microphone toggle-mute"
+                    text template="{{ context.microphone-muted | then:\u{EC54} }}" font="Segoe MDL2 Assets" colour="#1e1e2e" background="#f38ba8" on-click="signal ayn microphone toggle-mute"
+
+                    text template="{{ layout | icon }}" colour="#7f849c"
+                    text template="{{ clock }}" colour="#8dbcff"
+                }
+            }
+        }
+
+        // Dalil, the palette. Opened by the signal the alt+space binding raises.
+        dalil {
+            open-on-signal "palette"
+            show-unmanaged #true
+            confirm-destructive #true
+        }
+
+        // Ayn, the watcher: holds the three contexts above while the camera or the
+        // microphone is in use, or the microphone is muted.
+        ayn {
+            camera     { in-use "camera-in-use" }
+            microphone { in-use "microphone-in-use"; muted "microphone-muted" }
+            settle 500
         }
         """;
 }

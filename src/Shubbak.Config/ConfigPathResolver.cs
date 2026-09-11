@@ -17,7 +17,11 @@ public readonly record struct ConfigLocation(
     /// <remarks>
     /// Printed when nothing is found. "No config file" is a useless thing to be told
     /// when the file is sitting right there and the manager simply looked somewhere
-    /// else - which is the usual situation with dotfiles on a separate drive.
+    /// else - which is the usual situation with dotfiles on a separate drive. And on
+    /// a fresh install there is no file anywhere, which is the other usual situation,
+    /// so the message also says how to make one: the daemon runs on defaults with no
+    /// keybindings at all, and a user who reads only this far should not have to guess
+    /// what the next step is.
     /// </remarks>
     public string DescribeSearch()
     {
@@ -28,7 +32,8 @@ public readonly record struct ConfigLocation(
             output.Append("  ").AppendLine(candidate);
 
         output.AppendLine();
-        output.AppendLine("Set SHUBBAK_CONFIG, set XDG_CONFIG_HOME, or pass --config <path>.");
+        output.AppendLine("Run 'shubbak config init' to write a starter config there.");
+        output.AppendLine("Or set SHUBBAK_CONFIG, set XDG_CONFIG_HOME, or pass --config <path>.");
 
         return output.ToString();
     }
@@ -187,7 +192,7 @@ public static class ConfigPathResolver
         if (location.Found)
             Log.Info(LogCategory.Config, $"config: {location.Path} (via {location.Origin})");
         else
-            Log.Warn(LogCategory.Config, "no config file found; using defaults");
+            Log.Warn(LogCategory.Config, "no config file found; using defaults, which bind no keys. Run 'shubbak config init' to write a starter config.");
 
         return location;
     }

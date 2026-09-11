@@ -415,16 +415,34 @@ public sealed class WmDaemon : IDisposable
 
         _loop.Run(TimeSpan.FromMilliseconds(8));
 
-        // Announced first, before the work below, and deliberately so. Publishing only
-        // queues the message onto each client's outbox for its writer task to send, and
-        // the server does not flush on the way out - so the more real work that happens
-        // between saying this and tearing the pipe down, the likelier it is to arrive.
-        // Saving the session and un-concealing take tens of milliseconds, which is the
-        // margin.
-        //
-        // Still best-effort. A bar has to cope with the pipe simply going away too,
-        // because a kill gives no warning at all; this makes the ordinary case prompt
-        // rather than making it certain.
+        LeaveCleanly();
+    }
+
+    /// <summary>
+    /// The work that must happen between the loop ending and the process ending.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Announced first, before the work below, and deliberately so. Publishing only
+    /// queues the message onto each client's outbox for its writer task to send, and
+    /// the server does not flush on the way out - so the more real work that happens
+    /// between saying this and tearing the pipe down, the likelier it is to arrive.
+    /// Saving the session and un-concealing take tens of milliseconds, which is the
+    /// margin.
+    /// </para>
+    /// <para>
+    /// Still best-effort. A bar has to cope with the pipe simply going away too,
+    /// because a kill gives no warning at all; this makes the ordinary case prompt
+    /// rather than making it certain.
+    /// </para>
+    /// <para>
+    /// Safe to run twice. It is, when the session ends: once from inside the message
+    /// that says so, because the process may not outlive that message, and once more
+    /// from <see cref="Run"/> when it does.
+    /// </para>
+    /// </remarks>
+    private void LeaveCleanly()
+    {
         _ipc?.Publish(IpcProtocol.ShutdownTopic, "{}");
 
         // A clean shutdown is the one chance to record the arrangement exactly as
@@ -436,6 +454,34 @@ public sealed class WmDaemon : IDisposable
         // Log writing is buffered onto its own thread, so the last lines - the ones
         // that say why we are stopping - are still in the queue at this point.
         Log.Flush();
+    }
+
+    /// <summary>
+    /// Windows, or an installer, is closing this process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called from the tray window's <c>WM_ENDSESSION</c>, on this thread, while the
+    /// loop is inside <c>DispatchMessage</c>. Everything is done here and now rather
+    /// than by stopping the loop and letting <see cref="Run"/> finish, because the
+    /// system is allowed to end the process the moment the message returns - and at
+    /// logoff it does, which is how thirty seconds of layout were lost and every
+    /// concealed window stayed concealed until the next run adopted it.
+    /// </para>
+    /// <para>
+    /// The loop is stopped as well, for the case where there is time: an installer
+    /// waits for the process to exit on its own before it forces anything, and a
+    /// process that exits promptly is one the installer does not have to kill.
+    /// </para>
+    /// </remarks>
+    private void OnSessionEnding(bool byInstaller)
+    {
+        Log.Info(LogCategory.Wm, byInstaller
+            ? "an installer is replacing the files; leaving cleanly and registered to come back"
+            : "the session is ending; leaving cleanly");
+
+        LeaveCleanly();
+        Stop();
     }
 
     /// <summary>
@@ -3439,6 +3485,14 @@ public sealed class WmDaemon : IDisposable
         {
             (string file, string arguments) = SplitCommandLine(commandLine);
 
+            // A bare name that is also a program shipped beside this one means that
+            // program - see ResolveBeside for why it is not left to the PATH search.
+            if (ResolveBeside(file) is { } beside)
+            {
+                Log.Debug(LogCategory.Command, $"'{file}' resolved beside the window manager: {beside}");
+                file = beside;
+            }
+
             bool direct = CanLaunchDirectly(file);
 
             using var process = new Process();
@@ -3457,8 +3511,55 @@ public sealed class WmDaemon : IDisposable
         }
         catch (Exception ex)
         {
-            Log.Error(LogCategory.Command, $"shell-exec failed: {commandLine}", ex);
+            Log.Error(LogCategory.Command,
+                $"shell-exec failed: {commandLine}. A bare name is searched for beside the window manager and then on PATH; " +
+                "a path must exist. Run `shubbak check-config` for the configuration side, and the log for this side.", ex);
         }
+    }
+
+    /// <summary>
+    /// The program of that name beside this executable, if there is one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The bar, the palette and the watcher are installed beside the window manager,
+    /// and a config file names them by bare name: <c>startup-command "taj"</c>. Left
+    /// to the shell, that is a PATH search - which finds whichever <c>taj.exe</c> is
+    /// first on PATH, and finds nothing in the two cases that matter most.
+    /// </para>
+    /// <para>
+    /// First, straight after an install: the terminal the window manager was started
+    /// from has the PATH it was born with, so the directory the installer or winget
+    /// just added is not on it, the bar does not start, and the log is the only thing
+    /// that says why. Second, two copies on one machine - a portable one and an
+    /// installed one, or two versions - where the bar that starts should be the one
+    /// that shipped with the window manager that started it, not the one that happens
+    /// to sort first.
+    /// </para>
+    /// <para>
+    /// So a bare name is looked for beside this executable first. When it is there, the
+    /// result is a full path, which also takes the fast route through
+    /// <see cref="CanLaunchDirectly"/> rather than the shell. When it is not - a bare
+    /// <c>notepad</c>, say - nothing changes and the shell searches PATH as before.
+    /// <c>Environment.ProcessPath</c> may be a symlink, as it is under winget; the
+    /// sibling of a symlink is another symlink, and both resolve when started.
+    /// </para>
+    /// </remarks>
+    internal static string? ResolveBeside(string file)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return null;
+
+        // Anything with a directory, a drive or a relative segment is a path, and a
+        // path means exactly what it says.
+        if (file.AsSpan().IndexOfAny(@"\/:") >= 0) return null;
+
+        string name = file.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? file : file + ".exe";
+
+        if (Path.GetDirectoryName(Environment.ProcessPath) is not { Length: > 0 } directory)
+            return null;
+
+        string candidate = Path.Combine(directory, name);
+        return File.Exists(candidate) ? candidate : null;
     }
 
     /// <summary>
@@ -4122,6 +4223,12 @@ public sealed class WmDaemon : IDisposable
     {
         _tray.MenuItems = BuildTrayMenu;
         _tray.ItemChosen = OnTrayCommand;
+        _tray.SessionEnding = OnSessionEnding;
+        _tray.CloseRequested = () =>
+        {
+            Log.Info(LogCategory.Wm, "asked to close; leaving");
+            Stop();
+        };
 
         if (_tray.Create(TrayTooltip()))
         {
@@ -4201,23 +4308,42 @@ public sealed class WmDaemon : IDisposable
 
     /// <summary>Shows the folder the config was loaded from.</summary>
     /// <remarks>
+    /// <para>
     /// The directory rather than the file, because the answer to "where do I change
     /// this" is a place, and because a user with no config yet still needs to be shown
-    /// where to put one.
+    /// where to put one - so with no config the folder shown is the one
+    /// <c>shubbak config init</c> would write to, created if need be, which is exactly
+    /// the moment this menu item is most likely to be clicked.
+    /// </para>
+    /// <para>
+    /// Opened with the shell directly rather than through <see cref="ShellExecute"/>,
+    /// which splits its argument as a command line: a profile path with a space in it
+    /// - <c>C:\Users\John Smith\...</c> - was cut at the space and opened the wrong
+    /// thing, or nothing.
+    /// </para>
     /// </remarks>
     private void OpenConfigFolder()
     {
         string? folder = _configPath is { Length: > 0 } path
             ? Path.GetDirectoryName(Path.GetFullPath(path))
-            : Path.GetDirectoryName(ConfigPathResolver.Resolve(null).Path);
+            : Path.GetDirectoryName(ConfigPathResolver.Resolve(null).Path ?? ConfigPathResolver.DefaultWriteLocation());
 
-        if (folder is not { Length: > 0 } || !Directory.Exists(folder))
+        if (folder is not { Length: > 0 })
         {
             Log.Warn(LogCategory.Config, "there is no configuration folder to open");
             return;
         }
 
-        ShellExecute(folder);
+        try
+        {
+            Directory.CreateDirectory(folder);
+
+            using var explorer = Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+        {
+            Log.Error(LogCategory.Config, $"could not open the configuration folder {folder}", ex);
+        }
     }
 
     /// <summary>What hovering over the icon says.</summary>

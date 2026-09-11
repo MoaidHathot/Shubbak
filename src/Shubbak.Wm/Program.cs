@@ -79,6 +79,14 @@ internal static class Program
 
         if (!instance.Held) return 1;
 
+        // An installer that replaces these files closes this process first, through
+        // Restart Manager, and starts again afterwards only the processes that asked.
+        // Without the terminal switches: a restarted daemon has no terminal to attach
+        // to, and asking for one would put a console window on the desktop instead.
+        // The bar, the palette and the watcher are not registered; the config's
+        // startup commands bring them back with the window manager.
+        ApplicationRestart.Register(args.Where(a => a is not ("--foreground" or "--console")));
+
         using var daemon = new WmDaemon();
 
         Console.CancelKeyPress += (_, e) =>

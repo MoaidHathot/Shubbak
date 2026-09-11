@@ -103,4 +103,53 @@ public class AutostartCommandLineTests
             @"C:\shubbak\shubbak-wm.exe",
             Autostart.ExecutableFrom("  \"C:\\shubbak\\shubbak-wm.exe\"  "));
     }
+
+    /// <summary>
+    /// <c>status</c> compares the registered executable with the running one by file,
+    /// not by string: winget's portable install reaches the executables through
+    /// symlinks in a second directory, and both names are the same program.
+    /// </summary>
+    [Fact]
+    public void TheSameFileThroughASymbolicLinkIsTheSameFile()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "shubbak-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+
+        try
+        {
+            string target = Path.Combine(directory, "shubbak-wm.exe");
+            File.WriteAllText(target, "not really");
+
+            string link = Path.Combine(directory, "link.exe");
+            try
+            {
+                File.CreateSymbolicLink(link, target);
+            }
+            catch (IOException)
+            {
+                // Creating a symlink needs Developer Mode or a privilege this account
+                // may not have. Nothing to test then; the plain comparison below still is.
+                return;
+            }
+
+            Assert.True(Autostart.SameFile(link, target));
+            Assert.True(Autostart.SameFile(target, link));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void DifferentFilesAreDifferent()
+    {
+        Assert.False(Autostart.SameFile(@"C:\Program Files\Shubbak\shubbak-wm.exe", @"D:\portable\shubbak-wm.exe"));
+    }
+
+    [Fact]
+    public void TheSamePathSpelledDifferentlyIsTheSameFile()
+    {
+        Assert.True(Autostart.SameFile(@"C:\Program Files\Shubbak\shubbak-wm.exe", @"c:\program files\.\Shubbak\SHUBBAK-WM.EXE"));
+    }
 }

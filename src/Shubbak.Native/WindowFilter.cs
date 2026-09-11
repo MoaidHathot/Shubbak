@@ -246,6 +246,16 @@ public static class WindowFilter
         // It lives for a second or two, and tiling it animated the real windows aside
         // to make room for something that was about to disappear.
         "SnipOverlayRootWindow",
+
+        // Shubbak's own plumbing. The tray window is a hidden top-level tool window,
+        // so the visibility and style gates above already reject it; this is the
+        // guarantee that does not depend on either. It used to be message-only and
+        // therefore invisible to EnumWindows, until that turned out to also make it
+        // invisible to WM_ENDSESSION - see TrayIcon. The bar and the palette are the
+        // same shape of problem and were already caught by their styles.
+        "ShubbakTray",
+        "TajBarWindow",
+        "DalilPaletteWindow",
     };
 
     /// <summary>

@@ -810,6 +810,20 @@ public sealed class BarWindow : IDisposable
                         RequestShutdown?.Invoke();
                         return new LRESULT(0);
 
+                    // The session is ending, or an installer is replacing the files
+                    // under this process and has asked it to leave (Restart Manager,
+                    // which is what a silent `winget upgrade` runs). The first is a
+                    // question, answered yes; the second is the moment to go, and a
+                    // bar that goes when asked is one the installer does not have to
+                    // kill. Nothing here needs saving; the appbar reservation is
+                    // given back on the way out of the loop when there is time.
+                    case PInvoke.WM_QUERYENDSESSION:
+                        return new LRESULT(1);
+
+                    case PInvoke.WM_ENDSESSION:
+                        if (wParam.Value != 0) RequestShutdown?.Invoke();
+                        return new LRESULT(0);
+
                     case PInvoke.WM_DESTROY:
                         s_windows.Remove((nint)hwnd.Value);
                         return new LRESULT(0);

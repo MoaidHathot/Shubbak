@@ -37,11 +37,18 @@ public readonly record struct TrayMenuItem(
 /// owned.
 /// </para>
 /// <para>
-/// It is message-only: created with <c>HWND_MESSAGE</c> as its parent, which keeps it
-/// out of <c>EnumWindows</c> entirely. That matters more here than it would anywhere
-/// else, because the program enumerating windows and deciding which to tile is this
-/// one. A tray window that could be found would be a window manager trying to arrange
-/// its own plumbing.
+/// It is hidden and never shown, but it is a top-level window rather than a
+/// message-only one. Message-only was the first choice, because <c>EnumWindows</c>
+/// never returns one and the program enumerating windows and deciding which to tile
+/// is this one. But a message-only window is also invisible to the two things that
+/// most need to reach this process: the session ending, and an installer replacing
+/// the files under it. Both speak <c>WM_QUERYENDSESSION</c> and <c>WM_ENDSESSION</c>,
+/// and both send them to top-level windows only - so with no top-level window the
+/// daemon was simply killed at logoff and at every upgrade, with the last thirty
+/// seconds of session unsaved and every concealed window left concealed. The window
+/// filter rejects invisible windows, so a hidden top-level window costs nothing on
+/// the tiling side; it is a tool window besides, so it stays out of Alt-Tab even if
+/// something ever did show it.
 /// </para>
 /// <para>
 /// It also belongs on the daemon's thread and not the keyboard hook's.
@@ -93,6 +100,33 @@ public sealed unsafe class TrayIcon : IDisposable
     /// <summary>Called with the id of whatever was chosen.</summary>
     public Action<int>? ItemChosen { get; set; }
 
+    /// <summary>
+    /// Called when this process is being closed from outside: the user is logging
+    /// off or the machine is shutting down, or an installer is replacing the files.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The argument is <see langword="true"/> for an installer - Restart Manager, which
+    /// is how a silent <c>winget upgrade</c> gets the running copy out of the way - and
+    /// <see langword="false"/> for the session itself ending.
+    /// </para>
+    /// <para>
+    /// Everything that must happen before the process dies has to happen inside this
+    /// call. Windows may end the process the moment the message returns, so posting a
+    /// quit and finishing up in the loop is a plan that works only when there is time,
+    /// and this is the one path where there may not be.
+    /// </para>
+    /// </remarks>
+    public Action<bool>? SessionEnding { get; set; }
+
+    /// <summary>Called when something asks the window to close.</summary>
+    /// <remarks>
+    /// A plain <c>WM_CLOSE</c>, which is what the bar and the palette are stopped with
+    /// too. Left to <c>DefWindowProc</c> it would destroy the window and leave the
+    /// process running without a tray icon, which is the worst of the options.
+    /// </remarks>
+    public Action? CloseRequested { get; set; }
+
     /// <summary>Whether the icon is currently in the tray.</summary>
     public bool IsShown => _shown;
 
@@ -118,15 +152,17 @@ public sealed unsafe class TrayIcon : IDisposable
                 s_taskbarCreated = PInvoke.RegisterWindowMessage("TaskbarCreated");
 
             _window = PInvoke.CreateWindowEx(
-                0,
+                // A tool window: out of Alt-Tab and off the taskbar, should it ever be
+                // shown, which nothing here does.
+                WINDOW_EX_STYLE.WS_EX_TOOLWINDOW,
                 WindowClass,
                 "Shubbak",
-                0,
+                WINDOW_STYLE.WS_POPUP,
                 0, 0, 0, 0,
 
-                // The parent that makes it message-only. Nothing enumerates it, it is
-                // never shown, and it cannot be tiled by the program that owns it.
-                HWND.HWND_MESSAGE,
+                // No parent: a top-level window, so that WM_QUERYENDSESSION and
+                // WM_ENDSESSION reach it. See the remarks on the class.
+                HWND.Null,
                 (SafeHandle?)null,
                 (SafeHandle?)null,
                 null);
@@ -167,15 +203,20 @@ public sealed unsafe class TrayIcon : IDisposable
     /// Handles a message seen by the daemon's pump.
     /// </summary>
     /// <remarks>
-    /// Only the Explorer-restart broadcast, which arrives before the window procedure
-    /// gets a chance because it is sent to every top-level window rather than posted
-    /// to ours specifically.
+    /// Only the Explorer-restart broadcast. It is sent, not posted, so it normally
+    /// arrives at the window procedure and is handled there; this is the second route
+    /// in, for a copy that reaches the thread's queue.
     /// </remarks>
     public void OnLoopMessage(uint message)
     {
         if (s_taskbarCreated == 0 || message != s_taskbarCreated) return;
 
-        // Explorer has restarted and forgotten every icon it was showing.
+        OnTaskbarCreated();
+    }
+
+    /// <summary>Explorer has restarted and forgotten every icon it was showing.</summary>
+    private void OnTaskbarCreated()
+    {
         Log.Info(LogCategory.Wm, "the shell restarted; putting the tray icon back");
 
         _shown = false;
@@ -370,17 +411,56 @@ public sealed unsafe class TrayIcon : IDisposable
     {
         try
         {
-            if (message == CallbackMessage && s_windows.TryGetValue((nint)hwnd.Value, out TrayIcon? tray))
+            if (s_windows.TryGetValue((nint)hwnd.Value, out TrayIcon? tray))
             {
-                // The low word of lParam is what happened to the icon. Both buttons
-                // open the menu: a tray icon with no window to show has nothing else
-                // a left click could usefully do, and people try both.
-                uint what = (uint)(lParam.Value & 0xFFFF);
-
-                if (what is PInvoke.WM_LBUTTONUP or PInvoke.WM_RBUTTONUP)
+                switch (message)
                 {
-                    tray.ShowMenu();
-                    return new LRESULT(0);
+                    case CallbackMessage:
+                    {
+                        // The low word of lParam is what happened to the icon. Both
+                        // buttons open the menu: a tray icon with no window to show has
+                        // nothing else a left click could usefully do, and people try
+                        // both.
+                        uint what = (uint)(lParam.Value & 0xFFFF);
+
+                        if (what is PInvoke.WM_LBUTTONUP or PInvoke.WM_RBUTTONUP)
+                        {
+                            tray.ShowMenu();
+                            return new LRESULT(0);
+                        }
+
+                        break;
+                    }
+
+                    // "May the session end?" Yes, always: refusing only produces the
+                    // "this app is preventing shutdown" screen, and the work that
+                    // matters is done on the message that follows.
+                    case PInvoke.WM_QUERYENDSESSION:
+                        return new LRESULT(1);
+
+                    // wParam is whether the session really is ending; a false one means
+                    // something else refused and nothing is happening after all.
+                    // ENDSESSION_CLOSEAPP in lParam is Restart Manager - an installer -
+                    // rather than logoff or shutdown.
+                    case PInvoke.WM_ENDSESSION:
+                        if (wParam.Value != 0)
+                            tray.SessionEnding?.Invoke((lParam.Value & PInvoke.ENDSESSION_CLOSEAPP) != 0);
+
+                        return new LRESULT(0);
+
+                    case PInvoke.WM_CLOSE:
+                        tray.CloseRequested?.Invoke();
+                        return new LRESULT(0);
+
+                    default:
+                        // Sent, not posted, so it arrives here rather than at the pump.
+                        if (s_taskbarCreated != 0 && message == s_taskbarCreated)
+                        {
+                            tray.OnTaskbarCreated();
+                            return new LRESULT(0);
+                        }
+
+                        break;
                 }
             }
         }

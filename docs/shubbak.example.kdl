@@ -1,7 +1,14 @@
 // Shubbak configuration.
 //
-// This file is the KDL translation of the author's GlazeWM config. Two things it
-// does that the original could not:
+// This file is the KDL translation of the author's GlazeWM config, kept as the
+// annotated reference: every setting appears here with the reasoning beside it. It
+// is something to read and borrow from rather than to copy whole - the monitors are
+// named by the author's connector paths, the nineteen workspaces are the author's,
+// and a few rules match programs you may not have. `shubbak config init` writes a
+// short starter that is meant to be inherited; `shubbak monitors` prints the
+// `monitor` definitions for your own displays, ready to paste.
+//
+// Two things it does that the original could not:
 //
 //   * `for-each "workspace"` generates the per-workspace bindings, replacing
 //     40 lines of near-identical entries with six.
@@ -89,14 +96,21 @@ general {
         trigger "monitor"
     }
 
-    startup-command "shell-exec pwsh -WindowStyle Hidden -Command Restart-Taj"
+    // The bar, the palette and the watcher are separate programs, started here when
+    // the window manager starts. Each reads its own section of this file. A bare
+    // name is looked for beside shubbak-wm.exe first and then on PATH, so this works
+    // from a fresh install before any terminal has seen the new PATH.
+    startup-command "taj"
+    startup-command "dalil"
+    startup-command "ayn"
 }
 
 gaps {
     inner 6
 
     outer {
-        // A tall top gap reserves room for the bar.
+        // The bar reserves its own strip of the screen (it registers as an appbar),
+        // so this is a gap between the bar and the first window, not room for it.
         top 26
         right 4
         bottom 4

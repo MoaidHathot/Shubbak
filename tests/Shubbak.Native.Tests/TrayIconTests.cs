@@ -1,3 +1,6 @@
+using Windows.Win32;
+using Windows.Win32.Foundation;
+
 namespace Shubbak.Native.Tests;
 
 /// <summary>
@@ -8,13 +11,15 @@ namespace Shubbak.Native.Tests;
 /// The daemon owned no window at all before this. <c>Shell_NotifyIcon</c> needs one to
 /// send its callback message to, so a tray icon means giving a window manager its first
 /// HWND - and a window manager is, specifically, the program that enumerates windows
-/// and decides which of them to arrange.
+/// and decides which of them to arrange. If it ever managed its own tray window, the
+/// symptom would be a mystery tile in the layout with no application behind it.
 /// </para>
 /// <para>
-/// So the window is message-only: created with <c>HWND_MESSAGE</c> as its parent,
-/// which keeps it out of <c>EnumWindows</c> entirely. If that ever stopped being true,
-/// Shubbak would find its own tray plumbing and try to tile it, and the symptom would
-/// be a mystery window appearing in the layout with no application behind it.
+/// The window used to be message-only, which kept it out of <c>EnumWindows</c>
+/// altogether. That also kept it out of reach of <c>WM_ENDSESSION</c>, so the daemon
+/// was killed at logoff and by every installer with the session unsaved. It is now a
+/// hidden top-level window, and the property to pin is the one that actually matters:
+/// the window filter refuses it, under every setting the filter has.
 /// </para>
 /// </remarks>
 public sealed class TrayIconTests
@@ -23,25 +28,41 @@ public sealed class TrayIconTests
     private const string TrayClass = "ShubbakTray";
 
     /// <summary>
-    /// The whole reason the window is message-only.
+    /// The whole reason this class of test exists.
     /// </summary>
     [Fact]
-    public void TheTrayWindowCannotBeFoundByTheWindowEnumerator()
+    public void TheTrayWindowIsNeverManageable()
     {
         using var tray = new TrayIcon();
 
         // Created whether or not the shell accepted the icon: the window exists first,
-        // and it is the window that would be enumerable.
+        // and it is the window that would be tiled.
         tray.Create("Shubbak test");
 
-        IReadOnlyList<nint> windows = Win32Window.EnumerateTopLevel();
+        List<nint> windows = TrayWindows();
+        Assert.NotEmpty(windows);
 
         foreach (nint handle in windows)
         {
-            Assert.NotEqual(
-                TrayClass,
-                Win32Window.GetClassName(handle));
+            // Hidden, so the ordinary path never sees it.
+            Assert.False(PInvoke.IsWindowVisible(new HWND(handle)));
+
+            // And refused on every other path too - including recovery, which
+            // considers concealed windows, and the inspector, which does not require
+            // a title. The filter says why, and the answer must never be "yes".
+            Assert.False(WindowFilter.Evaluate(handle).Manageable);
+            Assert.False(WindowFilter.Evaluate(handle, requireTitle: false, concealedAreEligible: true).Manageable);
         }
+    }
+
+    /// <summary>
+    /// Excluded by name as well, so the guarantee does not rest on styles that a
+    /// future change to the window might alter.
+    /// </summary>
+    [Fact]
+    public void TheTrayWindowClassIsExcludedByName()
+    {
+        Assert.True(WindowFilter.IsExcludedClassName(TrayClass));
     }
 
     /// <summary>
@@ -61,9 +82,8 @@ public sealed class TrayIconTests
             tray.Create($"Shubbak test {i}");
         }
 
-        // Nothing enumerable survives any of them.
-        foreach (nint handle in Win32Window.EnumerateTopLevel())
-            Assert.NotEqual(TrayClass, Win32Window.GetClassName(handle));
+        // Nothing survives any of them.
+        Assert.Empty(TrayWindows());
     }
 
     /// <summary>Disposing twice is harmless.</summary>
@@ -81,6 +101,7 @@ public sealed class TrayIconTests
         tray.Dispose();
 
         Assert.False(tray.IsShown);
+        Assert.Empty(TrayWindows());
     }
 
     /// <summary>
@@ -112,5 +133,29 @@ public sealed class TrayIconTests
     {
         Assert.Equal(0, TrayMenuItem.Separator.Id);
         Assert.NotEqual(0, new TrayMenuItem(1, "Real").Id);
+    }
+
+    /// <summary>The tray windows owned by this process, by class.</summary>
+    /// <remarks>
+    /// By process as well as by class, because a running Shubbak on the machine the
+    /// tests run on has one of these too, and the guard that stops these tests running
+    /// beside a window manager is elsewhere.
+    /// </remarks>
+    private static List<nint> TrayWindows()
+    {
+        uint self = (uint)Environment.ProcessId;
+        List<nint> found = [];
+
+        foreach (nint handle in Win32Window.EnumerateTopLevel())
+        {
+            if (!string.Equals(Win32Window.GetClassName(handle), TrayClass, StringComparison.Ordinal))
+                continue;
+
+            uint owner = 0;
+            unsafe { _ = PInvoke.GetWindowThreadProcessId(new HWND(handle), &owner); }
+            if (owner == self) found.Add(handle);
+        }
+
+        return found;
     }
 }

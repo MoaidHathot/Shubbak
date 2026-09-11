@@ -168,9 +168,7 @@ internal static class Autostart
             return 1;
         }
 
-        if (FindDaemon() is { } current
-            && !string.Equals(
-                Path.GetFullPath(current), Path.GetFullPath(registered), StringComparison.OrdinalIgnoreCase))
+        if (FindDaemon() is { } current && !SameFile(current, registered))
         {
             Console.WriteLine();
             Console.WriteLine("warning: this is not the copy that will start at logon.");
@@ -180,6 +178,38 @@ internal static class Autostart
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Whether two paths name the same executable, following symbolic links.
+    /// </summary>
+    /// <remarks>
+    /// winget's portable install puts the executables in one directory and a symlink
+    /// to each in another that is on PATH, so the registered path and the running
+    /// copy can differ as strings while being one file. Comparing the strings said
+    /// "this is not the copy that will start at logon" to somebody whose install was
+    /// entirely in order, which is the kind of warning that teaches people to ignore
+    /// warnings.
+    /// </remarks>
+    internal static bool SameFile(string left, string right)
+    {
+        if (string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return string.Equals(FinalTarget(left), FinalTarget(right), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string FinalTarget(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            return file.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? file.FullName;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Path.GetFullPath(path);
+        }
     }
 
     /// <summary>

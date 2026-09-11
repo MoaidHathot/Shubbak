@@ -1348,6 +1348,18 @@ public sealed class PaletteWindow : IDisposable
                         RequestShutdown?.Invoke();
                         return new LRESULT(0);
 
+                    // The session is ending, or an installer is replacing the files
+                    // under this process and has asked it to leave (Restart Manager,
+                    // which is what a silent `winget upgrade` runs). Answer the
+                    // question yes, and go when told: the palette holds nothing that
+                    // needs saving, and the window manager starts it again.
+                    case PInvoke.WM_QUERYENDSESSION:
+                        return new LRESULT(1);
+
+                    case PInvoke.WM_ENDSESSION:
+                        if (wParam.Value != 0) RequestShutdown?.Invoke();
+                        return new LRESULT(0);
+
                     case PInvoke.WM_DESTROY:
                         s_windows.Remove((nint)hwnd.Value);
                         return new LRESULT(0);

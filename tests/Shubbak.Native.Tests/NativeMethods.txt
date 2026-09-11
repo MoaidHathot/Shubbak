@@ -10,6 +10,7 @@ SHOW_WINDOW_CMD
 WINDOW_STYLE
 WINDOW_EX_STYLE
 IsWindowVisible
+GetWindowThreadProcessId
 GetModuleHandle
 PeekMessage
 PEEK_MESSAGE_REMOVE_TYPE

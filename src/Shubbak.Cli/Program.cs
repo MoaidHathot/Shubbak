@@ -70,9 +70,10 @@ internal static class Program
                 "status" => await StatusAsync().ConfigureAwait(false),
                 "diagnose" => await DiagnoseAsync(args).ConfigureAwait(false),
                 "restore" => Restore(args),
-                "taj-exit" => CloseWindowsOfClass("TajBarWindow", "bar"),
-                "dalil-exit" => CloseWindowsOfClass("DalilPaletteWindow", "palette"),
-                "ayn-exit" => StopWatcher(),
+            "taj-exit" => CloseWindowsOfClass("TajBarWindow", "bar"),
+            "dalil-exit" => CloseWindowsOfClass("DalilPaletteWindow", "palette"),
+            "ayn-exit" => StopWatcher(),
+            "stop" => await StopEverythingAsync().ConfigureAwait(false),
                 "log-level" => await LogLevelAsync(args).ConfigureAwait(false),
                 _ => await CommandAsync(args).ConfigureAwait(false),
             };
@@ -117,6 +118,21 @@ internal static class Program
     /// <param name="what">What to call it when there is none, or several.</param>
     private static int CloseWindowsOfClass(string windowClass, string what)
     {
+        int closed = CloseWindowsOfClassQuietly(windowClass);
+
+        if (closed == 0)
+        {
+            Console.Error.WriteLine($"shubbak: no {what} is running.");
+            return 2;
+        }
+
+        Console.WriteLine($"closed {closed} {what} window(s)");
+        return 0;
+    }
+
+    /// <summary>Asks every window of a class to close, and says how many were asked.</summary>
+    private static int CloseWindowsOfClassQuietly(string windowClass)
+    {
         int closed = 0;
 
         foreach (nint handle in Win32Window.EnumerateTopLevel())
@@ -128,14 +144,7 @@ internal static class Program
             closed++;
         }
 
-        if (closed == 0)
-        {
-            Console.Error.WriteLine($"shubbak: no {what} is running.");
-            return 2;
-        }
-
-        Console.WriteLine($"closed {closed} {what} window(s)");
-        return 0;
+        return closed;
     }
 
     /// <summary>
@@ -150,29 +159,153 @@ internal static class Program
     /// </remarks>
     private static int StopWatcher()
     {
-        if (!EventWaitHandle.TryOpenExisting(IpcProtocol.StopEventNameFor("ayn"), out EventWaitHandle? stop))
+        if (!SignalWatcherToStop())
         {
             Console.Error.WriteLine("shubbak: no watcher is running.");
             return 2;
         }
 
-        using (stop) stop.Set();
-
-        string mutex = IpcProtocol.InstanceMutexNameFor("ayn");
-
-        for (int waited = 0; waited < 5000; waited += 50)
+        if (WaitUntilReleased(IpcProtocol.InstanceMutexNameFor("ayn"), TimeSpan.FromSeconds(5)))
         {
-            if (SingleInstanceLock.IsHeldByAnyone(mutex) is false)
-            {
-                Console.WriteLine("stopped the watcher");
-                return 0;
-            }
-
-            Thread.Sleep(50);
+            Console.WriteLine("stopped the watcher");
+            return 0;
         }
 
         Console.Error.WriteLine("shubbak: asked the watcher to stop, but it is still running after 5 s.");
         return 1;
+    }
+
+    /// <summary>Sets the watcher's stop event. False when there is no watcher to set it for.</summary>
+    private static bool SignalWatcherToStop()
+    {
+        if (!EventWaitHandle.TryOpenExisting(IpcProtocol.StopEventNameFor("ayn"), out EventWaitHandle? stop))
+            return false;
+
+        using (stop) stop.Set();
+        return true;
+    }
+
+    /// <summary>
+    /// Waits for a single-instance mutex to be let go of, which is the one reliable
+    /// sign that the process holding it has actually exited.
+    /// </summary>
+    private static bool WaitUntilReleased(string mutex, TimeSpan timeout)
+    {
+        long deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+
+        while (true)
+        {
+            // Uncertain counts as gone: if the mutex cannot be examined, waiting on it
+            // longer will not make it examinable.
+            if (SingleInstanceLock.IsHeldByAnyone(mutex) is not true) return true;
+            if (Environment.TickCount64 >= deadline) return false;
+
+            Thread.Sleep(50);
+        }
+    }
+
+    /// <summary>
+    /// Stops everything: the window manager, the bar, the palette and the watcher.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Four programs, three of which deliberately outlive the fourth - the palette and
+    /// the watcher reconnect when the window manager comes back, and the bar waits a
+    /// while for the same reason. That is right for a restart and wrong for "stop":
+    /// somebody replacing the executables, or just wanting their desktop back, wants
+    /// all of them gone and wants to be told when they are. Before this the answer
+    /// was four commands and a look at Task Manager.
+    /// </para>
+    /// <para>
+    /// The window manager goes first and over the pipe, because <c>wm-exit</c> is what
+    /// restores every concealed window and saves the session, and because the bar
+    /// closes itself when it hears the window manager leave. The others are asked
+    /// directly, the same way their own <c>-exit</c> commands ask, so this works with
+    /// no window manager at all. Then each one's single-instance mutex is watched
+    /// until it is released - the process being gone, rather than having been asked.
+    /// </para>
+    /// <para>
+    /// The exit code says whether everything stopped. A script that stops Shubbak in
+    /// order to replace it must be able to tell.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> StopEverythingAsync()
+    {
+        bool allStopped = true;
+        var waitingFor = new List<(string Mutex, string What)>();
+
+        if (IpcClient.IsServerRunning())
+        {
+            try
+            {
+                await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+                IpcResponse response = await client.SendAsync("command", "wm-exit").ConfigureAwait(false);
+
+                if (response.Ok)
+                {
+                    Console.WriteLine("asked the window manager to exit");
+                    waitingFor.Add((IpcProtocol.InstanceMutexName, "window manager"));
+                }
+                else
+                {
+                    Console.Error.WriteLine($"shubbak: the window manager refused to exit: {response.Error}");
+                    allStopped = false;
+                }
+            }
+            catch (TimeoutException)
+            {
+                // Its pipe is there but it did not answer in time. Its mutex is still
+                // worth waiting on below, in case it was merely busy.
+                Console.Error.WriteLine("shubbak: the window manager did not answer; waiting to see whether it leaves anyway.");
+                waitingFor.Add((IpcProtocol.InstanceMutexName, "window manager"));
+            }
+        }
+        else if (SingleInstanceLock.IsHeldByAnyone(IpcProtocol.InstanceMutexName) is true)
+        {
+            // A daemon holds the mutex but serves no pipe by our name: a different
+            // protocol version, most likely. The tray menu and the bar can still stop it;
+            // this command cannot reach it, and says so rather than pretending.
+            Console.Error.WriteLine("shubbak: a window manager is running that this version cannot talk to (an older or newer build).");
+            Console.Error.WriteLine("hint: use Exit in its tray menu, then run this again.");
+            allStopped = false;
+        }
+        else
+        {
+            Console.WriteLine("no window manager is running");
+        }
+
+        int bars = CloseWindowsOfClassQuietly("TajBarWindow");
+        Console.WriteLine(bars == 0 ? "no bar is running" : "asked the bar to close");
+        if (bars > 0) waitingFor.Add((IpcProtocol.InstanceMutexNameFor("taj"), "bar"));
+
+        int palettes = CloseWindowsOfClassQuietly("DalilPaletteWindow");
+        Console.WriteLine(palettes == 0 ? "no palette is running" : "asked the palette to close");
+        if (palettes > 0) waitingFor.Add((IpcProtocol.InstanceMutexNameFor("dalil"), "palette"));
+
+        bool watcher = SignalWatcherToStop();
+        Console.WriteLine(watcher ? "asked the watcher to stop" : "no watcher is running");
+        if (watcher) waitingFor.Add((IpcProtocol.InstanceMutexNameFor("ayn"), "watcher"));
+
+        // Generous, because the window manager un-conceals every window on its way out
+        // and a desktop with many of them takes a moment; ten seconds is also what
+        // --replace allows it.
+        foreach ((string mutex, string what) in waitingFor)
+        {
+            if (WaitUntilReleased(mutex, TimeSpan.FromSeconds(10)))
+            {
+                Console.WriteLine($"the {what} has stopped");
+            }
+            else
+            {
+                Console.Error.WriteLine($"shubbak: the {what} is still running after 10 s.");
+                allStopped = false;
+            }
+        }
+
+        if (!allStopped) return 1;
+
+        Console.WriteLine("everything has stopped");
+        return 0;
     }
 
     /// <summary>Brings back windows that some earlier run left concealed.</summary>
@@ -916,6 +1049,19 @@ internal static class Program
         USAGE
           shubbak <command> [args]
 
+        GETTING STARTED
+          config init          Write a starter config - keys, the bar, the palette and
+                               the watcher - where the window manager will find it.
+          shubbak-wm           Start the window manager (a separate program). Add
+                               --foreground to keep it attached to this terminal.
+          autostart enable     Have it start at logon from now on.
+          status               Is it running? paused? suspended?
+          stop                 Stop it and everything it started. Also the thing to
+                               run before replacing the executables by hand; winget
+                               and the MSI do it themselves.
+
+          The full guide: https://github.com/MoaidHathot/Shubbak/blob/main/docs/getting-started.md
+
         WINDOW MANAGER COMMANDS
           Anything not listed below is sent straight to the window manager, using
           exactly the same syntax as a keybinding:
@@ -932,9 +1078,10 @@ internal static class Program
             shubbak wm-exit
 
           wm-exit stops the window manager properly: it saves the session, brings
-          every concealed window back, and takes the bar down with it. Terminating
-          the process instead strands windows off screen - use 'restore' if that
-          has already happened.
+          every concealed window back, and takes the bar down with it. The palette
+          and the watcher stay and reconnect when it returns; 'stop' is the command
+          that takes all four down. Terminating the process instead strands windows
+          off screen - use 'restore' if that has already happened.
 
         GETTING OUT OF THE WAY
           wm-toggle-suspend    Release the keyboard hook and the window event hooks,
@@ -951,6 +1098,14 @@ internal static class Program
                                binding still works.
 
         PROCESSES
+          stop                 Stop the window manager, the bar, the palette and the
+                               watcher, and wait until each is actually gone. The
+                               window manager goes first, over the pipe, so it saves
+                               the session and brings every concealed window back;
+                               the others are asked directly, so this also works when
+                               no window manager is running. Exits non-zero if
+                               anything is still running after ten seconds.
+
           taj-exit             Close the bar, leaving the window manager running.
                                Asks its windows to close rather than terminating
                                it, so the strip of screen it reserved is given
@@ -961,7 +1116,7 @@ internal static class Program
                                these refuse to start a second copy of themselves,
                                so this is how you stop the one that is running.
 
-          ayn-exit           Stop the camera and microphone watcher. It has no
+          ayn-exit             Stop the camera and microphone watcher. It has no
                                window, so it is asked through a named event and
                                waited for; its leases on the window manager are
                                released the moment its connection closes.

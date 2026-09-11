@@ -148,4 +148,50 @@ public sealed class DirectLaunchTests
     [InlineData(null)]
     public void NothingAtAllStaysWithTheShell(string? target) =>
         Assert.False(WmDaemon.CanLaunchDirectly(target!));
+
+    /// <summary>
+    /// A bare name that is also a program beside this executable resolves to that
+    /// program, with or without its extension. The test host is the one executable
+    /// certain to be beside the running process, so it stands in for the bar.
+    /// </summary>
+    [Fact]
+    public void ABareNameOfAProgramBesideTheDaemonResolvesToIt()
+    {
+        string self = Path.GetFileName(Environment.ProcessPath!);
+        string expected = Path.Combine(Path.GetDirectoryName(Environment.ProcessPath!)!, self);
+        Assert.EndsWith(".exe", self, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal(expected, WmDaemon.ResolveBeside(self), StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(expected, WmDaemon.ResolveBeside(Path.GetFileNameWithoutExtension(self)), StringComparer.OrdinalIgnoreCase);
+
+        // And the resolved path is one the fast route accepts.
+        Assert.True(WmDaemon.CanLaunchDirectly(WmDaemon.ResolveBeside(self)!));
+    }
+
+    [Theory]
+    [InlineData("notepad")]
+    [InlineData("definitely-not-beside-anything")]
+    public void ABareNameOfSomethingElseIsLeftAlone(string target) =>
+        Assert.Null(WmDaemon.ResolveBeside(target));
+
+    /// <summary>
+    /// Anything with a directory in it is a path, and a path means exactly what it
+    /// says - even when a program of the same name happens to be beside the daemon.
+    /// </summary>
+    [Fact]
+    public void APathIsNeverRedirectedBesideTheDaemon()
+    {
+        string self = Path.GetFileName(Environment.ProcessPath!);
+
+        Assert.Null(WmDaemon.ResolveBeside(@".\" + self));
+        Assert.Null(WmDaemon.ResolveBeside(@"C:\somewhere\else\" + self));
+        Assert.Null(WmDaemon.ResolveBeside("sub/" + self));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void NothingAtAllResolvesToNothingBesideTheDaemon(string? target) =>
+        Assert.Null(WmDaemon.ResolveBeside(target!));
 }

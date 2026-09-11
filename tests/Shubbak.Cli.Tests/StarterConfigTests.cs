@@ -48,6 +48,65 @@ public class StarterConfigTests
     }
 
     /// <summary>
+    /// The bar, the palette and the watcher read their own sections of the same file,
+    /// with their own loaders. Each must be as clean as the window manager's part:
+    /// the starter turns all three on, so a warning in any of them is the first thing
+    /// a new user's log says.
+    /// </summary>
+    [Fact]
+    public void TheBarSectionIsClean()
+    {
+        (Taj.Core.TajConfig bar, IReadOnlyList<Diagnostic> diagnostics) = Taj.Core.TajConfigLoader.Load(ConfigCommand.Starter);
+
+        Assert.Empty(diagnostics);
+        Assert.NotEmpty(bar.Profiles);
+    }
+
+    [Fact]
+    public void ThePaletteSectionIsClean()
+    {
+        Dalil.Core.DalilConfigLoad palette = Dalil.Core.DalilConfigLoader.Validate(ConfigCommand.Starter);
+
+        Assert.Empty(palette.Diagnostics);
+    }
+
+    [Fact]
+    public void TheWatcherSectionIsClean()
+    {
+        Assert.Empty(Ayn.Core.AynConfigLoader.Validate(ConfigCommand.Starter).Diagnostics);
+    }
+
+    /// <summary>
+    /// The three companions are started from the config, not by the daemon, so the
+    /// starter has to say so or the desktop comes up with no bar and no palette.
+    /// </summary>
+    [Fact]
+    public void ItStartsTheCompanions()
+    {
+        IReadOnlyList<string> startup = Load().Config.StartupCommands;
+
+        Assert.Contains("taj", startup);
+        Assert.Contains("dalil", startup);
+        Assert.Contains("ayn", startup);
+    }
+
+    /// <summary>
+    /// The palette is opened by a signal, so a starter that starts Dalil but binds no
+    /// key to the signal it listens for has a palette nobody can reach.
+    /// </summary>
+    [Fact]
+    public void ThePaletteHasAKey()
+    {
+        Dalil.Core.DalilConfigLoad palette = Dalil.Core.DalilConfigLoader.Validate(ConfigCommand.Starter);
+        string signal = palette.Config.OpenOnSignal;
+
+        Assert.Contains(
+            Load().Config.Keybindings,
+            binding => binding.Commands.Any(command =>
+                command is Shubbak.Core.Commands.SignalCommand raised && raised.Signal == signal));
+    }
+
+    /// <summary>
     /// The five declared workspaces survive parsing.
     /// </summary>
     [Fact]
