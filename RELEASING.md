@@ -109,7 +109,16 @@ token belongs to an account that owns nothing else:
    **Tokens (classic)** → Generate. Scope `public_repo` and nothing else. Give it an
    expiry and put the date in a calendar: when it lapses the workflow's last step fails,
    which is how you find out, and the fix is a new token in the same secret.
-4. **This repository.** Settings → Secrets and variables → Actions:
+4. **This repository.** Settings → Environments → `package-managers` - on the
+   environment, not the repository. A repository secret can be read by any workflow
+   on any branch, which for a repository that takes direct pushes to `main` means
+   anybody who can push; an environment secret behind a required reviewer can be read
+   only by a run you approved. It is a separate environment from `release` so that
+   the job which needs only this token is never also handed the signing credentials,
+   and so that the two can be relaxed or rotated independently. It has the same two
+   rules as `release`: a required reviewer, and deployment branches and tags limited
+   to `main` and `v*` - a release event runs with its tag as the ref, which is what
+   admits it. On it:
 
    | Kind | Name | Value |
    |---|---|---|
@@ -118,7 +127,9 @@ token belongs to an account that owns nothing else:
 
    `WINGET_FORK_USER` is what the workflow passes to the action as `fork-user`. Until
    it is set the workflow falls back to the repository owner, which works only if the
-   fork and the token are the owner's - the wider blast radius above.
+   fork and the token are the owner's - the wider blast radius above. The variable is
+   not a secret, but it belongs to the same account, so it lives beside the token and
+   goes when it goes.
 
 The first submission of the package is made by hand and needs the same account; see
 "After publishing" below.
@@ -145,6 +156,7 @@ fast-forward push to `main` and, on release day, one annotated tag.
 | Actions → General | Fork pull request workflows: require approval for **all** outside collaborators | `build.yml` runs the pull request's code on a Windows runner. It has no secrets and a read-only token, so the exposure is the runner and the minutes, and one click per pull request from a stranger is a fair price for deciding. |
 | Actions → General | Workflow permissions: read | Already so. Workflows that write - the release, the manifest commit - say so in their own `permissions:` block. |
 | Environment `release` | Required reviewer; deployment branches and tags: `main`, `v*` | See the signing setup above. |
+| Environment `package-managers` | Required reviewer; deployment branches and tags: `main`, `v*` | Holds the winget token. See the same section. Publishing a release starts `winget.yml`, which then waits here for the click - the same person who just published, a moment later. |
 
 Not set, and why: **signed commits** are not required, because commits here are not
 signed and requiring them would refuse every push until they were - worth doing, but
@@ -266,7 +278,10 @@ fetch from it.
 
 ## 7. After publishing
 
-Publishing the release triggers `.github/workflows/winget.yml`, which:
+Publishing the release triggers `.github/workflows/winget.yml`. It runs in the
+`package-managers` environment, so it **waits for your approval** before its first
+step - Actions → the run → *Review deployments*. Until it is approved nothing
+downstream moves: the Scoop bucket still describes the previous release. Approved, it:
 
 - commits the filled manifests from the workflow artefact back to `packaging/winget`
   and `bucket/shubbak.json` on `main` - for Scoop, that commit **is** the release,

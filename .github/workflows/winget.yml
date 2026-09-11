@@ -34,6 +34,16 @@ jobs:
   manifests:
     runs-on: windows-latest
 
+    # The environment holds the winget token and the name of the account it belongs
+    # to, and it is what makes them unreadable to any run a maintainer has not
+    # approved - a repository secret is readable by any workflow on any branch, which
+    # for a repository that takes direct pushes to main is anybody who can push. A
+    # separate environment from `release`, so a job that needs only the bot's token is
+    # never also handed the signing credentials. A release event's ref is its tag, so
+    # the environment's `v*` rule admits it; a dispatch comes from main. See
+    # RELEASING.md for what is set on it.
+    environment: package-managers
+
     env:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
