@@ -4,863 +4,204 @@
 
 # Shubbak
 
-**A tiling window manager for Windows with animations, a status bar, a command
-palette, and a config file that tells you when you've made a mistake.**
+**A tiling window manager for Windows, batteries included.**
 
 [![Build](https://img.shields.io/github/actions/workflow/status/MoaidHathot/Shubbak/build.yml?branch=main&logo=github&label=build)](https://github.com/MoaidHathot/Shubbak/actions/workflows/build.yml)
 [![Release](https://img.shields.io/github/v/release/MoaidHathot/Shubbak?logo=github&label=release)](https://github.com/MoaidHathot/Shubbak/releases)
 [![Downloads](https://img.shields.io/github/downloads/MoaidHathot/Shubbak/total?logo=github)](https://github.com/MoaidHathot/Shubbak/releases)
 [![Licence](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 
-[Install](#install) •
-[Quick start](#quick-start) •
-[What makes it different](#what-makes-shubbak-different) •
-[Configuration](#configuration) •
-[Taj](#taj--the-bar) •
-[Dalil](#dalil--the-command-palette) •
-[Scripting](#scripting-it) •
-[FAQ](#faq)
+[Getting started](docs/getting-started.md) ·
+[Configuration](docs/configuration.md) ·
+[Taj](docs/taj.md) ·
+[Dalil](docs/dalil.md) ·
+[Ayn](docs/ayn.md) ·
+[Scripting](docs/scripting.md) ·
+[FAQ](docs/faq.md)
 
 </div>
 
-## Hello
+Shubbak (شبّاك, "window") arranges your windows so you can stop dragging them around.
+It is driven from the keyboard, it animates, and one config file covers the whole
+desktop: the window manager, the status bar, the command palette, and the watcher
+that tells them when your camera is on. There is no second project to install before
+it looks like yours.
 
-Shubbak (شبّاك, *"window"*) arranges your windows for you so you can stop dragging
-them around. It's keyboard-driven, it animates, and it ships with everything you
-need in the box, no second app to install before your desktop looks like your own.
+<!-- A screenshot or a short clip belongs here. -->
 
+## What's in the box
 
-## Demos
+Five small programs, compiled to native code. About 25 MB together, nothing to
+install first.
 
-Videos are on the way, I'm recording them now and they'll land here shortly:
-tiling and layouts, the animation engine at full speed, Taj, and Dalil.
+- **shubbak-wm**, the window manager. Eleven layouts that belong to containers rather
+  than workspaces, so they nest. Workspaces pinned to monitors, tags, floating,
+  fullscreen, a scratchpad, and animations at your display's refresh rate.
+- **Taj** (تاج, *crown*), the bar. One per monitor. Three widget primitives and a
+  template language do the work of a widget catalogue, and any program that prints to
+  stdout can drive a widget.
+- **Dalil** (دليل, *guide*), the command palette. Every window, command, workspace and
+  layout under one search box. Mark several windows and act on all of them at once.
+  Ask it why a window is not tiling, and it writes the rule for you.
+- **Ayn** (عين, *eye*), the watcher. Tells the window manager when the camera or the
+  microphone is in use, or the microphone is muted, so your config can react: a mute
+  button on the bar, the close key disarmed during a call.
+- **shubbak**, the command line. Everything the keys do, plus `inspect`, `diagnose`,
+  `restore` and `stop`.
 
-<!--
-  Coming soon:
-  - Layouts & tiling walkthrough
-  - Animations at 144 Hz
-  - Taj (the bar) and Dalil (the palette)
-  - "Why isn't this window tiling?" — shubbak inspect
--->
+## Why another one
 
-Meanwhile, [`docs/shubbak.example.kdl`](docs/shubbak.example.kdl) is a complete,
-heavily commented, real-world config you can read end to end.
+I used the tiling window managers available for Windows for years. Shubbak keeps what
+I liked about them and changes what kept getting in my way:
 
-## What makes Shubbak different
-
-I created Shubbak after being a heavy user of window tiling managers on Windows, aiming to keep the features I liked and improve the aspects that didn’t work well for me in other tiling managers for Windows, in all aspects: architecture, implementation, and features.
-
-### The config file talks back
-
-Instead of failing silently: you press the key, nothing happens, and
-you go hunting. Shubbak reads the whole file up front and tells you exactly where
-you went wrong, with a line, a column and a caret:
-
-```
-shubbak.kdl:8:20: error SHB0305: Unknown command 'focuss'.
-  8 |     bind "alt+h" { focuss --direction left }
-    |                    ^^^^^^^^^^^^^^^^^^^^^^^^
-  hint: Did you mean 'focus'?
-```
-
-It also warns about the mistakes that *look* fine. A real one from my own config:
-a regex wrapped in `/slashes/`, which Windows matches literally, so the rule had
-never once fired, and nothing had ever said so. Shubbak warns and prints the
-corrected pattern. Same for duplicate bindings, unknown settings, unknown sections,
-and rules that would match every window on your desktop.
-
-You could also manually validate the configuration before reloading
-```
-shubbak check-config       # validate before you reload
-```
-
-It checks the whole file, not just the window manager's part of it — the `bar` and
-`dalil` sections too, so a misspelt setting in either is reported here rather than
-being accepted and quietly doing nothing.
-
-And it tells you without being asked. Each process writes what is wrong with the part
-it reads to its own log, so a mistake made at logon is not something you have to go
-looking for; the bar's `{{ config }}` indicator appears when its settings could not be
-read, and `>config` in the palette lists the palette's own. **A file that won't parse
-never replaces what's already running** — the bar, the palette and your keybindings all
-keep working on the last good config rather than reverting to stock.
-
-### `for-each` — stop copy-pasting keybindings
-
-I run 19 workspaces. That's 40 near-identical lines in other window tiling managers, and every one of
-them is a chance to typo a number. Here it's six lines that can't drift out of sync
-with the workspace list:
-
-```kdl
-keybindings {
-    for-each "workspace" {
-        bind "alt+{name}"       { focus --workspace "{name}" }
-        bind "alt+shift+{name}" { move --workspace "{name}" --focus }
-    }
-}
-```
-
-### "Why isn't this window tiling?"
-
-Every tiling WM on Windows passes over some windows. Almost none of them will tell
-you *which* ones, or *why*. Shubbak will:
-
-```
-shubbak inspect            # click a window; get the full story in 3 seconds
-shubbak inspect --all      # every top-level window, with a verdict for each
-```
-
-You get every matchable attribute of the window, whether Shubbak will manage it,
-**the specific reason if it won't**, and which of your rules matched. There are 16
-distinct reasons a window gets skipped and each one explains itself in plain
-English. Copy the attributes straight into a rule and you're done.
-
-`inspect --all` and `restore` both run entirely locally and independently, so they still work when
-the window manager isn't running at all.
-
-### Nothing gets stranded
-
-Windows on inactive workspaces are **cloaked**, not hidden. A cloaked window still
-reports as visible to Win32, so if Shubbak crashes, is killed, or you pull the
-plug, the next run finds those windows and brings them straight back.
-
-Hiding (which is what this used to do, and what a lot of tools do) is a one-way
-door: the window filter rejects invisible windows, so they stay stranded with their
-process still running and nothing on screen to click.
-
-And if it ever does go wrong, there's a fire escape that doesn't need the daemon:
-
-```
-shubbak restore --dry-run  # show me what you'd bring back
-shubbak restore            # bring it back
-```
-
-### One report to hand to a bug tracker
-
-```
-shubbak diagnose -o report.md
-```
-
-One Markdown file: your environment, your config, the live window tree, and the
-recent log, including a ring buffer that's kept even at the default log level, so
-the report is still useful *after* the weird thing happened. You can also raise the
-log level on the running daemon without restarting it:
-
-```
-shubbak log-level trace
-```
-
-### Suspend is different from pause
-
-Two different things you'll actually want:
-
-- **`wm-toggle-pause`** — stop rearranging windows, keep the keyboard. For when you
-  want to drag something around manually for a minute.
-- **`wm-suspend`** — let go of the keyboard *entirely*, drop the hooks, stop doing
-  periodic work. For when a game or a remote session wants every key you press.
-
-Resuming from a full suspend uses a real Windows hotkey rather than a keyboard hook,
-so a suspended Shubbak costs you nothing per keystroke. The bar and the tray icon
-both tell you which state you're in, and both are clickable, because "suspended"
-and "crashed" look identical if the only way back is the keyboard you just gave up.
-
-### Layout belongs to the container, not the workspace
-
-A fibonacci region can sit inside a columns region with no special case, because
-layout is a property of a container. Eleven of them:
-
-`splith` `splitv` `fibonacci` `fibonacci-v` `fibonacci-mirrored` `master-left`
-`master-right` `master-top` `master-bottom` `grid` `monocle`
-
-`layout --cycle` walks a short list, deliberately ordered so each one looks
-obviously different from the last.
-
-### Tags, the AwesomeWM way
-
-A window can belong to several workspaces and show up in whichever one you're
-looking at. Windows only lets a window be in one place at a time, so membership
-means the window *relocates* to whichever tagged workspace you activated last,
-exactly what AwesomeWM does.
-
-### Animations that don't fight you
-
-Per-event durations and cubic-bezier curves. The important bit: re-targeting blends
-from the window's *current* position, so hammering a layout key never makes windows
-jump backwards or stutter. Frame rate follows your fastest display by default
-(`fps "auto"`) and is re-read when monitors come and go.
-
-### Mouse gestures that stick
-
-Drag a tiled window onto the middle of another to **swap** them, or near an edge to
-**insert** beside it. Drag a border to resize, and the resize is written back into
-the tree's ratios, so the next layout pass respects it instead of undoing it.
-
-### It's five small executables and no runtime
-
-`shubbak-wm`, `shubbak`, `taj`, `dalil`, `ayn`: around 25 MB total, under 11 MB
-zipped, compiled ahead-of-time with NativeAOT. Nothing to install first.
+- **The config file talks back.** A mistake is reported at load time with a line, a
+  column, a caret and a hint, for every section of the file. Mistakes that look fine
+  are caught too: a regex that can never match, a rule that matches every window, a
+  key bound twice. A file that will not parse never replaces the one that is running.
+- **It tells you why a window is not tiling.** `shubbak inspect`, click the window,
+  and you get every attribute, the verdict, the reason, and which of your rules
+  matched.
+- **Nothing gets stranded.** Windows on other workspaces are cloaked, not hidden, so a
+  crash or a kill leaves them recoverable. `shubbak restore` brings them back with
+  nothing else running.
+- **Contexts.** A presentation, a docked monitor, a call with the microphone open:
+  each is a named condition that layers changes on the config while it holds, and lets
+  go the moment it does not.
+- **Monitors by what they are**, not by the number Windows gave them today. A
+  workspace bound to a display leaves when it is unplugged and comes back with it.
+- **Scriptable.** One named pipe, JSON, 28 event topics, and a `signal` verb the window
+  manager carries without reading. The bar and the palette are ordinary clients of it,
+  and so can anything you write.
 
 ## Install
 
-**winget**
+With winget:
 
 ```
 winget install MoaidHathot.Shubbak
 ```
 
-**Scoop**
+That installs the MSI under `Program Files`, which is what lets Shubbak tile windows
+that belong to elevated programs (Task Manager, anything run as administrator) without
+running elevated itself. For a portable copy under your own profile, with no
+administrator prompt:
+
+```
+winget install MoaidHathot.Shubbak --scope user
+```
+
+With Scoop:
 
 ```
 scoop bucket add shubbak https://github.com/MoaidHathot/Shubbak
 scoop install shubbak
 ```
 
-**Or just grab the zip** from [Releases](https://github.com/MoaidHathot/Shubbak/releases)
-and unpack it anywhere. It's five self-contained executables with no prerequisites.
+Or take the MSI or the zip from [Releases](https://github.com/MoaidHathot/Shubbak/releases).
+The zip unpacks anywhere. Everything is signed. x64 for now; on Windows on ARM it runs
+through the built-in emulation.
 
-### A heads-up before you start
+## First steps
 
-**This build isn't code signed yet.** Two consequences worth knowing:
-
-1. SmartScreen will warn you the first time you run it.
-2. Windows belonging to **elevated** processes — Task Manager, anything running as
-   administrator — are detected and reported, but can't be moved. Run `shubbak-wm`
-   elevated if you need them tiled.
-
-Doing it properly without elevation needs `uiAccess`, and Windows only grants that
-to a signed binary installed under `Program Files`. That's the next release.
-
-## Quick start
+Open a new terminal, then:
 
 ```
-shubbak config init          # write a starter config you can actually read
-shubbak autostart enable     # start the window manager at logon
-shubbak-wm --foreground      # or just run it right now, attached to this terminal
+shubbak config init          # a starter config: keys, five workspaces, the bar, the palette, the watcher
+shubbak-wm --foreground      # run the window manager, attached to this terminal
+shubbak autostart enable     # and start it at logon from now on
 ```
 
-`shubbak autostart status` tells you whether it's registered, and warns you if it
-points at a copy you've since moved or deleted.
+In that order. Without a config the window manager tiles everything and binds no keys.
 
-Then poke at it:
+The starter's keys are all on Alt:
 
-```
-shubbak status               # running? paused? suspended?
-shubbak layouts              # what layouts exist
-shubbak config-path          # which config file is actually in effect
-shubbak query workspaces     # JSON, for scripts
-```
-
-There's a system tray icon too: suspend/resume, stop arranging windows, reload the
-config, open the config folder, exit.
-
-## Configuration
-
-One KDL file drives the window manager, the bar and the palette. Shubbak looks for
-it in this order, first match wins:
-
-1. `--config <path>`
-2. `$SHUBBAK_CONFIG` — a file, or a directory containing `shubbak.kdl`
-3. `$XDG_CONFIG_HOME/shubbak/shubbak.kdl`
-4. each entry of `$XDG_CONFIG_DIRS`
-5. `%USERPROFILE%\.config\shubbak\shubbak.kdl`
-6. `%APPDATA%\shubbak\shubbak.kdl`
-
-Yes, XDG on Windows. The spec is nominally Unix, but if you keep your dotfiles in a
-repo and symlink them per machine, you already have `XDG_CONFIG_HOME` set — and
-every tool that ignores it makes you learn one more bespoke environment variable.
-
-The window manager, the CLI and the bar all share one resolver, so they can't
-disagree about which file is loaded.
-
-### The sections
-
-| Section | What goes in it |
+| Keys | What |
 |---|---|
-| `general` | Behaviour: initial window state, default layout, hide method, startup commands |
-| `gaps` | `inner`, and `outer` per side |
-| `window-effects` | Focused / unfocused / floating border colours |
-| `animation` | `enabled`, `fps`, `minimum-distance`, and per-event duration + curve |
-| `logging` | `level`, `file`, `console` |
-| `workspaces` | Names, display names, monitor binding, starting layout |
-| `monitor` | A display named by what it is, for workspaces and commands to refer to |
-| `contexts` | Named conditions on the desktop that layer overrides on the config while they hold |
-| `keybindings` | `bind`, and `for-each` |
-| `binding-modes` | Modal keymaps, i3-style |
-| `app` | Reusable named matchers you reference from rules |
-| `rules` | Match windows, run commands |
-| `bar` | Taj — sources, profiles, zones, widgets |
-| `dalil` | The command palette's appearance and behaviour |
+| `alt` + `h` `j` `k` `l` | Focus left, down, up, right |
+| `alt+shift` + `h` `j` `k` `l` | Move the window |
+| `alt` + `1`…`5` | Go to a workspace; with `shift`, send the window there |
+| `alt+space` | The command palette |
+| `alt+shift+space` | Cycle the layout |
+| `alt+shift+q` | Close the window |
+| `alt+shift+r` | Reload the config |
 
-Both `colour` and `color` are accepted, everywhere. Settings can be written as a
-child node or a property, whichever reads better to you.
+Editing the config, upgrading, uninstalling and where the logs are: see
+[Getting started](docs/getting-started.md).
 
-### A taste of it
+## A taste of the config
+
+One KDL file, shared by all five programs. This is the shape of it:
 
 ```kdl
 general {
-    initial-window-state "tiling"
     default-layout "splith"
-    toggle-workspace-on-refocus #true
+    startup-command "taj"
+    startup-command "dalil"
 }
 
 gaps {
     inner 6
-    outer { top 26; right 4; bottom 4; left 4 }
+    outer { top 4; right 4; bottom 4; left 4 }
 }
 
-animation {
-    enabled #true
-    fps "auto"
-    window-move { duration 140; curve "ease-out-expo" }
+workspaces {
+    workspace "1"
+    workspace "2"
+    workspace "3"
 }
 
 keybindings {
     bind "alt+h" { focus --direction left }
     bind "alt+l" { focus --direction right }
-    bind "alt+v" { toggle-tiling-direction }
-    bind "alt+f" { toggle-floating }
-    bind "alt+shift+q" { close }
-}
-```
+    bind "alt+space" { signal "palette" }
 
-### Window rules
-
-Match on `title`, `class`, `process` or `path`, with five operators each — `equals`,
-`regex`, `starts-with`, `ends-with`, `contains` (symbolic forms `=` `~=` `^=` `$=`
-`*=` work too). Everything is case-insensitive. Prefix a matcher with `!` to negate.
-
-```kdl
-app "browser-picture-in-picture" {
-    // Raw strings need no backslash escaping, which matters for regexes.
-    title regex=r"[Pp]icture.in.[Pp]icture"
-    class regex=r"Chrome_WidgetWin_1|MozillaDialogClass"
+    for-each "workspace" {
+        bind "alt+{name}"       { focus --workspace "{name}" }
+        bind "alt+shift+{name}" { move --workspace "{name}" --focus }
+    }
 }
 
 rules {
-    rule "float the PiP window" {
-        match { app "browser-picture-in-picture" }
-        do { float }
-    }
-
     rule "browsers live on 2" {
         match { process regex=r"msedge|chrome|firefox" }
         do { move --workspace "2" }
     }
 }
-```
 
-Rules can fire `on="manage"` (the default), `on="title-change"` or `on="focus"`.
-The `do { }` block takes **any** command — it's the same parser your keybindings
-use, so there's no second vocabulary to learn. `ignore` and `manage` are the two
-that only make sense here: `ignore` tells Shubbak to leave a window alone, `manage`
-tells it to take on a window the built-in filter passed over.
-
-Reloading is explicit — `wm-reload-config`, from a keybinding, the CLI or the tray.
-Nothing watches your file behind your back, so a half-saved config can't take your
-desktop with it.
-
-### Monitors by name
-
-`monitor=1` on a workspace is a position in the order Windows reports displays, and
-Windows reorders that on replug, on DisplayPort wake and on a driver restart — which
-is how a workspace bound to "the right-hand screen" ends up on the left one after a
-dock. So a display can be named by what it *is* instead, with the same matcher shape
-an `app` uses:
-
-```kdl
-monitor "laptop"     { internal }
-monitor "dell-left"  { path *= "UID4355" }   // two of the same model report the same
-monitor "dell-right" { path *= "UID4357" }   // name; the connector path tells them apart
-
-workspaces {
-    workspace "3" display-name="Code"   monitor="dell-left"
-    workspace "/" display-name="Second" monitor="dell-right"
-}
-
-bind "alt+shift+o" { move-workspace --monitor "laptop" }
-```
-
-`shubbak monitors` prints a definition for every attached display, ready to paste, so
-the hundred characters of hexadecimal that distinguish two identical panels never
-have to be typed. A workspace whose monitor is unplugged moves to a survivor, and
-**moves back when the monitor returns** — the round of dragging workspaces home after
-every dock is gone. Bars follow too: Taj opens one on a display that arrives and
-closes the one on a display that goes, and a bar `rule` can say `monitor="laptop"` in
-the same words.
-
-### Contexts
-
-A talk from the laptop alone, then on a projector, then docked to two monitors for a
-remote session: each wants different gaps, a different bar, a safer keyboard, and the
-slides somewhere else. A **context** is a named condition on the desktop that layers
-overrides on the config while it holds — and stops the moment it doesn't:
-
-```kdl
-contexts {
-    context "presenting" {
-        when { window app="powerpoint-slideshow" }   // any block holding is enough
-        when { system-state "presenting" }           // the Win+P / Mobility Center toggle
-        linger 500                                   // ride out PowerPoint's window churn
-
-        gaps { inner 0; outer { top 0; right 0; bottom 0; left 0 } }
-        window-effects { border #false }
-        animation { enabled #false }
-        bindings { bind "alt+shift+q" { } }          // disarm close while on stage
-        workspaces { workspace ";" monitor="projector" }
-        on-enter { focus --workspace ";" }
-    }
-
-    context "docked" { when { monitor present="dell-right" } }
-    context "meeting" { }                            // external: set over the pipe
-    context "docked-meeting" { when { context "docked"; context "meeting" } }
-}
-```
-
-Conditions are deliberately only things Shubbak already knows or Windows says about
-the *session* in one call: a window present, focused or full-screen (matched with the
-same `app` definitions rules use); a workspace active or focused; how many monitors,
-which named ones, the Win+P topology; remote session; the shell's notification state.
-Several contexts hold at once and cascade in declaration order. Every override is a
-delta — `gaps { inner 0 }` changes the inner gap and nothing else.
-
-**The line:** Shubbak observes the desktop, not the applications. Whether the camera
-is on, whether a call is up, what the calendar says — those come from *outside*, as a
-context with no `when` that another program sets: `shubbak context --set meeting
---ttl 10s` from any script, or a held pipe connection with `--lease` so the fact dies
-with the process that supplied it. The config says what a meeting *does*; the program
-supplying the fact never needs to know. Pins beat detection (`--set`, `--clear`,
-`--toggle`); `--auto` hands a context back to its conditions. [Ayn](#ayn--the-watcher)
-is the reference provider: it supplies `camera-in-use`, `microphone-in-use` and
-`microphone-muted`, and nothing else.
-
-`shubbak contexts` says why each one is the way it is, condition by condition, and who
-pinned what — the same answer `inspect` gives for a window that didn't tile.
-
-### Saved arrangements
-
-A demo whose windows have been dragged about wants them back where they were:
-
-```
-shubbak arrangement --save demo       # the focused workspace's tree, under a name
-shubbak arrangement --restore demo    # put the windows that are here back into it
-```
-
-An arrangement records what the session file deliberately doesn't — the containers,
-their layouts and their ratios, and which window sits in each leaf, by process and
-class, never by title. Restoring rearranges only the windows on the workspace: one
-that isn't open is left out and its share goes to its siblings; one the arrangement
-never knew stays, at the end, with the share it would have had as one more child.
-`shubbak arrangements` lists them, `arrangement.restored` on the event stream says how
-many were placed, and the palette completes the names.
-
-### Commands
-
-35 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
-
-**Focus & movement** — `focus` `focus-window` `focus-recent-window` `move`
-`move-workspace` `resize` `equalise` `split` `toggle-tiling-direction`
-
-**Layout & state** — `layout` `float` `tile` `toggle-floating` `toggle-fullscreen`
-`toggle-minimized` `close`
-
-**Workspaces & stashing** — `tag` `sticky` `scratchpad`
-
-**Management** — `ignore` `manage` `toggle-managed`
-
-**Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`)
-
-**Arrangements** — `arrangement` (`--save` `--restore` `--delete`)
-
-**The window manager itself** — `wm-enable-binding-mode` `wm-disable-binding-mode`
-`wm-toggle-pause` `wm-suspend` `wm-resume` `wm-toggle-suspend` `wm-reload-config`
-`wm-redraw` `wm-exit`
-
-**Escape hatches** — `shell-exec` `signal`
-
-Anything the CLI doesn't recognise as its own subcommand is forwarded straight to
-the daemon, so `shubbak focus --direction left` just works.
-
-## Taj — the bar
-
-<img src="docs/assets/taj.png" width="72" align="right" alt="" />
-
-**Taj** (تاج, *"crown"*) is the status bar, and it's already in the box. One bar per
-monitor, each reserving its own strip, each able to show a different profile.
-
-```kdl
 bar {
-    source "clock" kind="time" format="ddd d MMM HH:mm" interval=500
-    source "keyboard" kind="keyboard" interval=250
+    source "clock" kind="time" format="HH:mm" interval=500
 
     profile "default" {
-        height 34
-        background "#1e1e2e"
-        foreground "#cdd6f4"
-
-        zone "left" justify="start" gap=4 {
-            workspaces hide-empty=#true active-background="#8dbcff"
-        }
-        zone "centre" justify="center" grow=1 {
-            text template="{{ window.title | truncate:90 }}"
-        }
-        zone "right" justify="end" gap=12 {
-            text template="{{ layout | icon }}" colour="#7f849c"
-            text template="{{ clock }}" colour="#8dbcff"
-        }
+        zone "left"  justify="start" { workspaces hide-empty=#true }
+        zone "right" justify="end"   { text template="{{ clock }}" }
     }
 }
 ```
 
-**Adding a widget usually needs no code at all.** There are three widget primitives
-— `text`, `workspaces`, `spacer` — and the breadth comes from templates, filters and
-sources rather than from a catalogue you have to wait for someone to grow:
+[Configuration](docs/configuration.md) is the reference.
+[`shubbak.example.kdl`](docs/shubbak.example.kdl) is a complete, commented, real
+config to read and borrow from.
 
-| What you want | What it costs |
+## Documentation
+
+| Page | What it covers |
 |---|---|
-| A new value on the bar | A few lines of KDL |
-| Something Taj has never heard of | Any program that writes lines to stdout |
-| Genuinely custom drawing | One `IWidget` implementation |
-
-Templates get filters — `truncate:N` `upper` `lower` `trim` `default:X` `then:X`
-`pad:N` `replace:from,to` `icon` `state-icon` — and a `when { }` block for conditional
-styling, so "colour the keyboard indicator red when I'm in the wrong language" is a
-line, not a plugin. A widget can have a `font=` of its own, which is how one widget
-draws a glyph from Segoe Fluent Icons beside text in the profile's face. Anything with
-an `on-click` shows it is a control: the pointer becomes a hand and the widget lights
-up under it — a pill lightens, a bare glyph gains the same faint pill the workspaces
-use — or takes `hover-background` and `hover-colour` of its own.
-
-Zones are flex containers. Profiles can `extend` each other, so a slim
-"presentation" variant costs five lines instead of a duplicate. A `rule` picks the
-profile at runtime by workspace, monitor or context — `rule use="presentation"
-context="presenting"` — and switching is a pointer swap. `{{ contexts }}` names the
-contexts the window manager holds, and is empty when none do; `{{ context.meeting }}`
-is `meeting` while that one holds and empty otherwise, so `{{ context.meeting |
-then:\u{E720} }}` is a microphone glyph that appears for the call and leaves with it.
-
-**Why it doesn't show stale titles.** The bar consumes the window manager's event
-stream and never inspects windows itself. `EVENT_OBJECT_NAMECHANGE` fires on things
-like browser tab switches — about twice as often as focus changes — so a bar
-listening only for focus quietly misses two thirds of title updates. Taj can't,
-because it isn't listening to Windows at all.
-
-Widgets re-render only when a source they use actually changes, so an idle desktop
-doesn't repaint. Clicking a workspace sends the same command a keybinding would.
-
-### Under the hood
-
-```
-L1 transport    Shubbak's IPC
-L2 sources      reactive values: WM events, timers, external processes
-L3 widget tree  renderer-agnostic model + flex layout
-L4 renderer     ITajRenderer — currently GDI
-```
-
-L2 and L3 contain no drawing code and are covered by tests that run with no window
-on screen. Swapping the renderer means implementing one interface.
-
-## Dalil — the command palette
-
-<img src="docs/assets/dalil.png" width="72" align="right" alt="" />
-
-**Dalil** (دليل, *"guide"*) is a fuzzy-search palette for your whole desktop. Bind a
-key to `signal "palette"` and it appears.
-
-Eight modes. Every one has a prefix, and every one has a **Ctrl+digit** that jumps
-straight to it in the order the hint bar draws them — because a prefix is faster and
-`~` is a dead key on several European layouts, where it produces no character at all
-until you press something else:
-
-| Prefix | Jump | Mode | |
-|---|---|---|---|
-| *(none)* | `Ctrl+1` | Windows | Every window on the desktop, managed or not |
-| `>` | `Ctrl+2` | Commands | Every verb, plus your own named sequences |
-| `#` | `Ctrl+3` | Workspaces | With window count, layout and monitor |
-| `!` | `Ctrl+4` | Inspect | Every window Shubbak is **not** managing, and why not |
-| `$` | `Ctrl+5` | Scratchpad | Everything you've stashed, by slot |
-| `~` | `Ctrl+6` | Layouts | What each one actually does, and the one you're in |
-| `%` | `Ctrl+7` | Monitors | Size, DPI, and what each is showing |
-| `?` | `Ctrl+8` | Help | The palette's keys — **and your own keybindings** |
-
-Prefixes are yours to move: `dalil { prefixes { layouts "l" } }`.
-
-Four things I'm particularly happy with:
-
-**Type a command and it's parsed for real.** Whatever you type becomes a top-ranked
-row, run through the *same* parser your config file uses. So a bad argument gives
-you the same message it would at load time, right there, before you press Enter.
-
-**Mark windows and act on all of them.** `Ctrl+Space` marks; `Ctrl+Enter` then acts
-on the set — move them all to one workspace, float them, close them. Doing that with
-keybindings is six rounds of find-it, focus-it, move-it, with the focus landing
-somewhere different after each one. This is the thing a palette is genuinely *for*.
-
-**`shubbak inspect`, without leaving the palette.** Press **Ctrl+Shift+I** on any
-window and you get the full report — attributes, verdict, which rules matched, which
-app definitions missed and on which matcher. Any line too long to fit opens in full
-with Enter, and Escape or Backspace steps back out. **Ctrl+C** copies the selected
-line; **Ctrl+Shift+C** copies the whole report, which is the version that belongs in
-a bug report.
-
-**And then it writes the rule for you.** "Write a rule for it" composes the KDL that
-would match that window — class, process, the path commented out beside it, the title
-commented out under that — ready to read and paste. It's the step that used to be
-left as an exercise: the report told you exactly what was wrong and then handed you a
-transcription job with one very easy way to get it silently wrong.
-
-**Every row has actions** (Ctrl+Enter): go to it, bring it here, send it to another
-workspace, float/tile, minimise/restore, make it sticky, edit its tags, write a rule
-for it, close it, start or stop managing it, and inspect it. Closing asks first —
-whichever route you reached it by, chord included — and nothing else does, because
-nothing else is irreversible.
-
-**Name your own sequences.** Keybindings are a scarce resource; palette rows are not.
-
-```kdl
-dalil {
-    action "Dev layout" description="Editor left, terminal right, on 2" {
-        focus --workspace "2"
-        layout --set "master-left"
-        equalise
-    }
-}
-```
-
-They're validated against the real parser at load time, so a typo is reported on the
-row rather than swallowed.
-
-**And a row can ask.** A `param` turns one row into a question, so a single entry
-stands in for one per workspace — nineteen of them, in my config, each of which would
-otherwise need its own name to invent and its own line to keep:
-
-```kdl
-dalil {
-    action "Send it to..." description="Move it there and stay where you are" {
-        param "ws" from="workspaces"
-        move --workspace "{ws}"
-    }
-
-    action "Arrange..." description="Go somewhere and lay it out, in one gesture" {
-        param "ws" from="workspaces"
-        param "l"  from="layouts"
-        focus --workspace "{ws}"
-        layout --set "{l}"
-        equalise
-    }
-}
-```
-
-Enter opens the picker; Escape goes back one question rather than dismissing. Choices
-come `from=` a list the palette already holds — `workspaces`, `layouts`,
-`binding-modes`, `scratchpads`, `directions`, `contexts` — or from `values="a b c"`
-when you want a set the window manager doesn't know. Workspaces are shown as `3 — Code`, because a
-picker reading `\` is not one anybody can choose from.
-
-The checking is real: a placeholder nothing declares is an error with a line and a
-caret, a question no command asks is a warning, and `move --direction "{d}"` is probed
-with an actual direction before the parser sees it rather than waved through.
-
-**Put an action on a key without writing it twice.** `signal "palette" "run" "<name>"`
-runs a named action outright and shows nothing:
-
-```kdl
-bind "alt+ctrl+d" { signal "palette" "run" "Deep work" }
-```
-
-Shubbak still has no idea what an action is — it carries the name without reading it,
-and the palette is what knows. An action that *asks* can't be answered by a key, so
-those open the palette with the name already typed and the picker one Enter away.
-
-Rows carry the application's icon and badges so you can see at a glance what you're
-looking at: `unmanaged`, `minimised`, `cloaked`, `floating`, `fullscreen`, `sticky`,
-`elevated`, `stashed`, `also on <workspace>`. Unmanaged windows also carry the reason
-in the dim text, so you don't have to open anything to find out why. The search box
-tells you when tiling is paused, when a binding mode is eating your keys, when the
-window manager has suspended itself, and when it can't be reached at all — because
-all four look exactly like a crash from the outside — and, quieter than any of those,
-which contexts it holds, because the keys in force are then not the ones in the file.
-Typing `context --toggle ` completes the declared names.
-
-Dalil is opened by a **signal**, not by a hard-wired command — which means Shubbak
-doesn't know Dalil exists. That's the same extension point anything else can use.
-
-## Ayn — the watcher
-
-<img src="docs/assets/ayn.png" width="72" align="right" alt="" />
-
-**Ayn** (عين, *"eye"*) is the smallest of the five, and optional. It supplies three
-facts, each a context the window manager holds while the fact is true: `camera-in-use`
-and `microphone-in-use`, from the record Windows keeps of which programs have a device
-open — the one the privacy indicator in the tray reads — and `microphone-muted`, from
-the default microphone's mute switch — the one the Sound settings toggle.
-
-```kdl
-contexts {
-    context "camera-in-use" { }         // facts: nothing in the file sets them, ayn does
-    context "microphone-in-use" { }
-    context "microphone-muted" { }
-
-    context "meeting" {                 // policy: yours to write
-        when { context "microphone-in-use" }
-        bindings { bind "alt+shift+q" { } }
-    }
-    context "meeting-muted" { when { context "meeting"; context "microphone-muted" } }
-}
-
-ayn {
-    camera     { in-use "camera-in-use" }
-    microphone { in-use "microphone-in-use"; muted "microphone-muted" }
-    settle 500                          // ms a change of use must last; mute is instant
-}
-```
-
-It also *acts*, on one thing: `signal "ayn" "microphone" "mute" | "unmute" |
-"toggle-mute"` from a keybinding, the bar or the palette flips the system mute, and
-the endpoint's own change notification turns that into the context — so a bar widget
-that reads `{{ context.meeting-muted | then:\u{EC54} }}` with `on-click="signal ayn
-microphone unmute"` is a mute button, and the window manager never learns the word.
-This is the system's mute: a call's own mute button is the call's and invisible from
-here, but Teams and its kind notice this one and say "muted by your system".
-
-The pins are made with `--lease`, so they die with Ayn's connection: a watcher that
-crashes leaves nothing behind, and a window manager that restarts is told again within
-a second. The file says what a meeting *does*; Ayn never needs to know. That division
-is the point of it — Shubbak observes the desktop, not the applications, and whether
-the camera is on is a fact about an application. Anything with the same shape — Teams
-presence, OBS recording, a calendar — is written the same way: hold a pipe connection
-open and say `context --set <name> --lease`.
-
-`ayn --report` prints what Windows says about each device right now, which is the
-same reading the watcher acts on. `shubbak ayn-exit` stops it. It sleeps on a registry
-notification and two Core Audio callbacks and holds no timer between changes.
-
-## Scripting it
-
-Everything the CLI and the palette do goes over one named pipe, `shubbak-v2-<SID>`,
-scoped per user, with the protocol version in the name. Newline-delimited JSON.
-
-```
-shubbak query state          # the whole window manager, as JSON
-shubbak query windows        # or: all-windows, workspaces, monitors,
-                             #     focused, layouts, commands, bindings
-shubbak sub                  # tail every event
-shubbak sub window.focused,workspace.activated
-```
-
-**28 event topics** you can subscribe to:
-
-```
-window.managed       window.unmanaged      window.focused      window.title_changed
-window.state_changed window.tags_changed   window.moved        window.native_fullscreen
-workspace.activated  workspace.created     workspace.destroyed workspace.moved
-layout.changed       container.resized
-monitor.added        monitor.removed       monitor.changed
-binding_mode.changed binding.fired         command.rejected    config.reloaded
-wm.paused            wm.suspended          wm.environment      wm.shutdown         wm.resync
-context.changed      arrangement.restored signal
-```
-
-Three of those exist purely so that things outside the daemon can know what it
-knows. `window.native_fullscreen` says an application took its own window
-full-screen (a video, a slide show) or gave the monitor back; it is an observation,
-not a state, and the window is still tiled underneath. `wm.environment` says the
-session became remote or stopped being, or the shell's idea of what you are doing
-changed - presenting, a full-screen app, a game. `binding.fired` reports each chord
-Shubbak claimed and ran, by key and verb name, and **only** those: nothing typed into
-an application can reach it, which is what makes a keycast overlay for a talk a small
-external subscriber rather than a keylogger.
-
-Subscribe to a topic that doesn't exist and you get told, along with the list of
-ones that do. `wm.resync` tells you your backlog was dropped; `wm.shutdown` tells
-you the daemon is leaving on purpose.
-
-`signal "name" [args...]` publishes a name Shubbak doesn't interpret at all. That's
-how Dalil exists without the window manager knowing about it, and it's how you'd
-wire in your own tools.
-
-**On security:** `shell-exec` is refused over the pipe by default. A window manager
-isn't an execution service, and the pipe is scoped to your *account*, not to your
-*integrity level* — so leaving it open would mean any process running as you could
-ask an elevated Shubbak to launch something elevated. Flip
-`allow-shell-exec-over-ipc` if you want it; keybindings and startup commands can
-always use it either way.
-
-## FAQ
-
-**Do I need a separate hotkey daemon?**
-No. Keybindings are built in. If you'd rather drive it from AutoHotkey or something
-else, the CLI and the pipe are right there.
-
-**Do I need to install a bar separately?**
-No. Taj ships with Shubbak and is configured in the same file. If you'd rather use
-something else, the event stream is public.
-
-**Can I run it alongside GlazeWM or komorebi?**
-Please don't — two window managers fighting over the same windows goes exactly how
-you'd expect. Shubbak refuses to start if another copy of *itself* is already
-running (`--replace` asks the incumbent to stand down cleanly first), but it can't
-detect other people's window managers.
-
-**Something's not tiling. What do I do?**
-`shubbak inspect`, click the window, and it'll tell you why. That's the whole
-feature.
-
-**How do I get out if it all goes wrong?**
-`shubbak restore` un-conceals anything stranded, and works with no daemon running.
-Beyond that, `shubbak diagnose -o report.md` gives you one file to attach to an
-issue.
-
-**Where are my logs?**
-Each process writes its own — `shubbak.log`, `taj.log`, `dalil.log`, `ayn.log`. Crashes are
-written automatically to `%LOCALAPPDATA%\Shubbak\crash-<timestamp>.md`.
-
-**Does it survive a reboot?**
-Yes. Windows go back to their workspaces. Titles are hashed rather than stored,
-because titles contain URLs and document names and that's your business.
-
-**Multi-monitor? High DPI?**
-Both. Per-monitor DPI awareness (V2) in all three GUI processes, effective DPI read
-per display, workspaces bindable to a monitor by name or by position, one bar per
-monitor that comes and goes with it, and `move-workspace` to shove a whole workspace
-to another screen — by direction or by name.
+| [Getting started](docs/getting-started.md) | Install, first run, the keys, upgrading, uninstalling |
+| [Configuration](docs/configuration.md) | The file: sections, rules, layouts, monitors, contexts, commands |
+| [Taj](docs/taj.md) | The bar: sources, templates, profiles |
+| [Dalil](docs/dalil.md) | The palette: modes, actions, questions |
+| [Ayn](docs/ayn.md) | The watcher: camera and microphone as contexts |
+| [Scripting](docs/scripting.md) | The pipe, the events, signals, security |
+| [Troubleshooting](docs/troubleshooting.md) | Organised by symptom |
+| [FAQ](docs/faq.md) | The questions that come up first |
+| [Architecture](docs/architecture.md) | How it is built, why .NET, the layout of the repo |
 
 ## Status
 
-Released as **0.9.0** — feature complete and working, but not yet battle-tested. If
-something misbehaves, [Troubleshooting](docs/troubleshooting.md) is organised by
-symptom, and `shubbak diagnose` is the fastest way to tell me about it.
-
-| Phase | | |
-| --- | --- | --- |
-| P0 | De-risking spike | done |
-| P1 | Core, platform layer, config, daemon, IPC/CLI | done |
-| P2 | Layout strategies | done |
-| P3 | Animation engine | done |
-| P4 | Taj — the bar | done |
-| P5 | Tags, scratchpad, session persistence | done |
-
-**1818 test methods**, around 700 ms to run. Everything except the platform layer
-and the renderer runs headless, so the entire behavioural surface — tree, layout,
-focus, animation, tags, sessions, the state machine — is testable in milliseconds
-with no window manager running.
-
-**Known limitations:** not code signed (see [above](#a-heads-up-before-you-start)),
-and x64 only for now.
-
-## Why .NET
-
-Not the obvious choice for a window manager, so it was measured rather than assumed.
-[ADR 0001](docs/adr/0001-language-choice.md) has all the numbers; the summary:
-
-- **Keyboard hook latency** — p99.9 of **0.8 µs** against Windows' 300 ms unhook
-  threshold, measured under ~1,300 forced blocking Gen2 collections. The hazard is
-  real; it doesn't materialise, because the callback never allocates.
-- **Animation** — zero dropped frames at 144 Hz, with **managed code accounting for
-  2.5–5.3% of frame time** and Win32 taking the rest. The unbatched control group
-  dropped 33–42% of frames with *identical* managed code — so `DeferWindowPos`
-  batching, not language choice, is what decides whether motion looks smooth.
-- **Distribution** — five single-file NativeAOT executables, ~25 MB total, under
-  11 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
+Shubbak is what I run all day, but it is young and has not been through many hands
+yet. Expect rough edges. When you hit one, `shubbak diagnose -o report.md` writes a
+single file with everything I need; open an issue and attach it.
+[CHANGELOG.md](CHANGELOG.md) says what changed between releases.
 
 ## Building
 
@@ -869,60 +210,18 @@ dotnet build
 dotnet test
 ```
 
-Publishing is what CI does on every push, so it's worth knowing it works:
-
-```
-dotnet publish src/Shubbak.Wm -c Release -r win-x64 -p:PublishAot=true
-```
-
-One quirk worth explaining: `shubbak-wm` is a **GUI-subsystem** binary despite
-having no window. A console-subsystem process gets given a console window when
-it's started by something that has no console of its own — which at logon means a
-black rectangle on your desktop forever. `--foreground` is how you get a console
-back when you want one, and failures that stop it starting open one regardless,
-because a daemon that dies silently is indistinguishable from one that never
-launched.
-
-### Layout of the repo
-
-```
-src/
-  Shubbak.Core/     tree, layouts, animation, state machine, logging  — zero Win32
-  Shubbak.Native/   Win32: hooks, window control, monitors, tray, DPI
-  Shubbak.Config/   KDL parser, schema, diagnostics
-  Shubbak.Ipc/      protocol, named-pipe server and client
-  Shubbak.Ui/       visual tree, flex layout, IRenderer            — no drawing code
-  Shubbak.Ui.Gdi/   the GDI renderer
-  Shubbak.Wm/       the daemon
-  Shubbak.Cli/      shubbak, and autostart registration
-  Taj.Core/         bar model, widgets, sources
-  Taj/              bar host
-  Dalil.Core/       fuzzy matching, palette model                     — no Win32
-  Dalil/            the palette
-  Ayn.Core/       the watcher's decisions: debounce, leases, config  — no Win32
-  Ayn/            the camera and microphone watcher
-tests/              1818 test methods across 10 projects
-bucket/             the Scoop manifest, where Scoop looks for it
-packaging/winget/   the winget manifests
-```
-
-`Shubbak.Core` contains no Win32 at all, and that's the highest-leverage decision in
-the project. It's what makes the logic testable headlessly in milliseconds, and it's
-also the insurance policy: if a hot path ever did fail in managed code, it could be
-replaced behind the `Shubbak.Native` boundary without touching any of the logic.
-
-See [RELEASING.md](RELEASING.md) for how a release is cut, and
-[CHANGELOG.md](CHANGELOG.md) for what changed.
+[Architecture](docs/architecture.md) explains the layout and the two quirks worth
+knowing before you change anything; [RELEASING.md](RELEASING.md) is how a release is
+cut.
 
 ## Thanks
 
-To **[GlazeWM](https://github.com/glzr-io/glazewm)**, which is where I learned what
-a good Windows tiling WM feels like to live in — and whose config I used as the
-translation target for Shubbak's own example file. To
-**[komorebi](https://github.com/LGUG2Z/komorebi)**, for showing that a window
-manager can be a queryable, scriptable, subscribable service rather than a black
-box. And to **AwesomeWM** and **i3**, for the ideas everyone on Windows is still
-catching up with.
+To [GlazeWM](https://github.com/glzr-io/glazewm), where I learned what a good Windows
+tiling window manager feels like to live in, and whose config I used as the
+translation target for Shubbak's example file. To
+[komorebi](https://github.com/LGUG2Z/komorebi), for showing that a window manager can
+be a queryable, scriptable, subscribable service rather than a black box. And to
+AwesomeWM and i3, for the ideas everyone on Windows is still catching up with.
 
 ## Licence
 

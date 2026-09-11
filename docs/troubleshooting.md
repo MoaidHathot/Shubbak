@@ -39,7 +39,7 @@ Common verdicts and what they mean:
 | `window is cloaked by the shell` | A suspended UWP app. It reports as visible but is not composited; tiling it would reserve space for nothing. |
 | `window is owned by another window` | A dialog. Its parent gets the tile — otherwise a save prompt would shrink the document behind it. |
 | `window has no title` | Splash screens and message-only helpers. |
-| `window belongs to an elevated process` | Run Shubbak elevated to manage it. |
+| `window belongs to an elevated process` | Install the MSI (`winget install MoaidHathot.Shubbak`): from `Program Files`, signed, Shubbak may move these. From a portable copy, run Shubbak elevated. |
 
 If the verdict is `manageable: yes` but a rule matched, the rule is why.
 
@@ -240,6 +240,32 @@ taj --log-level debug --log-file
 - **A widget shows `!`** — the source threw. For a `command` source, run the command
   by hand.
 
+## After an upgrade
+
+**The window manager did not come back.** A `winget upgrade` asks the running window
+manager to leave and starts it again once the files are in place. If it did not
+return - the machine was mid-logoff, or something force-closed it before it could
+register - start it with `shubbak-wm` or the Start Menu entry; the bar, the palette
+and the watcher follow from the config. Scoop stops everything before an update and
+does not start it again; that one is by design, run `shubbak-wm`.
+
+**"Another window manager took the desktop first" in a console at logon.** Two things
+tried to start it: the Run key and something else, usually an older shortcut or a
+second `autostart enable` from a different copy. `shubbak autostart status` says
+which copy is registered.
+
+**The bar is missing after an upgrade or a move.** The window manager looks for
+`taj` beside its own executable and then on `PATH`, so a bar that fails to start
+means neither place has one. `shubbak-wm --foreground` shows the `shell-exec
+failed` line naming what was tried.
+
+## Uninstalling
+
+`shubbak autostart disable`, then `winget uninstall MoaidHathot.Shubbak` or
+`scoop uninstall shubbak`. Your config (`%USERPROFILE%\.config\shubbak`) and the
+session, logs and crash reports (`%LOCALAPPDATA%\Shubbak`) are left for you to
+delete or keep.
+
 ## Known limitations
 
 These are design constraints, not bugs:
@@ -249,8 +275,11 @@ These are design constraints, not bugs:
   not. Komorebi has the same ceiling.
 - **Drag-to-swap has no live preview.** The drop is resolved when you release the
   mouse, so there is no highlight showing where the window will land while you drag.
-- **Elevated windows need an elevated Shubbak.** They are detected and reported, but
-  cannot be moved.
+- **Elevated windows need the installed Shubbak, or an elevated one.** Windows lets a
+  program move windows above its own integrity level only if it is signed, asks for
+  `uiAccess` in its manifest, and runs from `Program Files` - which is what the MSI
+  provides. A portable copy detects and reports them but cannot move them unless it
+  is itself run elevated.
 - **A window cannot be on two workspaces at once.** Tags relocate a window to
   whichever tagged workspace you last activated. A Windows window has one position on
   one monitor; anything else would be a promise the platform cannot keep.
