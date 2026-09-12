@@ -14,8 +14,16 @@ schedule and breaking either is a different kind of event:
   discarded rather than misread.
 
 ## [Unreleased]
+## [0.10.0] - 2026-09-12
 
-### Fixed
+Everything since 0.9.0, which was tagged and never published - so this is the first
+release anybody can install. In six parts, newest first: connecting to the window
+manager, how it is installed, then contexts and the watcher, validation, the palette
+as a control surface, and inspection from the palette.
+
+### Connecting to the window manager
+
+#### Fixed
 
 - **Closing an IPC connection could throw, and Dalil read one of the throws as a refused
   subscription.** `IpcClient.DisposeAsync` disposed its writer, disposing a writer
@@ -47,20 +55,13 @@ schedule and breaking either is a different kind of event:
   gap. It now says so. The clean case - a shutdown notice, then the close - was already
   logged from the notice.
 
-### Changed
+#### Internal
 
 - **CI prints why a test failed.** `dotnet test --verbosity quiet` quiets the console
   logger too, and at quiet it prints a failing test's name and nothing else - which is
   how a failure on the ARM64 runner came to be undiagnosable from its own log. The
   console logger is now named at `minimal`, which prints failures in full and passes
   not at all.
-
-## [0.10.0] - 2026-09-11
-
-Everything since 0.9.0, which was tagged and never published - so this is the first
-release anybody can install. In five parts, newest first: how it is installed, then
-contexts and the watcher, validation, the palette as a control surface, and
-inspection from the palette.
 
 ### Installing it
 

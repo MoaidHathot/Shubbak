@@ -9,7 +9,7 @@ InstallModes:
   - silentWithProgress
 UpgradeBehavior: install
 # Filled by tools/build-release.ps1 with the day the build was made.
-ReleaseDate: 2026-09-11
+ReleaseDate: 2026-09-12
 
 # Four ways to install the same version: an MSI and a portable zip, each for x64 and
 # for ARM64. winget picks the native architecture, prefers the MSI when both apply
