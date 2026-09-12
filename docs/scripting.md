@@ -75,9 +75,9 @@ A [context](configuration.md#contexts) with no `when` is external: nothing on th
 desktop decides it, so a program does. `shubbak context --set meeting --ttl 10s` from
 any script pins it for ten seconds, so a poller that crashes leaves nothing behind. A
 program that holds a pipe connection open can say `context --set meeting --lease`
-instead, and the pin dies with the connection. That is exactly what Ayn does for the
-camera and the microphone; Teams presence, OBS recording or a calendar are written the
-same way.
+instead, and the pin dies with the connection. That is exactly what Ayn does for
+everything it watches — the camera and the microphone, so far; Teams presence, OBS
+recording or a calendar are written the same way.
 
 ## Security
 

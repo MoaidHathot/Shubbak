@@ -2,12 +2,18 @@
 
 <img src="assets/ayn.png" width="72" align="right" alt="" />
 
-**Ayn** (عين, *"eye"*) is the smallest of the five programs, and optional. It supplies
-three facts, each a [context](configuration.md#contexts) the window manager holds
-while the fact is true: `camera-in-use` and `microphone-in-use`, from the record
-Windows keeps of which programs have a device open — the one the privacy indicator in
-the tray reads — and `microphone-muted`, from the default microphone's mute switch —
-the one the Sound settings toggle.
+**Ayn** (عين, *"eye"*) is the smallest of the five programs, and optional. It is the
+window manager's eyes on the rest of the machine. Whether a device is in use or a
+switch is flipped is a fact about the machine, not about a window, so the window
+manager does not read it; Ayn does, and hands each fact over as a
+[context](configuration.md#contexts) the window manager holds while the fact is true.
+
+Today it watches the camera and the microphone, and supplies three facts:
+`camera-in-use` and `microphone-in-use`, from the record Windows keeps of which
+programs have a device open — the one the privacy indicator in the tray reads — and
+`microphone-muted`, from the default microphone's mute switch — the one the Sound
+settings toggle. Facts are named `subject-state`, so the ones about one device sit
+together and the next device slots in beside them.
 
 It is its own program, `ayn`, started by the window manager from the config
 (`startup-command "ayn"`), and it reads the `ayn` section of the same file.
@@ -54,9 +60,14 @@ The pins are made with `--lease`, so they die with Ayn's connection: a watcher t
 crashes leaves nothing behind, and a window manager that restarts is told again within
 a second. The file says what a meeting *does*; Ayn never needs to know. That division
 is the point of it — Shubbak observes the desktop, not the applications, and whether
-the camera is on is a fact about an application. Anything with the same shape — Teams
-presence, OBS recording, a calendar — is written the same way: hold a pipe connection
-open and say `context --set <name> --lease`. See [Scripting](scripting.md).
+the camera is on is a fact about an application and a piece of hardware. Everything
+of that kind lives out here rather than in the daemon, because "it is only a hundred
+lines" is true of every device that would follow the camera, and is how a window
+manager grows a weather widget. Ayn is where those lines go: the next device is
+another subject in its section, not another thing the window manager knows. Anything
+with the same shape that Ayn does not watch — Teams presence, OBS recording, a
+calendar — is written the same way: hold a pipe connection open and say
+`context --set <name> --lease`. See [Scripting](scripting.md).
 
 ## Running it
 

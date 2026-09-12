@@ -1021,6 +1021,11 @@ dalil {
 // Ayn - the eye
 // ---------------------------------------------------------------------------
 //
+// The window manager's eyes on the rest of the machine. What is not a window - a
+// device in use, a switch flipped - is not the window manager's to read, so this
+// process reads it and hands each fact over as a context. Today that is the camera
+// and the microphone; the next subject goes in this section beside them.
+//
 // Its own process, started however you start the bar and the palette - a
 // startup-command, a shortcut, by hand. It reads this section and nothing else in
 // this file, and sleeps until something changes: the record Windows keeps of which

@@ -24,8 +24,8 @@
 Shubbak (شبّاك, "window") arranges your windows so you can stop dragging them around.
 It is driven from the keyboard, it animates, and one config file covers the whole
 desktop: the window manager, the status bar, the command palette, and the watcher
-that tells them when your camera is on. There is no second project to install before
-it looks like yours.
+that tells them about the rest of the machine, starting with whether your camera is
+on. There is no second project to install before it looks like yours.
 
 <!-- A screenshot or a short clip belongs here. -->
 
@@ -43,9 +43,11 @@ install first.
 - **Dalil** (دليل, *guide*), the command palette. Every window, command, workspace and
   layout under one search box. Mark several windows and act on all of them at once.
   Ask it why a window is not tiling, and it writes the rule for you.
-- **Ayn** (عين, *eye*), the watcher. Tells the window manager when the camera or the
-  microphone is in use, or the microphone is muted, so your config can react: a mute
-  button on the bar, the close key disarmed during a call.
+- **Ayn** (عين, *eye*), the watcher. The window manager's eyes on the rest of the
+  machine: what is not a window is watched here and arrives as a context, so the
+  window manager never has to learn it. Today that is the camera and the microphone,
+  in use or muted, and your config reacts: a mute button on the bar, the close key
+  disarmed during a call.
 - **shubbak**, the command line. Everything the keys do, plus `inspect`, `diagnose`,
   `restore` and `stop`.
 
@@ -189,7 +191,7 @@ config to read and borrow from.
 | [Configuration](docs/configuration.md) | The file: sections, rules, layouts, monitors, contexts, commands |
 | [Taj](docs/taj.md) | The bar: sources, templates, profiles |
 | [Dalil](docs/dalil.md) | The palette: modes, actions, questions |
-| [Ayn](docs/ayn.md) | The watcher: camera and microphone as contexts |
+| [Ayn](docs/ayn.md) | The watcher: the rest of the machine as contexts, the camera and the microphone first |
 | [Scripting](docs/scripting.md) | The pipe, the events, signals, security |
 | [Troubleshooting](docs/troubleshooting.md) | Organised by symptom |
 | [FAQ](docs/faq.md) | The questions that come up first |

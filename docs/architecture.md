@@ -11,7 +11,7 @@ a release is cut, see [RELEASING.md](../RELEASING.md).
 | `shubbak` | The command line. Everything the keys do, plus `inspect`, `diagnose`, `restore`, `stop`, `autostart`, `config init`. |
 | `taj` | The bar. A client of the window manager's event stream; never inspects windows itself. |
 | `dalil` | The command palette. Opened by a signal, so the window manager does not know it exists. |
-| `ayn` | The camera and microphone watcher. Supplies three facts as contexts, over a held connection. |
+| `ayn` | The watcher. The window manager's eyes on the rest of the machine: facts that are not about windows, supplied as contexts over a held connection. Today, the camera and the microphone. |
 
 Everything talks over one named pipe, `shubbak-v2-<SID>`, newline-delimited JSON,
 with the protocol version in the name so a new client and an old daemon fail to find
@@ -34,7 +34,7 @@ src/
   Dalil.Core/       fuzzy matching, palette model                     — no Win32
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
-  Ayn/              the camera and microphone watcher
+  Ayn/              the watcher: the rest of the machine, as contexts
 tests/              1834 test methods across 10 projects
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it

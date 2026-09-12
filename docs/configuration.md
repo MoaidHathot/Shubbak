@@ -329,8 +329,9 @@ context with no `when` that another program sets: `shubbak context --set meeting
 with the process that supplied it. The config says what a meeting *does*; the program
 supplying the fact never needs to know. Pins beat detection (`--set`, `--clear`,
 `--toggle`); `--auto` hands a context back to its conditions. [Ayn](ayn.md) is the
-reference provider: it supplies `camera-in-use`, `microphone-in-use` and
-`microphone-muted`, and nothing else.
+reference provider, and where facts about the machine rather than its windows live —
+`camera-in-use`, `microphone-in-use` and `microphone-muted`, so far. It supplies
+facts, and nothing else.
 
 `shubbak contexts` says why each one is the way it is, condition by condition, and who
 pinned what — the same answer `inspect` gives for a window that didn't tile.

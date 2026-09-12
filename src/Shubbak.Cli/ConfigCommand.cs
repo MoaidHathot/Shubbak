@@ -330,8 +330,9 @@ internal static class ConfigCommand
             confirm-destructive #true
         }
 
-        // Ayn, the watcher: holds the three contexts above while the camera or the
-        // microphone is in use, or the microphone is muted.
+        // Ayn, the watcher: the window manager's eyes on the rest of the machine.
+        // Today that is the camera and the microphone: it holds the three contexts
+        // above while a device is in use, or the microphone is muted.
         ayn {
             camera     { in-use "camera-in-use" }
             microphone { in-use "microphone-in-use"; muted "microphone-muted" }

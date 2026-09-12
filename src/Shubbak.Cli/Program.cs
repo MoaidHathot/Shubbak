@@ -1116,10 +1116,10 @@ internal static class Program
                                these refuse to start a second copy of themselves,
                                so this is how you stop the one that is running.
 
-          ayn-exit             Stop the camera and microphone watcher. It has no
-                               window, so it is asked through a named event and
-                               waited for; its leases on the window manager are
-                               released the moment its connection closes.
+          ayn-exit             Stop the watcher. It has no window, so it is asked
+                               through a named event and waited for; its leases on
+                               the window manager are released the moment its
+                               connection closes.
 
           autostart <action>   Whether the window manager starts when you log in.
                                enable | disable | status

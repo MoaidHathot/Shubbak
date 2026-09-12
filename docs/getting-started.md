@@ -61,8 +61,8 @@ shubbak config init
 This writes `%USERPROFILE%\.config\shubbak\shubbak.kdl` (or under `XDG_CONFIG_HOME` if
 you have one) and refuses to overwrite a file that is already there. It is short - a
 hundred and fifty lines, most of them comments - and it turns everything on: the
-keybindings below, five workspaces, the bar, the command palette and the camera and
-microphone watcher.
+keybindings below, five workspaces, the bar, the command palette and the watcher,
+with the camera and the microphone as contexts.
 
 Without a config the window manager runs on defaults, which tile every window and
 bind **no keys at all**. It will tell you so; this step is not optional.
