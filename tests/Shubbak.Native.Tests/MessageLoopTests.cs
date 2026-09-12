@@ -7,14 +7,32 @@ namespace Shubbak.Native.Tests;
 /// How the pump decides when to run again.
 /// </summary>
 /// <remarks>
+/// <para>
 /// It used to sleep, and a sleeping loop cannot do better than the system timer:
 /// asking for 8 ms measured at p50 15.50 ms, about 65 passes a second, with the pass
 /// itself taking 0.00 ms. Everything downstream inherited that floor - the animation
 /// ran at half its designed rate and a keystroke waited on a timer before anything
 /// looked at it.
+/// </para>
+/// <para>
+/// These tests run the test host the way the daemon runs itself, or they measure a
+/// process the daemon never is. Since Windows 11 a process nobody can see or hear
+/// gets no guarantee that its <c>timeBeginPeriod</c> is honoured, and the test host
+/// is exactly that; the daemon opts out of the heuristic at startup, and the static
+/// constructor below does the same here. Without it the resolution was honoured for
+/// about two and a half seconds after each request and then quietly withdrawn -
+/// measured on Windows 11 26200, 41 then 20 waits of 7 ms per 300 ms, with no window
+/// ever created - so a test whose 300 ms fell after the withdrawal counted the system
+/// tick and failed, which is how <see cref="AShortTimeoutStillRunsWithoutBeingWoken"/>
+/// came to report exactly 20 passes on a Windows Server 2025 runner - once in
+/// seventy-four runs, since the class order that exposed it is drawn at random and the
+/// window has to land late as well.
+/// </para>
 /// </remarks>
 public sealed class MessageLoopTests
 {
+    static MessageLoopTests() => PowerThrottling.OptOut();
+
     private static Thread RunOn(MessageLoop loop, TimeSpan interval)
     {
         var thread = new Thread(() => loop.Run(interval)) { IsBackground = true };
@@ -113,8 +131,17 @@ public sealed class MessageLoopTests
             Thread.Sleep(300);
 
             // 300 ms at 7 ms is about 40. Well under that means the wait is being
-            // rounded up to the system timer, which is the fault being fixed.
-            Assert.True(passes > 20, $"only {passes} passes in 300 ms at a 7 ms timeout");
+            // rounded up to the system timer, which is the fault being fixed; 20 is
+            // what the system tick alone produces, so the threshold sits on it. The
+            // message carries the two things that decide whether the fine timer was
+            // in force - asked for, and honoured - and how late the waits ran, so
+            // that a failure on a machine nobody can look at explains itself.
+            Assert.True(
+                passes > 20,
+                $"only {passes} passes in 300 ms at a 7 ms timeout " +
+                $"(fine timer held: {timer.IsHeld}, honoured by Windows: {PowerThrottling.HonorsTimerResolution}" +
+                $"{(PowerThrottling.TimerResolutionFailure is { } why ? $" - {why}" : "")}, " +
+                $"median wait overshoot {loop.WakeOvershootIdle.Percentile(0.5):F1} ms over {loop.WakeOvershootIdle.Count} waits)");
         }
         finally
         {

@@ -42,3 +42,14 @@ VIRTUAL_KEY
 // The connector-type enum, generated here from the same metadata the library uses,
 // so a test can pin the raw values it writes against the names they stand for.
 DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY
+
+// Switching Windows' "ignore this process's timer resolution" mechanism on by hand,
+// so that PowerThrottling.OptOut can be seen to switch it off again. The library
+// only ever turns it off; the test needs the other direction to have something to
+// observe.
+SetProcessInformation
+GetCurrentProcess
+PROCESS_INFORMATION_CLASS
+PROCESS_POWER_THROTTLING_STATE
+PROCESS_POWER_THROTTLING_CURRENT_VERSION
+PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION

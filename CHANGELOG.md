@@ -46,6 +46,23 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **The message-loop timing tests run the test host the way the daemon runs itself.**
+  `MessageLoopTests.AShortTimeoutStillRunsWithoutBeingWoken` failed on a Windows
+  Server 2025 runner - once in seventy-four runs - with exactly 20 passes in 300 ms
+  at a 7 ms timeout: the system tick, with `timeBeginPeriod(1)` held and accepted. Since Windows 11 a process nobody
+  can see or hear gets no guarantee its request is honoured; measured on 26200, a
+  process with no window at all keeps the fine resolution for about two and a half
+  seconds after asking and then loses it, for good, while `NtQueryTimerResolution`
+  goes on reporting 1 ms because something else on the machine holds it. The daemon
+  opts out of that heuristic at startup through `PowerThrottling.OptOut`; the test
+  host only did so when `PowerThrottlingTests` happened to run first, and xUnit
+  orders classes at random per run. `MessageLoopTests` now opts out itself, and the
+  assertion reports whether the fine timer was held, whether Windows honoured it, and
+  how late the waits ran. The same measurement gave the test that
+  `PowerThrottling.Apply`'s remarks said could not exist: switch the mechanism on by
+  hand, watch the waits go coarse, call `OptOut`, watch them come back - which fails
+  with the state mask inverted, where the six existing tests all pass.
+
 - **The winget submission is made with `wingetcreate` rather than `winget-releaser`.**
   The repository refuses any action not pinned to a commit, and the rule reaches
   through composite actions: `winget-releaser` fetched Komac through an action of its

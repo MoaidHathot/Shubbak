@@ -118,18 +118,17 @@ public static class PowerThrottling
             // requests - the exact opposite of the intent, and the whole reason this
             // class has a second call.
             //
-            // No test catches that inversion. It was tried: every test here still
-            // passes with this set to controlMask, because SetProcessInformation
-            // succeeds either way and the effect is a per-process guarantee that
-            // nothing in-process can read back. NtQueryTimerResolution reports the
-            // system-wide resolution, so it reads "fine" whenever any other process
-            // on the machine is holding a fine timer - which is the same confounder
-            // that hid this bug for weeks. A differential timing test fails the same
-            // way for the same reason.
-            //
-            // So this line is verified against the sample in the SetProcessInformation
-            // documentation and by the p10 wake overshoot on a long-lived daemon, and
-            // by nothing else. Change it only with one of those in hand.
+            // PowerThrottlingTests.OptingOutMakesWindowsHonourTheResolutionAgain is
+            // what catches the inversion. For a while nothing did, on the belief that
+            // it could not be observed from inside the process: NtQueryTimerResolution
+            // reports the machine's resolution, not this process's, so it reads "fine"
+            // whenever anything else on the machine holds a fine timer - which is how
+            // this bug hid for weeks. That is true of the query and not of the waits.
+            // Measured on Windows 11 26200 with the system-wide figure at 1.00 ms
+            // throughout, a process whose requests are being ignored still waits in
+            // 15.6 ms steps, and flipping the mechanism shows on the very next wait.
+            // So the test turns it on by hand, watches the waits go coarse, calls
+            // OptOut, and watches them come back. With this line inverted they do not.
             StateMask = 0,
         };
 

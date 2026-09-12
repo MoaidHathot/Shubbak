@@ -1,4 +1,6 @@
 using Shubbak.Native;
+using Windows.Win32;
+using Windows.Win32.System.Threading;
 
 namespace Shubbak.Native.Tests;
 
@@ -19,21 +21,24 @@ namespace Shubbak.Native.Tests;
 /// while reporting success.
 /// </para>
 /// <para>
-/// Worth being precise about what the timer-resolution tests below do not cover,
-/// because it is more than it looks. They assert that Windows accepted the request.
-/// They do not assert that Windows honoured it - and they do not catch the state mask
-/// being inverted, which would ask Windows to discard our timer requests instead of
-/// honouring them. That was verified rather than assumed: every test in this file
-/// still passes with the mask inverted.
+/// Worth being precise about what the first six tests do not cover, because it is
+/// more than it looks. They assert that Windows accepted the request. They do not
+/// assert that Windows honoured it - and they do not catch the state mask being
+/// inverted, which would ask Windows to discard our timer requests instead of
+/// honouring them. That was verified rather than assumed: every one of them still
+/// passes with the mask inverted, and <c>HonorsTimerResolution</c> reads True.
 /// </para>
 /// <para>
-/// That gap is not laziness, it is the shape of the API. The effect is a per-process
-/// guarantee with no in-process read-back; NtQueryTimerResolution reports the
-/// system-wide figure and so reads healthy whenever any other process is holding a
-/// fine timer, which is precisely the confounder that hid the original bug. A
-/// differential timing test fails the same way. The invariant is documented at the
-/// assignment in PowerThrottling instead, and the real detector is the p10 wake
-/// overshoot on a daemon that has been up for hours.
+/// The last test is the one that does catch it, and for a while it was believed
+/// impossible: the effect is a per-process guarantee with no in-process read-back, and
+/// <c>NtQueryTimerResolution</c> reports the system-wide figure, so it reads healthy
+/// whenever any other process is holding a fine timer - precisely the confounder that
+/// hid the original bug. True of the query; not, it turns out, of the waits. Measured
+/// on Windows 11 26200 with the system-wide figure at 1.00 ms throughout, a process
+/// whose requests are being ignored still waits in 15.6 ms steps, and flipping the
+/// mechanism shows on the very next wait. So the mechanism is switched on by hand,
+/// the waits are watched going coarse, <see cref="PowerThrottling.OptOut"/> is
+/// called, and the waits are watched coming back.
 /// </para>
 /// </remarks>
 public sealed class PowerThrottlingTests
@@ -119,13 +124,109 @@ public sealed class PowerThrottlingTests
     {
         // Same shape, and the same caveat: this says Windows accepted the request on
         // this build, not that a fine resolution is in force. It is here to catch the
-        // constant being dropped from NativeMethods.txt or the mask convention being
-        // inverted - both of which would leave every other signal looking healthy
-        // while animation quietly ran at half rate.
+        // constant being dropped from NativeMethods.txt, which would leave every other
+        // signal looking healthy while animation quietly ran at half rate. It does not
+        // catch the mask convention being inverted - SetProcessInformation accepts
+        // that just as happily - which is what the next test is for.
         PowerThrottling.OptOut();
 
         Assert.True(
             PowerThrottling.HonorsTimerResolution,
             $"timer resolution request was refused: {PowerThrottling.TimerResolutionFailure}");
+    }
+
+    [Fact]
+    public void OptingOutMakesWindowsHonourTheResolutionAgain()
+    {
+        using var timer = new TimerResolution(1);
+
+        timer.Acquire();
+
+        Assert.True(timer.IsHeld, "timeBeginPeriod(1) was refused, so there is nothing to be ignored");
+
+        try
+        {
+            // Windows 10 has no such mechanism and rejects the control bit. Nothing to
+            // observe there, and nothing at stake either: the heuristic this guards
+            // against does not exist on that build.
+            if (!SetIgnoreTimerResolution(on: true)) return;
+
+            int ignored = PassesIn300Ms();
+
+            // A build that accepts the bit but does not enforce it leaves no way to
+            // tell the two settings apart, so the test says nothing rather than
+            // something it cannot know. The system tick gives 19 or 20 in 300 ms;
+            // anything close to that is the mechanism biting.
+            if (ignored > 24) return;
+
+            PowerThrottling.OptOut();
+
+            int honoured = PassesIn300Ms();
+
+            Assert.True(
+                honoured > 30,
+                $"Windows ignored the fine timer ({ignored} passes in 300 ms at 7 ms) and OptOut did not " +
+                $"make it honour it again ({honoured} passes); HonorsTimerResolution={PowerThrottling.HonorsTimerResolution}" +
+                $"{(PowerThrottling.TimerResolutionFailure is { } why ? $" ({why})" : "")}");
+        }
+        finally
+        {
+            // Process-wide and sticky, so whatever happened above, the rest of the
+            // suite runs in the state the daemon runs in. Idempotent.
+            PowerThrottling.OptOut();
+        }
+    }
+
+    /// <summary>
+    /// Sets the mechanism the library only ever clears.
+    /// </summary>
+    /// <returns>False when this Windows does not know the control bit.</returns>
+    private static unsafe bool SetIgnoreTimerResolution(bool on)
+    {
+        var state = new PROCESS_POWER_THROTTLING_STATE
+        {
+            Version = PInvoke.PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask = PInvoke.PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+            StateMask = on ? PInvoke.PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION : 0,
+        };
+
+        return PInvoke.SetProcessInformation(
+            PInvoke.GetCurrentProcess(),
+            PROCESS_INFORMATION_CLASS.ProcessPowerThrottling,
+            &state,
+            (uint)sizeof(PROCESS_POWER_THROTTLING_STATE));
+    }
+
+    /// <summary>
+    /// Runs the pump at a 7 ms timeout for 300 ms and counts its passes.
+    /// </summary>
+    /// <remarks>
+    /// Through <see cref="MessageLoop"/> rather than a bare kernel wait, so the test
+    /// follows whatever the daemon actually waits on.
+    /// </remarks>
+    private static int PassesIn300Ms()
+    {
+        using var loop = new MessageLoop();
+
+        int passes = 0;
+
+        loop.NextTimeout = () => TimeSpan.FromMilliseconds(7);
+        loop.Tick += () => Interlocked.Increment(ref passes);
+
+        var thread = new Thread(() => loop.Run(TimeSpan.FromMilliseconds(8))) { IsBackground = true };
+
+        thread.Start();
+        SpinWait.SpinUntil(() => loop.IsRunning, TimeSpan.FromSeconds(2));
+
+        try
+        {
+            Thread.Sleep(300);
+            return passes;
+        }
+        finally
+        {
+            loop.Stop();
+            thread.Join(TimeSpan.FromSeconds(2));
+        }
     }
 }
