@@ -626,7 +626,7 @@ public sealed class PaletteWindow : IDisposable
             new PaletteEntry(
                 action.Name, action.Description, [], action.Command,
                 Explains: action.Explains, Expands: action.Expands,
-                Destructive: action.Destructive),
+                Destructive: action.Destructive, Copies: action.Copies),
             selected.Entry.Primary);
     }
 
@@ -643,6 +643,12 @@ public sealed class PaletteWindow : IDisposable
         if (action.Explains is { } handle)
         {
             ExplainRequested?.Invoke(handle, Breadcrumb(leaf));
+            return true;
+        }
+
+        if (action.Copies is { Length: > 0 } text)
+        {
+            CopyAndClose(text);
             return true;
         }
 
@@ -823,6 +829,36 @@ public sealed class PaletteWindow : IDisposable
         _ = Clipboard.SetText(text, Handle);
     }
 
+    /// <summary>
+    /// Copies what a row was chosen for, and goes away.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Closing is the confirmation. Every other action that does what it was asked
+    /// closes the palette, and a palette that stayed open after "Copy the rule" would
+    /// leave the user wondering whether it had - the clipboard being the one place a
+    /// program can put something with nothing on screen to show for it.
+    /// </para>
+    /// <para>
+    /// Failing is different. The clipboard can be held by another program for longer
+    /// than the retries wait, and a palette that vanished then would have reported
+    /// success by vanishing. So it stays, and says.
+    /// </para>
+    /// </remarks>
+    private void CopyAndClose(string text)
+    {
+        if (Clipboard.SetText(text, Handle))
+        {
+            Close();
+            return;
+        }
+
+        Push(
+            Breadcrumb("copy"),
+            PaletteEntries.ForReportFailure(
+                "Nothing was copied - the clipboard would not take it. Another program may be holding it; try again."));
+    }
+
     /// <summary>Puts text on the clipboard, on behalf of the host.</summary>
     /// <remarks>
     /// The window is the owner because a clipboard needs one, and the host does not
@@ -972,6 +1008,10 @@ public sealed class PaletteWindow : IDisposable
             case PaletteChoice.Expand:
                 Expand(entry.Expands!, Breadcrumb(
                     entry.Secondary is { Length: > 0 } label ? label : entry.Primary));
+                return;
+
+            case PaletteChoice.Copy:
+                CopyAndClose(entry.Copies!);
                 return;
 
             case PaletteChoice.OpenChildren:
@@ -1244,7 +1284,8 @@ public sealed class PaletteWindow : IDisposable
                     // A pure dictionary read. Nothing on the paint path is allowed to
                     // ask another process anything - see WindowIcons.
                     _config.ShowIcons ? WindowIcons.Get : null,
-                    _config.ShowIcons ? _renderer : null));
+                    _config.ShowIcons ? _renderer : null,
+                    OverlayIsExpanded: _overlays.Count > 0 && _overlays.Peek().Whole is { Length: > 0 }));
         }
         finally
         {

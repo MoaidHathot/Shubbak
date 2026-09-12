@@ -18,6 +18,9 @@ internal enum PaletteChoice
     /// <summary>Open the row's whole text, broken across rows.</summary>
     Expand,
 
+    /// <summary>Put the row's text on the clipboard.</summary>
+    Copy,
+
     /// <summary>Open the list the row carries.</summary>
     OpenChildren,
 
@@ -30,6 +33,12 @@ internal enum PaletteChoice
     /// <summary>Send the row's command.</summary>
     Run,
 }
+
+/// <summary>One key cap in the hint bar, and the word beside it.</summary>
+/// <param name="Key">What is printed on the cap.</param>
+/// <param name="Label">What pressing it does, or empty for a cap that explains itself.</param>
+/// <param name="Active">Whether it is drawn as the key that matters most here.</param>
+internal readonly record struct Hint(string Key, string Label, bool Active = false);
 
 /// <summary>
 /// What a keystroke means, decided without reference to a window.
@@ -142,6 +151,12 @@ internal static class PaletteInput
             return PaletteChoice.Inspect;
         }
 
+        // Some rows exist to be copied. Enter on one puts the text it carries on the
+        // clipboard, rather than opening it to be read: the row is the "Copy the rule"
+        // beneath a rule that has already been read, and a second copy of the same
+        // twelve lines would be the one thing left to do that reads as nothing done.
+        if (entry.Copies is { Length: > 0 }) return PaletteChoice.Copy;
+
         // Some rows are longer than a row. Opening one shows the whole thing rather
         // than the part that fit, which is the only way to read a path, the sentence
         // about elevation, or a composed rule without leaving the palette for a shell.
@@ -226,10 +241,97 @@ internal static class PaletteInput
     {
         ArgumentNullException.ThrowIfNull(entry);
 
+        // A row that exists to be copied is copied, whichever key asks. Ctrl+C on
+        // "Copy the rule" handing over the words "Copy the rule" would be a joke at the
+        // expense of the person who pressed it.
+        if (entry.Copies is { Length: > 0 } copies) return copies;
+
         if (entry.Expands is { Length: > 0 } expands) return expands;
 
         return entry.Secondary is { Length: > 0 } secondary
             ? $"{entry.Primary}  \u2014  {secondary}"
             : entry.Primary;
+    }
+
+    /// <summary>
+    /// What Enter would do to the selected row, in one word, or nothing.
+    /// </summary>
+    /// <remarks>
+    /// Read from the row rather than from the kind of list it is in, because the two
+    /// disagree: a report and an action list are both overlays, and Enter is inert in
+    /// one and consequential in the other. Returning empty for a row that does nothing
+    /// leaves the hint out altogether, which is the honest answer - a key cap that
+    /// promises an outcome it cannot deliver is worse than no key cap.
+    /// <para>
+    /// Mirrors <see cref="Choose"/> rather than calling it: the hint bar has no mode
+    /// and no frame to hand over, and wants a word rather than a verdict. Held together
+    /// by tests rather than by sharing code.
+    /// </para>
+    /// </remarks>
+    internal static string VerbFor(PaletteEntry? entry) => entry switch
+    {
+        null => string.Empty,
+        { SwitchesTo: not null } => "go",
+        { Explains: not null } => "inspect",
+        { Copies.Length: > 0 } => "copy",
+        { Expands.Length: > 0 } => "read it",
+        { HasActions: true, Command.Length: 0 } => "open",
+        { Destructive: true, Command.Length: > 0 } => "ask first",
+        { Command.Length: > 0 } => "do it",
+        _ => string.Empty,
+    };
+
+    /// <summary>
+    /// The key caps worth showing under a frame, in the order they are drawn.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every cap here names a key that does something to the row under the selection,
+    /// or to the frame it is in - which is why the list is worked out from the row and
+    /// the frame rather than fixed. A cap is left out when its key would do nothing,
+    /// because a bar that promises "copy" over a row with nothing to copy teaches the
+    /// reader to ignore the bar.
+    /// </para>
+    /// <para>
+    /// The expanded frame is the case this was written for. Its rows are the lines of
+    /// one value, and a line carries nothing - no text to expand, no command, no
+    /// actions - so a bar that asked the row what could be copied was told "nothing",
+    /// and drew "Esc back" under a composed rule that Ctrl+C and Ctrl+Shift+C would
+    /// both have copied. The rule was copyable and the screen said it was not; the
+    /// only route to finding out was the documentation.
+    /// </para>
+    /// </remarks>
+    /// <param name="selected">The row under the selection, or null when there is none.</param>
+    /// <param name="expanded">Whether the frame is one value broken across its rows.</param>
+    internal static IReadOnlyList<Hint> OverlayHints(PaletteEntry? selected, bool expanded)
+    {
+        List<Hint> hints = [];
+
+        string verb = VerbFor(selected);
+
+        if (verb.Length > 0) hints.Add(new Hint("\u21B5", verb, Active: true));
+
+        // Ctrl+Enter earns a cap when it reaches something Enter does not. A row whose
+        // Enter already opens its list has nothing further behind Ctrl+Enter, and two
+        // caps promising the same list would read as two different lists.
+        if (selected is { HasActions: true } && !string.Equals(verb, "open", StringComparison.Ordinal))
+            hints.Add(new Hint("\u2303\u21B5", "actions"));
+
+        // Ctrl+C copies the row's whole text when it has one hidden, and the line as
+        // drawn when the line is all there is. Said differently in the two cases,
+        // because "copy" over one line of twelve would be read as copying the twelve.
+        if (selected?.Expands is { Length: > 0 })
+            hints.Add(new Hint("\u2303C", "copy"));
+        else if (expanded)
+            hints.Add(new Hint("\u2303C", "copy line"));
+
+        // The whole value as it was written, not as it was broken to fit this width.
+        // This is the key somebody in a rule frame is looking for, and the one that
+        // was written down nowhere on the screen.
+        if (expanded) hints.Add(new Hint("\u2303\u21E7C", "copy all"));
+
+        hints.Add(new Hint("Esc", "back"));
+
+        return hints;
     }
 }

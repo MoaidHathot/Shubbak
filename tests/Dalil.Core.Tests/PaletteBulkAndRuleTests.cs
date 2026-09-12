@@ -225,4 +225,75 @@ public sealed class PaletteBulkAndRuleTests
         Assert.Equal(string.Empty, write.Command);
         Assert.Contains("TestClass", write.Expands!, StringComparison.Ordinal);
     }
+
+    // ---- getting the rule out -----------------------------------------------------------
+
+    [Fact]
+    public void AComposedRuleCanBeCopiedAndItsFileOpened()
+    {
+        // The two steps between reading a rule and having it in the file. Both existed
+        // - a chord documented in the manual, and a path on the clipboard - and neither
+        // was written anywhere on the screen, so a feature that wrote the rule for you
+        // read as a feature that showed you something you could not have.
+        IReadOnlyList<PaletteAction> actions = PaletteActions.ForRule("rules { }");
+
+        Assert.Equal(2, actions.Count);
+
+        PaletteAction copy = Find(actions, "Copy");
+        PaletteAction open = Find(actions, "Open");
+
+        Assert.Equal("rules { }", copy.Copies);
+        Assert.Equal(string.Empty, copy.Command);
+
+        Assert.Equal(PaletteEntries.BuiltinOpenConfig, open.Command);
+        Assert.True(PaletteEntries.IsBuiltin(open.Command));
+    }
+
+    [Fact]
+    public void TheRuleActionCarriesThoseStepsBehindCtrlEnter()
+    {
+        PaletteAction write = Find(PaletteActions.For(Window(), "1"), "Write a rule");
+
+        // The same text twice: what Enter opens to read is what "Copy the rule" puts on
+        // the clipboard. A copy that differed from what was read would be the silent
+        // transcription error this whole feature exists to remove.
+        Assert.NotNull(write.Children);
+        Assert.Equal(write.Expands, Find(write.Children!, "Copy").Copies);
+    }
+
+    [Fact]
+    public void TheRuleRowDoesNotAdvertiseItsListAsWhatEnterDoes()
+    {
+        // A row that reads and also carries a list keeps the list behind Ctrl+Enter, so
+        // a "2 ›" badge beside "↵ read it" would promise Enter a list it will not show.
+        PaletteEntry row = PaletteActions.AsEntries(PaletteActions.For(Window(), "1"))
+            .Single(e => e.Primary.StartsWith("Write a rule", StringComparison.Ordinal));
+
+        Assert.DoesNotContain(row.Badges, b => b.EndsWith('\u203A'));
+        Assert.True(row.HasActions);
+        Assert.False(string.IsNullOrEmpty(row.Expands));
+    }
+
+    [Fact]
+    public void ARowThatOnlyOpensAListStillSaysSo()
+    {
+        // The badge is suppressed for the rule row and nothing else. "Move it to..."
+        // has no text to read, so Enter opens its list and the badge is telling the
+        // truth.
+        PaletteEntry move = PaletteActions.AsEntries(PaletteActions.For(Window(workspace: "1"), "1", ["1", "2", "3"]))
+            .Single(e => e.Primary.StartsWith("Move it to", StringComparison.Ordinal));
+
+        Assert.Contains(move.Badges, b => b.EndsWith('\u203A'));
+    }
+
+    [Fact]
+    public void CopyingSurvivesBecomingARow()
+    {
+        // The text has to reach the row, which is what the window reads when Enter is
+        // pressed. Dropped in the conversion, the row would look right and copy nothing.
+        PaletteEntry copy = PaletteActions.AsEntries(PaletteActions.ForRule("rules { }"))
+            .Single(e => e.Primary.StartsWith("Copy", StringComparison.Ordinal));
+
+        Assert.Equal("rules { }", copy.Copies);
+    }
 }

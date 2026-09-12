@@ -875,7 +875,8 @@ bar {
 // rules matched - without leaving the window you are asking about. "Tags..." picks
 // which workspaces a window follows you to, "Move it to..." sends it somewhere and
 // leaves it there, and "Write a rule for it" composes the KDL that would match it,
-// ready to read and paste. Escape goes back one level rather than dismissing.
+// ready to read; Ctrl+Enter on that row copies it or opens this file to paste it into.
+// Escape goes back one level rather than dismissing.
 // ---------------------------------------------------------------------------
 
 dalil {

@@ -32,6 +32,15 @@ namespace Dalil.Core;
 /// route a report row too long for its line already takes. It is how the palette shows
 /// something it has composed rather than something it has been sent.
 /// </param>
+/// <param name="Copies">
+/// When set, choosing this puts the text on the clipboard rather than running anything.
+/// <para>
+/// The step after <paramref name="Expands"/>. A composed rule could be read in the
+/// palette and copied from it - with a chord written down only in the documentation -
+/// and the row that composed it offered nothing else. This is the row that does the
+/// copying by name, so the way to get the rule out is a thing you can see.
+/// </para>
+/// </param>
 public sealed record PaletteAction(
     string Name,
     string Description,
@@ -40,7 +49,8 @@ public sealed record PaletteAction(
     string? Chord = null,
     IReadOnlyList<PaletteAction>? Children = null,
     long? Explains = null,
-    string? Expands = null);
+    string? Expands = null,
+    string? Copies = null);
 
 /// <summary>
 /// What the palette can do to a window, beyond going to it.
@@ -248,11 +258,18 @@ public static class PaletteActions
         // manager has always known the class and the process; the user has always had
         // to transcribe them into KDL by hand, which is a transcription job with one
         // very easy way to get it silently wrong.
+        //
+        // Enter reads it; Ctrl+Enter is where copying it and opening the file live.
+        // Reading stays on Enter because it is the step that has to come first - a rule
+        // pasted unread is a rule with an empty `do` block pasted unread.
+        string rule = RuleComposer.Rule(null, window.ClassName, window.ProcessName, window.Title);
+
         actions.Add(new PaletteAction(
             "Write a rule for it",
             "Compose the KDL that would match this window, ready to paste",
             string.Empty,
-            Expands: RuleComposer.Rule(null, window.ClassName, window.ProcessName, window.Title)));
+            Children: ForRule(rule),
+            Expands: rule));
 
         actions.Add(new PaletteAction(
             "Close it",
@@ -370,6 +387,46 @@ public static class PaletteActions
         return actions;
     }
 
+    /// <summary>
+    /// What can be done with a rule once it has been composed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The two steps between reading the rule and having it in the file: getting it
+    /// onto the clipboard, and getting the file open to paste it into. Both were
+    /// possible before - Ctrl+Shift+C in the rule frame, and the path from "config
+    /// path" into an editor by hand - and neither was written anywhere on the screen,
+    /// which is how a feature that composed the rule for you came to be read as a
+    /// feature that showed you something you could not have.
+    /// </para>
+    /// <para>
+    /// Still nothing is applied. Copying is copying, and opening the file is opening
+    /// the file; what goes into it, and which verb goes into the <c>do</c> block, is
+    /// the user's business. See <see cref="RuleComposer"/>.
+    /// </para>
+    /// </remarks>
+    /// <param name="rule">The composed rule, as <see cref="RuleComposer"/> wrote it.</param>
+    public static IReadOnlyList<PaletteAction> ForRule(string rule)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+
+        return
+        [
+            new PaletteAction(
+                "Copy the rule",
+                "Put the whole rule on the clipboard, ready to paste into shubbak.kdl",
+                string.Empty,
+                Copies: rule),
+
+            // The palette's own command rather than the manager's: the file is the
+            // palette's to find, and opening it is the shell's to do.
+            new PaletteAction(
+                "Open the config",
+                "Open shubbak.kdl with whatever edits .kdl files, to paste the rule into",
+                PaletteEntries.BuiltinOpenConfig),
+        ];
+    }
+
     /// <summary>Aim and act, once per window, as one message.</summary>
     /// <remarks>
     /// The window manager stops a sequence at the first failure, which is the right
@@ -478,7 +535,12 @@ public static class PaletteActions
 
             // An action that opens another list says so, because Enter on it does
             // something visibly different from Enter on every row beside it.
-            if (action.Children is { Count: > 0 }) badges.Add($"{action.Children.Count} \u203A");
+            //
+            // Unless Enter opens its text instead. A row that reads and also carries a
+            // list keeps the list behind Ctrl+Enter, and a badge saying "2 ›" beside
+            // "↵ read it" would promise Enter a list it is not going to show.
+            if (action.Children is { Count: > 0 } && action.Expands is not { Length: > 0 })
+                badges.Add($"{action.Children.Count} \u203A");
 
             entries.Add(new PaletteEntry(
                 action.Name,
@@ -503,7 +565,8 @@ public static class PaletteActions
                 // Drawn in the warning colour, and confirmed before it happens. The
                 // flag was set here and read nowhere, which is how "Close it" came to
                 // look and behave exactly like "Float it".
-                Destructive: action.Destructive));
+                Destructive: action.Destructive,
+                Copies: action.Copies));
         }
 
         return entries;

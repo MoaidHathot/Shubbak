@@ -52,10 +52,14 @@ public sealed class PaletteActionsTests
         // Composing a rule is the other kind of row that sends nothing: it produces
         // text to read and paste rather than anything for the window manager to do, so
         // it carries no command either and must not be mistaken for one that lost it.
+        // Copying that text is the same kind of row one level down.
         Assert.All(
-            PaletteActions.For(Window(), "2").Where(a => a.Command.Length == 0),
+            Flatten(PaletteActions.For(Window(), "2")).Where(a => a.Command.Length == 0),
             a => Assert.True(
-                a.Explains is not null || a.Expands is { Length: > 0 } || a.Children is { Count: > 0 },
+                a.Explains is not null ||
+                a.Expands is { Length: > 0 } ||
+                a.Copies is { Length: > 0 } ||
+                a.Children is { Count: > 0 },
                 $"'{a.Name}' sends nothing and does nothing else either."));
     }
 
@@ -433,7 +437,9 @@ public sealed class PaletteActionsTests
         {
             Assert.DoesNotContain("focus-window", action.Command, StringComparison.Ordinal);
 
-            if (action.Command.Length > 0)
+            // The palette's own commands aim at nothing: opening the config file is
+            // not done to the window, so it has no business starting with the slot.
+            if (action.Command.Length > 0 && !PaletteEntries.IsBuiltin(action.Command))
                 Assert.StartsWith("scratchpad notes", action.Command, StringComparison.Ordinal);
         }
     }

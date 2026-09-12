@@ -17,6 +17,20 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **The composed rule can leave the palette.** "Write a rule for it" composed the KDL
+  and showed it, one line per row, and that was where it stopped: the rows could not
+  be edited, Ctrl+C took one line, and the chord that copied the whole rule -
+  Ctrl+Shift+C - was written in the manual and nowhere on the screen. So the feature
+  that wrote the rule for you read as a feature that showed you something you could
+  not have. **Ctrl+Enter** on the row now offers **Copy the rule**, which puts the
+  whole rule on the clipboard and closes, and **Open the config**, which opens
+  `shubbak.kdl` with whatever Windows opens `.kdl` files with - the shell association
+  decides, not a `dalil` setting, because that answer already exists once. The same two
+  actions sit on the rule row at the top of every inspect report. Still nothing is
+  applied and nothing edits the file; the `do` block is still yours to fill in.
+- **`open config`** in the command list, beside `config path`. The path is still what a
+  terminal, a bug report or an editor that is already open wants; this is for when the
+  next thing to happen is typing into the file.
 - **`exit-all`.** Shuts down all of Shubbak - the window manager, the bar, the
   palette and the watcher - from a keybinding, the palette or the CLI. `wm-exit` is
   unchanged and still stops the window manager alone: the palette and the watcher
@@ -33,6 +47,13 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **The hint bar under an expanded rule said only `Esc back`.** Inside a frame the bar
+  asked the selected row whether it had anything to copy, and the rows of an expanded
+  frame - the lines of one value - carry nothing, so the one frame that exists to be
+  copied from was the one frame that showed no way to copy. It now reads `⌃C copy line`
+  `⌃⇧C copy all` `Esc back` there, and `⌃↵ actions` on any frame row that carries a
+  list Enter does not open. The decision moved out of the renderer into `PaletteInput`,
+  where it is tested against what Enter actually does.
 - **Taj left a `kind="command"` source's program running.** Disposing the source
   cancelled its reader and dropped the handle, and the program - usually a
   PowerShell script - carried on. That happened at exit and on every configuration

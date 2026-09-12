@@ -16,10 +16,17 @@ namespace Dalil;
 /// The renderer's icon capability, when it has one. Null degrades to the layout that
 /// existed before icons did, rather than to a crash or a gap.
 /// </param>
+/// <param name="OverlayIsExpanded">
+/// Whether the list showing is one value broken across rows rather than a list of
+/// things. The hint bar reads it because the rows themselves cannot say: a wrapped
+/// line carries nothing, so a bar that asked the selected row what could be copied was
+/// told "nothing" in exactly the frame that exists to be copied from.
+/// </param>
 internal readonly record struct PaletteChrome(
     string? OverlayTitle = null,
     Func<long, nint>? Icons = null,
-    IIconRenderer? IconRenderer = null);
+    IIconRenderer? IconRenderer = null,
+    bool OverlayIsExpanded = false);
 
 /// <summary>
 /// Draws the palette.
@@ -125,7 +132,9 @@ internal static class PaletteRenderer
             }
         }
 
-        DrawHintBar(renderer, model, config, theme, layout, canvas, small, first, count, chrome.OverlayTitle);
+        DrawHintBar(
+            renderer, model, config, theme, layout, canvas, small, first, count,
+            chrome.OverlayTitle, chrome.OverlayIsExpanded);
     }
 
     private static void DrawSearchBox(
@@ -595,7 +604,8 @@ internal static class PaletteRenderer
     /// </remarks>
     private static void DrawHintBar(
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteTheme theme,
-        PaletteLayout layout, Rect canvas, FontStyle small, int first, int count, string? actionsFor)
+        PaletteLayout layout, Rect canvas, FontStyle small, int first, int count,
+        string? actionsFor, bool expanded)
     {
         int y = canvas.Bottom - layout.HintBar;
 
@@ -647,19 +657,18 @@ internal static class PaletteRenderer
         // list of verbs with no visible way back is the one place somebody will press
         // it hoping to undo and expect the whole palette to vanish.
         //
-        // What Enter does is read off the selected row rather than assumed. Every
-        // overlay used to advertise "do it", including a report whose rows all do
-        // nothing at all - so the one list where Enter was inert was also the one
-        // insisting it was not.
+        // Which caps to draw is decided in PaletteInput, beside the keys they stand
+        // for, and read off the selected row rather than assumed from the kind of list
+        // it is in. Every overlay used to advertise "do it", including a report whose
+        // rows all do nothing at all - so the one list where Enter was inert was also
+        // the one insisting it was not. And the copy hint used to ask the row whether it
+        // had anything to copy, which a wrapped line never does; so the frame that
+        // exists to be copied from was the one frame that showed no way to copy.
         if (actionsFor is { Length: > 0 })
         {
-            if (VerbFor(model.Selected?.Entry) is { Length: > 0 } verb)
-                x = DrawHint(renderer, config, theme, layout, small, "\u21B5", verb, x, textY, limit, active: true);
+            foreach (Hint hint in PaletteInput.OverlayHints(model.Selected?.Entry, expanded))
+                x = DrawHint(renderer, config, theme, layout, small, hint.Key, hint.Label, x, textY, limit, hint.Active);
 
-            if (model.Selected?.Entry.Expands is { Length: > 0 })
-                x = DrawHint(renderer, config, theme, layout, small, "\u2303C", "copy", x, textY, limit, active: false);
-
-            _ = DrawHint(renderer, config, theme, layout, small, "Esc", "back", x, textY, limit, active: false);
             return;
         }
 
@@ -773,28 +782,6 @@ internal static class PaletteRenderer
             ? cap + layout[16]
             : cap + layout[5] + Measure(renderer, label, small).Width + layout[16];
     }
-
-    /// <summary>
-    /// What Enter would do to the selected row, in one word, or nothing.
-    /// </summary>
-    /// <remarks>
-    /// Read from the row rather than from the kind of list it is in, because the two
-    /// disagree: a report and an action list are both overlays, and Enter is inert in
-    /// one and consequential in the other. Returning empty for a row that does nothing
-    /// leaves the hint out altogether, which is the honest answer - a key cap that
-    /// promises an outcome it cannot deliver is worse than no key cap.
-    /// </remarks>
-    private static string VerbFor(PaletteEntry? entry) => entry switch
-    {
-        null => string.Empty,
-        { SwitchesTo: not null } => "go",
-        { Explains: not null } => "inspect",
-        { Expands.Length: > 0 } => "read it",
-        { HasActions: true, Command.Length: 0 } => "open",
-        { Destructive: true, Command.Length: > 0 } => "ask first",
-        { Command.Length: > 0 } => "do it",
-        _ => string.Empty,
-    };
 
     /// <summary>The last part of a breadcrumb, which is the part that is about to act.</summary>
     /// <remarks>

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
+using System.Diagnostics;
 using Dalil.Core;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
@@ -247,6 +249,12 @@ internal static class Program
             return;
         }
 
+        if (string.Equals(command, PaletteEntries.BuiltinOpenConfig, StringComparison.Ordinal))
+        {
+            OpenConfig();
+            return;
+        }
+
         if (string.Equals(command, PaletteEntries.BuiltinReload, StringComparison.Ordinal))
         {
             ReloadConfig();
@@ -324,6 +332,62 @@ internal static class Program
             parts.Add(counts.Warnings == 1 ? "1 warning" : $"{counts.Warnings} warnings");
 
         return string.Join(" and ", parts);
+    }
+
+    /// <summary>
+    /// Opens the configuration file in whatever Windows opens it with.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Handed to the shell, which is the only program entitled to decide what edits a
+    /// <c>.kdl</c> file. The palette could have taken an <c>editor</c> setting and did
+    /// not: that answer already exists once, in the file association, and a second
+    /// copy of it in <c>shubbak.kdl</c> would be a second thing to keep right. A
+    /// machine with no association gets Windows' own "How do you want to open this
+    /// file?" prompt, which asks the question in the place the answer is kept.
+    /// </para>
+    /// <para>
+    /// The palette has already closed by the time this runs - every command closes it
+    /// first, because the thing asked for usually raises a window and a topmost palette
+    /// would cover it. That is the right outcome here too; the editor is what was asked
+    /// for. Only a failure reopens it, to say so where the request was made rather than
+    /// in a log nobody is looking at.
+    /// </para>
+    /// <para>
+    /// The exceptions are the ones the shell raises for a file that is not there, a
+    /// verb nobody has registered and an association that points at a program that has
+    /// been uninstalled. Anything else is a bug and stays one.
+    /// </para>
+    /// </remarks>
+    private static void OpenConfig()
+    {
+        string? path = ConfigPathResolver.Resolve(s_configPath).Path;
+
+        if (path is not { Length: > 0 })
+        {
+            Complain("No configuration file was found to open. `shubbak config init` writes one.");
+            return;
+        }
+
+        try
+        {
+            using var editor = Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException)
+        {
+            Log.Error(LogCategory.Config, $"could not open the configuration file {path}", ex);
+            Complain($"Windows could not open {path}: {ex.Message}");
+        }
+
+        // Where the request was made, not where nobody is looking. The palette closed
+        // when the row was chosen, so it has to be brought back to carry the answer.
+        static void Complain(string reason)
+        {
+            if (s_palette is not { } showing) return;
+
+            showing.Open(PaletteMode.Commands);
+            showing.ShowReportFailure("open config", reason);
+        }
     }
 
     /// <summary>

@@ -23,9 +23,10 @@ public class PaletteInputTests
         IReadOnlyList<PaletteAction>? actions = null,
         long? explains = null,
         string? expands = null,
-        bool prompts = false) =>
+        bool prompts = false,
+        string? copies = null) =>
         new(primary, secondary, [], command, 0, switchesTo, actions, explains, expands,
-            Prompts: prompts);
+            Prompts: prompts, Copies: copies);
 
     // ---- chords ------------------------------------------------------------------
 
@@ -346,6 +347,34 @@ public class PaletteInputTests
     }
 
     [Fact]
+    public void ARowThatExistsToBeCopiedCopies()
+    {
+        // "Copy the rule" has to copy on Enter. Opening the same twelve lines to be
+        // read a second time would be the one thing left to do that reads as nothing
+        // having been done.
+        Assert.Equal(
+            PaletteChoice.Copy,
+            PaletteInput.Choose(
+                Entry(command: "", copies: "rules { }"),
+                PaletteMode.Windows,
+                insideOverlay: true));
+    }
+
+    [Fact]
+    public void CopyingBeatsExpandingWhenARowCouldDoBoth()
+    {
+        // Belt and braces: no row carries both today, but if one did, the one that
+        // acts has to win over the one that shows - Enter on it was pressed to get the
+        // text out, not to look at it again.
+        Assert.Equal(
+            PaletteChoice.Copy,
+            PaletteInput.Choose(
+                Entry(command: "", copies: "rules { }", expands: "rules { }"),
+                PaletteMode.Windows,
+                insideOverlay: true));
+    }
+
+    [Fact]
     public void ARowCarryingAListOpensItButOnlyInsideAFrame()
     {
         PaletteEntry entry = Entry(
@@ -598,5 +627,120 @@ public class PaletteInputTests
     public void CopyingAnEmptyListCopiesNothing()
     {
         Assert.Null(PaletteInput.CopyText(null, [], null, everything: true));
+    }
+
+    [Fact]
+    public void CtrlCOnARowThatExistsToBeCopiedCopiesWhatItCarries()
+    {
+        // Ctrl+C on "Copy the rule" handing over the words "Copy the rule" would be a
+        // joke at the expense of the person who pressed it.
+        PaletteEntry row = Entry("Copy the rule", secondary: "Put it on the clipboard", command: "", copies: "rules { }");
+
+        Assert.Equal("rules { }", PaletteInput.DescribeForClipboard(row));
+    }
+
+    // ---- what the hint bar says under a frame -------------------------------------------
+
+    private static string Bar(PaletteEntry? selected, bool expanded) =>
+        string.Join("  ", PaletteInput.OverlayHints(selected, expanded).Select(h => $"{h.Key} {h.Label}"));
+
+    [Fact]
+    public void AnExpandedFrameSaysHowToCopyFromIt()
+    {
+        // The bug this exists for. The rows of an expanded frame are the lines of one
+        // value, and a line carries nothing - so a bar that asked the row what could
+        // be copied was told "nothing", and drew "Esc back" under a composed rule that
+        // Ctrl+C and Ctrl+Shift+C would both have copied. The screen said the rule
+        // could not be had, and the only way to learn otherwise was the manual.
+        string bar = Bar(Entry("    class \"Chrome_WidgetWin_1\"", command: ""), expanded: true);
+
+        Assert.Contains("\u2303C copy line", bar, StringComparison.Ordinal);
+        Assert.Contains("\u2303\u21E7C copy all", bar, StringComparison.Ordinal);
+        Assert.EndsWith("Esc back", bar, StringComparison.Ordinal);
+
+        // And no Enter: a wrapped line does nothing when chosen, and a cap promising
+        // otherwise would be a lie in the one frame that most needs believing.
+        Assert.DoesNotContain("\u21B5", bar, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AReportRowSaysItCanBeReadAndCopied()
+    {
+        // Unchanged from before: a report row opens in full on Enter and its whole text
+        // goes on the clipboard with Ctrl+C. "copy", not "copy line" - the copy is of
+        // the value, not of what was drawn.
+        string bar = Bar(Entry("0x3047A", secondary: "handle", command: "", expands: "handle  0x3047A"), expanded: false);
+
+        Assert.Equal("\u21B5 read it  \u2303C copy  Esc back", bar);
+    }
+
+    [Fact]
+    public void TheRuleRowAdvertisesCtrlEnter()
+    {
+        // The row that reads on Enter and carries copying and opening behind Ctrl+Enter
+        // has to say so, or the two actions are as hidden as the chord they replace.
+        PaletteEntry rule = Entry(
+            "Write a rule for it",
+            command: "",
+            expands: "rules { }",
+            actions: PaletteActions.ForRule("rules { }"));
+
+        Assert.Equal("\u21B5 read it  \u2303\u21B5 actions  \u2303C copy  Esc back", Bar(rule, expanded: false));
+    }
+
+    [Fact]
+    public void ARowWhoseEnterAlreadyOpensItsListDoesNotAlsoAdvertiseCtrlEnter()
+    {
+        // "Move it to..." opens its list on Enter; Ctrl+Enter would open the same list.
+        // Two caps promising the same thing read as two different things.
+        PaletteEntry move = Entry(
+            "Move it to\u2026",
+            command: "",
+            actions: [new PaletteAction("2", "Send it to 2", "move --workspace 2")]);
+
+        Assert.Equal("\u21B5 open  Esc back", Bar(move, expanded: false));
+    }
+
+    [Fact]
+    public void ARowThatCopiesSaysSo()
+    {
+        Assert.Equal("\u21B5 copy  Esc back", Bar(Entry("Copy the rule", command: "", copies: "rules { }"), expanded: false));
+    }
+
+    [Fact]
+    public void EscapeIsAlwaysTheLastWordUnderAFrame()
+    {
+        // A list of verbs with no visible way back is the one place somebody presses
+        // Escape hoping to undo and expects the whole palette to vanish.
+        foreach (bool expanded in new[] { false, true })
+        {
+            Assert.Equal("Esc", PaletteInput.OverlayHints(null, expanded)[^1].Key);
+            Assert.Equal("Esc", PaletteInput.OverlayHints(Entry(), expanded)[^1].Key);
+        }
+    }
+
+    [Fact]
+    public void TheVerbAgreesWithWhatChoosingWouldDo()
+    {
+        // The hint bar's word and the input's verdict are worked out separately - the
+        // bar has no mode and no frame to hand over - so the two are held together
+        // here rather than by sharing code.
+        (PaletteEntry Row, string Verb, PaletteChoice Choice)[] cases =
+        [
+            (Entry(command: "", switchesTo: PaletteMode.Help), "go", PaletteChoice.SwitchMode),
+            (Entry(command: "", explains: 42), "inspect", PaletteChoice.Inspect),
+            (Entry(command: "", copies: "x"), "copy", PaletteChoice.Copy),
+            (Entry(command: "", expands: "x"), "read it", PaletteChoice.Expand),
+            (Entry(command: "", actions: [new PaletteAction("a", "b", "c")]), "open", PaletteChoice.OpenChildren),
+            (Destructive(), "ask first", PaletteChoice.Confirm),
+            (Entry(), "do it", PaletteChoice.Run),
+            (Entry(command: ""), "", PaletteChoice.Nothing),
+        ];
+
+        foreach ((PaletteEntry row, string verb, PaletteChoice choice) in cases)
+        {
+            Assert.Equal(verb, PaletteInput.VerbFor(row));
+            Assert.Equal(choice, PaletteInput.Choose(row, PaletteMode.Windows, insideOverlay: true));
+        }
     }
 }

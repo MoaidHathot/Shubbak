@@ -70,6 +70,15 @@ commented out under that — ready to read and paste. It is the step that used t
 left as an exercise: the report told you exactly what was wrong and then handed you a
 transcription job with one very easy way to get it silently wrong.
 
+Enter reads it, one line per row. **Ctrl+Enter** on the row is where the rule leaves
+the palette: **Copy the rule** puts the whole thing on the clipboard and closes, and
+**Open the config** opens `shubbak.kdl` with whatever Windows opens `.kdl` files with,
+so the next thing is pasting. Inside the rule itself, Ctrl+C copies one line and
+Ctrl+Shift+C copies all of it — and the hint bar says so. The `do` block is left
+holding a comment on purpose: the same window one person wants floated is one another
+wants ignored, and a rule that guessed would look right and be wrong. Nothing is applied
+and nothing edits the file; what goes into it is yours.
+
 **Every row has actions** (Ctrl+Enter): go to it, bring it here, send it to another
 workspace, float/tile, minimise/restore, make it sticky, edit its tags, write a rule
 for it, close it, start or stop managing it, and inspect it. Closing asks first —
@@ -147,7 +156,9 @@ keys, when the window manager has suspended itself, and when it cannot be reache
 all — because all four look exactly like a crash from the outside — and, quieter than
 any of those, which contexts it holds, because the keys in force are then not the
 ones in the file. Typing `context --toggle ` completes the declared names, and
-`>config` lists anything wrong with the palette's own section.
+`>config` lists anything wrong with the palette's own section. `>config path` copies
+the path of the file in effect and `>open config` opens it, with whatever Windows
+opens `.kdl` files with — the palette does not pick an editor.
 
 ## Settings
 

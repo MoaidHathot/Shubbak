@@ -175,6 +175,11 @@ public enum PaletteMode
 /// key nobody has a reason to try.
 /// </para>
 /// </param>
+/// <param name="Copies">
+/// The text choosing this row puts on the clipboard, when that is what choosing it
+/// does. Distinct from <paramref name="Expands"/>, which is text to be opened and
+/// read: this is the row that says "Copy the rule", and Enter on it has to copy.
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -191,7 +196,8 @@ public sealed record PaletteEntry(
     bool Destructive = false,
     bool Unavailable = false,
     Func<IReadOnlyList<PaletteAction>>? ActionsFactory = null,
-    bool Prompts = false)
+    bool Prompts = false,
+    string? Copies = null)
 {
     /// <summary>Whether there is anything Ctrl+Enter could show, without working out what.</summary>
     public bool HasActions => Actions is { Count: > 0 } || ActionsFactory is not null;

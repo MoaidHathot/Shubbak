@@ -604,15 +604,29 @@ public static class PaletteEntries
                 Rank: 4,
                 SwitchesTo: PaletteMode.Help),
 
-            // The path, not the file. Opening an editor from here would mean deciding
-            // which editor, which is a decision this program has no business making;
-            // putting the path on the clipboard works with whichever one you use.
+            // The path, for whichever editor you use and however you reach it. It was
+            // the only row here for a while, on the grounds that opening an editor
+            // would mean choosing one; the row below leaves that choice where it
+            // already lives, and this one stays for the terminal, the bug report and
+            // the editor that is already open.
             new PaletteEntry(
                 "config path",
                 "Copy the path of the configuration file in effect",
                 ["dalil"],
                 BuiltinConfigPath,
                 Rank: 3),
+
+            // The file, in whatever Windows opens .kdl files with. The palette does not
+            // pick the editor - the shell association does, which is the one place the
+            // user has already answered that question - and a machine with no answer
+            // gets the "How do you want to open this file?" prompt, which is the
+            // question put by the one program entitled to ask it.
+            new PaletteEntry(
+                "open config",
+                "Open the configuration file in effect with whatever edits .kdl files",
+                ["dalil"],
+                BuiltinOpenConfig,
+                Rank: 2),
 
             // Not the same as reloading the window manager, and worth having precisely
             // when it is not. The palette re-reads its section when the manager
@@ -624,7 +638,7 @@ public static class PaletteEntries
                 "Re-read the dalil section on its own, even if the window manager refused the file",
                 ["dalil"],
                 BuiltinReload,
-                Rank: 2),
+                Rank: 1),
         ];
 
         if (macros > 0)
@@ -670,6 +684,15 @@ public static class PaletteEntries
 
     /// <summary>The command that puts the configuration file's path on the clipboard.</summary>
     public const string BuiltinConfigPath = "dalil:config-path";
+
+    /// <summary>The command that opens the configuration file in whatever edits it.</summary>
+    /// <remarks>
+    /// Handed to the shell rather than to an editor the palette chose. Which program
+    /// edits a <c>.kdl</c> file is a decision the user has already made once, in
+    /// Windows, and asking them to make it again in a <c>dalil</c> setting would be
+    /// two places for the same answer to drift apart.
+    /// </remarks>
+    public const string BuiltinOpenConfig = "dalil:open-config";
 
     /// <summary>The command that re-reads the palette's own section.</summary>
     public const string BuiltinReload = "dalil:reload";
@@ -848,6 +871,13 @@ public static class PaletteEntries
         // to doing. Everything below explains why the window behaves as it does; this
         // is what changes it, already written out, using the two attributes the rest of
         // the report is about to spend twenty lines establishing.
+        //
+        // Enter reads it. Ctrl+Enter copies it or opens the file it belongs in - the two
+        // steps that used to be a chord in the documentation and a path on the
+        // clipboard, and that the screen never mentioned.
+        string composed = RuleComposer.RuleFromReport(
+            report.ClassName, report.ProcessName, report.ProcessPath, report.Title);
+
         entries.Add(new PaletteEntry(
             "Write a rule for it",
             "compose",
@@ -855,10 +885,9 @@ public static class PaletteEntries
             string.Empty,
             Rank: 1,
             SwitchesTo: null,
-            Actions: null,
+            Actions: PaletteActions.ForRule(composed),
             Explains: null,
-            Expands: RuleComposer.RuleFromReport(
-                report.ClassName, report.ProcessName, report.ProcessPath, report.Title)));
+            Expands: composed));
 
         Add("handle", $"0x{report.Handle:X}");
         Add("title", report.Title);

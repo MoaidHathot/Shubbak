@@ -706,6 +706,34 @@ public sealed class PaletteEntriesTests
     }
 
     [Fact]
+    public void TheRuleAtTheTopOfAReportCanBeCopiedAndItsFileOpened()
+    {
+        // The report tells you exactly what is wrong and hands you the rule; this is
+        // what gets the rule out. Ctrl+Enter on the row used to do nothing at all, and
+        // the chord that copied the rule was written only in the documentation.
+        PaletteEntry rule = PaletteEntries.ForReport(Report(className: "Chrome_WidgetWin_1"))
+            .Single(e => e.Primary == "Write a rule for it");
+
+        Assert.True(rule.HasActions);
+
+        IReadOnlyList<PaletteAction> actions = rule.ResolveActions();
+
+        // What is copied is what was read, path comment and all.
+        Assert.Equal(rule.Expands, actions.Single(a => a.Copies is not null).Copies);
+        Assert.Contains("Chrome_WidgetWin_1", rule.Expands!, StringComparison.Ordinal);
+
+        Assert.Contains(actions, a => a.Command == PaletteEntries.BuiltinOpenConfig);
+    }
+
+    [Fact]
+    public void OnlyTheRuleRowOfAReportHasActions()
+    {
+        // The facts are there to be read. Offering Ctrl+Enter on "handle 0x3047A"
+        // would advertise a key that then does nothing.
+        Assert.Single(PaletteEntries.ForReport(Report()), e => e.HasActions);
+    }
+
+    [Fact]
     public void AFailedReportStillSaysSomething()
     {
         // An empty list would read as "the palette is broken" rather than "the window
@@ -1049,6 +1077,19 @@ public sealed class PaletteEntriesTests
             PaletteEntries.ForBuiltins(), e => e.Primary == "config path");
 
         Assert.Equal(PaletteEntries.BuiltinConfigPath, entry.Command);
+        Assert.True(PaletteEntries.IsBuiltin(entry.Command));
+    }
+
+    [Fact]
+    public void TheConfigurationInEffectCanBeOpened()
+    {
+        // Beside the path rather than instead of it. The path is still what a terminal,
+        // a bug report or an editor that is already open wants; this is for the case
+        // where the next thing to happen is typing into the file.
+        PaletteEntry entry = Assert.Single(
+            PaletteEntries.ForBuiltins(), e => e.Primary == "open config");
+
+        Assert.Equal(PaletteEntries.BuiltinOpenConfig, entry.Command);
         Assert.True(PaletteEntries.IsBuiltin(entry.Command));
     }
 
