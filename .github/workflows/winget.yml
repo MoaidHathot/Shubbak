@@ -51,7 +51,7 @@ jobs:
       # main, not the tag: the filled manifests are committed to main. The tag's
       # version must still be main's version, which is checked before anything is
       # written - if main has already moved on, this needs a human.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
