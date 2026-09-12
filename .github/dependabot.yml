@@ -16,7 +16,7 @@ updates:
       interval: weekly
     groups:
       # One pull request for all of them, so a week of releases is one review rather
-      # than eight.
+      # than one per action.
       actions:
         patterns: ['*']
     commit-message:

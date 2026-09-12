@@ -89,57 +89,50 @@ The certificate is short-lived (three days) and the signature is timestamped by 
 service's own authority, which is what keeps it valid afterwards;
 `tools/check-signatures.ps1` fails the build if a file is signed but not timestamped.
 
-Also once, for the post-release automation: `winget-releaser` needs a **classic**
+Also once, for the post-release automation: the winget submission is made with
+[`wingetcreate`](https://github.com/microsoft/winget-create), which needs a **classic**
 personal access token with the `public_repo` scope - fine-grained tokens are not
-supported - and a fork of `microsoft/winget-pkgs` under the account the token belongs
-to. `public_repo` is write access to *every* public repository that account owns,
-which for the maintainer's own account is a great deal more than one pull request
-against `winget-pkgs` needs, and the token is handed to a third-party action. So the
-token belongs to an account that owns nothing else:
+supported - and works as whichever account the token names: it forks
+`microsoft/winget-pkgs` under that account if it has to, keeps the fork in step with
+upstream, and opens the pull request from it. `public_repo` is write access to
+*every* public repository that account owns, which for the maintainer's own account
+is a great deal more than one pull request against `winget-pkgs` needs. So the token
+belongs to an account that owns nothing else:
 
 1. **The account.** Sign out, create a second GitHub account - GitHub's terms allow one
    free *machine account* alongside a personal one, "used exclusively for performing
    automated tasks" - with a mailbox you control, a name that says what it is
    (`shubbak-bot`, say), two-factor authentication on, and nothing in its profile
-   that matters. It never needs to be a collaborator on this repository.
-2. **The fork.** Signed in as the bot, fork `microsoft/winget-pkgs`. Default branch
-   only is fine. Komac, which `winget-releaser` runs, brings the fork up to date with
-   upstream before it branches, so the fork is never maintained by hand.
-3. **The token.** As the bot: Settings → Developer settings → Personal access tokens →
+   that matters. It never needs to be a collaborator on this repository, and it needs
+   no fork made by hand: the tool makes one the first time it runs.
+2. **The token.** As the bot: Settings → Developer settings → Personal access tokens →
    **Tokens (classic)** → Generate. Scope `public_repo` and nothing else. Give it an
    expiry and put the date in a calendar: when it lapses the workflow's last step fails,
    which is how you find out, and the fix is a new token in the same secret.
-4. **This repository.** Settings → Environments → `package-managers` - on the
-   environment, not the repository. A repository secret can be read by any workflow
-   on any branch, which for a repository that takes direct pushes to `main` means
-   anybody who can push; an environment secret behind a required reviewer can be read
-   only by a run you approved. It is a separate environment from `release` so that
-   the job which needs only this token is never also handed the signing credentials,
-   and so that the two can be relaxed or rotated independently. It has the same two
-   rules as `release`: a required reviewer, and deployment branches and tags limited
-   to `main` and `v*` - a release event runs with its tag as the ref, which is what
-   admits it. On it:
+3. **This repository.** Settings → Environments → `package-managers` → secret
+   `WINGET_TOKEN` - on the environment, not the repository. A repository secret can be
+   read by any workflow on any branch, which for a repository that takes direct pushes
+   to `main` means anybody who can push; an environment secret behind a required
+   reviewer can be read only by a run you approved. It is a separate environment from
+   `release` so that the job which needs only this token is never also handed the
+   signing credentials, and so that the two can be relaxed or rotated independently.
+   It has the same two rules as `release`: a required reviewer, and deployment
+   branches and tags limited to `main` and `v*` - a release event runs with its tag
+   as the ref, which is what admits it.
 
-   | Kind | Name | Value |
-   |---|---|---|
-   | secret | `WINGET_TOKEN` | the bot's token |
-   | variable | `WINGET_FORK_USER` | the bot's username |
-
-   `WINGET_FORK_USER` is what the workflow passes to the action as `fork-user`. Until
-   it is set the workflow falls back to the repository owner, which works only if the
-   fork and the token are the owner's - the wider blast radius above. The variable is
-   not a secret, but it belongs to the same account, so it lives beside the token and
-   goes when it goes.
-
-The first submission of the package is made by hand and needs the same account; see
-"After publishing" below.
+Nothing else: no username to configure, because the tool takes it from the token.
 
 Every action in `.github/workflows` is pinned to a commit rather than a version tag,
 because a tag can be moved by whoever controls the action's repository and two of the
 steps hold credentials. `.github/dependabot.yml` opens a pull request when an action
 publishes a new version; merging it is how the pins move. The repository setting
 *Require actions to be pinned to a full-length commit SHA* refuses a workflow that
-is not, so an unpinned `@v4` cannot be merged back in by accident.
+is not, so an unpinned `@v4` cannot be merged back in by accident. The rule reaches
+through composite actions to whatever they use in turn, which is how `winget-releaser`
+came to be refused before its first step - it fetched Komac through an action pinned
+to `@main` - and why the submission is a plain, checked download of `wingetcreate`
+instead. A tool fetched by a `run:` step is not covered by the rule, which is why that
+step pins the version itself and checks the hash and the signature before running it.
 
 ## Once: the repository settings
 
@@ -152,7 +145,7 @@ fast-forward push to `main` and, on release day, one annotated tag.
 |---|---|---|
 | Ruleset `protect main` | `main`: block force pushes, block deletion. **No bypass.** | A rewrite of `main` is a deliberate act that should begin with editing this rule, not with `--force`. Fast-forward pushes - yours, and the one `winget.yml` makes - are unaffected. |
 | Ruleset `release tags` | `refs/tags/v*`: restrict creation, update and deletion. Bypass: repository admin. | Only the owner can create a release tag, and nobody can move or delete one without meaning to. `prepare-release.ps1 -Tag -Push` is the owner and goes through; a compromised token with `contents: write` does not. Closes the one gap left after the `release` environment's rules, which decide who may *run* the signing but not who may *name* a release. |
-| Actions → General | Require actions to be pinned to a full-length commit SHA | See above. |
+| Actions → General | Require actions to be pinned to a full-length commit SHA | See above. It reaches through composite actions, so a third-party action that uses an unpinned one inside is refused too - which is what happened to `winget-releaser`, and is the rule doing its job. |
 | Actions → General | Fork pull request workflows: require approval for **all** outside collaborators | `build.yml` runs the pull request's code on a Windows runner. It has no secrets and a read-only token, so the exposure is the runner and the minutes, and one click per pull request from a stranger is a fair price for deciding. |
 | Actions → General | Workflow permissions: read | Already so. Workflows that write - the release, the manifest commit - say so in their own `permissions:` block. |
 | Environment `release` | Required reviewer; deployment branches and tags: `main`, `v*` | See the signing setup above. |
@@ -286,16 +279,16 @@ downstream moves: the Scoop bucket still describes the previous release. Approve
 - commits the filled manifests from the workflow artefact back to `packaging/winget`
   and `bucket/shubbak.json` on `main` - for Scoop, that commit **is** the release,
   since Scoop reads the bucket straight from this repository;
-- if the package already exists in `microsoft/winget-pkgs`, opens the version update
-  pull request there with `winget-releaser` (which uses Komac to match the MSI and the
-  zip to the right installer entries).
+- unless this version is already in `microsoft/winget-pkgs`, opens the pull request
+  there with `wingetcreate`, from the manifests it has just committed. The first
+  version goes the same way as every one after it; nothing is derived from a previous
+  version, so none has to exist.
 
-**The first submission is manual**, because the update tooling can only update a
-package that exists. It is made *as the bot account*, so that the fork it uses is the
-one `winget-releaser` will look for afterwards, and it is made after the release is
-published, so that the manifests carry the hashes of files anybody can download. Take
-the committed `packaging/winget` once the workflow above has run - or the `winget/`
-directory from the workflow artefact - and:
+If `WINGET_TOKEN` was not set when the release was published, the run says so and
+stops after the commit. Set it and run the workflow again by hand - Actions → *package
+managers* → *Run workflow*, with the tag - and it finds nothing to commit and goes
+straight to the submission. The same can be done from a machine, as the same account,
+with the same tool:
 
 ```
 winget install Microsoft.WingetCreate
@@ -306,14 +299,15 @@ wingetcreate submit packaging\winget
 
 `token --store` with no token opens GitHub's device sign-in: sign in as the bot. That
 keeps the token off the command line and out of the shell's history, which the tool's
-own documentation warns `--token` does not. `submit` uses the bot's existing fork of
-`microsoft/winget-pkgs`, pushes a branch and opens the pull request from there. Then
-watch it: the repository's bot validates the manifests, downloads all four installers,
-checks the hashes, installs them in a VM and reports; a new package also waits for a
-moderator, who may ask about the publisher, the URLs or the licence, and that has taken
-anywhere from a day to a couple of weeks. Once it is merged, `winget search shubbak`
-finds it within a day, and every release after this one is a pull request the
-workflow opens on its own.
+own documentation warns `--token` does not.
+
+Then watch the pull request - the run's summary links it. The repository's bot
+validates the manifests, downloads all four installers, checks the hashes, installs
+them in a VM and reports; a new package also waits for a moderator, who may ask about
+the publisher, the URLs or the licence, and that has taken anywhere from a day to a
+couple of weeks. Questions arrive as comments addressed to the account that opened the
+pull request, which is the bot, so its mailbox is one to watch. Once it is merged,
+`winget search shubbak` finds it within a day.
 
 ### The icon winget will not show
 

@@ -6,9 +6,8 @@ name: package managers
 #
 # For Scoop, committing the filled manifest to main *is* the release - Scoop reads the
 # bucket straight from this repository. For winget, the pull request against
-# microsoft/winget-pkgs is opened here too, once the package exists there; the very
-# first submission has to be made by hand (see RELEASING.md), because the update
-# tooling can only update.
+# microsoft/winget-pkgs is opened here too, with the manifests this run has just
+# committed: the first version the same way as every one after it.
 #
 # The hashes are recomputed from the published assets rather than copied from the
 # build that made them, so what the manifests promise is what a download produces.
@@ -34,14 +33,13 @@ jobs:
   manifests:
     runs-on: windows-latest
 
-    # The environment holds the winget token and the name of the account it belongs
-    # to, and it is what makes them unreadable to any run a maintainer has not
-    # approved - a repository secret is readable by any workflow on any branch, which
-    # for a repository that takes direct pushes to main is anybody who can push. A
-    # separate environment from `release`, so a job that needs only the bot's token is
-    # never also handed the signing credentials. A release event's ref is its tag, so
-    # the environment's `v*` rule admits it; a dispatch comes from main. See
-    # RELEASING.md for what is set on it.
+    # The environment holds the winget token, and it is what makes the token
+    # unreadable to any run a maintainer has not approved - a repository secret is
+    # readable by any workflow on any branch, which for a repository that takes direct
+    # pushes to main is anybody who can push. A separate environment from `release`,
+    # so a job that needs only the bot's token is never also handed the signing
+    # credentials. A release event's ref is its tag, so the environment's `v*` rule
+    # admits it; a dispatch comes from main. See RELEASING.md for what is set on it.
     environment: package-managers
 
     env:
@@ -88,6 +86,9 @@ jobs:
           ./tools/ensure-winget.ps1
           ./tools/build-release.ps1 -Manifests
 
+      # A push made with the workflow's own token starts no workflow, by GitHub's rule
+      # against runs that trigger themselves - so build.yml does not run on this commit.
+      # It changes two manifests and nothing the build reads, which is why that is fine.
       - name: Commit the filled manifests to main
         shell: pwsh
         run: |
@@ -107,42 +108,88 @@ jobs:
             git push origin main
           }
 
-      # winget-releaser can only update a package that is already in the community
-      # repository. The first release is submitted by hand; from then on this does it.
+      # The winget-pkgs pull request, made with wingetcreate - Microsoft's tool - from
+      # the manifests just committed: the complete, validated set, with the hashes of
+      # the published assets. Nothing here derives a manifest from the previous
+      # version, so there is no previous version to need, and the first release is
+      # submitted the same way as every one after it.
       #
-      # The action needs a classic personal access token with public_repo, which is
-      # write access to every public repository the token's owner has - far more than
-      # one pull request against winget-pkgs needs. So the token belongs to a separate
-      # account that owns nothing but a fork of winget-pkgs, and WINGET_FORK_USER
-      # names that account; see RELEASING.md. The action itself is pinned to a commit
-      # rather than a tag, because a tag can be moved and this step holds the token.
-      - name: Is the package already in winget-pkgs?
+      # It replaced winget-releaser, a composite action that fetched its tool through
+      # an unpinned action of its own. The repository refuses any action not pinned to
+      # a commit, and the rule reaches through composite actions - rightly, since a
+      # step that holds a token is exactly where an unpinned dependency matters - so
+      # the job was refused before its first step. The tool is now a plain download at
+      # a pinned version, checked against the hash Microsoft publishes for it and
+      # against its Authenticode signature before it is run with the token. Bumping it
+      # is the two lines of env below; the hash is the wingetcreate.exe.txt beside the
+      # release asset, or (Get-FileHash wingetcreate.exe).Hash.
+      #
+      # The token is a classic personal access token with public_repo, which is write
+      # access to every public repository of the account that issued it - far more
+      # than one pull request needs - so it belongs to an account that owns nothing
+      # but a fork of winget-pkgs; see RELEASING.md. wingetcreate forks, syncs and
+      # opens the pull request as whichever account the token names, which is the
+      # whole of the setup. Until the token exists the run stops here and says so;
+      # dispatching it again with the same tag once the token is set finds nothing to
+      # commit and goes straight to the submission.
+      - name: Is this version already in winget-pkgs?
         id: upstream
         shell: pwsh
         run: |
+          $version = '${{ steps.version.outputs.version }}'
+
           try {
-            Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/m/MoaidHathot/Shubbak' `
-              -Headers @{ 'User-Agent' = 'shubbak-release' } | Out-Null
-            Write-Output 'MoaidHathot.Shubbak exists upstream; the update pull request will be opened.'
+            Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/m/MoaidHathot/Shubbak/$version" `
+              -Headers @{ 'User-Agent' = 'shubbak-release'; 'Authorization' = "Bearer $env:GH_TOKEN" } | Out-Null
+            Write-Output "MoaidHathot.Shubbak $version is already in winget-pkgs; nothing to submit."
             "exists=true" >> $env:GITHUB_OUTPUT
           }
           catch {
-            Write-Output 'MoaidHathot.Shubbak is not in winget-pkgs yet. Submit the first version by hand, as the bot account (see RELEASING.md):'
-            Write-Output '  winget validate --manifest packaging\winget'
-            Write-Output '  wingetcreate token --store'
-            Write-Output '  wingetcreate submit packaging\winget'
             "exists=false" >> $env:GITHUB_OUTPUT
+
+            if ($env:HAS_WINGET_TOKEN -eq 'true') {
+              Write-Output "MoaidHathot.Shubbak $version is not in winget-pkgs yet; the pull request will be opened."
+            }
+            else {
+              Write-Output "MoaidHathot.Shubbak $version is not in winget-pkgs, and WINGET_TOKEN is not set on the package-managers environment, so it will not be submitted."
+              Write-Output 'Set the token (see RELEASING.md) and run this workflow again with the same tag, or submit by hand as the same account:'
+              Write-Output '  winget validate --manifest packaging\winget'
+              Write-Output '  wingetcreate token --store'
+              Write-Output '  wingetcreate submit packaging\winget'
+            }
           }
 
       - name: Open the winget-pkgs pull request
-        if: steps.upstream.outputs.exists == 'true' && env.HAS_WINGET_TOKEN == 'true'
-        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2 (2024-11-27)
-        with:
-          identifier: MoaidHathot.Shubbak
-          release-tag: ${{ env.TAG }}
-          # The four installers, and nothing else: the symbols archives must not match.
-          installers-regex: 'shubbak-[\d.]+-win-(x64|arm64)\.(msi|zip)$'
-          # The account holding the winget-pkgs fork, which is the account the token
-          # belongs to. Falls back to the repository owner until the variable is set.
-          fork-user: ${{ vars.WINGET_FORK_USER || github.repository_owner }}
-          token: ${{ secrets.WINGET_TOKEN }}
+        if: env.HAS_WINGET_TOKEN == 'true' && steps.upstream.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          # Read by wingetcreate itself, which keeps the token off the command line and
+          # out of the log; its own documentation warns that --token can end up there.
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          WINGETCREATE_VERSION: 1.12.13.0
+          WINGETCREATE_SHA256: 24042BD37915805615E6CF969AC57C6439124C3FE85823327F5F3FB24BD9FFEA
+        run: |
+          $exe = Join-Path $env:RUNNER_TEMP 'wingetcreate.exe'
+          Invoke-WebRequest -Uri "https://github.com/microsoft/winget-create/releases/download/v$env:WINGETCREATE_VERSION/wingetcreate.exe" -OutFile $exe
+
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash
+          if ($hash -ne $env:WINGETCREATE_SHA256) {
+            throw "wingetcreate.exe $env:WINGETCREATE_VERSION hashes to $hash; this workflow expects $env:WINGETCREATE_SHA256. Not running it."
+          }
+
+          $signature = Get-AuthenticodeSignature -LiteralPath $exe
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation, O=Microsoft Corporation,') {
+            throw "wingetcreate.exe does not carry a valid Microsoft signature: $($signature.Status), signer '$($signature.SignerCertificate.Subject)'. Not running it."
+          }
+
+          Write-Output "wingetcreate $env:WINGETCREATE_VERSION: the hash and the signature check out."
+
+          # --no-open: there is no browser here to open the pull request in. The title
+          # is the tool's own - it says whether the package is new or an update.
+          & $exe submit --no-open packaging\winget | Tee-Object -Variable output
+          if ($LASTEXITCODE -ne 0) { throw "wingetcreate submit exited $LASTEXITCODE." }
+
+          $pullRequest = [regex]::Match(($output | Out-String), 'https://github\.com/microsoft/winget-pkgs/pull/\d+').Value
+          if ($pullRequest) {
+            "winget-pkgs pull request: $pullRequest" >> $env:GITHUB_STEP_SUMMARY
+          }

@@ -14,6 +14,21 @@ schedule and breaking either is a different kind of event:
   discarded rather than misread.
 
 ## [Unreleased]
+
+### Internal
+
+- **The winget submission is made with `wingetcreate` rather than `winget-releaser`.**
+  The repository refuses any action not pinned to a commit, and the rule reaches
+  through composite actions: `winget-releaser` fetched Komac through an action of its
+  own pinned to `@main`, and the job was refused before its first step - on the first
+  release it was ever asked to publish. `wingetcreate`, Microsoft's tool, is now a
+  plain download at a pinned version, checked against the hash Microsoft publishes
+  and against its signature before it is run with the token, and it files the
+  manifests the release build already produced. Nothing derives a manifest from the
+  previous version any more, so the first version is submitted the same way as every
+  one after it, and the by-hand first submission is retired along with the
+  `WINGET_FORK_USER` variable - the tool works as whichever account the token names.
+
 ## [0.10.0] - 2026-09-12
 
 Everything since 0.9.0, which was tagged and never published - so this is the first
