@@ -551,7 +551,13 @@ keybindings {
     // tells the bar to re-read it too, so one key updates both.
     bind "alt+shift+r" { wm-reload-config }
     bind "alt+shift+w" { wm-redraw }
-    bind "alt+shift+e" { wm-exit }
+
+    // exit-all stops everything: the window manager, the bar, the palette and the
+    // watcher. wm-exit stops the window manager alone - the palette and the watcher
+    // stay and reconnect when it is back, and the bar waits a while for the same
+    // reason - which is what you want when restarting it, and not what you want
+    // when you are done.
+    bind "alt+shift+e" { exit-all }
 
     // Get out of the way entirely, for a game.
     //
@@ -631,9 +637,9 @@ bar {
     // If the window manager comes back inside the window, the bar reconnects and
     // the clock resets - so restarting the daemon does not cost you the bar.
     //
-    // A clean `wm-exit` does not wait for this at all: the window manager
-    // announces that it is going and the bar follows within a frame. This is the
-    // safety net for the times it cannot, such as being killed outright.
+    // A clean `wm-exit` or `exit-all` does not wait for this at all: the window
+    // manager announces that it is going and the bar follows within a frame. This is
+    // the safety net for the times it cannot, such as being killed outright.
     window-manager-timeout 30
 
     // The interval is how often a value is *checked*, not how often the bar
@@ -678,7 +684,9 @@ bar {
 
     // Any program that writes lines to stdout can drive a widget - in any
     // language, with no Taj source code. This is the extension point that means
-    // Taj never has to grow a widget for everything.
+    // Taj never has to grow a widget for everything. The program is restarted if
+    // it exits, and stopped - with anything it started - when the bar exits or
+    // reloads this file.
     //
     // source "weather" kind="command" command="pwsh -NoProfile -File C:\\Users\\me\\.config\\shubbak\\weather.ps1"
 

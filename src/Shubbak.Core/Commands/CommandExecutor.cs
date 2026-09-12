@@ -43,6 +43,17 @@ public enum HostAction
     Exit,
 
     /// <summary>
+    /// Shut the window manager down cleanly, and tell the bar, the palette and the
+    /// watcher to leave with it.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="Exit"/> because the companions treat the two
+    /// differently: after a plain exit they stay and wait for the window manager to
+    /// come back, and after this one they go.
+    /// </remarks>
+    ExitAll,
+
+    /// <summary>
     /// Bring a window the tree does not know about back into view.
     /// </summary>
     /// <remarks>
@@ -202,6 +213,7 @@ public sealed class CommandExecutor
             ReloadConfigCommand => Host(HostAction.ReloadConfig),
             RedrawCommand => Host(HostAction.Redraw),
             ExitCommand => Host(HostAction.Exit),
+            ExitAllCommand => Host(HostAction.ExitAll),
 
             // Host effects rather than state-machine ones, because what they change is
             // which hooks are installed - which the state machine has never known

@@ -159,11 +159,12 @@ manager it reports on; now it spends almost none.
 
 ## When the window manager goes away
 
-A clean `wm-exit` announces itself and the bar closes within a frame. If the window
-manager is killed instead, the bar waits `window-manager-timeout` seconds (30 by
-default; 0 waits for ever) for it to come back, reconnects if it does, and closes if
-it does not. A bar that has never connected waits indefinitely, because it is
-normally launched by the window manager's own startup command and can win the race.
+A clean `wm-exit` or `exit-all` announces itself and the bar closes within a frame.
+If the window manager is killed instead, the bar waits `window-manager-timeout`
+seconds (30 by default; 0 waits for ever) for it to come back, reconnects if it does,
+and closes if it does not. A bar that has never connected waits indefinitely, because
+it is normally launched by the window manager's own startup command and can win the
+race.
 
 `shubbak taj-exit` closes the bar on its own; only one bar runs per account.
 

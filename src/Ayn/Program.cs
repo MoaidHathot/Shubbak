@@ -139,11 +139,12 @@ internal static class Program
     /// <remarks>
     /// <para>
     /// Everything that can wake it is a handle: a stop request, the window manager
-    /// leaving, a reload, a signal, the microphone's mute or default device changing,
-    /// and one event per watched registry key. Between wakes it waits with no timeout,
-    /// unless a change is waiting out its settle time or the window manager is
-    /// unreachable with something to say, in which case it waits exactly that long.
-    /// No thread of ours spins, and no timer ticks.
+    /// leaving - alone, or taking everything with it - a reload, a signal, the
+    /// microphone's mute or default device changing, and one event per watched
+    /// registry key. Between wakes it waits with no timeout, unless a change is
+    /// waiting out its settle time or the window manager is unreachable with
+    /// something to say, in which case it waits exactly that long. No thread of ours
+    /// spins, and no timer ticks.
     /// </para>
     /// <para>
     /// The registry is re-armed before it is read, or a change landing between the two
@@ -158,14 +159,19 @@ internal static class Program
         var provider = new Provider(config);
 
         const int StopIndex = 0;
-        const int LostIndex = 1;
-        const int ReloadedIndex = 2;
-        const int SignalledIndex = 3;
-        const int AudioIndex = 4;
-        const int FirstRegistryIndex = 5;
+        const int DismissedIndex = 1;
+        const int LostIndex = 2;
+        const int ReloadedIndex = 3;
+        const int SignalledIndex = 4;
+        const int AudioIndex = 5;
+        const int FirstRegistryIndex = 6;
 
+        // Dismissed sits before Lost on purpose. WaitAny answers with the lowest
+        // index that is set, and exit-all raises both within a moment of each other -
+        // the notice, then the pipe closing behind it - so the order decides whether
+        // the watcher leaves or reconnects to nothing.
         WaitHandle[] handles =
-            [stop, connection.Lost, connection.Reloaded, connection.Signalled, AudioEndpoint.Changed, .. store.Changed];
+            [stop, connection.Dismissed, connection.Lost, connection.Reloaded, connection.Signalled, AudioEndpoint.Changed, .. store.Changed];
 
         store.Arm();
         provider.Observe(Reading.From(store, endpoint.IsMuted()), Environment.TickCount64);
@@ -193,6 +199,11 @@ internal static class Program
             switch (woke)
             {
                 case StopIndex:
+                    return;
+
+                case DismissedIndex:
+                    // exit-all: the user is done with Shubbak, not restarting it. The
+                    // leases go with the connection, which Main closes on the way out.
                     return;
 
                 case LostIndex:

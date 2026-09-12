@@ -56,6 +56,17 @@ internal sealed class WmConnection : IAsyncDisposable
     /// <summary>The events connection ended, which means the window manager is gone or restarting.</summary>
     public AutoResetEvent Lost { get; } = new(false);
 
+    /// <summary>
+    /// The window manager left and asked everything to leave with it, which is
+    /// <c>exit-all</c>; the watcher should stop rather than wait for it.
+    /// </summary>
+    /// <remarks>
+    /// Manual-reset, unlike its neighbours, because it is answered by leaving and
+    /// nothing after it matters; a request to stop that could be consumed and lost
+    /// by an unlucky wake would be worse than one that stays raised.
+    /// </remarks>
+    public ManualResetEvent Dismissed { get; } = new(false);
+
     /// <summary>The window manager re-read the configuration file.</summary>
     public AutoResetEvent Reloaded { get; } = new(false);
 
@@ -190,7 +201,15 @@ internal sealed class WmConnection : IAsyncDisposable
                                 break;
 
                             case IpcProtocol.ShutdownTopic:
-                                Log.Info(LogCategory.Ipc, "the window manager is shutting down; the watcher stays and reconnects when it returns");
+                                if (ShutdownNotice.IsForEveryone(events.Current.Data))
+                                {
+                                    Log.Info(LogCategory.Ipc, "the window manager is shutting down and asked everything to go with it; the watcher leaves");
+                                    Dismissed.Set();
+                                }
+                                else
+                                {
+                                    Log.Info(LogCategory.Ipc, "the window manager is shutting down; the watcher stays and reconnects when it returns");
+                                }
                                 break;
                         }
                     }
@@ -291,6 +310,7 @@ internal sealed class WmConnection : IAsyncDisposable
 
         _stopping.Dispose();
         Lost.Dispose();
+        Dismissed.Dispose();
         Reloaded.Dispose();
         Signalled.Dispose();
     }

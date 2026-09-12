@@ -51,8 +51,11 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>Raised on a background thread when the window list may have changed.</summary>
     public event Action? Stale;
 
-    /// <summary>Raised on a background thread when the window manager is going away.</summary>
-    public event Action? ShuttingDown;
+    /// <summary>
+    /// Raised on a background thread when the window manager is going away. The
+    /// argument is whether it asked everything to go with it.
+    /// </summary>
+    public event Action<bool>? ShuttingDown;
 
     /// <summary>Raised on a background thread when the configuration was reloaded.</summary>
     public event Action? Reloaded;
@@ -461,14 +464,22 @@ public sealed class WmConnection : IAsyncDisposable
                 break;
 
             case IpcProtocol.ShutdownTopic:
-                // Said out loud, because what happens next looks like nothing: the
-                // palette stays - deliberately, it reconnects when the window manager
-                // is back, and a restarted window manager without a palette is the
-                // thing this avoids - and a log with no line here read as an event
-                // that never arrived.
-                Log.Info(LogCategory.Ipc, "the window manager is shutting down; the palette stays and reconnects when it returns");
-                ShuttingDown?.Invoke();
+            {
+                // Said out loud either way, because what happens next can look like
+                // nothing: after a plain exit the palette stays - deliberately, it
+                // reconnects when the window manager is back, and a restarted window
+                // manager without a palette is the thing this avoids - and a log with
+                // no line here read as an event that never arrived. After exit-all it
+                // goes, and the line says which was asked.
+                bool everything = ShutdownNotice.IsForEveryone(raised.Data);
+
+                Log.Info(LogCategory.Ipc, everything
+                    ? "the window manager is shutting down and asked everything to go with it; the palette leaves"
+                    : "the window manager is shutting down; the palette stays and reconnects when it returns");
+
+                ShuttingDown?.Invoke(everything);
                 break;
+            }
 
             case "config.reloaded":
                 Reloaded?.Invoke();

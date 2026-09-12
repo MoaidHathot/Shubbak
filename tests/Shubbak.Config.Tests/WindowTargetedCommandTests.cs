@@ -55,6 +55,7 @@ public sealed class WindowTargetedCommandTests
     [InlineData("wm-reload-config")]
     [InlineData("wm-redraw")]
     [InlineData("wm-exit")]
+    [InlineData("exit-all")]
     [InlineData("move-workspace --direction left")]
 
     // Suspending must work from an unmanaged window above all others. Somebody

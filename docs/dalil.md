@@ -161,6 +161,9 @@ misspelt setting here with a line, a column and a caret, like everywhere else.
 
 ## When the window manager goes away
 
-The palette stays and reconnects when the window manager returns; its search box says
-it cannot be reached meanwhile. `shubbak dalil-exit` closes it, and `shubbak stop`
-closes it along with everything else. Only one palette runs per account.
+After `wm-exit` the palette stays and reconnects when the window manager returns; its
+search box says it cannot be reached meanwhile. That is for restarting the window
+manager. After `exit-all` - which is what the tray's Exit and the starter config's
+`alt+shift+e` run - it leaves with everything else. `shubbak dalil-exit` closes it on
+its own, and `shubbak stop` closes it along with everything else from outside, window
+manager or no window manager. Only one palette runs per account.

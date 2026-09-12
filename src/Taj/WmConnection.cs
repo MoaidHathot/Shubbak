@@ -449,9 +449,10 @@ public sealed class WmConnection : IAsyncDisposable
                 // The window manager is going. A bar launched by it should go too,
                 // rather than sitting there attached to nothing.
                 //
-                // Best-effort on the sending side - the server does not flush its
-                // outboxes on the way out - so missing this is not a failure. The
-                // timeout on the reconnect loop catches it a few seconds later.
+                // Best-effort on the sending side - the server gives its outboxes a
+                // bounded moment on the way out, not a guarantee - so missing this is
+                // not a failure. The timeout on the reconnect loop catches it a few
+                // seconds later.
                 Log.Info(LogCategory.Ipc, "the window manager is shutting down; closing the bar");
                 WindowManagerStopped?.Invoke();
                 break;

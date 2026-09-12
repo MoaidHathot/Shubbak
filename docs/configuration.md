@@ -403,7 +403,7 @@ shubbak restore            # bring it back
 
 ## Commands
 
-35 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
+36 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
 
 **Focus & movement** — `focus` `focus-window` `focus-recent-window` `move`
 `move-workspace` `resize` `equalise` `split` `toggle-tiling-direction`
@@ -422,6 +422,11 @@ shubbak restore            # bring it back
 **The window manager itself** — `wm-enable-binding-mode` `wm-disable-binding-mode`
 `wm-toggle-pause` `wm-suspend` `wm-resume` `wm-toggle-suspend` `wm-reload-config`
 `wm-redraw` `wm-exit`
+
+**All of Shubbak** — `exit-all`: the window manager, the bar, the palette and the
+watcher. `wm-exit` stops the window manager alone and the other three wait for it to
+come back, which is for restarting it; this is for being done with it, and it is what
+the tray's Exit runs.
 
 **Escape hatches** — `shell-exec` `signal`
 

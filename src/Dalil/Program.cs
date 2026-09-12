@@ -181,7 +181,7 @@ internal static class Program
         s_connection.Signalled += OnSignal;
         s_connection.Stale += () => Post(MarkStale);
         s_connection.Reloaded += () => Post(ReloadConfig);
-        s_connection.ShuttingDown += () => Post(MarkOffline);
+        s_connection.ShuttingDown += everything => Post(() => OnWindowManagerLeaving(everything));
         s_connection.Start();
 
         Log.Info(LogCategory.Wm,
@@ -671,12 +671,32 @@ internal static class Program
     /// The window manager said it was leaving.
     /// </summary>
     /// <remarks>
-    /// The palette used to stop with it, which is the wrong half of the relationship:
-    /// it reconnects when the daemon comes back, so shutting down meant a restarted
-    /// window manager had no palette until somebody noticed and started one. Now it
-    /// says so instead - the search box shows "offline" and the empty list explains
-    /// itself - and carries on waiting.
+    /// <para>
+    /// Two answers, and the notice says which. After a plain <c>wm-exit</c> the
+    /// palette stays: it used to stop with the window manager, which is the wrong half
+    /// of the relationship - it reconnects when the daemon comes back, so shutting
+    /// down meant a restarted window manager had no palette until somebody noticed and
+    /// started one. Now it says so instead - the search box shows "offline" and the
+    /// empty list explains itself - and carries on waiting.
+    /// </para>
+    /// <para>
+    /// After <c>exit-all</c> it goes, the same way <c>WM_CLOSE</c> takes it out: the
+    /// user is done with Shubbak, and a palette waiting for a window manager that is
+    /// not coming back is exactly the stray process the tray's Exit used to leave.
+    /// </para>
     /// </remarks>
+    private static void OnWindowManagerLeaving(bool everything)
+    {
+        if (everything)
+        {
+            s_running = false;
+            return;
+        }
+
+        MarkOffline();
+    }
+
+    /// <summary>Shows that the window manager cannot be reached, and waits.</summary>
     private static void MarkOffline()
     {
         s_sources = PaletteSources.Offline;

@@ -116,6 +116,7 @@ public sealed class CommandExecutorTests
         { new ReloadConfigCommand(), HostAction.ReloadConfig },
         { new RedrawCommand(), HostAction.Redraw },
         { new ExitCommand(), HostAction.Exit },
+        { new ExitAllCommand(), HostAction.ExitAll },
         { new ContextCommand("presenting", ContextAction.Set), HostAction.Context },
         { new ArrangementCommand("demo", ArrangementAction.Save), HostAction.Arrangement },
         { new ArrangementCommand("demo", ArrangementAction.Restore), HostAction.Arrangement },

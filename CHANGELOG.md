@@ -15,6 +15,35 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Added
+
+- **`exit-all`.** Shuts down all of Shubbak - the window manager, the bar, the
+  palette and the watcher - from a keybinding, the palette or the CLI. `wm-exit` is
+  unchanged and still stops the window manager alone: the palette and the watcher
+  stay and reconnect when it is back, which is what `--replace` and an upgrade rely
+  on, and the bar waits a while for the same reason. That is the right behaviour for
+  a restart and was the only behaviour there was, so the tray's **Exit Shubbak** left a
+  palette and a watcher running behind it for a window manager that was not coming
+  back. The tray item now runs `exit-all`, and so does the starter config's
+  `alt+shift+e`. The window manager says which was asked in the `wm.shutdown` notice
+  - `{"everything":true}` rather than `{}` - and the palette and the watcher act on
+  it; a client that reads `{}` as it always did is unaffected. `shubbak stop` remains
+  the way from outside, and the only one that works when the window manager is
+  already gone.
+
+### Fixed
+
+- **Taj left a `kind="command"` source's program running.** Disposing the source
+  cancelled its reader and dropped the handle, and the program - usually a
+  PowerShell script - carried on. That happened at exit and on every configuration
+  reload, since a reload replaces every source, so a bar reloaded five times had six
+  copies of each script writing to nothing. The source now stops the program and
+  everything it started when it is disposed, which is a tree kill because the
+  program is nearly always `pwsh -File` or `cmd /c` something, and on Windows ending
+  a parent leaves its children running. Two tests: one that a grandchild is gone
+  after dispose, which failed on the old code, and one that a program that exits is
+  still started again.
+
 ### Internal
 
 - **The winget submission is made with `wingetcreate` rather than `winget-releaser`.**

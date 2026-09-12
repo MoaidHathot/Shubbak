@@ -58,7 +58,10 @@ external subscriber rather than a keylogger.
 
 Subscribe to a topic that does not exist and you get told, along with the list of
 ones that do. `wm.resync` tells you your backlog was dropped; `wm.shutdown` tells you
-the daemon is leaving on purpose.
+the daemon is leaving on purpose, and its payload says how much is going with it:
+`{}` after `wm-exit`, when the palette and the watcher stay for its return, and
+`{"everything":true}` after `exit-all`, when they leave too. A client of your own that
+outlives the window manager should read that field the same way.
 
 ## Signals
 

@@ -224,6 +224,18 @@ public sealed class WmDaemon : IDisposable
     /// <summary>Whether the hooks have been let go of.</summary>
     internal bool IsSuspended => _suspended;
 
+    /// <summary>
+    /// Whether the exit under way is <c>exit-all</c>: the bar, the palette and the
+    /// watcher are to leave with the window manager rather than wait for it.
+    /// </summary>
+    /// <remarks>
+    /// Set by the command and read by <see cref="LeaveCleanly"/>, which is the one
+    /// place the shutdown notice is written, so that every way out - the loop ending,
+    /// the session ending - says the same thing. Never cleared: an exit does not come
+    /// back from.
+    /// </remarks>
+    private bool _exitingEverything;
+
     private ShubbakConfig _config = ShubbakConfig.Default;
     private string? _configPath;
 
@@ -425,10 +437,16 @@ public sealed class WmDaemon : IDisposable
     /// <para>
     /// Announced first, before the work below, and deliberately so. Publishing only
     /// queues the message onto each client's outbox for its writer task to send, and
-    /// the server does not flush on the way out - so the more real work that happens
-    /// between saying this and tearing the pipe down, the likelier it is to arrive.
-    /// Saving the session and un-concealing take tens of milliseconds, which is the
-    /// margin.
+    /// the server gives those writers a bounded moment on the way out rather than
+    /// waiting on them - so the more real work that happens between saying this and
+    /// tearing the pipe down, the likelier it is to arrive. Saving the session and
+    /// un-concealing take tens of milliseconds, which is the margin.
+    /// </para>
+    /// <para>
+    /// The notice says whether the rest of Shubbak is to leave too. After
+    /// <c>wm-exit</c> the palette and the watcher stay for the window manager's
+    /// return; after <c>exit-all</c> they go, and so does the bar - which goes either
+    /// way, being the one launched-by and gone-with program of the three.
     /// </para>
     /// <para>
     /// Still best-effort. A bar has to cope with the pipe simply going away too,
@@ -443,7 +461,7 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private void LeaveCleanly()
     {
-        _ipc?.Publish(IpcProtocol.ShutdownTopic, "{}");
+        _ipc?.Publish(IpcProtocol.ShutdownTopic, ShutdownNotice.Payload(_exitingEverything));
 
         // A clean shutdown is the one chance to record the arrangement exactly as
         // the user left it, rather than as it was up to thirty seconds earlier.
@@ -2904,6 +2922,15 @@ public sealed class WmDaemon : IDisposable
                 Stop();
                 break;
 
+            case HostAction.ExitAll:
+                // The flag is all that differs from Exit. The notice that carries it is
+                // written by LeaveCleanly, after the loop has stopped, which is the same
+                // moment and the same code path as any other exit.
+                Log.Info(LogCategory.Wm, "exit requested for everything: the bar, the palette and the watcher are asked to leave too");
+                _exitingEverything = true;
+                Stop();
+                break;
+
             case HostAction.Suspend:
                 Suspend();
                 break;
@@ -4296,7 +4323,12 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case TrayCommand.Exit:
-                RunCommand(new ExitCommand());
+                // Everything, not just the window manager. The item says "Exit
+                // Shubbak", and somebody clicking it with a mouse is done with the
+                // program - not restarting it, which is the case wm-exit exists for.
+                // A palette and a watcher left waiting after that were the only sign
+                // the two were ever different.
+                RunCommand(new ExitAllCommand());
                 break;
 
             default:

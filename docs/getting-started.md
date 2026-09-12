@@ -114,7 +114,7 @@ Everything in the starter config is on Alt. This is the list at the top of the f
 | `alt+shift+m` | Float the window, or tile it again |
 | `alt+shift+q` | Close the window |
 | `alt+shift+r` | Reload the config |
-| `alt+shift+e` | Exit Shubbak |
+| `alt+shift+e` | Exit Shubbak: the window manager, the bar, the palette and the watcher |
 
 Change any of them by editing the file. `alt+space` is also PowerToys Run's default;
 if you use both, move one.

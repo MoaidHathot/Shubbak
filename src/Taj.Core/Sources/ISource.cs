@@ -317,6 +317,18 @@ public sealed class PushSource : SourceBase
 /// a bug rather than a script that meant to stop, and a permanently blank widget
 /// gives the user nothing to go on.
 /// </para>
+/// <para>
+/// And it is stopped when the source is disposed. The program is the bar's own
+/// worker, not a peer like the palette or the watcher: nothing but this source knows
+/// it is there, so nothing else can stop it, and a source that only let go of its
+/// handle left the script running - once per configuration reload, since a reload
+/// replaces every source, so a bar reloaded five times had six copies of each. The
+/// whole tree goes, because the script is nearly always <c>pwsh -File x.ps1</c> or
+/// <c>cmd /c ...</c> and on Windows ending a parent leaves its children running. Best
+/// effort: a bar that is killed rather than closed cannot do this, and does not try to
+/// own the process through a job object - the cost is one stray script after a crash,
+/// which is the same bargain the window manager makes with its startup commands.
+/// </para>
 /// </remarks>
 public sealed class ProcessSource : SourceBase
 {
@@ -324,8 +336,29 @@ public sealed class ProcessSource : SourceBase
     private readonly string _arguments;
     private readonly TimeSpan _restartDelay;
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly Lock _gate = new();
 
     private Task? _reader;
+
+    /// <summary>The program that is running now, or null between runs.</summary>
+    /// <remarks>
+    /// <para>
+    /// Read and written under <see cref="_gate"/>, and started under it too, so that a
+    /// program cannot start in the gap between <see cref="Dispose(bool)"/> looking for
+    /// one and the reader noticing it has been cancelled - and so that the reader does
+    /// not dispose the <see cref="System.Diagnostics.Process"/> while dispose is in the
+    /// middle of stopping it.
+    /// </para>
+    /// <para>
+    /// Whoever takes it out of this field is the one who stops it, if it needs
+    /// stopping. Cancellation wakes the reader, so it is a race between the reader's
+    /// finally and dispose, and either may win; the loser finds the field empty and
+    /// does nothing. One of them, never both: stopping a tree walks the process
+    /// table, which is tens of milliseconds on the bar's thread, and paying it twice
+    /// per source per reload would show.
+    /// </para>
+    /// </remarks>
+    private System.Diagnostics.Process? _process;
 
     public ProcessSource(string name, string commandLine, TimeSpan? restartDelay = null)
         : base(name)
@@ -353,18 +386,43 @@ public sealed class ProcessSource : SourceBase
                     CreateNoWindow = true,
                 };
 
-                process.Start();
-
-                // ReadLineAsync returning null is the end-of-stream signal here;
-                // checking EndOfStream would block the async path.
-                while (!_shutdown.IsCancellationRequested)
+                lock (_gate)
                 {
-                    string? line = await process.StandardOutput.ReadLineAsync(_shutdown.Token)
-                        .ConfigureAwait(false);
+                    if (_shutdown.IsCancellationRequested) return;
 
-                    if (line is null) break;
+                    process.Start();
+                    _process = process;
+                }
 
-                    Publish(line.TrimEnd());
+                try
+                {
+                    // ReadLineAsync returning null is the end-of-stream signal here;
+                    // checking EndOfStream would block the async path.
+                    while (!_shutdown.IsCancellationRequested)
+                    {
+                        string? line = await process.StandardOutput.ReadLineAsync(_shutdown.Token)
+                            .ConfigureAwait(false);
+
+                        if (line is null) break;
+
+                        Publish(line.TrimEnd());
+                    }
+                }
+                finally
+                {
+                    // Still here means dispose has not stopped it. Then either the
+                    // program exited on its own - the ordinary way out of the loop, and
+                    // there is nothing to stop - or cancellation ended the read (or a
+                    // line arrived just after it) with the program alive, and this is
+                    // the last moment anyone holds it.
+                    lock (_gate)
+                    {
+                        if (_process is not null)
+                        {
+                            _process = null;
+                            if (_shutdown.IsCancellationRequested) Terminate(process);
+                        }
+                    }
                 }
 
                 if (_shutdown.IsCancellationRequested) return;
@@ -409,11 +467,50 @@ public sealed class ProcessSource : SourceBase
             : (commandLine[..space], commandLine[(space + 1)..]);
     }
 
+    /// <summary>
+    /// Stops a program this source started, and everything it started in turn.
+    /// </summary>
+    /// <remarks>
+    /// Nothing here throws. Stopping is best effort by nature - the program may have
+    /// exited a moment ago, which <c>Kill</c> treats as done, or be one this account
+    /// may not end, which it reports - and the caller is either the reader on its way
+    /// out or dispose on the bar's thread, and neither has anywhere for an exception to
+    /// go but the log.
+    /// </remarks>
+    private void Terminate(System.Diagnostics.Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException
+                                    or System.ComponentModel.Win32Exception
+                                    or AggregateException)
+        {
+            Log.Warn(LogCategory.Wm, $"source '{Name}': could not stop the program it started; it may still be running: {ex.Message}");
+        }
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             _shutdown.Cancel();
+
+            // Cancelling wakes the reader - the runtime cancels a pending pipe read,
+            // measured at well under 100 ms - but wakes it into a loop that used to
+            // simply return, leaving the program to run on. Stopping it is a separate
+            // act, and it happens here or in the reader's finally, whichever gets to
+            // the field first; the other finds it empty. Taken out of the field before
+            // stopping, so the reader knows it has been done.
+            lock (_gate)
+            {
+                if (_process is { } process)
+                {
+                    _process = null;
+                    Terminate(process);
+                }
+            }
 
             try { _reader?.Wait(TimeSpan.FromSeconds(1)); }
             catch (AggregateException) { }

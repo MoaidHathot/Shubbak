@@ -95,6 +95,7 @@ public abstract record WmCommand
         // Destructive, or expensive, or both.
         CloseWindowCommand or
         ExitCommand or
+        ExitAllCommand or
         ShellExecCommand or
         ReloadConfigCommand or
         RedrawCommand or
@@ -551,6 +552,29 @@ public sealed record RedrawCommand : WmCommand
 public sealed record ExitCommand : WmCommand
 {
     public override string Name => "wm-exit";
+}
+
+/// <summary>
+/// <c>exit-all</c> - shuts the window manager down and takes the bar, the palette
+/// and the watcher with it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A second command rather than a flag on <see cref="ExitCommand"/>, because the two
+/// mean different things and both are wanted. <c>wm-exit</c> stops the window
+/// manager alone: the palette and the watcher stay and reconnect, which is right
+/// when the window manager is being restarted - <c>--replace</c> and an upgrade both
+/// rely on it - and wrong when the user is done with Shubbak. This is the second
+/// case: the tray's Exit, and the keybinding a starter config puts next to it.
+/// </para>
+/// <para>
+/// Not prefixed <c>wm-</c>, deliberately. That prefix names commands about the
+/// window manager itself; this one is about all of Shubbak.
+/// </para>
+/// </remarks>
+public sealed record ExitAllCommand : WmCommand
+{
+    public override string Name => "exit-all";
 }
 
 /// <summary>

@@ -599,10 +599,16 @@ public static class IpcProtocol
     /// without dying every time the daemon is reloaded.
     /// </para>
     /// <para>
-    /// Best-effort, deliberately. Publishing enqueues to each client's outbox and the
-    /// server does not flush on the way out, so a client that is slow to read may miss
-    /// it. Clients must therefore still cope with the pipe simply going away; this
-    /// only makes the common case prompt rather than making it certain.
+    /// The payload says how much is leaving: see <see cref="ShutdownNotice"/>. A
+    /// plain exit takes the window manager alone, and the palette and the watcher
+    /// stay for its return; <c>exit-all</c> says so, and they go with it.
+    /// </para>
+    /// <para>
+    /// Best-effort, deliberately. Publishing enqueues to each client's outbox, and
+    /// the server gives the writers a bounded moment - a quarter of a second - on the
+    /// way out rather than waiting on them, so a client that has stopped reading may
+    /// miss it. Clients must therefore still cope with the pipe simply going away;
+    /// this only makes the common case prompt rather than making it certain.
     /// </para>
     /// </remarks>
     public const string ShutdownTopic = "wm.shutdown";

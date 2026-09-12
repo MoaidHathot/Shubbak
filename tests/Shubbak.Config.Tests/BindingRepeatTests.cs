@@ -40,6 +40,7 @@ public sealed class BindingRepeatTests
         Assert.False(Bind(new CloseWindowCommand()).RepeatsOnHold);
         Assert.False(Bind(new ShellExecCommand("wt.exe")).RepeatsOnHold);
         Assert.False(Bind(new ExitCommand()).RepeatsOnHold);
+        Assert.False(Bind(new ExitAllCommand()).RepeatsOnHold);
     }
 
     [Fact]

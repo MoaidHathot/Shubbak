@@ -217,6 +217,12 @@ internal static class Program
     /// was four commands and a look at Task Manager.
     /// </para>
     /// <para>
+    /// <c>exit-all</c> - the tray's Exit - asks the same thing from inside, over the
+    /// pipe. This is still the command for a script, and the only one of the two that
+    /// works when the window manager is already gone: it does not need the pipe, and
+    /// it waits until each program has actually left rather than having been asked.
+    /// </para>
+    /// <para>
     /// The window manager goes first and over the pipe, because <c>wm-exit</c> is what
     /// restores every concealed window and saves the session, and because the bar
     /// closes itself when it hears the window manager leave. The others are asked
@@ -1076,12 +1082,15 @@ internal static class Program
             shubbak toggle-floating
             shubbak wm-reload-config
             shubbak wm-exit
+            shubbak exit-all
 
           wm-exit stops the window manager properly: it saves the session, brings
           every concealed window back, and takes the bar down with it. The palette
-          and the watcher stay and reconnect when it returns; 'stop' is the command
-          that takes all four down. Terminating the process instead strands windows
-          off screen - use 'restore' if that has already happened.
+          and the watcher stay and reconnect when it returns, which is what you want
+          when restarting it. exit-all takes all four down, and is what the tray's
+          Exit runs; 'stop' does the same from outside, and also works when the
+          window manager is already gone. Terminating the process instead strands
+          windows off screen - use 'restore' if that has already happened.
 
         GETTING OUT OF THE WAY
           wm-toggle-suspend    Release the keyboard hook and the window event hooks,

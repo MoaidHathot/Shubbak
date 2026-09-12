@@ -330,6 +330,10 @@ public static class CommandParser
                 command = new ExitCommand();
                 return true;
 
+            case "exit-all":
+                command = new ExitAllCommand();
+                return true;
+
             case "focus-recent-window":
                 command = new FocusRecentWindowCommand();
                 return true;

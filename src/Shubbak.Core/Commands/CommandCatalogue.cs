@@ -188,7 +188,8 @@ public static class CommandCatalogue
         Spec("wm-toggle-suspend", "Let go of the keyboard, or take it back"),
         Spec("wm-reload-config", "Re-read the configuration file"),
         Spec("wm-redraw", "Force every window back to its computed rectangle"),
-        Spec("wm-exit", "Shut the window manager down"),
+        Spec("wm-exit", "Shut the window manager down; the palette and the watcher stay"),
+        Spec("exit-all", "Shut down Shubbak: the window manager, the bar, the palette and the watcher"),
     ];
 
     private static CommandSpec Spec(

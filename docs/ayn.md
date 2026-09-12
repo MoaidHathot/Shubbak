@@ -72,7 +72,8 @@ calendar — is written the same way: hold a pipe connection open and say
 ## Running it
 
 `ayn --report` prints what Windows says about each device right now, which is the
-same reading the watcher acts on. `shubbak ayn-exit` stops it, and `shubbak stop`
-stops it along with everything else; only one watcher runs per account. It sleeps on
-a registry notification and two Core Audio callbacks and holds no timer between
-changes, so an idle watcher costs nothing.
+same reading the watcher acts on. It outlives a `wm-exit` and reconnects when the
+window manager returns; `exit-all` takes it down with everything else, as do
+`shubbak ayn-exit` on its own and `shubbak stop` from outside. Only one watcher runs
+per account. It sleeps on a registry notification and two Core Audio callbacks and
+holds no timer between changes, so an idle watcher costs nothing.

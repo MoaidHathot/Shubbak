@@ -263,7 +263,11 @@ internal static class ConfigCommand
             // One key re-reads this file for the window manager and tells the bar
             // and the palette to re-read it too.
             bind "alt+shift+r" { wm-reload-config }
-            bind "alt+shift+e" { wm-exit }
+
+            // Everything goes: the window manager, the bar, the palette and the
+            // watcher. `wm-exit` stops the window manager alone and the others wait
+            // for it to come back, which is for restarting it.
+            bind "alt+shift+e" { exit-all }
 
             // One pair of bindings per workspace declared above, generated rather
             // than written out - so they cannot drift out of sync with the list.
