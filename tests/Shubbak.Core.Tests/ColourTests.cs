@@ -116,4 +116,132 @@ public sealed class ColourTests
         Assert.NotEqual(Colour.Black, Colour.Transparent);
         Assert.True(Colour.Black.WithAlpha(0).IsTransparent);
     }
+
+    // ---- named colours -----------------------------------------------------
+
+    /// <summary>
+    /// Runs a test with a known accent, and puts the hook back afterwards. The hook is
+    /// process-wide, so a test that left it set would colour every test after it.
+    /// </summary>
+    private static void WithAccent(Colour? accent, Action test)
+    {
+        Func<Colour?>? previous = Colour.AccentSource;
+        Colour.AccentSource = () => accent;
+
+        try { test(); }
+        finally { Colour.AccentSource = previous; }
+    }
+
+    [Theory]
+    [InlineData("accent")]
+    [InlineData("Accent")]
+    [InlineData("ACCENT")]
+    [InlineData("  accent  ")]
+    public void AccentIsTheHostsAccent(string text) => WithAccent(new Colour(0x1D, 0xFB, 0x8D), () =>
+    {
+        Assert.True(Colour.TryParse(text, out Colour colour));
+        Assert.Equal(new Colour(0x1D, 0xFB, 0x8D), colour);
+    });
+
+    [Fact]
+    public void AccentIsOpaqueWhateverTheHostSays() => WithAccent(new Colour(0x1D, 0xFB, 0x8D, 0xC4), () =>
+    {
+        // The compositor's colorization value carries its own blend weight in the
+        // alpha byte. That is not a property of the colour, and a bar background
+        // written `accent` should be as opaque as one written in hex.
+        Assert.True(Colour.TryParse("accent", out Colour colour));
+        Assert.Equal(255, colour.A);
+    });
+
+    [Fact]
+    public void AccentFallsBackToTheStockBlueWithoutAHost()
+    {
+        // A config written `accent` must parse everywhere the parser runs - in a
+        // test, in a tool, on a machine whose compositor will not answer - or the
+        // same file would be valid in one process and not another.
+        WithAccent(null, () =>
+        {
+            Assert.True(Colour.TryParse("accent", out Colour colour));
+            Assert.Equal(Colour.DefaultAccent, colour);
+        });
+
+        Func<Colour?>? previous = Colour.AccentSource;
+        Colour.AccentSource = null;
+
+        try
+        {
+            Assert.True(Colour.TryParse("accent", out Colour colour));
+            Assert.Equal(Colour.DefaultAccent, colour);
+        }
+        finally
+        {
+            Colour.AccentSource = previous;
+        }
+    }
+
+    [Fact]
+    public void AccentIsReadEachTimeRatherThanOnce()
+    {
+        // The user changes their accent and the config is re-read; the new colour has
+        // to be what the re-read sees.
+        Colour current = new(0x00, 0x78, 0xD4);
+        Func<Colour?>? previous = Colour.AccentSource;
+        Colour.AccentSource = () => current;
+
+        try
+        {
+            Assert.True(Colour.TryParse("accent", out Colour first));
+            current = new Colour(0xF3, 0x8B, 0xA8);
+            Assert.True(Colour.TryParse("accent", out Colour second));
+
+            Assert.NotEqual(first, second);
+            Assert.Equal(new Colour(0xF3, 0x8B, 0xA8), second);
+        }
+        finally
+        {
+            Colour.AccentSource = previous;
+        }
+    }
+
+    [Theory]
+    [InlineData("accent 40%", 102)]
+    [InlineData("accent 100%", 255)]
+    [InlineData("accent 0%", 0)]
+    [InlineData("accent\t25%", 64)]
+    public void AnOpacityMayFollowANamedColour(string text, int alpha) => WithAccent(new Colour(1, 2, 3), () =>
+    {
+        // There is no hex to append an alpha to, so a named colour takes its opacity
+        // as a word: this is how a translucent accent pill is written.
+        Assert.True(Colour.TryParse(text, out Colour colour));
+
+        Assert.Equal(new Colour(1, 2, 3, (byte)alpha), colour);
+    });
+
+    [Fact]
+    public void AnOpacityMayFollowAHexColourToo()
+    {
+        // One rule for both spellings, and it scales what is there: half of a colour
+        // that is already half transparent is a quarter.
+        Assert.True(Colour.TryParse("#8dbcff 50%", out Colour opaque));
+        Assert.Equal(new Colour(0x8D, 0xBC, 0xFF, 128), opaque);
+
+        Assert.True(Colour.TryParse("#8dbcff80 50%", out Colour translucent));
+        Assert.Equal(64, translucent.A);
+    }
+
+    [Theory]
+    [InlineData("accent 140%")]
+    [InlineData("accent -5%")]
+    [InlineData("accent lots%")]
+    [InlineData("accent 40")]
+    [InlineData("40%")]
+    [InlineData("accent 40% 50%")]
+    public void ANonsensicalOpacityIsRefused(string text) => WithAccent(new Colour(1, 2, 3), () =>
+    {
+        Assert.False(Colour.TryParse(text, out _));
+    });
+
+    [Fact]
+    public void TheNamesAreListedForTheHintsThatMentionThem() =>
+        Assert.Contains("accent", Colour.Names);
 }

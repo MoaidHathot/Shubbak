@@ -299,11 +299,14 @@ public static class TajConfigLoader
 
     /// <summary>Settings a <c>profile</c> understands, as a child or a property.</summary>
     private static readonly string[] KnownProfileKeys =
-        ["extends", "edge", "height", "background", "foreground", "font", "font-size", "padding", "zone"];
+    [
+        "extends", "edge", "height", "background", "foreground", "font", "font-size", "padding", "zone",
+        "backdrop", "margin", "radius", "border",
+    ];
 
     /// <summary>What may appear inside a <c>zone</c>: its settings, and the widgets.</summary>
     private static readonly string[] KnownZoneKeys =
-        ["justify", "grow", "gap", "workspaces", "spacer", "text"];
+        ["justify", "grow", "gap", "workspaces", "spacer", "text", "icon"];
 
     /// <summary>Styling every widget accepts, whatever kind it is.</summary>
     /// <remarks>
@@ -327,6 +330,10 @@ public static class TajConfigLoader
 
     private static readonly string[] KnownTextKeys =
         [.. CommonWidgetKeys, "template", "on-click", "when", "hover-background", "hover-colour", "hover-color"];
+
+    /// <summary>What an <c>icon</c> widget accepts: where the picture comes from, and how big.</summary>
+    private static readonly string[] KnownIconKeys =
+        [.. CommonWidgetKeys, "source", "size", "on-click", "hover-background", "hover-colour", "hover-color"];
 
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
     private static readonly string[] KnownConditionKeys =
@@ -424,6 +431,7 @@ public static class TajConfigLoader
         "workspaces" => KnownWorkspacesKeys,
         "spacer" => KnownSpacerKeys,
         "text" => KnownTextKeys,
+        "icon" => KnownIconKeys,
         _ => null,
     };
 
@@ -567,7 +575,68 @@ public static class TajConfigLoader
         // rather than what was written here - inheritance should chain.
         inheritedText[name] = new ProfileText(foreground, font, padding);
 
-        return new BarProfile(name, edge, height, background, Edges.Symmetric(padding, 0), zones);
+        return new BarProfile(name, edge, height, background, Edges.Symmetric(padding, 0), zones)
+        {
+            Backdrop = ParseBackdrop(node, diagnostics) ?? parent?.Backdrop ?? BarBackdrop.None,
+            Margin = NonNegative(node, "margin", diagnostics) ?? parent?.Margin ?? 0,
+            Radius = NonNegative(node, "radius", diagnostics) ?? parent?.Radius ?? 0,
+            Border = ParseColour(SettingText(node, "border")) ?? parent?.Border ?? Colour.Transparent,
+        };
+    }
+
+    /// <summary>Reads <c>backdrop</c>, or null when the profile does not say.</summary>
+    /// <remarks>
+    /// A name the compositor does not know is reported and ignored rather than
+    /// guessed at: the difference between mica and acrylic is the whole reason to
+    /// write the setting, and silently substituting one for a typo of the other would
+    /// look like the setting having no effect.
+    /// </remarks>
+    private static BarBackdrop? ParseBackdrop(KdlNode node, List<Diagnostic> diagnostics)
+    {
+        if (Setting(node, "backdrop") is not { } value) return null;
+
+        string? text = value.AsString();
+
+        switch (text?.ToLowerInvariant())
+        {
+            case "none": return BarBackdrop.None;
+            case "mica": return BarBackdrop.Mica;
+            case "acrylic": return BarBackdrop.Acrylic;
+            case "tabbed" or "mica-alt": return BarBackdrop.Tabbed;
+
+            default:
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0024",
+                    $"Unknown backdrop '{text}'; the bar will have none.",
+                    value.Span,
+                    "Write backdrop \"acrylic\", \"mica\", \"tabbed\" or \"none\"."));
+
+                return null;
+        }
+    }
+
+    /// <summary>Reads a pixel measure that cannot sensibly be negative.</summary>
+    private static int? NonNegative(KdlNode node, string name, List<Diagnostic> diagnostics)
+    {
+        if (Setting(node, name) is not { } value) return null;
+
+        if (!value.TryAsInt(out int amount))
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0025", $"'{name}' must be a whole number of pixels.", value.Span, $"Write {name} 8."));
+
+            return null;
+        }
+
+        if (amount < 0)
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0025", $"'{name}' cannot be negative ({amount}).", value.Span, $"Write {name} 0 for none."));
+
+            return null;
+        }
+
+        return amount;
     }
 
     private static BarZone? ParseZone(
@@ -769,6 +838,19 @@ public static class TajConfigLoader
                         "Add on-click=\"...\" to make it a control, or drop the hover settings."));
                 }
 
+                // The one verb the bar answers itself is checked here, because it is
+                // the one verb the window manager will never get the chance to refuse.
+                // Everything else is the window manager's to judge, when it is clicked.
+                if (KeyboardCommand.Recognises(onClick) &&
+                    !KeyboardCommand.TryParse(onClick, out _, out string? problem))
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0023",
+                        $"'{id}' has on-click=\"{onClick}\", which the bar cannot perform: {problem}",
+                        Setting(node, "on-click")?.Span ?? node.Span,
+                        "The click will be refused. Write on-click=\"keyboard next\" to cycle the input language."));
+                }
+
                 return new TemplateWidget(id, template, style, box)
                 {
                     OnClick = onClick,
@@ -780,6 +862,58 @@ public static class TajConfigLoader
                             Background = hoverBackground ?? Colour.Transparent,
                             Foreground = hoverForeground ?? Colour.Transparent,
                         },
+                };
+            }
+
+            case "icon":
+            {
+                // The focused window's icon unless told otherwise; any source that
+                // publishes the same shape would do. Sized for the bar it usually sits
+                // in: 20 pixels is a 34-pixel bar's text height, near enough.
+                string source = SettingText(node, "source") ?? FocusedWindow.IconKey;
+                int size = SettingInt(node, "size") ?? 20;
+
+                if (size <= 0)
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0025", $"'size' must be a positive number of pixels ({size}).",
+                        Setting(node, "size")?.Span ?? node.Span, "Write size=20."));
+
+                    size = 20;
+                }
+
+                string? onClick = SettingText(node, "on-click");
+                Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
+
+                if (KeyboardCommand.Recognises(onClick) &&
+                    !KeyboardCommand.TryParse(onClick, out _, out string? problem))
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0023",
+                        $"'{id}' has on-click=\"{onClick}\", which the bar cannot perform: {problem}",
+                        Setting(node, "on-click")?.Span ?? node.Span,
+                        "The click will be refused. Write on-click=\"keyboard next\" to cycle the input language."));
+                }
+
+                // A picture has no text colour; a colour written on it is the one
+                // thing here that would silently do nothing.
+                if ((SettingText(node, "colour") ?? SettingText(node, "color")) is not null)
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0016",
+                        $"'{id}' is an icon, and an icon has no text to colour; 'colour' will be ignored.",
+                        node.Span,
+                        "Use background= for a pill behind it."));
+                }
+
+                // Padded evenly rather than the text widgets' sideways-only padding, so
+                // the pill a clickable icon gains on hover is a square around it.
+                return new IconWidget(id, source, size, style, new BoxStyle(Padding: Edges.All(4)))
+                {
+                    OnClick = onClick,
+                    HoverStyle = hoverBackground is null
+                        ? null
+                        : VisualStyle.Default with { Background = hoverBackground.Value },
                 };
             }
 

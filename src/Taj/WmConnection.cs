@@ -64,6 +64,45 @@ public sealed class WmConnection : IAsyncDisposable
     private Task? _pump;
 
     /// <summary>
+    /// The window in front as last reported, so an icon that arrives after focus has
+    /// moved on is kept for later rather than shown now.
+    /// </summary>
+    private long _focusedHandle;
+
+    /// <summary>
+    /// Icons by window, as the window manager sent them, with when they were read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The window manager remembers too, so this is not about sparing it: it is about
+    /// not making a round trip per focus change for a picture that was on screen a
+    /// second ago. A minute, then asked again, because icons do change - a badge, a
+    /// profile - and a handle is reused once its window has gone. Emptied wholesale
+    /// when full, like every other cache in this program; at these sizes an eviction
+    /// policy would be more code than the cache.
+    /// </para>
+    /// <para>
+    /// Written from the pump and from the fire-and-forget fetches, hence concurrent.
+    /// </para>
+    /// </remarks>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ReadAt, string? Json)> _icons = new();
+
+    /// <summary>
+    /// Windows whose icon is being fetched right now, so a burst of title changes in
+    /// the moment after an entry expires costs one round trip rather than one each.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, byte> _fetching = new();
+
+    private static readonly TimeSpan IconLifetime = TimeSpan.FromSeconds(60);
+    private const int IconCapacity = 64;
+
+    /// <summary>
+    /// The size asked for. A hint to the window manager about which variant to prefer;
+    /// the widget scales whatever comes.
+    /// </summary>
+    private const int IconSize = 32;
+
+    /// <summary>
     /// Every topic <see cref="HandleEventAsync"/> has a case for, and nothing else.
     /// </summary>
     /// <remarks>
@@ -357,7 +396,7 @@ public sealed class WmConnection : IAsyncDisposable
         switch (notification.Topic)
         {
             case "window.title_changed":
-                UpdateFocusedWindow(notification.Data);
+                UpdateFocusedWindow(client, notification.Data);
                 break;
 
             case "window.state_changed":
@@ -366,11 +405,11 @@ public sealed class WmConnection : IAsyncDisposable
                 // alter what the bar shows, and UpdateFocusedWindow only writes the
                 // values the title widget reads. Cheaper than a full refresh, and
                 // this fires on every fullscreen toggle.
-                UpdateFocusedWindow(notification.Data);
+                UpdateFocusedWindow(client, notification.Data);
                 break;
 
             case "window.focused":
-                UpdateFocusedWindow(notification.Data);
+                UpdateFocusedWindow(client, notification.Data);
 
                 // The workspace list is refreshed too, because which workspace holds
                 // focus can change without any workspace being activated. Moving
@@ -380,12 +419,18 @@ public sealed class WmConnection : IAsyncDisposable
                 await RefreshAsync(client).ConfigureAwait(false);
                 break;
 
+            case "window.unmanaged":
+                // Its icon is forgotten along with it, so a handle Windows hands to the
+                // next window does not come with the last one's picture.
+                ForgetIcon(notification.Data);
+                await RefreshAsync(client).ConfigureAwait(false);
+                break;
+
             case "workspace.activated":
             case "workspace.created":
             case "workspace.destroyed":
             case "workspace.moved":
             case "window.managed":
-            case "window.unmanaged":
             case "window.moved":
             case "window.tags_changed":
                 // Workspace occupancy is derived from several event kinds, so the
@@ -517,13 +562,110 @@ public sealed class WmConnection : IAsyncDisposable
     /// </remarks>
     public event Action<bool>? SuspendedChanged;
 
-    private void UpdateFocusedWindow(string json)
+    private void UpdateFocusedWindow(IpcClient client, string json)
     {
         if (FocusedWindow.Parse(json) is not { } values) return;
 
         _model.SetValue(FocusedWindow.TitleKey, values.Title);
         _model.SetValue(FocusedWindow.ProcessKey, values.Process);
         _model.SetValue(FocusedWindow.StateKey, values.State);
+
+        TrackFocus(client, values.Handle);
+    }
+
+    /// <summary>
+    /// Notes which window is in front and sees to its icon: from memory when it was
+    /// seen recently, otherwise asked for and applied when the answer comes.
+    /// </summary>
+    /// <remarks>
+    /// The previous icon stays up until the new one arrives rather than being cleared
+    /// at once. Clearing hides the widget, which moves the title beside it, and a
+    /// title that jumps left and back on every focus change is worse than a picture
+    /// that lags the title by the milliseconds a round trip takes.
+    /// </remarks>
+    private void TrackFocus(IpcClient client, long handle)
+    {
+        Volatile.Write(ref _focusedHandle, handle);
+
+        if (handle == 0)
+        {
+            _model.SetValue(FocusedWindow.IconKey, string.Empty);
+            return;
+        }
+
+        if (_icons.TryGetValue(handle, out (long ReadAt, string? Json) known) &&
+            Stopwatch.GetElapsedTime(known.ReadAt) < IconLifetime)
+        {
+            _model.SetValue(FocusedWindow.IconKey, known.Json ?? string.Empty);
+            return;
+        }
+
+        // One fetch per window at a time. A terminal retitles itself on every command,
+        // and each retitle lands here; without this, the first retitle after an entry
+        // expired would send a request, and every one behind it in the same instant
+        // would send another - each a message into the window the user is typing in.
+        if (!_fetching.TryAdd(handle, 0)) return;
+
+        _ = FetchIconAsync(client, handle);
+    }
+
+    /// <summary>
+    /// Asks the window manager for a window's icon, remembers the answer, and shows it
+    /// if that window is still the one in front.
+    /// </summary>
+    /// <remarks>
+    /// Fire-and-forget from the pump rather than awaited on it, so a window slow to
+    /// answer the window manager holds up its own icon and nothing else - the events
+    /// behind it keep flowing. Which is why the guard at the end exists: two fetches
+    /// can be in flight and finish out of order.
+    /// </remarks>
+    private async Task FetchIconAsync(IpcClient client, long handle)
+    {
+        string? json = null;
+
+        try
+        {
+            try
+            {
+                IpcResponse response = await client.SendAsync(
+                    WindowIcon.Method, $"{handle} {IconSize}").ConfigureAwait(false);
+
+                if (response.Ok) json = response.Data;
+                else if (Log.IsEnabled(LogLevel.Debug)) Log.Debug(LogCategory.Ipc, $"no icon for window {handle}: {response.Error}");
+            }
+            catch (Exception ex)
+            {
+                // A lost connection is the pump's to notice and mend; here it is one
+                // picture missing, and a debug line is all that is owed.
+                Log.Debug(LogCategory.Ipc, $"could not fetch the icon of window {handle}: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            if (_icons.Count >= IconCapacity) _icons.Clear();
+            _icons[handle] = (Stopwatch.GetTimestamp(), json);
+        }
+        finally
+        {
+            // After the entry is stored, so nobody arriving in between finds neither
+            // an answer nor a fetch in flight and starts another.
+            _fetching.TryRemove(handle, out _);
+        }
+
+        if (Volatile.Read(ref _focusedHandle) == handle)
+            _model.SetValue(FocusedWindow.IconKey, json ?? string.Empty);
+    }
+
+    /// <summary>Forgets the icon of a window the window manager has let go of.</summary>
+    private void ForgetIcon(string json)
+    {
+        try
+        {
+            if (JsonSerializer.Deserialize(json, IpcJsonContext.Default.WindowInfo) is { } window)
+                _icons.TryRemove(window.Handle, out _);
+        }
+        catch (JsonException)
+        {
+            // Nothing to forget from a payload that says nothing.
+        }
     }
 
     private async Task RefreshAsync(IpcClient client)
@@ -589,6 +731,11 @@ public sealed class WmConnection : IAsyncDisposable
             _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
             _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
             _model.SetValue("layout", FindActiveLayout(state));
+
+            // The icon too, from the snapshot as well as from the events, or a bar
+            // started with a window already in front would show its title alone until
+            // focus next moved.
+            TrackFocus(client, state.FocusedWindow?.Handle ?? 0);
 
             // From the snapshot as well as from the events, because a bar that starts
             // while Shubbak is already suspended would otherwise show nothing until

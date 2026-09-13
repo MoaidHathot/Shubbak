@@ -56,6 +56,11 @@ internal static class Program
         // know about.
         PowerThrottling.OptOut();
 
+        // Before the config is read: a border written `accent` is resolved when it is
+        // applied, and it should resolve to this machine's accent rather than the
+        // stock blue.
+        SystemColours.Adopt();
+
         string? configPath = ResolveConfigPath(args);
 
         // A terminal-facing operation by definition: it exists to print diagnostics

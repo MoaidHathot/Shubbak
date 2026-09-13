@@ -98,7 +98,7 @@ public static class VisualPainter
             renderer.FillRectangle(node.Rect, style.Background, style.CornerRadius);
 
         if (style.BorderWidth > 0 && !style.BorderColour.IsTransparent)
-            renderer.DrawRectangle(node.Rect, style.BorderColour, style.BorderWidth, style.CornerRadius);
+            PaintBorder(renderer, node.Rect, style);
 
         if (node.Kind == VisualKind.Text && node.Text.Length > 0)
         {
@@ -106,8 +106,52 @@ public static class VisualPainter
             renderer.DrawText(node.Text, textRect, style.Foreground, style.Font);
         }
 
+        // Through the capability when the renderer has it; a renderer that cannot
+        // composite draws the node's background and border and leaves the picture out,
+        // which is a gap rather than a failure.
+        if (node.Kind == VisualKind.Image && node.Image is { } image && renderer is IImageRenderer images)
+        {
+            Rect imageRect = Deflate(node.Rect, node.Box.Padding);
+            if (!imageRect.IsEmpty) images.DrawImage(image, imageRect);
+        }
+
         // Children after the parent's own background, so nesting draws correctly.
         foreach (VisualNode child in node.Children) PaintNode(renderer, child, hovered);
+    }
+
+    /// <summary>
+    /// An outline, or a straight strip along each edge the style names.
+    /// </summary>
+    /// <remarks>
+    /// The strips are filled rectangles rather than a stroke, so a renderer needs no
+    /// notion of partial outlines: a hairline under a docked bar or under an active
+    /// item is the same primitive as any other fill. Drawn inside the node's rectangle,
+    /// where an outline is, so switching between the two does not move anything.
+    /// </remarks>
+    private static void PaintBorder(IRenderer renderer, Rect rect, VisualStyle style)
+    {
+        BorderSides sides = style.BorderSides;
+
+        if (sides == BorderSides.All)
+        {
+            renderer.DrawRectangle(rect, style.BorderColour, style.BorderWidth, style.CornerRadius);
+            return;
+        }
+
+        int width = Math.Min(style.BorderWidth, Math.Min(rect.Width, rect.Height));
+        if (width <= 0) return;
+
+        if (sides.HasFlag(BorderSides.Top))
+            renderer.FillRectangle(new Rect(rect.Left, rect.Top, rect.Width, width), style.BorderColour);
+
+        if (sides.HasFlag(BorderSides.Bottom))
+            renderer.FillRectangle(new Rect(rect.Left, rect.Bottom - width, rect.Width, width), style.BorderColour);
+
+        if (sides.HasFlag(BorderSides.Left))
+            renderer.FillRectangle(new Rect(rect.Left, rect.Top, width, rect.Height), style.BorderColour);
+
+        if (sides.HasFlag(BorderSides.Right))
+            renderer.FillRectangle(new Rect(rect.Right - width, rect.Top, width, rect.Height), style.BorderColour);
     }
 
     private static Rect Deflate(Rect rect, Edges padding) => Rect.FromEdges(

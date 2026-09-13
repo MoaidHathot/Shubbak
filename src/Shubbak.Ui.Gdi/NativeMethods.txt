@@ -18,6 +18,16 @@ DeleteDC
 BitBlt
 ROP_CODE
 
+// The composited renderer owns its pixels: a 32-bit DIB it writes directly, read
+// back after GDI has drawn text into it. GdiFlush is what makes the read-back see
+// the text rather than the batch GDI was still holding.
+CreateDIBSection
+BITMAPINFO
+BITMAPINFOHEADER
+BI_COMPRESSION
+DIB_USAGE
+GdiFlush
+
 // --- shapes -----------------------------------------------------------------------
 CreateSolidBrush
 RoundRect

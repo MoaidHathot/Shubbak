@@ -16,6 +16,25 @@ public readonly record struct FontStyle(
     public static FontStyle Default => new();
 }
 
+/// <summary>Which edges of a node its border is drawn along.</summary>
+/// <remarks>
+/// A border is usually an outline, but a bar docked at the top of the screen wants a
+/// hairline along the edge that faces the windows and nothing along the three that
+/// face the bezel - and an underline is the other common way to mark an active item.
+/// Anything short of <see cref="All"/> is drawn as straight lines, ignoring the
+/// corner radius.
+/// </remarks>
+[Flags]
+public enum BorderSides
+{
+    None = 0,
+    Top = 1,
+    Right = 2,
+    Bottom = 4,
+    Left = 8,
+    All = Top | Right | Bottom | Left,
+}
+
 /// <summary>Everything the renderer needs in order to draw a node.</summary>
 /// <param name="Foreground">Text colour.</param>
 /// <param name="Background">Fill colour.</param>
@@ -24,6 +43,10 @@ public readonly record struct FontStyle(
 /// <param name="CornerRadius">Corner rounding in pixels.</param>
 /// <param name="Font">Text style.</param>
 /// <param name="Opacity">Overall opacity, 0 to 1.</param>
+/// <param name="BorderSides">
+/// The edges the border runs along; an outline unless said otherwise. Only read when
+/// <paramref name="BorderWidth"/> is positive, so a zeroed struct still draws no border.
+/// </param>
 public readonly record struct VisualStyle(
     Colour Foreground = default,
     Colour Background = default,
@@ -31,7 +54,8 @@ public readonly record struct VisualStyle(
     int BorderWidth = 0,
     int CornerRadius = 0,
     FontStyle Font = default,
-    double Opacity = 1.0)
+    double Opacity = 1.0,
+    BorderSides BorderSides = BorderSides.All)
 {
     public static VisualStyle Default => new()
     {
@@ -39,6 +63,7 @@ public readonly record struct VisualStyle(
         Background = Colour.Transparent,
         Font = FontStyle.Default,
         Opacity = 1.0,
+        BorderSides = BorderSides.All,
     };
 
     /// <summary>Overlays only the properties set in <paramref name="other"/>.</summary>
@@ -56,6 +81,7 @@ public readonly record struct VisualStyle(
             Background = o.Background,
             BorderColour = o.BorderWidth > 0 ? o.BorderColour : BorderColour,
             BorderWidth = o.BorderWidth > 0 ? o.BorderWidth : BorderWidth,
+            BorderSides = o.BorderWidth > 0 ? o.BorderSides : BorderSides,
             CornerRadius = o.CornerRadius > 0 ? o.CornerRadius : CornerRadius,
             Font = string.IsNullOrEmpty(o.Font.Family) ? Font : o.Font,
             Opacity = o.Opacity,

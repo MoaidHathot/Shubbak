@@ -170,4 +170,48 @@ public sealed class BarLayoutTests
             }
         }
     }
+
+    [Fact]
+    public void ALongTitleCostsTheTitleAndNotTheClock()
+    {
+        // The centre zone grows, so it is the one that gives when a title is longer
+        // than the room. Before this rule the overflow was shared out proportionally
+        // and the clock lost width to a long title - which is why configs capped the
+        // title at a character count that knew nothing about the bar's actual width.
+        TajConfig config = Load();
+        BarProfile profile = config.Profiles["default"];
+
+        var model = new BarModel(profile);
+        model.SetValue("workspaces", "1|One|1|1|1\t2|Two|0|1|0");
+        model.SetValue("clock", "Sun 2 Aug 23:15");
+        model.SetValue("seattle", "Sun 2 Aug 13:15");
+
+        model.SetValue("window.title", "Short");
+        VisualNode withShort = model.Build();
+        new FlexLayout(new FixedTextMeasurer()).Arrange(withShort, new Rect(0, 0, BarWidth, profile.Height));
+
+        model.SetValue("window.title", new string('x', 400));
+        VisualNode withLong = model.Build();
+        new FlexLayout(new FixedTextMeasurer()).Arrange(withLong, new Rect(0, 0, BarWidth, profile.Height));
+
+        // The readouts keep exactly the room they had.
+        Assert.Equal(Find(withShort, "clock").Rect, Find(withLong, "clock").Rect);
+        Assert.Equal(Find(withShort, "seattle").Rect, Find(withLong, "seattle").Rect);
+        Assert.Equal(Find(withShort, "workspaces").Rect, Find(withLong, "workspaces").Rect);
+
+        // The title filled what was left and no more; the renderer clips it there.
+        VisualNode title = Find(withLong, "text");
+        Assert.True(title.Rect.Width > 0);
+        Assert.True(title.Rect.Right <= Find(withLong, "right").Rect.Left);
+        Assert.True(title.Rect.Width < title.ContentSize.Width, "the title should have been cut to the room available");
+    }
+
+    [Fact]
+    public void ATitleThatFitsIsNotCut()
+    {
+        TajConfig config = Load();
+        VisualNode title = Find(Arrange(config.Profiles["default"]), "text");
+
+        Assert.Equal(title.ContentSize.Width, title.Rect.Width);
+    }
 }

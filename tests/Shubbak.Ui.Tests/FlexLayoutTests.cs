@@ -178,6 +178,56 @@ public sealed class FlexLayoutTests
         Assert.Equal(50, Find(root, "fixed").Rect.Width);
     }
 
+    [Fact]
+    public void AGrowingChildGivesBeforeItsNeighboursDo()
+    {
+        // The bar: workspaces on the left, a growing centre zone holding the window
+        // title, the clock on the right. A long title must cost the title, not the
+        // clock - what stretches when there is room is what gives when there is not.
+        VisualNode root = Row(
+            Text("left", new string('w', 10)),                                   // 100px
+            Text("title", new string('x', 100), new BoxStyle(Grow: 1)),         // 1000px
+            Text("clock", "Sun 13 Sep 15:57"));                                  // 160px
+
+        Layout.Arrange(root, new Rect(0, 0, 600, 30));
+
+        Assert.Equal(100, Find(root, "left").Rect.Width);
+        Assert.Equal(160, Find(root, "clock").Rect.Width);
+        Assert.Equal(340, Find(root, "title").Rect.Width);
+    }
+
+    [Fact]
+    public void TheNeighboursGiveOnlyOnceTheGrowingChildHasNothingLeft()
+    {
+        // A bar too narrow even for its fixed content: the growing child goes to its
+        // minimum first, and the remaining overflow then falls on the rest, the
+        // ordinary proportional way.
+        VisualNode root = Row(
+            Text("left", new string('w', 30)),                                   // 300px
+            Text("title", new string('x', 10), new BoxStyle(Grow: 1)),          // 100px
+            Text("right", new string('y', 30)));                                 // 300px
+
+        Layout.Arrange(root, new Rect(0, 0, 500, 30));
+
+        Assert.Equal(0, Find(root, "title").Rect.Width);
+        Assert.Equal(250, Find(root, "left").Rect.Width);
+        Assert.Equal(250, Find(root, "right").Rect.Width);
+    }
+
+    [Fact]
+    public void AGrowingChildStillStopsAtItsMinimum()
+    {
+        VisualNode root = Row(
+            Text("left", new string('w', 30)),                                   // 300px
+            Text("title", new string('x', 50), new BoxStyle(Grow: 1, MinWidth: 80)),
+            Text("right", new string('y', 30)));                                 // 300px
+
+        Layout.Arrange(root, new Rect(0, 0, 500, 30));
+
+        Assert.Equal(80, Find(root, "title").Rect.Width);
+        Assert.Equal(500, Find(root, "left").Rect.Width + Find(root, "title").Rect.Width + Find(root, "right").Rect.Width);
+    }
+
     [Theory]
     [InlineData(JustifyContent.Start, 0)]
     [InlineData(JustifyContent.Center, 75)]

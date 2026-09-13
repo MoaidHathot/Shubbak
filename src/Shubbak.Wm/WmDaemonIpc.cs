@@ -19,6 +19,12 @@ internal sealed partial class WmDaemonIpc
 {
     private readonly WmDaemon _daemon;
 
+    /// <summary>
+    /// Icons already read, so a bar switching between the same few windows all day
+    /// asks each of them once every half minute rather than once per focus change.
+    /// </summary>
+    private readonly WindowIconCache _icons = new();
+
     public WmDaemonIpc(WmDaemon daemon) => _daemon = daemon;
 
     public Task<IpcResponse> HandleAsync(IpcRequest request, IpcClientInfo client)
@@ -28,6 +34,7 @@ internal sealed partial class WmDaemonIpc
             "command" => RunCommandAsync(request, client),
             "query" => QueryAsync(request),
             "inspect" => InspectAsync(request),
+            WindowIcon.Method => Task.FromResult(WindowIconResponse(request)),
             "add-rule" => AddRuleAsync(request, client),
             "remove-rule" => RemoveRuleAsync(request, client),
             "diagnose" => DiagnoseAsync(request),
@@ -36,6 +43,50 @@ internal sealed partial class WmDaemonIpc
             _ => Task.FromResult(new IpcResponse(
                 request.Id, false, null, $"unknown method '{request.Method}'")),
         };
+    }
+
+    /// <summary>
+    /// Answers <c>window-icon</c>: a window's icon as pixels.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A capability of the window manager rather than of any one client, for the same
+    /// reason the title comes over the pipe rather than from the bar reading windows
+    /// itself: one process asks windows things, and everything else asks it. A bar, a
+    /// palette, a keycast overlay or a script gets the same icon the taskbar shows
+    /// without sending a message to a window that may be hung.
+    /// </para>
+    /// <para>
+    /// On the pipe thread, deliberately, and never on the loop: nothing here touches the
+    /// tree, and the one call that can wait - the message to the window - is bounded to
+    /// a tenth of a second and gives up at once on a window already known to be hung.
+    /// The loop, which holds the keyboard hook, must not be made to wait on another
+    /// process for the sake of a picture.
+    /// </para>
+    /// <para>
+    /// The payload is the handle as a decimal number, optionally followed by the size
+    /// the client draws at, which picks the large or the small variant to try first.
+    /// </para>
+    /// </remarks>
+    private IpcResponse WindowIconResponse(IpcRequest request)
+    {
+        string[] words = (request.Payload ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        if (words.Length == 0 || !long.TryParse(words[0], out long raw))
+            return new IpcResponse(request.Id, false, null, "expected a window handle, optionally followed by a size");
+
+        int size = words.Length > 1 && int.TryParse(words[1], out int wanted) ? wanted : 32;
+        nint handle = (nint)raw;
+
+        if (!Win32Window.Exists(handle))
+            return new IpcResponse(request.Id, false, null, "no such window");
+
+        if (_icons.Get(handle, size) is not { } pixels)
+            return new IpcResponse(request.Id, false, null, "the window has no icon");
+
+        var icon = new WindowIcon(raw, pixels.Width, pixels.Height, Convert.ToBase64String(pixels.Bgra), pixels.Source);
+
+        return new IpcResponse(request.Id, true, JsonSerializer.Serialize(icon, IpcJsonContext.Default.WindowIcon));
     }
 
     /// <summary>

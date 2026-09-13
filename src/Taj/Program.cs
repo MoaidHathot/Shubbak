@@ -179,6 +179,11 @@ internal static class Program
         // coordinates on scaled displays and the bar lands in the wrong place.
         PInvoke.SetProcessDpiAwarenessContext((DPI_AWARENESS_CONTEXT)(nint)(-4));
 
+        // Before the config is read, so a colour written `accent` is this machine's.
+        // Re-read on every reload, which is how the bar follows a change of accent -
+        // see BarWindow.SystemColoursChanged.
+        SystemColours.Adopt();
+
         try
         {
             (TajConfig config, _) = LoadConfig(args, out DiagnosticCounts problems);
@@ -385,7 +390,22 @@ internal static class Program
 
         connection.WindowManagerTimeout = config.WindowManagerTimeout;
 
-        window.CommandRequested += command => _ = connection.SendCommandAsync(command);
+        window.CommandRequested += command =>
+        {
+            // The one verb the bar answers itself. Everything else is the window
+            // manager's, and goes to it unread.
+            if (KeyboardCommand.Recognises(command))
+            {
+                if (KeyboardCommand.TryParse(command, out KeyboardCommand? keyboard, out string? problem))
+                    KeyboardLanguage.Switch(keyboard!);
+                else
+                    Log.Warn(LogCategory.Wm, $"refused click command '{command}': {problem}");
+
+                return;
+            }
+
+            _ = connection.SendCommandAsync(command);
+        };
 
         if (!window.Create(bounds))
         {
@@ -646,6 +666,15 @@ internal static class Program
         BarWindow.FullScreenAppChanged += up =>
         {
             s_fullScreenApp = up;
+            s_wake.Set();
+        };
+
+        // The accent changed. Colours written `accent` were resolved when the file was
+        // read, so it is read again - the same path a saved file takes, coalesced the
+        // same way, since Windows says this once per display.
+        BarWindow.SystemColoursChanged += () =>
+        {
+            s_reloadRequested = true;
             s_wake.Set();
         };
 

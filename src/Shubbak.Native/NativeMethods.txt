@@ -40,6 +40,10 @@ DwmGetWindowAttribute
 DWMWINDOWATTRIBUTE
 DwmSetWindowAttribute
 
+// The accent colour, for configs written `accent` rather than as a hex value. See
+// SystemColours.
+DwmGetColorizationColor
+
 // --- shell cloaking (undocumented) ------------------------------------------
 // Deliberately absent. DWMWA_CLOAK is a per-process attribute - setting it on a
 // window owned by another process returns E_ACCESSDENIED, so it can never conceal a
@@ -221,6 +225,26 @@ NOTIFY_ICON_DATA_FLAGS
 // index is what every shell API uses to mean "the icon this file shows".
 ExtractIconEx
 DestroyIcon
+
+// A window's icon as pixels, for the `window-icon` pipe method. The window is asked
+// the way the taskbar asks, then its class is read, then the file's icon is taken as
+// the tray's is; the answer is unpacked with GetIconInfo and read out with GetDIBits.
+// See WindowIconReader.
+WM_GETICON
+GetClassLongPtr
+GET_CLASS_LONG_INDEX
+GetIconInfo
+ICONINFO
+GetObject
+BITMAP
+GetDIBits
+BITMAPINFO
+BITMAPINFOHEADER
+BI_COMPRESSION
+DIB_USAGE
+CreateCompatibleDC
+DeleteDC
+DeleteObject
 
 CreatePopupMenu
 AppendMenu

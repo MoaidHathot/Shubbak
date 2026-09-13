@@ -13,6 +13,26 @@ shubbak query windows        # or: all-windows, workspaces, monitors, focused,
                              #     layouts, commands, bindings, contexts, arrangements
 ```
 
+One more thing can be asked over the pipe that the CLI has no subcommand for, because
+its answer is a picture: **`window-icon`**. Send the method `window-icon` with the
+window's handle as the payload — optionally followed by a space and the size you mean
+to draw at, which picks the large or the small variant — and the answer is the
+window's icon as pixels:
+
+```json
+{"handle":131842,"width":32,"height":32,"pixels":"<base64>","source":"window"}
+```
+
+`pixels` is `width * height * 4` bytes, rows top-down, blue-green-red-alpha with the
+colour premultiplied by the alpha, which is what a compositor draws directly. `source`
+says who answered: the window itself (`WM_GETICON`, the way the taskbar asks), its
+class, or the executable's own icon (`file`) for a window that never set one. The
+daemon does the asking so that a client never sends a message to a window that may be
+hung — the ask is bounded to a tenth of a second and served off the daemon's loop —
+and remembers answers for half a minute, so a bar that asks on every focus change
+costs the window one read. This is how Taj draws the focused window's icon; a keycast
+overlay or a task switcher of your own gets the same picture the same way.
+
 ## Telling
 
 Anything the CLI does not recognise as its own subcommand is forwarded straight to

@@ -105,6 +105,10 @@ internal static class Program
         s_threadId = PInvoke.GetCurrentThreadId();
         s_configPath = PathFrom(args);
 
+        // Before the config is read, so a theme colour written `accent` is this
+        // machine's rather than the stock blue.
+        SystemColours.Adopt();
+
         ConfigureLogging(args);
 
         // One palette per account, for the same reason there is one window manager.

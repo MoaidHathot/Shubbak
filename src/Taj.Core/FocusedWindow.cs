@@ -14,7 +14,11 @@ namespace Taj.Core;
 /// <c>fullscreen</c>, <c>monitorfullscreen</c>, <c>maximised</c> or
 /// <c>minimised</c>. Published so a widget can style itself by it.
 /// </param>
-public readonly record struct FocusedWindowValues(string Title, string Process, string State)
+/// <param name="Handle">
+/// The window itself, for asking the window manager things about it - its icon -
+/// or zero when nothing is focused.
+/// </param>
+public readonly record struct FocusedWindowValues(string Title, string Process, string State, long Handle = 0)
 {
     /// <summary>Nothing focused: every value blank.</summary>
     public static FocusedWindowValues None => new(string.Empty, string.Empty, string.Empty);
@@ -39,6 +43,18 @@ public static class FocusedWindow
 
     /// <summary>Source name carrying the focused window's state.</summary>
     public const string StateKey = "window.state";
+
+    /// <summary>
+    /// Source name carrying the focused window's icon, as the window manager sent
+    /// it: the JSON of a <see cref="WindowIcon"/>, or empty when it has none.
+    /// </summary>
+    /// <remarks>
+    /// The wire form rather than something decoded, because source values are
+    /// strings by design - that uniformity is what lets a script-backed source and a
+    /// built-in one be interchangeable - and the widget that draws it decodes once
+    /// and keeps the result.
+    /// </remarks>
+    public const string IconKey = "window.icon";
 
     /// <summary>
     /// The values a payload implies, or null when the bar should not change.
@@ -69,7 +85,7 @@ public static class FocusedWindow
 
             if (window is null || !window.Focused) return null;
 
-            return new FocusedWindowValues(window.Title, window.ProcessName, window.State);
+            return new FocusedWindowValues(window.Title, window.ProcessName, window.State, window.Handle);
         }
         catch (JsonException ex)
         {

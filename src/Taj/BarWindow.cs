@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
+using Shubbak.Core.Rendering;
 using Taj.Core;
 using Shubbak.Ui.Layout;
 using Shubbak.Ui.Rendering;
@@ -75,6 +76,17 @@ public sealed class BarWindow : IDisposable
     /// </remarks>
     public static event Action<bool>? FullScreenAppChanged;
 
+    /// <summary>
+    /// Raised when Windows says the accent colour has changed.
+    /// </summary>
+    /// <remarks>
+    /// Static for the same reason as the others: the answer is about the machine, not
+    /// about one bar. A config that writes <c>accent</c> resolved it when it was read,
+    /// so following the change means reading the file again - which the loop already
+    /// knows how to do, and does for this the way it does for a saved file.
+    /// </remarks>
+    public static event Action? SystemColoursChanged;
+
     private readonly BarModel _model;
 
     /// <summary>
@@ -90,10 +102,28 @@ public sealed class BarWindow : IDisposable
     private readonly string _label;
 
     private HWND _handle;
-    private GdiRenderer? _renderer;
+    private CompositedGdiRenderer? _renderer;
     private FlexLayout? _layout;
     private VisualNode? _tree;
+
+    /// <summary>The display the bar is on, as last told.</summary>
+    private Rect _monitor;
+
+    /// <summary>The window's rectangle: the bar as drawn.</summary>
     private Rect _bounds;
+
+    /// <summary>
+    /// The rectangle reserved from other windows, which contains <see cref="_bounds"/>.
+    /// </summary>
+    /// <remarks>
+    /// The same as the window for a docked bar. A floating bar reserves its margin
+    /// on both sides of itself as well, so it sits in the middle of the gap it makes.
+    /// </remarks>
+    private Rect _strip;
+
+    /// <summary>What the compositor was last asked for, so it is asked once per change.</summary>
+    private Look? _look;
+
     private bool _appbarRegistered;
     private bool _refusalReported;
     private VisualNode? _hovered;
@@ -125,13 +155,8 @@ public sealed class BarWindow : IDisposable
 
         BarProfile profile = _model.Profile;
 
-        _bounds = profile.Edge == BarEdge.Top
-            ? new Rect(monitorBounds.X, monitorBounds.Y, monitorBounds.Width, profile.Height)
-            : new Rect(
-                monitorBounds.X,
-                monitorBounds.Bottom - profile.Height,
-                monitorBounds.Width,
-                profile.Height);
+        _monitor = monitorBounds;
+        (_strip, _bounds) = Geometry(monitorBounds, profile);
 
         _handle = PInvoke.CreateWindowEx(
             WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE,
@@ -151,11 +176,12 @@ public sealed class BarWindow : IDisposable
 
         AllowShellRestartBroadcast();
 
-        _renderer = new GdiRenderer((nint)_handle.Value);
+        _renderer = new CompositedGdiRenderer((nint)_handle.Value);
         _layout = new FlexLayout(_renderer);
 
         RegisterAppbar();
-        ApplyBackdrop();
+        HonourAlpha();
+        ApplyLook(profile);
 
         PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
 
@@ -169,9 +195,14 @@ public sealed class BarWindow : IDisposable
 
         if (!_model.IsDirty && _tree is not null) return;
 
-        // Height can change when the profile does, e.g. a presentation profile with
-        // a slimmer bar.
-        if (_model.Profile.Height != _bounds.Height) Resize(_model.Profile.Height);
+        BarProfile profile = _model.Profile;
+
+        // The shape can change when the profile does, e.g. a presentation profile
+        // with a slimmer bar, or one that floats where the default is docked.
+        (Rect strip, Rect bounds) = Geometry(_monitor, profile);
+        if (strip != _strip || bounds != _bounds) Place(strip, bounds);
+
+        ApplyLook(profile);
 
         _tree = _model.Build();
         _layout.Arrange(_tree, _bounds with { X = 0, Y = 0 });
@@ -196,17 +227,47 @@ public sealed class BarWindow : IDisposable
         PInvoke.UpdateWindow(_handle);
     }
 
-    private void Resize(int height)
+    /// <summary>
+    /// Where a profile puts its bar on a display: the strip it reserves, and the
+    /// window inside that strip.
+    /// </summary>
+    /// <remarks>
+    /// A docked bar is its strip. A floating one is inset by its margin from the
+    /// screen edge and from both sides, and the strip is deepened by the same margin
+    /// on the inner side, so the room above the bar and the room below it match
+    /// without the window manager's gaps having to know about either.
+    /// </remarks>
+    private static (Rect Strip, Rect Window) Geometry(Rect monitor, BarProfile profile)
     {
-        _bounds = _model.Profile.Edge == BarEdge.Top
-            ? _bounds with { Height = height }
-            : new Rect(_bounds.X, _bounds.Bottom - height, _bounds.Width, height);
+        int margin = Math.Max(0, profile.Margin);
+        int depth = profile.Height + (2 * margin);
+
+        Rect strip = profile.Edge == BarEdge.Top
+            ? new Rect(monitor.X, monitor.Y, monitor.Width, depth)
+            : new Rect(monitor.X, monitor.Bottom - depth, monitor.Width, depth);
+
+        var window = new Rect(
+            strip.X + margin,
+            strip.Y + margin,
+            Math.Max(0, strip.Width - (2 * margin)),
+            profile.Height);
+
+        return (strip, window);
+    }
+
+    /// <summary>Moves the window and re-reserves its strip.</summary>
+    private void Place(Rect strip, Rect bounds)
+    {
+        _strip = strip;
+        _bounds = bounds;
 
         PInvoke.SetWindowPos(
             _handle, HWND.Null, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
 
         RegisterAppbar();
+
+        Log.Info(LogCategory.Wm, $"bar {_label} placed at {_bounds}, reserving {_strip}");
     }
 
     /// <summary>
@@ -230,27 +291,17 @@ public sealed class BarWindow : IDisposable
     {
         if (_handle.IsNull) return false;
 
-        BarProfile profile = _model.Profile;
+        _monitor = monitorBounds;
 
-        Rect wanted = profile.Edge == BarEdge.Top
-            ? new Rect(monitorBounds.X, monitorBounds.Y, monitorBounds.Width, _bounds.Height)
-            : new Rect(monitorBounds.X, monitorBounds.Bottom - _bounds.Height, monitorBounds.Width, _bounds.Height);
+        (Rect strip, Rect bounds) = Geometry(monitorBounds, _model.Profile);
 
-        if (wanted == _bounds) return false;
+        if (strip == _strip && bounds == _bounds) return false;
 
-        _bounds = wanted;
-
-        PInvoke.SetWindowPos(
-            _handle, HWND.Null, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
-            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
-
-        RegisterAppbar();
+        Place(strip, bounds);
 
         // The tree was laid out for the old width. Dropping it makes the next Update
         // rebuild, whether or not the model has changed.
         _tree = null;
-
-        Log.Info(LogCategory.Wm, $"bar {_label} moved to {_bounds}");
 
         return true;
     }
@@ -259,8 +310,11 @@ public sealed class BarWindow : IDisposable
     {
         if (_renderer is null || _tree is null) return;
 
+        // Cleared to nothing rather than to the profile's background: the root node
+        // paints the surface, with its corners and border, and painting a translucent
+        // colour twice would double it. What the root leaves bare stays see-through.
         VisualPainter.Paint(
-            _renderer, _tree, _bounds with { X = 0, Y = 0 }, _model.Profile.Background, _hovered);
+            _renderer, _tree, _bounds with { X = 0, Y = 0 }, Colour.Transparent, _hovered);
     }
 
     /// <summary>Tracks which node the pointer is over, repainting when it changes.</summary>
@@ -378,10 +432,10 @@ public sealed class BarWindow : IDisposable
             uEdge = _model.Profile.Edge == BarEdge.Top ? 1u : 3u,   // ABE_TOP : ABE_BOTTOM
             rc = new RECT
             {
-                left = _bounds.Left,
-                top = _bounds.Top,
-                right = _bounds.Right,
-                bottom = _bounds.Bottom,
+                left = _strip.Left,
+                top = _strip.Top,
+                right = _strip.Right,
+                bottom = _strip.Bottom,
             },
         };
 
@@ -663,21 +717,107 @@ public sealed class BarWindow : IDisposable
         FullScreenAppChanged?.Invoke(opening);
     }
 
+    // ---- the compositor ----------------------------------------------------
+
     /// <summary>
-    /// Asks the compositor for a system backdrop.
+    /// Tells the compositor to honour the alpha channel of what the bar draws.
     /// </summary>
     /// <remarks>
-    /// Windows 11 only, and failure is ignored: on Windows 10 the bar simply uses its
-    /// configured background colour, which is a perfectly good bar.
+    /// <para>
+    /// A plain top-level window is composed as opaque whatever its pixels say, so a
+    /// translucent background painted into it would simply come out solid. The
+    /// blur-behind call with an <i>empty</i> region is the documented way of asking
+    /// for anything else: the blur itself has not existed since Windows 8, but the
+    /// side effect - the window's own alpha being respected - has, and it is what
+    /// every transparent window toolkit on Windows does. It costs nothing when every
+    /// pixel is opaque, which is how an ordinary solid bar comes out of the renderer.
+    /// </para>
+    /// <para>
+    /// Asked once, at creation. Whether any pixel actually is translucent is then
+    /// the profile's business, and a profile switch needs no window work.
+    /// </para>
     /// </remarks>
-    private unsafe void ApplyBackdrop()
+    private void HonourAlpha()
     {
-        const DWMWINDOWATTRIBUTE SystemBackdropType = (DWMWINDOWATTRIBUTE)38;
-        const int Mica = 2;
+        HRGN empty = PInvoke.CreateRectRgn(0, 0, -1, -1);
 
-        int value = Mica;
-        PInvoke.DwmSetWindowAttribute(_handle, SystemBackdropType, &value, sizeof(int));
+        var blur = new DWM_BLURBEHIND
+        {
+            dwFlags = PInvoke.DWM_BB_ENABLE | PInvoke.DWM_BB_BLURREGION,
+            fEnable = true,
+            hRgnBlur = empty,
+        };
+
+        // Failure is ignored: without composition there is no transparency to have,
+        // and the bar draws opaque over its own background as it always did.
+        _ = PInvoke.DwmEnableBlurBehindWindow(_handle, in blur);
+
+        if (!empty.IsNull) PInvoke.DeleteObject(empty);
     }
+
+    /// <summary>What the compositor is asked for on the bar's behalf.</summary>
+    /// <param name="Backdrop">The material behind translucent pixels.</param>
+    /// <param name="Dark">Whether the material should be its dark variant.</param>
+    /// <param name="Corners">The corner preference, in the compositor's own numbering.</param>
+    private readonly record struct Look(BarBackdrop Backdrop, bool Dark, int Corners);
+
+    /// <summary>
+    /// Asks the compositor for the profile's backdrop, corners and tint, when they
+    /// differ from what it was last asked for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Windows 11 only, and failure is ignored: on Windows 10 the bar simply uses its
+    /// configured background colour, which is a perfectly good bar - a translucent one
+    /// still, since that part needs no material, only <see cref="HonourAlpha"/>.
+    /// </para>
+    /// <para>
+    /// The dark-mode hint is set from the background's own lightness rather than
+    /// from the system theme. It decides whether Mica and Acrylic come out as their
+    /// dark or their light variant, and a dark bar over the light variant is muddy -
+    /// while the bar's colour is the one thing the config has actually said.
+    /// </para>
+    /// <para>
+    /// Corners are the compositor's to round only when there is a material to clip:
+    /// a backdrop fills the window's whole rectangle, and without the clip a rounded
+    /// bar would sit on square acrylic. The compositor offers two sizes, and the
+    /// nearer one to the profile's radius is chosen; without a backdrop the bar's own
+    /// anti-aliased corners are the shape, exactly as drawn, and the compositor is told
+    /// to leave them alone.
+    /// </para>
+    /// </remarks>
+    private unsafe void ApplyLook(BarProfile profile)
+    {
+        const int DoNotRound = 1;
+        const int Round = 2;
+        const int RoundSmall = 3;
+
+        bool clipToMaterial = profile.IsFloating && profile.Radius > 0 && profile.Backdrop != BarBackdrop.None;
+
+        var look = new Look(
+            profile.Backdrop,
+            IsDark(profile.Background),
+            clipToMaterial ? (profile.Radius >= 6 ? Round : RoundSmall) : DoNotRound);
+
+        if (look == _look) return;
+        _look = look;
+
+        const DWMWINDOWATTRIBUTE UseImmersiveDarkMode = (DWMWINDOWATTRIBUTE)20;
+        const DWMWINDOWATTRIBUTE CornerPreference = (DWMWINDOWATTRIBUTE)33;
+        const DWMWINDOWATTRIBUTE SystemBackdropType = (DWMWINDOWATTRIBUTE)38;
+
+        int dark = look.Dark ? 1 : 0;
+        int corners = look.Corners;
+        int backdrop = (int)look.Backdrop;
+
+        _ = PInvoke.DwmSetWindowAttribute(_handle, UseImmersiveDarkMode, &dark, sizeof(int));
+        _ = PInvoke.DwmSetWindowAttribute(_handle, CornerPreference, &corners, sizeof(int));
+        _ = PInvoke.DwmSetWindowAttribute(_handle, SystemBackdropType, &backdrop, sizeof(int));
+    }
+
+    /// <summary>Whether a colour reads as dark: relative luminance under a half.</summary>
+    private static bool IsDark(Colour colour) =>
+        ((0.2126 * colour.R) + (0.7152 * colour.G) + (0.0722 * colour.B)) / 255.0 < 0.5;
 
     // ---- window plumbing ---------------------------------------------------
 
@@ -800,6 +940,13 @@ public sealed class BarWindow : IDisposable
                         window.NotifyAppbarActivated(state != PInvoke.WA_INACTIVE);
                         break;
                     }
+
+                    // Broadcast to every top-level window when the accent changes, in
+                    // Settings or by the wallpaper. Said once to the loop rather than
+                    // acted on per bar: one accent, one reload, however many displays.
+                    case PInvoke.WM_DWMCOLORIZATIONCOLORCHANGED:
+                        SystemColoursChanged?.Invoke();
+                        return new LRESULT(0);
 
                     case PInvoke.WM_CLOSE:
                         // Closing any bar closes the bar. There is one message loop

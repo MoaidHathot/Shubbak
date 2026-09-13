@@ -21,15 +21,47 @@ public readonly record struct Colour(byte R, byte G, byte B, byte A = 255)
 
     public static Colour Black => new(0, 0, 0);
 
+    /// <summary>
+    /// The accent colour Windows ships with, used for <c>accent</c> when no host has
+    /// said what the machine's actually is.
+    /// </summary>
+    public static Colour DefaultAccent => new(0x00, 0x78, 0xD4);
+
+    /// <summary>
+    /// Reads the machine's accent colour, supplied by a host that can ask the
+    /// compositor. Null, or a null answer, falls back to <see cref="DefaultAccent"/>.
+    /// </summary>
+    /// <remarks>
+    /// A hook rather than a call, because this type is shared by every process and
+    /// the core is deliberately free of Win32. Asked on every parse rather than once,
+    /// so a config re-read after the user changes their accent sees the new one.
+    /// </remarks>
+    public static Func<Colour?>? AccentSource { get; set; }
+
+    /// <summary>The machine's accent colour, opaque.</summary>
+    public static Colour Accent => (AccentSource?.Invoke() ?? DefaultAccent) with { A = 255 };
+
+    /// <summary>The words <see cref="TryParse"/> accepts in place of a hex colour.</summary>
+    public static IReadOnlyList<string> Names { get; } = ["accent"];
+
     public bool IsTransparent => A == 0;
 
     /// <summary>
-    /// Parses <c>#RGB</c>, <c>#RRGGBB</c> or <c>#RRGGBBAA</c>.
+    /// Parses <c>#RGB</c>, <c>#RRGGBB</c>, <c>#RRGGBBAA</c> or a named colour, each
+    /// optionally followed by an opacity: <c>#8dbcff 40%</c>, <c>accent 25%</c>.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Alpha last, matching CSS rather than Win32's <c>#AARRGGBB</c>. Config is
     /// written by people who know CSS, and silently reinterpreting their colours
     /// would be a baffling class of bug.
+    /// </para>
+    /// <para>
+    /// The percentage scales whatever opacity the colour already has, which for the
+    /// ordinary opaque case simply sets it. It exists for the named colours - there
+    /// is no hex to append an alpha to - and is allowed after a hex colour so that one
+    /// rule covers both.
+    /// </para>
     /// </remarks>
     public static bool TryParse(string? text, out Colour colour)
     {
@@ -38,6 +70,36 @@ public readonly record struct Colour(byte R, byte G, byte B, byte A = 255)
         if (string.IsNullOrWhiteSpace(text)) return false;
 
         ReadOnlySpan<char> span = text.AsSpan().Trim();
+
+        // An opacity, if the last word is one: "40%".
+        double opacity = 1.0;
+        int lastSpace = span.LastIndexOfAny(' ', '\t');
+
+        if (lastSpace > 0 && span[^1] == '%')
+        {
+            ReadOnlySpan<char> percent = span[(lastSpace + 1)..^1];
+
+            if (!int.TryParse(percent, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out int value) || value > 100)
+            {
+                return false;
+            }
+
+            opacity = value / 100.0;
+            span = span[..lastSpace].TrimEnd();
+        }
+
+        if (!TryParseHex(span, out colour) && !TryParseName(span, out colour)) return false;
+
+        if (opacity < 1.0) colour = colour with { A = (byte)Math.Round(colour.A * opacity) };
+
+        return true;
+    }
+
+    private static bool TryParseHex(ReadOnlySpan<char> span, out Colour colour)
+    {
+        colour = default;
+
         if (span.Length > 0 && span[0] == '#') span = span[1..];
 
         switch (span.Length)
@@ -71,6 +133,23 @@ public readonly record struct Colour(byte R, byte G, byte B, byte A = 255)
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// The words a colour may be written as. One so far: <c>accent</c>, the colour
+    /// Windows is set to, so a bar or a border can follow the machine rather than
+    /// hard-coding a blue that stops matching the moment the user picks a green.
+    /// </summary>
+    private static bool TryParseName(ReadOnlySpan<char> span, out Colour colour)
+    {
+        if (span.Equals("accent", StringComparison.OrdinalIgnoreCase))
+        {
+            colour = Accent;
+            return true;
+        }
+
+        colour = default;
+        return false;
     }
 
     /// <summary>Blends towards another colour; <c>t</c> of 0 is this colour.</summary>

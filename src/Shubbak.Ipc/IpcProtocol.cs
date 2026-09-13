@@ -364,6 +364,61 @@ public sealed record RuleAddition(string Kdl, long? Handle = null, string? Sourc
 public sealed record RuleRemoval(string Name, int Line, long? Handle = null);
 
 /// <summary>
+/// A window's icon, as pixels, over <c>window-icon</c>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Pixels rather than a handle, because an icon handle is a resource of the process
+/// that asked for it and means nothing across a pipe. The daemon asks the window for
+/// its icon on the client's behalf - the window itself first, then its class, then
+/// the executable's own - and hands back the bitmap, so a client never has to send
+/// a message to a window that may be hung and never has to know which of the three
+/// answered.
+/// </para>
+/// <para>
+/// The request is the window handle as a decimal number, optionally followed by a
+/// space and the size the client means to draw at, which is a hint about which of an
+/// icon's sizes to prefer rather than a promise: the pixels come at whatever size the
+/// window supplied, and the client scales. Rows are top-down, each pixel four bytes
+/// blue-green-red-alpha with the colour premultiplied by the alpha, which is what
+/// a compositor consumes directly. Base64, because the protocol is JSON text.
+/// </para>
+/// </remarks>
+/// <param name="Handle">The window asked about.</param>
+/// <param name="Width">Pixels across.</param>
+/// <param name="Height">Pixels down.</param>
+/// <param name="Pixels">The bitmap: base64 of <c>Width * Height * 4</c> bytes.</param>
+/// <param name="Source">
+/// Where the icon came from: <c>window</c>, <c>class</c> or <c>file</c>. For a client
+/// that wants to prefer one over another, and for anyone debugging why a window shows
+/// the icon it does.
+/// </param>
+public sealed record WindowIcon(long Handle, int Width, int Height, string Pixels, string Source)
+{
+    /// <summary>The pipe method that answers with one of these.</summary>
+    public const string Method = "window-icon";
+
+    /// <summary>Bytes per pixel in <see cref="Pixels"/>.</summary>
+    public const int BytesPerPixel = 4;
+
+    /// <summary>The bitmap decoded, or null if the record does not describe one.</summary>
+    public byte[]? Decode()
+    {
+        if (Width <= 0 || Height <= 0 || string.IsNullOrEmpty(Pixels)) return null;
+
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(Pixels);
+            return bytes.Length == Width * Height * BytesPerPixel ? bytes : null;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+    }
+}
+
+/// <summary>
 /// What adding or removing a rule did.
 /// </summary>
 /// <param name="Path">The file that was edited.</param>
@@ -519,6 +574,7 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(RuleAddition))]
 [JsonSerializable(typeof(RuleRemoval))]
 [JsonSerializable(typeof(RuleChange))]
+[JsonSerializable(typeof(WindowIcon))]
 [JsonSerializable(typeof(ContextReport))]
 [JsonSerializable(typeof(WhenReport))]
 [JsonSerializable(typeof(ConditionReport))]

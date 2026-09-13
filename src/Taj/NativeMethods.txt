@@ -61,6 +61,9 @@ WM_WINDOWPOSCHANGED
 WM_ACTIVATE
 WA_INACTIVE
 
+// The accent changed; a config written `accent` is re-read to follow it.
+WM_DWMCOLORIZATIONCOLORCHANGED
+
 TrackMouseEvent
 TRACKMOUSEEVENT
 TRACKMOUSEEVENT_FLAGS
@@ -92,11 +95,28 @@ WINDOW_MESSAGE_FILTER_ACTION
 
 DwmSetWindowAttribute
 DWMWINDOWATTRIBUTE
+
+// The compositor is told to honour the bar's alpha channel through the blur-behind
+// call with an empty region - the documented shape of "transparent window" since
+// Windows 8, when the blur itself went away. DeleteObject is for that region.
+DwmEnableBlurBehindWindow
+DWM_BLURBEHIND
+DWM_BB_ENABLE
+DWM_BB_BLURREGION
+CreateRectRgn
+DeleteObject
+
 LoadCursor
 SetCursor
 IDC_ARROW
 IDC_HAND
 WM_SETCURSOR
+
+// Reading the input language of the window in front, and asking it to change.
 GetKeyboardLayout
+GetKeyboardLayoutList
+HKL
 GetWindowThreadProcessId
 GetForegroundWindow
+PostMessage
+WM_INPUTLANGCHANGEREQUEST

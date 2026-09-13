@@ -14,11 +14,44 @@ public enum BarEdge
     Bottom,
 }
 
+/// <summary>
+/// The material the compositor is asked to draw behind the bar.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Windows 11 only; older systems ignore the request and the bar's own background
+/// is all there is, which with an opaque colour is exactly the bar there was before.
+/// A backdrop only shows through pixels the bar leaves translucent, so it pairs with
+/// a <c>background</c> carrying alpha - with an opaque one nothing of it is seen.
+/// </para>
+/// <para>
+/// The numbers are the compositor's own (<c>DWM_SYSTEMBACKDROP_TYPE</c>), so the
+/// host passes the value straight through.
+/// </para>
+/// </remarks>
+public enum BarBackdrop
+{
+    /// <summary>Nothing behind the bar: translucent pixels show the desktop as it is.</summary>
+    None = 1,
+
+    /// <summary>Mica: a tinted, blurred rendering of the wallpaper.</summary>
+    Mica = 2,
+
+    /// <summary>Acrylic: a live blur of whatever is behind the bar.</summary>
+    Acrylic = 3,
+
+    /// <summary>Mica Alt: the stronger tint used behind tabs.</summary>
+    Tabbed = 4,
+}
+
 /// <summary>One bar's appearance and contents.</summary>
 /// <param name="Name">Profile name, referenced by bar rules.</param>
 /// <param name="Edge">Which edge of the monitor.</param>
 /// <param name="Height">Height in device-independent pixels.</param>
-/// <param name="Background">Bar background colour.</param>
+/// <param name="Background">
+/// Bar background colour. Alpha is honoured: a translucent colour makes a
+/// translucent bar, through which the <see cref="Backdrop"/> or the desktop shows.
+/// </param>
 /// <param name="Padding">Space inside the bar.</param>
 /// <param name="Zones">
 /// Top-level regions, laid out left to right. Three is only a convention; a profile
@@ -30,7 +63,61 @@ public sealed record BarProfile(
     int Height,
     Colour Background,
     Edges Padding,
-    IReadOnlyList<BarZone> Zones);
+    IReadOnlyList<BarZone> Zones)
+{
+    /// <summary>What the compositor draws behind translucent pixels.</summary>
+    public BarBackdrop Backdrop { get; init; } = BarBackdrop.None;
+
+    /// <summary>
+    /// Space between the bar and the edges of the monitor it is docked to, in pixels.
+    /// </summary>
+    /// <remarks>
+    /// Zero is a bar that runs edge to edge. Anything more makes it float: inset from
+    /// the top (or bottom) and from both sides, with the desktop showing around it.
+    /// The strip reserved from other windows grows to keep the same room on the
+    /// inner side as on the outer, so the bar sits in the middle of its gap.
+    /// </remarks>
+    public int Margin { get; init; }
+
+    /// <summary>Corner radius of the bar itself, in pixels.</summary>
+    /// <remarks>
+    /// Meant for a floating bar. Applied to a docked one it rounds the corners that
+    /// touch the screen edge too, which shows the desktop through the gaps.
+    /// </remarks>
+    public int Radius { get; init; }
+
+    /// <summary>
+    /// A one-pixel line along the bar's edge, or transparent for none.
+    /// </summary>
+    /// <remarks>
+    /// An outline on a floating bar. On a docked bar only the edge that faces the
+    /// windows gets it - a hairline along the top of the screen, and down the sides
+    /// of every monitor, would mark nothing.
+    /// </remarks>
+    public Colour Border { get; init; } = Colour.Transparent;
+
+    /// <summary>Whether the bar is inset from the monitor edges rather than docked to them.</summary>
+    public bool IsFloating => Margin > 0;
+
+    /// <summary>
+    /// The style of the bar's own surface: the node everything else sits in.
+    /// </summary>
+    /// <remarks>
+    /// Owned by the profile rather than assembled in the model so a test can ask a
+    /// profile what it will look like, and so the rule about which edges a docked bar
+    /// borders lives in one place.
+    /// </remarks>
+    public VisualStyle SurfaceStyle => VisualStyle.Default with
+    {
+        Background = Background,
+        CornerRadius = Math.Max(0, Radius),
+        BorderColour = Border,
+        BorderWidth = Border.IsTransparent ? 0 : 1,
+        BorderSides = IsFloating
+            ? BorderSides.All
+            : Edge == BarEdge.Top ? BorderSides.Bottom : BorderSides.Top,
+    };
+}
 
 /// <summary>A region of a bar.</summary>
 /// <param name="Id">Identifier, for styling and diagnostics.</param>
@@ -281,6 +368,10 @@ public sealed class BarModel : IDisposable
             _dirty = false;
         }
 
+        // The root is the bar's surface. Its background, corners and border are drawn
+        // by the painter like any other node's, over a frame the host clears to
+        // nothing - so a translucent background is painted exactly once, rather than
+        // once by the clear and again by the root, which would double its density.
         var root = new VisualNode
         {
             Id = "bar",
@@ -288,7 +379,7 @@ public sealed class BarModel : IDisposable
             Direction = FlexDirection.Row,
             Align = AlignItems.Stretch,
             Box = new BoxStyle(Padding: profile.Padding),
-            Style = VisualStyle.Default with { Background = profile.Background },
+            Style = profile.SurfaceStyle,
         };
 
         foreach (BarZone zone in profile.Zones)

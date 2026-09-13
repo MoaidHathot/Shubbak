@@ -53,3 +53,15 @@ PROCESS_INFORMATION_CLASS
 PROCESS_POWER_THROTTLING_STATE
 PROCESS_POWER_THROTTLING_CURRENT_VERSION
 PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+
+// Giving a test window an icon with known pixels, so WindowIconReader's answer can
+// be checked byte for byte rather than merely for existing.
+CreateIconIndirect
+ICONINFO
+CreateBitmap
+DeleteObject
+DestroyIcon
+SendMessage
+WM_SETICON
+ICON_BIG
+ExtractIconEx

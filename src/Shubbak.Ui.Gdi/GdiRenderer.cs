@@ -67,64 +67,14 @@ public sealed class GdiRenderer : IRenderer, IIconRenderer
 
     /// <summary>How much room a string needs, in the font it will be drawn in.</summary>
     /// <remarks>
-    /// <para>
-    /// Measured with <c>DT_CALCRECT</c> rather than <c>GetTextExtentPoint32</c>, because
-    /// only the former agrees with what is actually drawn. <c>GetTextExtentPoint32</c>
-    /// consults the selected font alone, while <c>DrawText</c> quietly borrows a glyph
-    /// from another font when the selected one has none.
-    /// </para>
-    /// <para>
-    /// So a character the font lacks was measured at the width of the missing-glyph box
-    /// and then drawn several pixels wider - and since the text is drawn with
-    /// <c>DT_END_ELLIPSIS</c> into the width that was measured, the glyph was cut off.
-    /// Six of the eleven layout icons have no glyph in Segoe UI Variable Text, and none
-    /// of them do in Segoe UI, so the layout indicator was a clipped smear rather than
-    /// a symbol. Any template holding an unusual character had the same fault.
-    /// </para>
+    /// The measuring itself, and the reason it is done with <c>DT_CALCRECT</c>, lives in
+    /// <see cref="GdiText.Measure"/> so the composited renderer measures identically.
     /// </remarks>
     public Size Measure(string text, FontStyle font)
     {
         if (string.IsNullOrEmpty(text)) return Size.Empty;
 
-        HFONT handle = GetFont(font);
-        HGDIOBJ previous = PInvoke.SelectObject(_measureDc, handle);
-
-        try
-        {
-            var native = new RECT { left = 0, top = 0, right = 0, bottom = 0 };
-
-            unsafe
-            {
-                fixed (char* p = text)
-                {
-                    // Same flags as DrawText, minus the ones that need a real rectangle.
-                    int height = PInvoke.DrawText(
-                        _measureDc,
-                        p,
-                        text.Length,
-                        ref native,
-                        DRAW_TEXT_FORMAT.DT_CALCRECT |
-                        DRAW_TEXT_FORMAT.DT_SINGLELINE |
-                        DRAW_TEXT_FORMAT.DT_LEFT |
-                        DRAW_TEXT_FORMAT.DT_NOPREFIX);
-
-                    if (height != 0)
-                        return new Size(native.right - native.left, native.bottom - native.top);
-                }
-            }
-
-            // Still worth asking: DT_CALCRECT fails on some device contexts where the
-            // simpler call succeeds, and a slightly narrow answer beats none.
-            if (PInvoke.GetTextExtentPoint32W(_measureDc, text, text.Length, out SIZE size))
-                return new Size(size.cx, size.cy);
-        }
-        finally
-        {
-            PInvoke.SelectObject(_measureDc, previous);
-        }
-
-        // A rough fallback beats returning zero, which would collapse the layout.
-        return new Size((int)(text.Length * font.Size * 0.6), (int)(font.Size * 1.4));
+        return GdiText.Measure(_measureDc, GetFont(font), text, font);
     }
 
     // ---- frame -------------------------------------------------------------
@@ -267,16 +217,7 @@ public sealed class GdiRenderer : IRenderer, IIconRenderer
                     // Clipped and single-line: the layout engine has already decided
                     // how much room this text gets, and letting it spill over a
                     // neighbour would be worse than cutting it off.
-                    PInvoke.DrawText(
-                        _memoryDc,
-                        p,
-                        text.Length,
-                        ref native,
-                        DRAW_TEXT_FORMAT.DT_SINGLELINE |
-                        DRAW_TEXT_FORMAT.DT_VCENTER |
-                        DRAW_TEXT_FORMAT.DT_LEFT |
-                        DRAW_TEXT_FORMAT.DT_NOPREFIX |
-                        DRAW_TEXT_FORMAT.DT_END_ELLIPSIS);
+                    PInvoke.DrawText(_memoryDc, p, text.Length, ref native, GdiText.DrawFlags);
                 }
             }
         }
@@ -381,38 +322,17 @@ public sealed class GdiRenderer : IRenderer, IIconRenderer
         return brush;
     }
 
-    [DllImport("GDI32.dll", EntryPoint = "CreateFontW", CharSet = CharSet.Unicode, ExactSpelling = true)]
-    private static extern HFONT CreateFontRaw(
-        int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight,
-        uint bItalic, uint bUnderline, uint bStrikeOut, uint iCharSet,
-        uint iOutPrecision, uint iClipPrecision, uint iQuality, uint iPitchAndFamily,
-        string pszFaceName);
-
     [DllImport("USER32.dll", EntryPoint = "FillRect", ExactSpelling = true)]
     private static extern int FillRectRaw(HDC hDC, in RECT lprc, HBRUSH hbr);
 
     private HFONT GetFont(FontStyle font)
     {
-        string family = string.IsNullOrEmpty(font.Family) ? "Segoe UI" : font.Family;
-        int size = (int)Math.Round(font.Size);
-
-        var key = (family, size, font.Bold, font.Italic);
+        (string Family, int Size, bool Bold, bool Italic) key = GdiText.Key(font);
         if (_fonts.TryGetValue(key, out HFONT cached)) return cached;
 
-        // Negative height asks for a character height rather than a cell height,
-        // which is what font sizes elsewhere mean.
-        // The SafeHandle-returning overload would dispose the font at collection
-        // time; these are cached for the process lifetime and released in Dispose.
-        HFONT handle = CreateFontRaw(
-            -size, 0, 0, 0,
-            font.Bold ? 600 : 400,
-            font.Italic ? 1u : 0u, 0, 0,
-            (uint)FONT_CHARSET.DEFAULT_CHARSET,
-            (uint)FONT_OUTPUT_PRECISION.OUT_TT_PRECIS,
-            (uint)FONT_CLIP_PRECISION.CLIP_DEFAULT_PRECIS,
-            (uint)FONT_QUALITY.CLEARTYPE_QUALITY,
-            0,
-            family);
+        // ClearType, because this renderer only ever draws onto an opaque surface,
+        // which is the one place ClearType's colour fringes are correct.
+        HFONT handle = GdiText.CreateFont(font, FONT_QUALITY.CLEARTYPE_QUALITY);
 
         _fonts[key] = handle;
         return handle;

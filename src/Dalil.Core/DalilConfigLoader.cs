@@ -735,7 +735,7 @@ public static class DalilConfigLoader
             "DAL0010",
             $"'{value.AsString()}' is not a colour; '{name}' will keep its default.",
             value.Span,
-            "Write a hex colour such as \"#16161C\" or \"#16161CFF\"."));
+            "Write a hex colour such as \"#16161C\" or \"#16161CFF\", or \"accent\" for the Windows accent colour."));
 
         return null;
     }

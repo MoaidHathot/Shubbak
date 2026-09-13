@@ -52,6 +52,10 @@ internal static class Program
             return 0;
         }
 
+        // So `check-config` resolves a colour written `accent` exactly as the bar and
+        // the palette will.
+        SystemColours.Adopt();
+
         try
         {
             return args[0] switch

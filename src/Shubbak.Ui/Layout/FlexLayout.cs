@@ -67,6 +67,7 @@ public sealed class FlexLayout
         {
             VisualKind.Text => _measurer.Measure(node.Text, node.Style.Font),
             VisualKind.Spacer => Size.Empty,
+            VisualKind.Image => node.Image is { } image ? new Size(image.Width, image.Height) : Size.Empty,
             _ => MeasureChildren(node),
         };
 
@@ -229,10 +230,18 @@ public sealed class FlexLayout
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Proportional to each child's size, as flexbox does, and pinned so the result
-    /// fits exactly. Reducing children one at a time against a shrinking remainder
-    /// leaves part of the overflow unresolved, and the content then spills past the
-    /// bar's right edge.
+    /// What stretches when there is room is what gives when there is not: overflow
+    /// comes first out of the children that grow, and only when they have nothing
+    /// left to give does it fall on the rest. A bar's centre zone grows to hold the
+    /// window title; without this rule a long title squeezed the clock beside it,
+    /// proportionally, and the guard against that was a character cap on the title
+    /// that knew nothing about how much room there actually was.
+    /// </para>
+    /// <para>
+    /// Within each group, proportional to each child's size, as flexbox does, and
+    /// pinned so the result fits exactly. Reducing children one at a time against a
+    /// shrinking remainder leaves part of the overflow unresolved, and the content
+    /// then spills past the bar's right edge.
     /// </para>
     /// <para>
     /// A child that hits its minimum stops giving; the shortfall is redistributed
@@ -242,22 +251,32 @@ public sealed class FlexLayout
     /// </remarks>
     private static void Shrink(List<VisualNode> children, Span<int> sizes, int overflow)
     {
+        overflow = ShrinkAmong(children, sizes, overflow, growingOnly: true);
+
+        if (overflow > 0) ShrinkAmong(children, sizes, overflow, growingOnly: false);
+    }
+
+    /// <summary>
+    /// Takes as much of the overflow as it can from one group of children, and
+    /// returns what is left.
+    /// </summary>
+    private static int ShrinkAmong(List<VisualNode> children, Span<int> sizes, int overflow, bool growingOnly)
+    {
         for (int pass = 0; pass < 3 && overflow > 0; pass++)
         {
             int shrinkable = 0;
 
             for (int i = 0; i < children.Count; i++)
-                if (children[i].Box.CanShrink && sizes[i] > children[i].Box.MinWidth)
-                    shrinkable += sizes[i];
+                if (Gives(children[i], sizes[i], growingOnly)) shrinkable += sizes[i];
 
-            if (shrinkable <= 0) return;
+            if (shrinkable <= 0) return overflow;
 
             int removed = 0;
 
             for (int i = 0; i < children.Count; i++)
             {
                 VisualNode child = children[i];
-                if (!child.Box.CanShrink || sizes[i] <= child.Box.MinWidth) continue;
+                if (!Gives(child, sizes[i], growingOnly)) continue;
 
                 int share = (int)Math.Round((double)sizes[i] / shrinkable * overflow);
                 int reduced = Math.Max(child.Box.MinWidth, sizes[i] - share);
@@ -266,11 +285,19 @@ public sealed class FlexLayout
                 sizes[i] = reduced;
             }
 
-            if (removed == 0) return;
+            if (removed == 0) return overflow;
 
             overflow -= removed;
         }
+
+        return overflow;
     }
+
+    /// <summary>Whether a child can still give up width in this round.</summary>
+    private static bool Gives(VisualNode child, int size, bool growingOnly) =>
+        child.Box.CanShrink &&
+        size > child.Box.MinWidth &&
+        (!growingOnly || child.Box.Grow > 0);
 
     private static (int Offset, int ExtraGap) Justify(JustifyContent justify, int leftover, int count) =>
         justify switch

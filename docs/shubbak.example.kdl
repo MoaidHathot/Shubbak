@@ -182,6 +182,8 @@ animation {
 
 window-effects {
     border #true
+    // A hex colour, or `accent` for the colour Windows is set to - resolved each
+    // time a border is painted, so a change of accent reaches the next focus change.
     focused-colour "#8dbcff"
     unfocused-colour "#a1a1a1"
 
@@ -716,6 +718,28 @@ bar {
         font "Segoe UI"
         font-size 14
 
+        // The surface can be see-through. A background with an alpha channel is a
+        // genuinely translucent bar, and `backdrop` is what shows through it:
+        // "acrylic" blurs whatever is behind the bar, "mica" tints the wallpaper,
+        // "tabbed" is Mica's stronger variant, "none" is the desktop as it is.
+        // Windows 11 only; elsewhere the request is ignored. Try:
+        //
+        //   background "#1e1e2eb3"
+        //   backdrop "acrylic"
+        //   border "#ffffff14"      // a one-pixel hairline along the inner edge
+        //
+        // `margin` floats the bar off the screen edges, with the desktop around it,
+        // and `radius` rounds its corners - meant for a floating bar:
+        //
+        //   margin 8
+        //   radius 8
+        //
+        // All of these inherit through `extends`.
+        //
+        // Anywhere a colour goes, `accent` is the colour Windows is set to, and any
+        // colour may be followed by an opacity - `accent 40%` is a translucent
+        // accent pill. The bar follows a change of accent as the title bars do.
+
         // Zones are flex containers. Three is a convention, not a limit - add as
         // many as you like, each with its own alignment and growth.
         zone "left" justify="start" gap=4 {
@@ -728,6 +752,13 @@ bar {
         }
 
         zone "centre" justify="center" grow=1 {
+            // The focused window's icon - the one its taskbar button shows - fetched
+            // from the window manager over the pipe and cached, so it costs one read
+            // per window rather than one per focus change. Hidden when nothing is
+            // focused, so the title beside it does not gain a gap. `size` is the
+            // square it is drawn in; add background= and radius= for a pill behind it.
+            icon size=20
+
             // `window.state` is the focused window's state: tiling, floating,
             // fullscreen, monitorfullscreen, maximised or minimised. The `state-icon`
             // filter turns the two fullscreens into a hollow and a solid square and
@@ -754,7 +785,12 @@ bar {
             //   when of="source"    - tests a source instead of the drawn text
             //
             // First match wins, so the block reads top to bottom as written.
-            text id="lang"    template="{{ keyboard }}"     colour="#7f849c" {
+            //
+            // `keyboard next` is the one click command the bar performs itself rather
+            // than sending to the window manager: it switches the window in front to
+            // its next installed layout, and the indicator follows on its next poll.
+            // `keyboard previous` goes the other way; `keyboard he` picks a language.
+            text id="lang"    template="{{ keyboard }}"     colour="#7f849c" on-click="keyboard next" {
                 when value="HE" colour="#f38ba8" bold=#true
             }
 

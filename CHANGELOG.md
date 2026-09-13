@@ -17,6 +17,60 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **The focused window's icon, on the bar and over the pipe.** A new pipe method,
+  `window-icon`, answers with a window's icon as pixels: the daemon asks the window
+  the way the taskbar does (`WM_GETICON`), then its class, then takes the executable's
+  own, and hands back premultiplied BGRA in JSON with `source` saying which answered.
+  A capability of the window manager rather than of any client, for the reason the
+  title already travels this way - one process asks windows things, and the ask is
+  bounded to a tenth of a second, gives up at once on a hung window, runs off the
+  daemon's loop and is remembered for half a minute per window. Taj's new `icon`
+  widget draws it: `icon size=20` beside the title, hidden when nothing is focused so
+  the title gains no gap, with `background`/`radius` for a pill and `on-click` like
+  any control; the bar caches per window for a minute and forgets a window when it
+  is unmanaged, so a day of switching between the same windows costs one read each.
+  Underneath: `VisualKind.Image`, `ImageBitmap`, and an `IImageRenderer` capability
+  the composited renderer implements with area-averaged scaling, so a 32-pixel icon
+  drawn at 20 keeps its edges.
+- **`accent` is a colour.** Anywhere a colour is written - the bar, the palette's
+  theme, a focus border - `accent` is the colour Windows is set to, read from the
+  compositor, and any colour may be followed by an opacity: `accent 40%`,
+  `#8dbcff 40%`. The bar re-reads its config when Windows announces a change of
+  accent, so the bar follows the title bars; the window manager resolves it each time
+  it paints a border. Every executable adopts the machine's accent at startup and the
+  parser falls back to the stock blue without one, so a file is valid in every process
+  or none.
+- **The bar can be translucent, and can float.** Taj's `background` now honours its
+  alpha channel: `#1e1e2eb3` is a genuinely see-through bar rather than a darker
+  opaque one, and every pill, hover and dimmed colour on it composites properly,
+  with anti-aliased corners where GDI's never were. `backdrop "acrylic"` (or `mica`,
+  `tabbed`) asks Windows 11 for a material behind the translucent pixels, dark or
+  light to match the bar's own colour; `margin 8` floats the bar off the screen
+  edges with the desktop around it, reserving the same room below as above;
+  `radius 8` rounds its corners; `border "#ffffff14"` draws a one-pixel hairline -
+  an outline on a floating bar, and along the edge that faces the windows on a
+  docked one. All five inherit through `extends`. Underneath: a second renderer,
+  `CompositedGdiRenderer`, which owns a 32-bit premultiplied back buffer and reads
+  GDI's text back as a coverage mask, so glyphs blend instead of punching holes;
+  the window asks the compositor to respect its alpha through the blur-behind call
+  with an empty region, the way every transparent toolkit on Windows does. Text is
+  smoothed in grayscale rather than ClearType, which only ever looked right on an
+  opaque background. The palette keeps the renderer it had. An untouched config
+  draws exactly the bar it drew before. Unknown `backdrop` names and negative
+  measures are pointed out (`TAJ0024`, `TAJ0025`).
+- **Click the language indicator to switch it.** `on-click="keyboard next"` on the
+  `{{ keyboard }}` widget switches the window in front to its next installed layout;
+  `keyboard previous` goes the other way and `keyboard he` picks a language by its
+  two-letter code. The one click command the bar performs itself rather than
+  sending to the window manager: it already reads the layout of the window in
+  front, and changing it is a message posted to that same window, so the round trip
+  would have bought nothing. The indicator follows on its next poll. A `keyboard`
+  command the bar cannot perform is pointed out at load (`TAJ0023`); the window
+  manager's verbs are, as before, left for the window manager to judge.
+- **Borders on chosen sides.** `VisualStyle.BorderSides` lets a node border one
+  edge rather than all four - the docked bar's hairline, and the underline an active
+  item will want - drawn as filled strips so no renderer needs a notion of partial
+  outlines.
 - **The palette writes the rule and adds it.** The common reason to want a rule is
   the common thing `toggle-managed` cannot do: make a window stay ignored, or stay
   managed, across a reload and a restart - the toggle is remembered in memory and
@@ -102,6 +156,14 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A long window title no longer squeezes the clock.** The bar's layout shared
+  overflow out proportionally among every child, so a title longer than the centre
+  zone took width from the readouts beside it - and the guard against that was
+  `truncate:90`, a character cap that knew nothing about the bar's actual width.
+  Overflow now comes first out of the children that grow, which are the ones that
+  stretch when there is room, and falls on the rest only once those have nothing
+  left. The title fills what is free, is cut with an ellipsis exactly where the
+  clocks begin, and the cap can go.
 - **The palette's first opening showed its frame and hid it again.** On a fresh session
   the first `alt+shift+space` drew the palette for a frame and put it away; the second
   press worked. The loop that puts away a palette nobody can reach ran straight after
