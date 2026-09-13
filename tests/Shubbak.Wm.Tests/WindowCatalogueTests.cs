@@ -65,6 +65,33 @@ public sealed class WindowCatalogueTests
     }
 
     [Fact]
+    public void TheFiltersVerdictSaysWhetherARuleCouldOverturnIt()
+    {
+        // A client composing a `manage` rule needs to know whether the rule would do
+        // anything. The filter's heuristics can be argued with; its facts cannot.
+        WindowManager wm = WithOneWorkspace();
+        var registry = new WindowRegistry();
+
+        IReadOnlyList<WindowCandidate> described = WindowCatalogue.Join(
+            [
+                Seen(0x100, decision: ManageDecision.No(ExclusionReason.ToolWindow)),
+                Seen(0x200, decision: ManageDecision.No(ExclusionReason.CloakedByShell)),
+                Seen(0x300, decision: ManageDecision.Yes),
+            ],
+            wm, registry);
+
+        Assert.Equal(false, described[0].Manageable);
+        Assert.Equal(true, described[0].Overridable);
+
+        Assert.Equal(false, described[1].Manageable);
+        Assert.Equal(false, described[1].Overridable);
+
+        // Nothing to override when the answer was yes.
+        Assert.Equal(true, described[2].Manageable);
+        Assert.Null(described[2].Overridable);
+    }
+
+    [Fact]
     public void BeingManagedOverrulesTheFilter()
     {
         WindowManager wm = WithOneWorkspace();

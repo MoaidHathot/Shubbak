@@ -71,19 +71,50 @@ public sealed class PaletteEntriesTests
         Assert.Contains("window has no area", entry.Secondary, StringComparison.Ordinal);
     }
 
+    /// <summary>The window rows of the inspect list, without the row that widens it.</summary>
+    private static IReadOnlyList<PaletteEntry> Skipped(IReadOnlyList<PaletteEntry> entries) =>
+        [.. entries.Where(e => e.Command != PaletteEntries.BuiltinEveryWindow)];
+
     [Fact]
     public void SkippedShowsOnlyTheWindowsThatWereSkipped()
     {
         // The whole reason it earns a prefix of its own. The window list already shows
         // everything; this is the "what is being passed over" view.
-        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForSkipped(
+        IReadOnlyList<PaletteEntry> entries = Skipped(PaletteEntries.ForSkipped(
         [
             Window(handle: 1, title: "managed one"),
             Window(handle: 2, title: "skipped one", managed: false, workspace: null,
                 summary: "not an Alt+Tab target"),
-        ]);
+        ]));
 
         Assert.Equal("skipped one", Assert.Single(entries).Primary);
+    }
+
+    [Fact]
+    public void SkippedOffersToWidenTheList()
+    {
+        // The ordinary list leaves out the windows the filter turned down for their
+        // shape - which are the very windows a manage rule is for. The way to them is a
+        // row, found by searching, and the same row leads back.
+        PaletteEntry widen = Assert.Single(
+            PaletteEntries.ForSkipped([], everything: false), e => e.Command == PaletteEntries.BuiltinEveryWindow);
+
+        PaletteEntry narrow = Assert.Single(
+            PaletteEntries.ForSkipped([], everything: true), e => e.Command == PaletteEntries.BuiltinEveryWindow);
+
+        Assert.Equal("Show every window", widen.Primary);
+        Assert.Equal("Back to the usual list", narrow.Primary);
+
+        // Above every window, so it can be found without knowing it is there.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForSkipped(
+            [Window(managed: false, workspace: null, summary: "excluded by a rule")]);
+
+        Assert.True(entries[0].Rank > entries[1].Rank);
+
+        // The palette's own, and one that stays open: it changes the list under the
+        // selection rather than asking for anything.
+        Assert.True(PaletteEntries.IsBuiltin(widen.Command));
+        Assert.True(PaletteEntries.StaysOpen(widen.Command));
     }
 
     [Fact]
@@ -91,10 +122,10 @@ public sealed class PaletteEntriesTests
     {
         // Enter in this mode asks why, because going to a window you have just been
         // told is not managed answers nothing.
-        PaletteEntry entry = Assert.Single(PaletteEntries.ForSkipped(
+        PaletteEntry entry = Assert.Single(Skipped(PaletteEntries.ForSkipped(
         [
             Window(handle: 0x2A, managed: false, workspace: null, summary: "no title"),
-        ]));
+        ])));
 
         Assert.Equal(0x2A, entry.Explains);
     }
@@ -105,7 +136,7 @@ public sealed class PaletteEntriesTests
         // A rule is something the user wrote and can unwrite; a child window with no
         // area is a fact about Win32. Recency would sort these almost equally, because
         // most of them have never been focused.
-        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForSkipped(
+        IReadOnlyList<PaletteEntry> entries = Skipped(PaletteEntries.ForSkipped(
         [
             Window(handle: 1, title: "win32 says no", managed: false, workspace: null,
                 summary: "a child window"),
@@ -113,7 +144,7 @@ public sealed class PaletteEntriesTests
                 summary: "excluded by a rule"),
             Window(handle: 3, title: "not yet", managed: false, workspace: null,
                 summary: "not adopted yet"),
-        ]);
+        ]));
 
         Assert.Equal(
             ["your rule says no", "not yet", "win32 says no"],
@@ -126,10 +157,10 @@ public sealed class PaletteEntriesTests
         // Ctrl+Enter has to reach "Manage it" from here. That is the fix for most of
         // what this mode shows, and a list that diagnoses without offering the remedy
         // is half a feature.
-        PaletteEntry entry = Assert.Single(PaletteEntries.ForSkipped(
+        PaletteEntry entry = Assert.Single(Skipped(PaletteEntries.ForSkipped(
         [
             Window(managed: false, workspace: null, summary: "not adopted yet"),
-        ]));
+        ])));
 
         Assert.True(entry.HasActions);
         Assert.Contains(entry.ResolveActions(), a => a.Name == "Manage it");
@@ -687,9 +718,10 @@ public sealed class PaletteEntriesTests
     public void EveryReportRowCanBeOpenedInFull()
     {
         // A row is drawn on one line and clipped, and the values worth opening a
-        // report for - a path, the sentence about elevation - are the long ones.
+        // report for - a path, the sentence about elevation - are the long ones. Every
+        // fact, that is: the rule row at the top opens a list rather than a text.
         Assert.All(
-            PaletteEntries.ForReport(Report()),
+            PaletteEntries.ForReport(Report()).Where(e => e.Secondary != "compose"),
             e => Assert.False(string.IsNullOrEmpty(e.Expands)));
     }
 
@@ -706,31 +738,86 @@ public sealed class PaletteEntriesTests
     }
 
     [Fact]
-    public void TheRuleAtTheTopOfAReportCanBeCopiedAndItsFileOpened()
+    public void TheRuleRowAtTheTopOfAReportOpensTheChoices()
     {
-        // The report tells you exactly what is wrong and hands you the rule; this is
-        // what gets the rule out. Ctrl+Enter on the row used to do nothing at all, and
-        // the chord that copied the rule was written only in the documentation.
+        // The report tells you exactly what is wrong; this is what changes it - as a
+        // list of the rules that could, each complete, decided by the report's own
+        // facts. Enter opens the list; the rule row itself carries no text of its own.
         PaletteEntry rule = PaletteEntries.ForReport(Report(className: "Chrome_WidgetWin_1"))
-            .Single(e => e.Primary == "Write a rule for it");
+            .Single(e => e.Primary.StartsWith("Write a rule for it", StringComparison.Ordinal));
 
         Assert.True(rule.HasActions);
+        Assert.Null(rule.Expands);
+        Assert.Equal(string.Empty, rule.Command);
 
-        IReadOnlyList<PaletteAction> actions = rule.ResolveActions();
+        IReadOnlyList<PaletteAction> choices = rule.ResolveActions();
 
-        // What is copied is what was read, path comment and all.
-        Assert.Equal(rule.Expands, actions.Single(a => a.Copies is not null).Copies);
-        Assert.Contains("Chrome_WidgetWin_1", rule.Expands!, StringComparison.Ordinal);
+        // Every choice is a complete rule matching this window, readable and addable.
+        Assert.All(
+            choices.Where(c => c.Expands is not null),
+            c => Assert.Contains("Chrome_WidgetWin_1", c.Expands!, StringComparison.Ordinal));
 
-        Assert.Contains(actions, a => a.Command == PaletteEntries.BuiltinOpenConfig);
+        Assert.Contains(choices, c => c.Children?.Any(a => a.Applies is not null) == true);
     }
 
     [Fact]
-    public void OnlyTheRuleRowOfAReportHasActions()
+    public void EveryRuleRowOfAReportCanBeRemoved()
+    {
+        // A rule that matched and should not have is found in this list, and this is
+        // where the finding happens - so this is where it can be taken out.
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(Report(rules:
+        [
+            new RuleReport("float the pip", 42, Matched: true, ["float"], "manage"),
+            new RuleReport("browsers to 2", 51, Matched: false, ["move-to-workspace"], "manage"),
+        ]));
+
+        foreach (PaletteEntry row in entries.Where(e => e.Secondary.StartsWith("rule", StringComparison.Ordinal)))
+        {
+            PaletteAction remove = Assert.Single(row.ResolveActions(), a => a.Removes is not null);
+
+            Assert.Contains(remove.Removes!.Name, row.Primary, StringComparison.Ordinal);
+            Assert.Contains($"line {remove.Removes.Line}", row.Primary, StringComparison.Ordinal);
+        }
+
+        // And what each does is on the row, so a matched rule's consequence can be
+        // read off it rather than looked up.
+        Assert.Contains(entries, e => e.Primary.Contains("float the pip  float", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void OnlyTheRuleRowsOfAReportHaveActions()
     {
         // The facts are there to be read. Offering Ctrl+Enter on "handle 0x3047A"
         // would advertise a key that then does nothing.
-        Assert.Single(PaletteEntries.ForReport(Report()), e => e.HasActions);
+        IReadOnlyList<PaletteEntry> entries = PaletteEntries.ForReport(Report(rules:
+        [
+            new RuleReport("float the pip", 42, Matched: true),
+        ]));
+
+        Assert.Equal(2, entries.Count(e => e.HasActions));
+        Assert.All(
+            entries.Where(e => e.HasActions),
+            e => Assert.True(
+                e.Primary.StartsWith("Write a rule", StringComparison.Ordinal) ||
+                e.Secondary.StartsWith("rule", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void TheVerdictSaysWhetherARuleCouldOverturnIt()
+    {
+        // The question anybody reading "no" asks next.
+        Assert.Contains("(a manage rule can override this)",
+            PaletteEntries.ForReport(Report(manageable: false, verdict: "a tool window", overridable: true))
+                .Single(e => e.Secondary == "manageable").Primary, StringComparison.Ordinal);
+
+        Assert.Contains("(no rule can override this)",
+            PaletteEntries.ForReport(Report(manageable: false, verdict: "cloaked", overridable: false))
+                .Single(e => e.Secondary == "manageable").Primary, StringComparison.Ordinal);
+
+        // An older daemon says nothing, and so does the row.
+        Assert.DoesNotContain("override",
+            PaletteEntries.ForReport(Report(manageable: false, verdict: "cloaked"))
+                .Single(e => e.Secondary == "manageable").Primary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -752,10 +839,11 @@ public sealed class PaletteEntriesTests
         bool excludedByRule = false,
         ManagedWindowReport? node = null,
         IReadOnlyList<RuleReport>? rules = null,
-        IReadOnlyList<AppReport>? apps = null) =>
+        IReadOnlyList<AppReport>? apps = null,
+        bool? overridable = null) =>
         new(handle, "a window", className, "test", @"C:\test.exe", 0, 0, 800, 600,
             0x16CF0000, 0x00040100, true, "None", false, manageable, verdict, "manageable",
-            node is not null, excludedByRule, node, rules ?? [], apps ?? []);
+            node is not null, excludedByRule, node, rules ?? [], apps ?? [], overridable);
 
     /// <summary>A stand-in for the renderer: every character the same width.</summary>
     /// <remarks>

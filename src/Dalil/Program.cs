@@ -53,6 +53,16 @@ internal static class Program
     private static long s_foreground;
 
     /// <summary>
+    /// Whether the inspect list is showing every window the filter turned down, rather
+    /// than the ones worth listing by default.
+    /// </summary>
+    /// <remarks>
+    /// Flipped by a row in that list and forgotten when the palette closes. Held here
+    /// because it decides which query the read asks, and the read is the host's.
+    /// </remarks>
+    private static bool s_everyWindow;
+
+    /// <summary>
     /// What was wrong with the palette's own section, last time it was read.
     /// </summary>
     /// <remarks>
@@ -177,6 +187,61 @@ internal static class Program
             });
         });
 
+        // The same fetch, shown as the rules that could be written rather than as the
+        // facts they rest on. The facts decide the rules - whether the filter could be
+        // overruled, which rules already match - which is why the report is fetched
+        // rather than the row's own attributes used.
+        s_palette.ComposeRequested += (handle, title) => _ = Task.Run(async () =>
+        {
+            string? failure = null;
+
+            WindowReport? report = await s_connection!
+                .InspectAsync(handle, reason => failure = reason)
+                .ConfigureAwait(false);
+
+            Post(() =>
+            {
+                if (report is not null) s_palette?.ShowRuleChoices(title, report);
+                else s_palette?.ShowReportFailure(title, failure ?? "Nothing to write a rule from");
+            });
+        });
+
+        // The two requests that change the configuration file. The window manager does
+        // the editing and answers with what happened, and the answer carries the undo,
+        // so the frame that shows it is where a mistake is taken back.
+        s_palette.ApplyRuleRequested += (rule, title) => _ = Task.Run(async () =>
+        {
+            string? failure = null;
+
+            RuleChange? change = await s_connection!
+                .AddRuleAsync(rule.Kdl, rule.Handle, reason => failure = reason)
+                .ConfigureAwait(false);
+
+            Post(() =>
+            {
+                if (change is not null) s_palette?.ShowRuleChange(title, change, added: true);
+                else s_palette?.ShowReportFailure(title, failure ?? "The rule was not added.");
+            });
+        });
+
+        s_palette.RemoveRuleRequested += (rule, title) => _ = Task.Run(async () =>
+        {
+            string? failure = null;
+
+            RuleChange? change = await s_connection!
+                .RemoveRuleAsync(rule.Name, rule.Line, rule.Handle, reason => failure = reason)
+                .ConfigureAwait(false);
+
+            Post(() =>
+            {
+                if (change is not null) s_palette?.ShowRuleChange(title, change, added: false);
+                else s_palette?.ShowReportFailure(title, failure ?? "The rule was not removed.");
+            });
+        });
+
+        // The widened inspect list is a moment, not a preference.
+        s_palette.Closed += () => s_everyWindow = false;
+
         PaletteWindow.RequestShutdown += () => s_running = false;
 
         s_connection = new WmConnection();
@@ -252,6 +317,17 @@ internal static class Program
         if (string.Equals(command, PaletteEntries.BuiltinOpenConfig, StringComparison.Ordinal))
         {
             OpenConfig();
+            return;
+        }
+
+        if (string.Equals(command, PaletteEntries.BuiltinEveryWindow, StringComparison.Ordinal))
+        {
+            // The palette stayed open for this - see PaletteWindow.Send - so the list it
+            // is looking at is refilled in place once the wider read lands.
+            s_everyWindow = !s_everyWindow;
+
+            if (s_palette is { IsOpen: true } showing) Refresh(showing);
+
             return;
         }
 
@@ -669,7 +745,8 @@ internal static class Program
                     s_config.ShowUnmanaged,
                     s_config.Macros,
                     s_foreground,
-                    s_problems.Errors + s_problems.Warnings)
+                    s_problems.Errors + s_problems.Warnings,
+                    s_everyWindow)
                 .ConfigureAwait(false);
 
             if (s_config.ShowIcons && read.WindowHandles is { Count: > 0 } handles)

@@ -50,6 +50,15 @@ internal static class WindowReportText
         text.AppendLine();
         text.AppendLine($"manageable   {(report.Manageable ? "yes" : "no")} - {report.Verdict}");
 
+        // Whether a rule could argue with a no. The question anybody reading "no" asks
+        // next, and the difference between "write a manage rule" and "nothing to be done".
+        if (!report.Manageable && report.Overridable is { } overridable)
+        {
+            text.AppendLine(overridable
+                ? "             (a rule with `manage` can override this)"
+                : "             (no rule can override this)");
+        }
+
         if (!complete) return text.ToString();
 
         if (report.Node is { } node)
@@ -80,8 +89,15 @@ internal static class WindowReportText
         }
         else
         {
+            // What each rule does and when, so a matched rule's consequence can be read
+            // off this line rather than looked up. Older daemons say neither.
             foreach (RuleReport rule in report.Rules)
-                text.AppendLine($"  [{(rule.Matched ? "x" : " ")}] {rule.Name} (line {rule.Line})");
+            {
+                string does = rule.Does is { Count: > 0 } verbs ? $"  {string.Join(", ", verbs)}" : string.Empty;
+                string when = rule.Trigger is { Length: > 0 } and not "manage" ? $"  on {rule.Trigger}" : string.Empty;
+
+                text.AppendLine($"  [{(rule.Matched ? "x" : " ")}] {rule.Name} (line {rule.Line}){does}{when}");
+            }
         }
 
         // Listed separately because that is what turns "my rule does not fire" into a

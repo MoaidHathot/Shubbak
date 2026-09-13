@@ -35,7 +35,7 @@ until you press something else:
 | *(none)* | `Ctrl+1` | Windows | Every window on the desktop, managed or not |
 | `>` | `Ctrl+2` | Commands | Every verb, plus your own named actions |
 | `#` | `Ctrl+3` | Workspaces | With window count, layout and monitor |
-| `!` | `Ctrl+4` | Inspect | Every window Shubbak is **not** managing, and why not |
+| `!` | `Ctrl+4` | Inspect | Every window Shubbak is **not** managing, and why not — with a row that widens it to the tool windows and popups it never lists, which are the ones a `manage` rule is for |
 | `$` | `Ctrl+5` | Scratchpad | Everything you have stashed, by slot |
 | `~` | `Ctrl+6` | Layouts | What each one actually does, and the one you are in |
 | `%` | `Ctrl+7` | Monitors | Size, DPI, and what each is showing |
@@ -64,20 +64,32 @@ with Enter, and Escape or Backspace steps back out. **Ctrl+C** copies the select
 line; **Ctrl+Shift+C** copies the whole report, which is the version that belongs in
 a bug report.
 
-**And then it writes the rule for you.** "Write a rule for it" composes the KDL that
-would match that window — class, process, the path commented out beside it, the title
-commented out under that — ready to read and paste. It is the step that used to be
-left as an exercise: the report told you exactly what was wrong and then handed you a
-transcription job with one very easy way to get it silently wrong.
+**And then it writes the rule for you — and adds it, if you say so.** "Write a rule
+for it…" opens the rules that could be written for the window, each complete and
+named for what it does, best first. A managed window is offered **Ignore it** first;
+a window the filter turned down is offered **Manage it** (only where a rule could
+actually overrule the filter — a cloaked window is not offered one that would look
+right and do nothing); a window a rule already ignores or forces is offered **Stop
+ignoring it** / **Stop forcing it**, which removes that rule. Float it, tile it, send
+it to a workspace, and "Match it, decide later" — the matchers written and the `do`
+block left to you — are always there.
 
-Enter reads it, one line per row. **Ctrl+Enter** on the row is where the rule leaves
-the palette: **Copy the rule** puts the whole thing on the clipboard and closes, and
-**Open the config** opens `shubbak.kdl` with whatever Windows opens `.kdl` files with,
-so the next thing is pasting. Inside the rule itself, Ctrl+C copies one line and
-Ctrl+Shift+C copies all of it — and the hint bar says so. The `do` block is left
-holding a comment on purpose: the same window one person wants floated is one another
-wants ignored, and a rule that guessed would look right and be wrong. Nothing is applied
-and nothing edits the file; what goes into it is yours.
+Enter on a choice reads the rule. **Ctrl+Enter** is where it leaves the palette:
+**Add it to the config and reload** appends it to `shubbak.kdl` and reloads, and the
+answer says what happened — *Added "ignore ms-teams" at line 412 and reloaded. "Teams"
+was released.* — with **Remove it again** right under it, because it did not ask
+first. **Copy the rule** and **Open the config** remain for the user who would rather
+place it by hand. Inside a rule, Ctrl+C copies one line and Ctrl+Shift+C copies all of
+it, and the hint bar says so.
+
+The window manager does the writing: it validates the whole file as it would load it
+and refuses rather than leave it broken, and a rule that runs `shell-exec` is refused
+unless the pipe may run it directly. Every rule row in a report can be removed the same
+way, and removal prints the rule so it can be put back. Nothing is guessed: the `do`
+block holds what you chose, and the same window one person wants floated is one
+another wants ignored. `general { allow-config-edits-over-ipc #false }` turns the
+whole thing off; `shubbak rule add` and `shubbak rule remove` do the same from a
+terminal. See [Configuration](configuration.md#window-rules).
 
 **Every row has actions** (Ctrl+Enter): go to it, bring it here, send it to another
 workspace, float/tile, minimise/restore, make it sticky, edit its tags, write a rule

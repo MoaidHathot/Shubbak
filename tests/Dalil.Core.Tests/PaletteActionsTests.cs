@@ -52,13 +52,17 @@ public sealed class PaletteActionsTests
         // Composing a rule is the other kind of row that sends nothing: it produces
         // text to read and paste rather than anything for the window manager to do, so
         // it carries no command either and must not be mistaken for one that lost it.
-        // Copying that text is the same kind of row one level down.
+        // Copying that text is the same kind of row one level down, and so are the two
+        // that ask for the file to be edited and the one that opens the list of rules.
         Assert.All(
             Flatten(PaletteActions.For(Window(), "2")).Where(a => a.Command.Length == 0),
             a => Assert.True(
                 a.Explains is not null ||
                 a.Expands is { Length: > 0 } ||
                 a.Copies is { Length: > 0 } ||
+                a.Applies is not null ||
+                a.Removes is not null ||
+                a.Composes is not null ||
                 a.Children is { Count: > 0 },
                 $"'{a.Name}' sends nothing and does nothing else either."));
     }

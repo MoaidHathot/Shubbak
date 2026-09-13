@@ -375,7 +375,7 @@ public sealed class WmDaemon : IDisposable
         phase = ReportPhase("dpi awareness", phase);
 
         _configPath = configPath;
-        LoadConfig(configPath, initial: true);
+        _ = LoadConfig(configPath, initial: true);
         phase = ReportPhase("config", phase);
 
         SyncMonitors();
@@ -1898,6 +1898,19 @@ public sealed class WmDaemon : IDisposable
         if (_config.Effects.Enabled && Win32Window.Exists(handle))
             WindowActions.ClearBorderColour(handle);
 
+        // Brought back into view before it is forgotten, undoing what concealed it. A
+        // window on an inactive workspace is cloaked by Shubbak, and a release that
+        // forgot it while cloaked left a process running with no window anywhere - not
+        // in Alt+Tab, not on the taskbar, not on any workspace. Releasing by hand never
+        // hit it, because the foreground window is by definition on show; a rule
+        // taking effect at reload hit it every time the window was somewhere else.
+        //
+        // Restore rather than Reveal: the concealment is undone whatever else the
+        // window is doing, minimised included, and nothing happens to a window this
+        // instance did not conceal - one its application hid itself, to the tray, say,
+        // is released without being fought over.
+        _ = _committer.Restore(handle);
+
         _committer.Forget(handle);
         _animation.Remove(window.Handle);
         _dragOrigin.Remove(handle);
@@ -2755,7 +2768,14 @@ public sealed class WmDaemon : IDisposable
         List<RuleReport> rules = new(_config.Rules.Count);
 
         foreach (WindowRule rule in _config.Rules)
-            rules.Add(new RuleReport(rule.Name, rule.Span.Start.Line, rule.Matches(attributes, _config.Apps)));
+        {
+            rules.Add(new RuleReport(
+                rule.Name,
+                rule.Span.Start.Line,
+                rule.Matches(attributes, _config.Apps),
+                [.. rule.Commands.Select(c => c.Name)],
+                TriggerName(rule.Trigger)));
+        }
 
         List<AppReport> apps = new(_config.Apps.Count);
 
@@ -2820,7 +2840,52 @@ public sealed class WmDaemon : IDisposable
                 TagsElsewhere(window),
                 window.ScratchpadName),
             rules,
-            apps);
+            apps,
+
+            // Whether a rule could change the verdict, when the verdict is no. This is
+            // what lets a client offer "manage it" only where the offer is honest.
+            decision.Manageable ? null : WindowFilter.CanBeOverridden(decision.Reason));
+    }
+
+    /// <summary>A trigger as the config spells it, for reports and the rule list.</summary>
+    internal static string TriggerName(RuleTrigger trigger) => trigger switch
+    {
+        RuleTrigger.OnTitleChange => "title-change",
+        RuleTrigger.OnFocus => "focus",
+        _ => "manage",
+    };
+
+    /// <summary>
+    /// Every rule in force, for <c>query rules</c>.
+    /// </summary>
+    /// <remarks>
+    /// The effective set: the file's own rules and those of the contexts that hold
+    /// right now, in the order they are consulted. A rule that belongs to a context
+    /// says so, because removing it means finding it under that context in the file.
+    /// </remarks>
+    internal IReadOnlyList<RuleInfo> DescribeRules()
+    {
+        List<RuleInfo> rules = new(_config.Rules.Count);
+
+        // A rule's span says where it is; which context it came from does not travel
+        // with it, so the contexts are asked which of their rules are in force.
+        Dictionary<TextSpan, string> owners = [];
+
+        foreach (ContextDefinition context in _contexts.ActiveDefinitions())
+            foreach (WindowRule rule in context.Effects.Rules)
+                owners[rule.Span] = context.Name;
+
+        foreach (WindowRule rule in _config.Rules)
+        {
+            rules.Add(new RuleInfo(
+                rule.Name,
+                rule.Span.Start.Line,
+                TriggerName(rule.Trigger),
+                [.. rule.Commands.Select(c => c.Name)],
+                owners.GetValueOrDefault(rule.Span)));
+        }
+
+        return rules;
     }
 
     /// <summary>
@@ -2895,7 +2960,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case HostAction.ReloadConfig:
-                LoadConfig(_configPath, initial: false);
+                _ = LoadConfig(_configPath, initial: false);
                 _layoutDirty = true;
 
                 // Announced so the bar, which is a separate process reading the same
@@ -5439,18 +5504,30 @@ public sealed class WmDaemon : IDisposable
 
     // ---- config ------------------------------------------------------------
 
-    private void LoadConfig(string? path, bool initial)
+    /// <summary>
+    /// Reads the configuration file and makes it the running one.
+    /// </summary>
+    /// <returns>
+    /// Whether the file is now the configuration in force. False when it had errors and
+    /// the previous configuration was kept - which the callers that edited the file on
+    /// somebody's behalf need to know, because to them a refused reload looks exactly
+    /// like an edit that landed.
+    /// </returns>
+    private bool LoadConfig(string? path, bool initial)
     {
         if (path is null)
         {
             Log.Warn(LogCategory.Config, "no config file found; using defaults");
             _ = _bindings.Load(_config);
             _rules.Load(_config);
-            return;
+            return true;
         }
 
+        // Stamped before it is read, never after - see ConfigStamp for the race.
+        ConfigStamp stamp = ConfigStamp.Of(path);
+
         ConfigLoadResult result = ConfigLoader.LoadFile(path);
-        string source = File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        string source = SourceForDiagnostics(path);
 
         foreach (Diagnostic diagnostic in result.Diagnostics)
             Console.Error.Write(diagnostic.Render(source, path));
@@ -5466,8 +5543,12 @@ public sealed class WmDaemon : IDisposable
             // Keeping the previous config is the safe failure mode: a typo must not
             // leave a running desktop with no keybindings.
             Log.Error(LogCategory.Config, "config has errors; keeping the previously loaded configuration");
-            return;
+            return false;
         }
+
+        // Remembered so the watcher can tell a save it has already loaded - its own
+        // write, most often - from one it has not.
+        _loadedConfigStamp = stamp;
 
         _baseConfig = result.Config;
 
@@ -5568,6 +5649,273 @@ public sealed class WmDaemon : IDisposable
                 $"{forgotten} previously excluded window(s) re-examined" +
                 $"{(_contexts.Count > 0 ? $", {_contexts.Count} context(s)" : "")}");
         }
+
+        // The watcher follows the setting in the file it watches, so turning it off
+        // in the file is the last save it reacts to.
+        SyncConfigWatcher();
+
+        return true;
+    }
+
+    /// <summary>The file's text for rendering carets, or nothing when it cannot be read.</summary>
+    /// <remarks>
+    /// The loader has already said what is wrong with an unreadable file; this only
+    /// feeds the renderer, and an exception here would turn a diagnostic into a crash.
+    /// </remarks>
+    private static string SourceForDiagnostics(string path)
+    {
+        try
+        {
+            return File.Exists(path) ? File.ReadAllText(path) : string.Empty;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return string.Empty;
+        }
+    }
+
+    // ---- editing the configuration on somebody's behalf --------------------------
+
+    /// <summary>What the file looked like when it was last loaded.</summary>
+    private ConfigStamp _loadedConfigStamp;
+
+    /// <summary>Says when the file is saved, while the setting asks for that.</summary>
+    private ConfigWatcher? _configWatcher;
+
+    /// <summary>How long a save has to be over before the file is read.</summary>
+    /// <remarks>
+    /// Long enough that an editor writing in place has finished, and that a
+    /// write-rename has renamed; short enough that the reload still reads as the
+    /// consequence of the save rather than as something that happened later.
+    /// </remarks>
+    private static readonly TimeSpan s_saveSettle = TimeSpan.FromMilliseconds(300);
+
+    /// <summary>
+    /// Starts or stops watching the file, as the loaded setting says.
+    /// </summary>
+    /// <remarks>
+    /// Called at the end of every load, so the watcher follows the file it watches:
+    /// turning <c>reload-on-save</c> off is the last save it reacts to, and turning it
+    /// on takes a reload by the key.
+    /// </remarks>
+    private void SyncConfigWatcher()
+    {
+        bool wanted = _configPath is not null && _config.ReloadOnSave;
+
+        if (wanted == (_configWatcher is not null)) return;
+
+        if (!wanted)
+        {
+            _configWatcher!.Dispose();
+            _configWatcher = null;
+            Log.Info(LogCategory.Config, "no longer reloading on save");
+            return;
+        }
+
+        try
+        {
+            // Onto the loop, where the configuration lives. InvokeAsync wakes the loop,
+            // which matters when the daemon is suspended and would otherwise wait for
+            // ever - a suspended daemon is exactly one somebody might be reconfiguring.
+            _configWatcher = new ConfigWatcher(_configPath!, s_saveSettle, () => _ = InvokeAsync(ReloadIfSaved));
+
+            Log.Info(LogCategory.Config, $"reloading on save; watching {_configPath}");
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            Log.Warn(LogCategory.Config, $"cannot watch {_configPath} for saves: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Reloads the file after a save, unless the save is one already loaded.
+    /// </summary>
+    /// <remarks>
+    /// The daemon's own writes - a rule added over the pipe - are saves like any other
+    /// as far as the folder is concerned, and each was followed by a reload of exactly
+    /// what was written. Comparing the file against the stamp taken at that reload is
+    /// what keeps every such edit from being loaded twice.
+    /// </remarks>
+    /// <returns>Whether a reload was attempted - the value <see cref="InvokeAsync{T}"/> wants.</returns>
+    private bool ReloadIfSaved()
+    {
+        if (_configPath is null) return false;
+
+        if (ConfigStamp.Of(_configPath) == _loadedConfigStamp)
+        {
+            Log.Debug(LogCategory.Config, "config saved, but it is the file already loaded; not reloading");
+            return false;
+        }
+
+        Log.Info(LogCategory.Config, "config saved; reloading");
+
+        _ = LoadConfig(_configPath, initial: false);
+        _layoutDirty = true;
+
+        // Announced as the key's reload is, and whatever the outcome, for the same
+        // reason: the bar and the palette read the same file and want to know it moved.
+        Publish(new WmResult(true, [new ConfigReloaded(_configPath)]));
+
+        return true;
+    }
+
+    /// <summary>Whether the pipe may add and remove rules in the file.</summary>
+    internal bool AllowConfigEditsOverIpc => _config.AllowConfigEditsOverIpc;
+
+    /// <summary>The configuration file in effect, or null when running on defaults.</summary>
+    internal string? ConfigPath => _configPath;
+
+    /// <summary>
+    /// Adds rules to the configuration file and reloads it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The daemon edits the file rather than the client, for three reasons that all
+    /// point the same way. The daemon knows which file is in effect - the client's
+    /// resolution of the search order need not agree with a daemon started with
+    /// <c>--config</c>. The daemon has the loader, and validates the result as it would
+    /// load it before a byte is written. And the reload has to happen here anyway.
+    /// </para>
+    /// <para>
+    /// On the message loop, because it reads and rewrites the running configuration.
+    /// </para>
+    /// </remarks>
+    /// <param name="addition">What to add, and for which window.</param>
+    /// <param name="requestedBy">Who asked, for the log and the marker.</param>
+    /// <param name="refusal">Why nothing was done, when nothing was.</param>
+    internal RuleChange? AddRule(RuleAddition addition, string requestedBy, out string? refusal)
+    {
+        ArgumentNullException.ThrowIfNull(addition);
+
+        if (!MayEditConfig(out refusal, out string? path, out ConfigText? file)) return null;
+
+        string marker = $"{ConfigEditor.Marker} on {DateTime.Now:yyyy-MM-dd}" +
+            (addition.Source is { Length: > 0 } source ? $" from {source}" : string.Empty);
+
+        ConfigEdit edit = ConfigEditor.PlanAddition(file!.Text, addition.Kdl, _config.AllowShellExecOverIpc, marker);
+
+        return CommitEdit(edit, path!, file, addition.Handle, requestedBy, "added", out refusal);
+    }
+
+    /// <summary>Removes one rule from the configuration file and reloads it.</summary>
+    /// <param name="removal">Which rule, as a report identified it, and for which window.</param>
+    /// <param name="requestedBy">Who asked, for the log.</param>
+    /// <param name="refusal">Why nothing was done, when nothing was.</param>
+    internal RuleChange? RemoveRule(RuleRemoval removal, string requestedBy, out string? refusal)
+    {
+        ArgumentNullException.ThrowIfNull(removal);
+
+        if (!MayEditConfig(out refusal, out string? path, out ConfigText? file)) return null;
+
+        ConfigEdit edit = ConfigEditor.PlanRemoval(file!.Text, removal.Name, removal.Line);
+
+        return CommitEdit(edit, path!, file, removal.Handle, requestedBy, "removed", out refusal);
+    }
+
+    /// <summary>The gate every edit passes, and the file it edits.</summary>
+    private bool MayEditConfig(out string? refusal, out string? path, out ConfigText? file)
+    {
+        path = _configPath;
+        file = null;
+
+        if (!_config.AllowConfigEditsOverIpc)
+        {
+            refusal = "The window manager is not accepting configuration edits over the pipe. " +
+                "Remove general { allow-config-edits-over-ipc #false } to permit them, or edit the file by hand.";
+            return false;
+        }
+
+        if (path is null)
+        {
+            refusal = "No configuration file is loaded - the window manager is running on defaults. " +
+                "Run `shubbak config init` and restart it, then try again.";
+            return false;
+        }
+
+        try
+        {
+            file = ConfigFile.Read(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            refusal = $"The configuration file could not be read: {ex.Message}";
+            return false;
+        }
+
+        refusal = null;
+        return true;
+    }
+
+    /// <summary>Writes a planned edit, reloads, and says what became of the window.</summary>
+    private RuleChange? CommitEdit(
+        ConfigEdit edit, string path, ConfigText file, long? handle, string requestedBy, string verb, out string? refusal)
+    {
+        if (!edit.Accepted)
+        {
+            // Rendered against the text the diagnostics point into - the planned file,
+            // for a rule that would not load - so the carets land on the right lines.
+            string about = edit.Text.Length > 0 ? edit.Text : file.Text;
+
+            refusal = edit.Diagnostics.Count == 0
+                ? edit.Refusal
+                : $"{edit.Refusal}\n{string.Join('\n', edit.Diagnostics.Select(d => d.Render(about, path).TrimEnd()))}";
+
+            Log.Warn(LogCategory.Config, $"rule not {verb} for {requestedBy}: {edit.Refusal}");
+            return null;
+        }
+
+        bool wasManaged = handle is { } before && _windows.IsManaged((nint)before);
+
+        try
+        {
+            ConfigFile.Write(path, edit.Text, file.HasBom);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            refusal = $"The configuration file could not be written: {ex.Message}";
+            Log.Error(LogCategory.Config, $"could not write {path} on behalf of {requestedBy}", ex);
+            return null;
+        }
+
+        Log.Info(LogCategory.Config,
+            $"{verb} rule {string.Join(", ", edit.Names.Select(n => $"\"{n}\""))} at line {edit.Line} of {path} for {requestedBy}");
+
+        // The ordinary reload, gate and all, and announced the same way, so the bar
+        // and the palette re-read the file at the same moment they would for the key.
+        bool reloaded = LoadConfig(path, initial: false);
+        _layoutDirty = true;
+        Publish(new WmResult(true, [new ConfigReloaded(path)]));
+
+        refusal = null;
+
+        return new RuleChange(
+            path,
+            edit.Line,
+            edit.Names,
+            edit.RuleText,
+            reloaded,
+            handle is { } after ? DescribeOutcome((nint)after, wasManaged, reloaded) : null);
+    }
+
+    /// <summary>What the reload did to the window a rule was written for, in a sentence.</summary>
+    private string DescribeOutcome(nint handle, bool wasManaged, bool reloaded)
+    {
+        string name = Win32Window.Exists(handle)
+            ? $"\"{Win32Window.GetTitle(handle).Truncate(40)}\""
+            : "the window";
+
+        if (!reloaded) return $"The reload was refused, so nothing changed for {name}.";
+        if (!Win32Window.Exists(handle)) return "The window has since closed.";
+
+        bool isManaged = _windows.IsManaged(handle);
+
+        return (wasManaged, isManaged) switch
+        {
+            (true, false) => $"{name} was released.",
+            (false, true) => $"{name} was adopted.",
+            (true, true) => $"{name} is still managed.",
+            _ => $"{name} is still unmanaged.",
+        };
     }
 
     /// <summary>
@@ -5900,6 +6248,10 @@ public sealed class WmDaemon : IDisposable
         _keyboard?.Dispose();
         _winEvents?.Dispose();
         _resumeHotKey.Dispose();
+
+        // Before the loop goes, so a save landing now has no loop to be posted to.
+        _configWatcher?.Dispose();
+        _configWatcher = null;
 
         // Before the loop goes: removing the icon needs the window it belongs to, and
         // an icon left behind is a ghost the user has to hover over to clear.

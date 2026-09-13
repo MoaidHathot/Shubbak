@@ -45,7 +45,15 @@ internal static class WindowCatalogue
     /// <see cref="Win32Window"/> and <see cref="WindowFilter"/> are stateless readers
     /// over Win32, and <see cref="ProcessIdentityCache"/> takes its own lock.
     /// </remarks>
-    public static List<Discovered> Discover()
+    /// <param name="everything">
+    /// Whether to list the windows the filter turned down for being the wrong shape -
+    /// tool windows, popups, windows missing from Alt+Tab - as well as the ones it turned
+    /// down for being the wrong kind. Those are precisely the windows a <c>manage</c>
+    /// rule exists for, and a client cannot write the rule for a window it is never
+    /// shown. Off by default because there are dozens of them on an ordinary desktop
+    /// and almost none is what anybody has lost.
+    /// </param>
+    public static List<Discovered> Discover(bool everything = false)
     {
         IReadOnlyList<nint> handles = Win32Window.EnumerateTopLevel();
         List<Discovered> found = new(handles.Count);
@@ -68,7 +76,7 @@ internal static class WindowCatalogue
             if (decision.Reason is ExclusionReason.NotAWindow) continue;
 
             string title = Win32Window.GetTitle(handle);
-            if (!WorthListing(decision, title)) continue;
+            if (!(everything ? WorthListingAtAll(decision, title) : WorthListing(decision, title))) continue;
 
             uint processId = Win32Window.GetProcessId(handle);
             string? path = Win32Window.GetProcessPath(processId);
@@ -139,7 +147,14 @@ internal static class WindowCatalogue
                 node?.FocusSequence ?? 0,
                 node?.ScratchpadName,
                 node is { } tagged && tagged.Tags.Count > 0 ? [.. tagged.Tags] : null,
-                node is not null ? null : Summarise(window, registry)));
+                node is not null ? null : Summarise(window, registry),
+
+                // The filter's answer as it stands, and whether a rule could change it.
+                // A managed window on an inactive workspace is cloaked and reads as not
+                // manageable here; that is the honest reading of the filter, and Managed
+                // beside it says the rest.
+                window.Decision.Manageable,
+                window.Decision.Manageable ? null : WindowFilter.CanBeOverridden(window.Decision.Reason)));
         }
 
         return candidates;
@@ -213,6 +228,39 @@ internal static class WindowCatalogue
             ExclusionReason.Elevated or
             ExclusionReason.Chromeless or
             ExclusionReason.NotVisible;
+    }
+
+    /// <summary>
+    /// The wider test, for a client that asked to see what the ordinary list leaves out.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Everything the filter could be argued with, whatever its title. A tool window, a
+    /// popup owned by another window, a window that keeps itself out of Alt+Tab, a
+    /// window with no title yet: each is a heuristic, each is what a <c>manage</c> rule
+    /// is for, and none of them is in the ordinary list - so until now the only way to
+    /// write a rule for one was <c>shubbak inspect</c> with a handle from somewhere else.
+    /// </para>
+    /// <para>
+    /// Still not literally everything. A handle that is not a window, the shell's own
+    /// windows, a child control and a window with no area cannot be managed by any rule,
+    /// and listing them would be listing the plumbing. And an invisible window with no
+    /// title is a helper - a message sink, an IME host - of which a desktop has a hundred;
+    /// the ones a person could point at are the visible ones and the titled ones.
+    /// </para>
+    /// </remarks>
+    private static bool WorthListingAtAll(ManageDecision decision, string title)
+    {
+        if (decision.Manageable) return true;
+
+        if (!WindowFilter.CanBeOverridden(decision.Reason) && decision.Reason is not (
+            ExclusionReason.CloakedByShell or ExclusionReason.CloakedByOwner or ExclusionReason.NotVisible))
+        {
+            return false;
+        }
+
+        // Invisible and nameless is a helper, not a window anybody is looking for.
+        return decision.Reason is not ExclusionReason.NotVisible || title.Length > 0;
     }
 
     /// <summary>How a window is currently kept off screen, if it is.</summary>

@@ -217,69 +217,112 @@ public sealed class PaletteBulkAndRuleTests
     [Fact]
     public void WritingARuleIsOfferedOnEveryWindowRow()
     {
-        PaletteAction write = Find(PaletteActions.For(Window(), "1"), "Write a rule");
+        PaletteAction write = Find(PaletteActions.For(Window(handle: 0x2A), "1"), "Write a rule");
 
-        // It composes rather than commands: nothing is sent, and nothing touches the
-        // config file. A window manager that edited your configuration behind you would
-        // be a worse idea than a little typing.
+        // It opens the rules that could be written, once the report is in: nothing is
+        // sent, and nothing touches the config file until a row that says it will.
         Assert.Equal(string.Empty, write.Command);
-        Assert.Contains("TestClass", write.Expands!, StringComparison.Ordinal);
+        Assert.Equal(0x2A, write.Composes);
+        Assert.Null(write.Expands);
+    }
+
+    [Fact]
+    public void ARuleIsNamedForWhatItDoesToWhat()
+    {
+        // A configuration with a dozen rules is read by their names, and a name that
+        // says only which application leaves the reader opening each one.
+        Assert.Contains("rule \"ignore msedge\"", RuleComposer.Rule(null, "C", "msedge.exe", does: ["ignore"]), StringComparison.Ordinal);
+        Assert.Contains("rule \"manage WhatsApp\"", RuleComposer.Rule(null, "C", "WhatsApp.exe", does: ["manage", "float"]), StringComparison.Ordinal);
+        Assert.Contains("rule \"msedge on 2\"", RuleComposer.Rule(null, "C", "msedge.exe", does: ["move --workspace \"2\""]), StringComparison.Ordinal);
+        Assert.Contains("rule \"float Calc\"", RuleComposer.Rule(null, "C", "Calc", does: ["float"]), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheVerbsGoIntoTheDoBlockOnePerLine()
+    {
+        string rule = RuleComposer.Rule(null, "C", "p.exe", does: ["manage", "move --workspace \"2\""]);
+
+        Assert.Contains("        do {\n            manage\n            move --workspace \"2\"\n        }", rule, StringComparison.Ordinal);
+        Assert.DoesNotContain(RuleComposer.Undecided, rule, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ThePathRidesBesideTheProcessWhateverTheVerb()
+    {
+        string rule = RuleComposer.Rule(null, "C", "p.exe", null, ["ignore"], @"C:\p.exe");
+
+        Assert.Contains("            process \"p.exe\"\n            // path \"C:\\\\p.exe\"\n", rule, StringComparison.Ordinal);
     }
 
     // ---- getting the rule out -----------------------------------------------------------
 
     [Fact]
-    public void AComposedRuleCanBeCopiedAndItsFileOpened()
+    public void ACompleteRuleCanBeAddedCopiedOrItsFileOpened()
     {
-        // The two steps between reading a rule and having it in the file. Both existed
-        // - a chord documented in the manual, and a path on the clipboard - and neither
-        // was written anywhere on the screen, so a feature that wrote the rule for you
-        // read as a feature that showed you something you could not have.
-        IReadOnlyList<PaletteAction> actions = PaletteActions.ForRule("rules { }");
+        // The three steps between reading a rule and having it in the file, and the
+        // first takes the other two off the user's hands. It says so in its name: it is
+        // the one row in the palette that writes to a file somebody maintains by hand.
+        IReadOnlyList<PaletteAction> actions = PaletteActions.ForRule("rules { }", 0x2A, complete: true);
 
-        Assert.Equal(2, actions.Count);
+        Assert.Equal(["Add it to the config and reload", "Copy the rule", "Open the config"], actions.Select(a => a.Name));
 
-        PaletteAction copy = Find(actions, "Copy");
-        PaletteAction open = Find(actions, "Open");
+        PaletteAction add = actions[0];
+        Assert.Equal("rules { }", add.Applies!.Kdl);
+        Assert.Equal(0x2A, add.Applies.Handle);
+        Assert.Equal(string.Empty, add.Command);
 
-        Assert.Equal("rules { }", copy.Copies);
-        Assert.Equal(string.Empty, copy.Command);
-
-        Assert.Equal(PaletteEntries.BuiltinOpenConfig, open.Command);
-        Assert.True(PaletteEntries.IsBuiltin(open.Command));
+        Assert.Equal("rules { }", actions[1].Copies);
+        Assert.Equal(PaletteEntries.BuiltinOpenConfig, actions[2].Command);
     }
 
     [Fact]
-    public void TheRuleActionCarriesThoseStepsBehindCtrlEnter()
+    public void AnUndecidedRuleIsNotOfferedForAdding()
     {
-        PaletteAction write = Find(PaletteActions.For(Window(), "1"), "Write a rule");
+        // The loader drops a rule with an empty do block, so adding one would change
+        // nothing and look like it had.
+        IReadOnlyList<PaletteAction> actions = PaletteActions.ForRule("rules { }", 0x2A, complete: false);
 
-        // The same text twice: what Enter opens to read is what "Copy the rule" puts on
-        // the clipboard. A copy that differed from what was read would be the silent
-        // transcription error this whole feature exists to remove.
-        Assert.NotNull(write.Children);
-        Assert.Equal(write.Expands, Find(write.Children!, "Copy").Copies);
+        Assert.DoesNotContain(actions, a => a.Applies is not null);
+        Assert.Contains(actions, a => a.Copies is not null);
     }
 
     [Fact]
-    public void TheRuleRowDoesNotAdvertiseItsListAsWhatEnterDoes()
+    public void EveryChoiceReadsOnEnterAndAddsFromCtrlEnter()
+    {
+        // The same text twice: what Enter opens to read is what "Add it" hands the
+        // window manager and what "Copy the rule" puts on the clipboard. A copy that
+        // differed from what was read would be the silent transcription error this
+        // whole feature exists to remove.
+        foreach (PaletteAction choice in PaletteActions.RuleChoices(Managed(), "1", ["1", "2"]).Where(c => c.Expands is not null))
+        {
+            Assert.NotNull(choice.Children);
+
+            foreach (PaletteAction step in choice.Children!.Where(s => s.Applies is not null || s.Copies is not null))
+                Assert.Equal(choice.Expands, step.Applies?.Kdl ?? step.Copies);
+        }
+    }
+
+    [Fact]
+    public void AChoiceDoesNotAdvertiseItsListAsWhatEnterDoes()
     {
         // A row that reads and also carries a list keeps the list behind Ctrl+Enter, so
-        // a "2 ›" badge beside "↵ read it" would promise Enter a list it will not show.
-        PaletteEntry row = PaletteActions.AsEntries(PaletteActions.For(Window(), "1"))
-            .Single(e => e.Primary.StartsWith("Write a rule", StringComparison.Ordinal));
+        // a "3 ›" badge beside "↵ read it" would promise Enter a list it will not show.
+        IReadOnlyList<PaletteEntry> rows = PaletteActions.AsEntries(PaletteActions.RuleChoices(Managed(), "1", ["1", "2"]));
 
-        Assert.DoesNotContain(row.Badges, b => b.EndsWith('\u203A'));
-        Assert.True(row.HasActions);
-        Assert.False(string.IsNullOrEmpty(row.Expands));
+        PaletteEntry ignore = rows.Single(e => e.Primary == "Ignore it");
+
+        Assert.DoesNotContain(ignore.Badges, b => b.EndsWith('\u203A'));
+        Assert.True(ignore.HasActions);
+        Assert.False(string.IsNullOrEmpty(ignore.Expands));
+
+        // "Send it to workspace..." has no text to read, so Enter opens its list and
+        // the badge is telling the truth.
+        Assert.Contains(rows.Single(e => e.Primary.StartsWith("Send it to", StringComparison.Ordinal)).Badges, b => b.EndsWith('\u203A'));
     }
 
     [Fact]
     public void ARowThatOnlyOpensAListStillSaysSo()
     {
-        // The badge is suppressed for the rule row and nothing else. "Move it to..."
-        // has no text to read, so Enter opens its list and the badge is telling the
-        // truth.
         PaletteEntry move = PaletteActions.AsEntries(PaletteActions.For(Window(workspace: "1"), "1", ["1", "2", "3"]))
             .Single(e => e.Primary.StartsWith("Move it to", StringComparison.Ordinal));
 
@@ -287,13 +330,260 @@ public sealed class PaletteBulkAndRuleTests
     }
 
     [Fact]
-    public void CopyingSurvivesBecomingARow()
+    public void EveryKindOfRequestSurvivesBecomingARow()
     {
-        // The text has to reach the row, which is what the window reads when Enter is
-        // pressed. Dropped in the conversion, the row would look right and copy nothing.
-        PaletteEntry copy = PaletteActions.AsEntries(PaletteActions.ForRule("rules { }"))
-            .Single(e => e.Primary.StartsWith("Copy", StringComparison.Ordinal));
+        // What the window reads when Enter is pressed. Dropped in the conversion, the
+        // row would look right and do nothing.
+        IReadOnlyList<PaletteEntry> rows = PaletteActions.AsEntries(
+        [
+            new PaletteAction("copy", "", "", Copies: "rules { }"),
+            new PaletteAction("add", "", "", Applies: new RuleToAdd("rules { }", 0x2A)),
+            new PaletteAction("remove", "", "", Removes: new RuleToRemove("x", 7, 0x2A)),
+            new PaletteAction("compose", "", "", Composes: 0x2A),
+        ]);
 
-        Assert.Equal("rules { }", copy.Copies);
+        Assert.Equal("rules { }", rows[0].Copies);
+        Assert.Equal(new RuleToAdd("rules { }", 0x2A), rows[1].Applies);
+        Assert.Equal(new RuleToRemove("x", 7, 0x2A), rows[2].Removes);
+        Assert.Equal(0x2A, rows[3].Composes);
+    }
+
+    // ---- which rules are offered, and in which order --------------------------------------
+
+    private static WindowReport Managed(string state = "Tiling", string workspace = "1", bool manageable = true, IReadOnlyList<RuleReport>? rules = null) =>
+        Report(managed: true, manageable: manageable, node: new ManagedWindowReport(1, state, workspace, true, false, [], null), rules: rules);
+
+    private static WindowReport Report(
+        bool managed = false,
+        bool manageable = true,
+        bool excludedByRule = false,
+        bool? overridable = null,
+        ManagedWindowReport? node = null,
+        IReadOnlyList<RuleReport>? rules = null) =>
+        new(0x2A, "a window", "TestClass", "test", @"C:\test.exe", 0, 0, 800, 600, 0, 0, true, "None", false,
+            manageable, manageable ? "manageable" : "window has WS_EX_TOOLWINDOW", manageable ? "manageable" : "a tool window",
+            managed, excludedByRule, node, rules ?? [], [], overridable);
+
+    private static IReadOnlyList<string> Names(WindowReport report, string? here = "1", IReadOnlyList<string>? workspaces = null) =>
+        [.. PaletteActions.RuleChoices(report, here, workspaces ?? ["1", "2", "3"]).Select(c => c.Name)];
+
+    [Fact]
+    public void AManagedWindowIsOfferedIgnoringFirst()
+    {
+        // The first row inverts what the window is now.
+        Assert.Equal(
+            ["Ignore it", "Float it", "Keep it tiled", "Send it to workspace\u2026", "Match it, decide later"],
+            Names(Managed()));
+    }
+
+    [Fact]
+    public void AFloatingWindowIsOfferedKeepingItThatWay()
+    {
+        Assert.Equal(
+            ["Ignore it", "Keep it floating", "Tile it", "Send it to workspace\u2026", "Match it, decide later"],
+            Names(Managed(state: "Floating")));
+    }
+
+    [Fact]
+    public void AWindowManagedDespiteTheFilterIsOfferedTheRuleThatKeepsItSo()
+    {
+        // Forced, by hand or by a rule that is not there: toggle-managed is forgotten
+        // on reload, and this is the row that makes it stick.
+        Assert.Equal("Manage it", Names(Managed(manageable: false))[0]);
+    }
+
+    [Fact]
+    public void AWindowARuleAlreadyForcesIsNotOfferedASecond()
+    {
+        WindowReport report = Managed(manageable: false, rules:
+        [
+            new RuleReport("manage test", 12, Matched: true, ["manage"], "manage"),
+        ]);
+
+        IReadOnlyList<string> names = Names(report);
+
+        Assert.Equal("Stop forcing it", names[0]);
+        Assert.DoesNotContain("Manage it", names);
+    }
+
+    [Fact]
+    public void SendingItSomewhereLeavesOutWhereItIs()
+    {
+        PaletteAction send = PaletteActions.RuleChoices(Managed(workspace: "2"), "1", ["1", "2", "3"])
+            .Single(c => c.Name.StartsWith("Send it to", StringComparison.Ordinal));
+
+        IReadOnlyList<PaletteAction> destinations = send.Children!;
+
+        Assert.Equal(["1", "3"], destinations.Select(c => c.Name));
+        Assert.Contains("move --workspace \"3\"", destinations[1].Expands!, StringComparison.Ordinal);
+        Assert.Contains("rule \"test on 3\"", destinations[1].Expands!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnUnmanagedWindowTheFilterTurnedDownIsOfferedManagingFirst()
+    {
+        Assert.Equal(
+            ["Manage it", "Manage it, floating", "Manage it on workspace\u2026", "Ignore it", "Match it, decide later"],
+            Names(Report(manageable: false, overridable: true)));
+    }
+
+    [Fact]
+    public void ManagingIsNotOfferedWhereNoRuleCouldDoIt()
+    {
+        // A cloaked window, a child control: the filter's reason is a fact, not an
+        // opinion, and a rule that looked right and did nothing is the worst thing this
+        // list could hand somebody.
+        IReadOnlyList<string> names = Names(Report(manageable: false, overridable: false));
+
+        Assert.DoesNotContain(names, n => n.StartsWith("Manage", StringComparison.Ordinal));
+        Assert.Equal("Ignore it", names[0]);
+    }
+
+    [Fact]
+    public void AnOlderDaemonLeavesManagingOfferedWithACaveat()
+    {
+        // Null from a daemon that predates the field: offered, and the description says
+        // it may not work.
+        PaletteAction manage = PaletteActions.RuleChoices(Report(manageable: false, overridable: null), "1", ["1"])
+            .Single(c => c.Name == "Manage it");
+
+        Assert.Contains("if the filter's reason allows it", manage.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWindowReleasedByHandIsOfferedTheRuleThatMakesItStick()
+    {
+        // Excluded, and no rule says so: toggle-managed did, and a reload takes it back.
+        PaletteAction ignore = PaletteActions.RuleChoices(Report(excludedByRule: true), "1", ["1"])[0];
+
+        Assert.Equal("Ignore it", ignore.Name);
+        Assert.Contains("reload would otherwise take it back", ignore.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWindowARuleAlreadyIgnoresIsOfferedThatRulesRemovalFirst()
+    {
+        WindowReport report = Report(excludedByRule: true, rules:
+        [
+            new RuleReport("ignore test", 42, Matched: true, ["ignore"], "manage"),
+            new RuleReport("unrelated", 50, Matched: false, ["float"], "manage"),
+        ]);
+
+        IReadOnlyList<PaletteAction> choices = PaletteActions.RuleChoices(report, "1", ["1"]);
+
+        Assert.Equal("Stop ignoring it", choices[0].Name);
+        Assert.Equal(new RuleToRemove("ignore test", 42, 0x2A), choices[0].Removes);
+        Assert.Contains("line 42", choices[0].Description, StringComparison.Ordinal);
+
+        // Not offered twice, and the rule that did not match is not offered for removal.
+        Assert.DoesNotContain(choices, c => c.Name == "Ignore it");
+        Assert.DoesNotContain(choices, c => c.Removes?.Name == "unrelated");
+    }
+
+    [Fact]
+    public void AnIgnoreRuleOnAnotherTriggerDoesNotCount()
+    {
+        // ignore on title-change does nothing, so the window is not "already ignored"
+        // and the rule that would is still offered.
+        WindowReport report = Managed(rules:
+        [
+            new RuleReport("late", 42, Matched: true, ["ignore"], "title-change"),
+        ]);
+
+        IReadOnlyList<string> names = Names(report);
+
+        Assert.Contains("Ignore it", names);
+        Assert.DoesNotContain("Stop ignoring it", names);
+        Assert.Contains("Remove \"late\"", names);
+    }
+
+    [Fact]
+    public void AMatchedShapingRuleIsOfferedForRemoval()
+    {
+        WindowReport report = Managed(rules:
+        [
+            new RuleReport("float test", 9, Matched: true, ["float"], "manage"),
+        ]);
+
+        PaletteAction remove = PaletteActions.RuleChoices(report, "1", ["1"]).Single(c => c.Name == "Remove \"float test\"");
+
+        Assert.Equal(new RuleToRemove("float test", 9, 0x2A), remove.Removes);
+        Assert.Contains("float", remove.Description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheUndecidedRuleIsAlwaysLastAndNeverAdded()
+    {
+        foreach (WindowReport report in new[] { Managed(), Report(manageable: false, overridable: true), Report(excludedByRule: true) })
+        {
+            PaletteAction last = PaletteActions.RuleChoices(report, "1", ["1"])[^1];
+
+            Assert.Equal("Match it, decide later", last.Name);
+            Assert.Contains(RuleComposer.Undecided, last.Expands!, StringComparison.Ordinal);
+            Assert.DoesNotContain(last.Children!, a => a.Applies is not null);
+        }
+    }
+
+    [Fact]
+    public void EveryChoiceThatAddsCarriesTheWindow()
+    {
+        // So the answer can say what became of it.
+        foreach (PaletteAction choice in PaletteActions.RuleChoices(Managed(), "1", ["1", "2"]))
+        {
+            foreach (PaletteAction step in Flatten(choice.Children ?? []))
+            {
+                if (step.Applies is { } add) Assert.Equal(0x2A, add.Handle);
+            }
+        }
+    }
+
+    private static IEnumerable<PaletteAction> Flatten(IEnumerable<PaletteAction> actions)
+    {
+        foreach (PaletteAction action in actions)
+        {
+            yield return action;
+
+            foreach (PaletteAction child in Flatten(action.Children ?? []))
+                yield return child;
+        }
+    }
+
+    // ---- what the answer shows ------------------------------------------------------------
+
+    [Fact]
+    public void AnAdditionIsShownWithTheWayBack()
+    {
+        var change = new RuleChange(@"C:\me\shubbak.kdl", 412, ["ignore test"], "rule \"ignore test\" { }", Reloaded: true, "\"a window\" was released.");
+
+        IReadOnlyList<PaletteEntry> rows = PaletteEntries.ForRuleChange(change, added: true);
+
+        Assert.Equal("Added \"ignore test\" at line 412 of shubbak.kdl and reloaded. \"a window\" was released.", rows[0].Primary);
+        Assert.Equal("Remove it again", rows[1].Primary);
+        Assert.Equal(new RuleToRemove("ignore test", 412, null), rows[1].Removes);
+        Assert.Equal("rule \"ignore test\" { }", rows[2].Copies);
+        Assert.Equal(PaletteEntries.BuiltinOpenConfig, rows[3].Command);
+    }
+
+    [Fact]
+    public void ARemovalIsShownWithTheWayBack()
+    {
+        var change = new RuleChange(@"C:\me\shubbak.kdl", 412, ["ignore test"], "rule \"ignore test\" { }", Reloaded: true, "\"a window\" was adopted.");
+
+        IReadOnlyList<PaletteEntry> rows = PaletteEntries.ForRuleChange(change, added: false);
+
+        Assert.StartsWith("Removed \"ignore test\" from line 412", rows[0].Primary, StringComparison.Ordinal);
+        Assert.Equal("Put it back", rows[1].Primary);
+        Assert.Equal(new RuleToAdd("rule \"ignore test\" { }", null), rows[1].Applies);
+        Assert.Equal("Copy the removed rule", rows[2].Primary);
+    }
+
+    [Fact]
+    public void ARefusedReloadIsSaidPlainly()
+    {
+        // Written, but not in force: to the user that looks exactly like an edit that
+        // landed, and the row has to say otherwise.
+        var change = new RuleChange(@"C:\me\shubbak.kdl", 412, ["x"], "rule \"x\" { }", Reloaded: false, null);
+
+        Assert.Contains("the reload was refused", PaletteEntries.ForRuleChange(change, added: true)[0].Primary, StringComparison.Ordinal);
     }
 }

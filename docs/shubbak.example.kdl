@@ -73,6 +73,25 @@ general {
     // something elevated.
     allow-shell-exec-over-ipc #false
 
+    // Whether tools may add and remove rules in this file over the pipe - the
+    // palette's "Add it to the config and reload", and `shubbak rule add`.
+    //
+    // On, and the asymmetry with the setting above is deliberate: every process
+    // running as you can already open this file and write to it, so refusing to do
+    // it on their behalf would protect nothing. What is permitted is narrow - rules,
+    // and only rules, appended as a block of their own and validated first - and a
+    // rule that runs `shell-exec` is refused unless the setting above allows it.
+    allow-config-edits-over-ipc #true
+
+    // Whether saving this file reloads it.
+    //
+    // On. The window manager watches the file and reloads a moment after any editor
+    // saves it, with the same gate as `wm-reload-config`: a file with errors is
+    // reported and the running configuration is kept. Nothing is polled - the folder
+    // tells the window manager when the file changes - so a file nobody is editing
+    // costs nothing. Turn it off to reload by the key alone.
+    reload-on-save #true
+
     // The layout a new workspace starts in. An unrecognised name is an error at
     // load rather than a silent fall back to horizontal.
     //
@@ -874,9 +893,10 @@ bar {
 // line's `shubbak inspect <handle>` does - styles, cloak state, tags, and which
 // rules matched - without leaving the window you are asking about. "Tags..." picks
 // which workspaces a window follows you to, "Move it to..." sends it somewhere and
-// leaves it there, and "Write a rule for it" composes the KDL that would match it,
-// ready to read; Ctrl+Enter on that row copies it or opens this file to paste it into.
-// Escape goes back one level rather than dismissing.
+// leaves it there, and "Write a rule for it..." offers the rules that could be written
+// for it - ignore it, manage it, float it, send it somewhere - each complete, and
+// Ctrl+Enter on one adds it to this file and reloads. Escape goes back one level
+// rather than dismissing.
 // ---------------------------------------------------------------------------
 
 dalil {

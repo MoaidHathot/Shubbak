@@ -185,4 +185,38 @@ public class WindowReportTextTests
         Assert.DoesNotContain(lines, l => l.StartsWith("managed", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, l => l.StartsWith("rules", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void ARuleSaysWhatItDoesAndWhen()
+    {
+        // The consequence of a matched rule, read off the line rather than looked up in
+        // the file. An older daemon says neither, and the line is as it always was.
+        WindowReport report = Report(rules:
+        [
+            new RuleReport("float the pip", 42, Matched: true, ["float"], "manage"),
+            new RuleReport("on focus", 51, Matched: false, ["move-to-workspace"], "focus"),
+            new RuleReport("old daemon", 60, Matched: false),
+        ]);
+
+        string[] lines = Lines(report);
+
+        Assert.Contains("  [x] float the pip (line 42)  float", lines, StringComparer.Ordinal);
+        Assert.Contains("  [ ] on focus (line 51)  move-to-workspace  on focus", lines, StringComparer.Ordinal);
+        Assert.Contains("  [ ] old daemon (line 60)", lines, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public void TheVerdictSaysWhetherARuleCouldOverturnIt()
+    {
+        // The question anybody reading "no" asks next.
+        WindowReport tool = Report(manageable: false, verdict: "a tool window") with { Overridable = true };
+        WindowReport cloaked = Report(manageable: false, verdict: "cloaked") with { Overridable = false };
+
+        Assert.Contains("             (a rule with `manage` can override this)", Lines(tool), StringComparer.Ordinal);
+        Assert.Contains("             (no rule can override this)", Lines(cloaked), StringComparer.Ordinal);
+
+        // Nothing when the answer was yes, and nothing from a daemon that did not say.
+        Assert.DoesNotContain(Lines(Report()), l => l.Contains("override", StringComparison.Ordinal));
+        Assert.DoesNotContain(Lines(Report(manageable: false, verdict: "cloaked")), l => l.Contains("override", StringComparison.Ordinal));
+    }
 }

@@ -61,6 +61,14 @@ public sealed class ConfigLoader
     }
 
     /// <summary>Loads config from a file.</summary>
+    /// <remarks>
+    /// A file that cannot be read is a diagnostic, not an exception. The reload paths
+    /// call this while an editor may still hold the file - a save-and-reload key, and
+    /// now a watcher that reloads on the save itself - and an <c>IOException</c> from
+    /// here used to travel up into the message loop, where the tick has no business
+    /// catching it. The same code as a missing file, because the answer to both is the
+    /// same: nothing was loaded, and here is why.
+    /// </remarks>
     public static ConfigLoadResult LoadFile(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
@@ -76,7 +84,24 @@ public sealed class ConfigLoader
             ]);
         }
 
-        return Load(File.ReadAllText(path));
+        string text;
+
+        try
+        {
+            text = File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new ConfigLoadResult(ShubbakConfig.Default, [
+                Diagnostic.Error(
+                    "SHB0400",
+                    $"Config file could not be read: {path} ({ex.Message})",
+                    new TextSpan(new TextPosition(1, 1, 0), 0),
+                    "Another program may be holding it. Try again in a moment.")
+            ]);
+        }
+
+        return Load(text);
     }
 
     private ShubbakConfig Build(KdlDocument document)
@@ -102,7 +127,15 @@ public sealed class ConfigLoader
             Workspaces = workspaces,
             Keybindings = ParseKeybindings(document.Node("keybindings"), workspaces),
             BindingModes = ParseBindingModes(document.Node("binding-modes"), workspaces),
-            Rules = ParseRules(document.Node("rules"), apps),
+
+            // Every block, not the first. The loader used to read one `rules { }` and
+            // drop any other in silence - no diagnostic, nothing in the log - which
+            // made "paste this at the end of your file" wrong advice for every file
+            // that already had a rules block, which is every file the starter config
+            // produces. A second block is now simply more rules, in file order, which
+            // is also what lets a tool append one without having to find and edit the
+            // block that is already there.
+            Rules = ParseRules(document.NodesNamed("rules"), apps),
             Contexts = ParseContexts(document.Node("contexts"), apps, monitors, workspaces),
         };
 
@@ -285,6 +318,7 @@ public sealed class ConfigLoader
         "focus-follows-cursor", "toggle-workspace-on-refocus", "follow-window-on-move",
         "cursor-jump", "initial-window-state", "hide-method", "keep-in-taskbar",
         "default-layout", "unmanaged-window-commands", "allow-shell-exec-over-ipc",
+        "allow-config-edits-over-ipc", "reload-on-save",
         "startup-command", "new-window-placement",
     ];
 
@@ -361,6 +395,8 @@ public sealed class ConfigLoader
             HideMethod = HideMethod(node, config.HideMethod),
             UnmanagedWindowCommands = UnmanagedCommands(node, config.UnmanagedWindowCommands),
             AllowShellExecOverIpc = Bool(node, "allow-shell-exec-over-ipc", config.AllowShellExecOverIpc),
+            AllowConfigEditsOverIpc = Bool(node, "allow-config-edits-over-ipc", config.AllowConfigEditsOverIpc),
+            ReloadOnSave = Bool(node, "reload-on-save", config.ReloadOnSave),
             KeepInTaskbar = Bool(node, "keep-in-taskbar", config.KeepInTaskbar),
             DefaultLayout = DefaultLayout(node, config.DefaultLayout),
             StartupCommands = startup,
@@ -1451,7 +1487,7 @@ public sealed class ConfigLoader
                 child.Child("window-effects") is { } look ? ReadEffects(look) : null,
                 child.Child("animation") is { } motion ? ReadAnimation(motion) : null,
                 bindings,
-                ParseRules(child.Child("rules"), apps),
+                ParseRules(child.ChildrenNamed("rules"), apps),
                 ParseWorkspaceHomes(child.Child("workspaces"), name, monitors, workspaces),
                 child.Child("on-enter") is { } enter ? ParseCommandBlock(enter, null) : [],
                 child.Child("on-exit") is { } exit ? ParseCommandBlock(exit, null) : []);
@@ -2101,90 +2137,131 @@ public sealed class ConfigLoader
         }
     }
 
-    private List<WindowRule> ParseRules(KdlNode? node, IReadOnlyDictionary<string, AppDefinition> apps)
+    /// <summary>Reads every rule in every <c>rules { }</c> block given, in order.</summary>
+    /// <param name="blocks">The blocks, in file order. Their rules are concatenated.</param>
+    /// <param name="apps">The app definitions a rule may refer to.</param>
+    private List<WindowRule> ParseRules(IEnumerable<KdlNode> blocks, IReadOnlyDictionary<string, AppDefinition> apps)
     {
         List<WindowRule> rules = [];
-        if (node is null) return rules;
 
+        // Numbered across blocks, so an unnamed rule in a second block does not share
+        // "rule #1" with an unnamed rule in the first.
         int ordinal = 0;
 
-        foreach (KdlNode child in node.ChildrenNamed("rule"))
+        foreach (KdlNode node in blocks)
         {
-            ordinal++;
-            string name = child.Argument(0)?.AsString() ?? $"rule #{ordinal}";
-
-            string triggerName = (Text(child, "on", "manage") ?? "manage").ToLowerInvariant();
-
-            RuleTrigger trigger = triggerName switch
+            foreach (KdlNode child in node.ChildrenNamed("rule"))
             {
-                "manage" => RuleTrigger.OnManage,
-                "title-change" => RuleTrigger.OnTitleChange,
-                "focus" => RuleTrigger.OnFocus,
-                _ => RuleTrigger.OnManage,
-            };
+                ordinal++;
 
-            // Reported rather than assumed. Falling back to "manage" meant a rule
-            // written on="titel-change" ran at a completely different moment from the
-            // one intended, and looked from the outside like the rule not matching.
-            if (triggerName is not ("manage" or "title-change" or "focus"))
-            {
-                Report(Diagnostic.Error(
-                    "SHB0431",
-                    $"Rule '{name}' has unknown trigger '{triggerName}'.",
-                    SpanOf(child, "on"),
-                    "Use on=\"manage\" (the default), on=\"title-change\", or on=\"focus\"."));
+                if (ParseRule(child, ordinal, apps) is { } rule) rules.Add(rule);
             }
-
-            List<WindowMatcher> matchers = [];
-            List<string> appReferences = [];
-
-            if (child.Child("match") is { } match)
-            {
-                matchers = ParseMatchers(match);
-
-                foreach (KdlValue value in match.ChildrenNamed("app").SelectMany(a => a.Arguments))
-                {
-                    string reference = value.AsString();
-
-                    if (!apps.ContainsKey(reference))
-                    {
-                        Report(Diagnostic.Error(
-                            "SHB0416",
-                            $"Rule '{name}' references app '{reference}', which is not defined.",
-                            value.Span,
-                            $"Define it with: app \"{reference}\" {{ process = \"...\" }}"));
-                        continue;
-                    }
-
-                    appReferences.Add(reference);
-                }
-            }
-
-            List<WmCommand> commands = child.Child("do") is { } doBlock
-                ? ParseCommandBlock(doBlock, null)
-                : [];
-
-            if (matchers.Count == 0 && appReferences.Count == 0)
-            {
-                Report(Diagnostic.Error(
-                    "SHB0417",
-                    $"Rule '{name}' has no conditions, so it would match every window.",
-                    child.Span,
-                    "Add a match block, e.g. match { process = \"firefox\" }."));
-                continue;
-            }
-
-            if (commands.Count == 0)
-            {
-                Report(Diagnostic.Warning(
-                    "SHB0418", $"Rule '{name}' runs no commands.", child.Span));
-                continue;
-            }
-
-            rules.Add(new WindowRule(name, trigger, matchers, appReferences, commands, child.Span));
         }
 
         return rules;
+    }
+
+    /// <summary>The default name of an unnamed rule, as a report will show it.</summary>
+    /// <remarks>
+    /// Public because a tool removing a rule by the name a report gave it has to
+    /// recognise the name as one the loader invented rather than one the user wrote.
+    /// </remarks>
+    public static string DefaultRuleName(int ordinal) => $"rule #{ordinal}";
+
+    /// <summary>Reads one <c>rule</c> node, or null when it is not worth keeping.</summary>
+    private WindowRule? ParseRule(KdlNode child, int ordinal, IReadOnlyDictionary<string, AppDefinition> apps)
+    {
+        string name = child.Argument(0)?.AsString() ?? DefaultRuleName(ordinal);
+
+        string triggerName = (Text(child, "on", "manage") ?? "manage").ToLowerInvariant();
+
+        RuleTrigger trigger = triggerName switch
+        {
+            "manage" => RuleTrigger.OnManage,
+            "title-change" => RuleTrigger.OnTitleChange,
+            "focus" => RuleTrigger.OnFocus,
+            _ => RuleTrigger.OnManage,
+        };
+
+        // Reported rather than assumed. Falling back to "manage" meant a rule
+        // written on="titel-change" ran at a completely different moment from the
+        // one intended, and looked from the outside like the rule not matching.
+        if (triggerName is not ("manage" or "title-change" or "focus"))
+        {
+            Report(Diagnostic.Error(
+                "SHB0431",
+                $"Rule '{name}' has unknown trigger '{triggerName}'.",
+                SpanOf(child, "on"),
+                "Use on=\"manage\" (the default), on=\"title-change\", or on=\"focus\"."));
+        }
+
+        List<WindowMatcher> matchers = [];
+        List<string> appReferences = [];
+
+        if (child.Child("match") is { } match)
+        {
+            matchers = ParseMatchers(match);
+
+            foreach (KdlValue value in match.ChildrenNamed("app").SelectMany(a => a.Arguments))
+            {
+                string reference = value.AsString();
+
+                if (!apps.ContainsKey(reference))
+                {
+                    Report(Diagnostic.Error(
+                        "SHB0416",
+                        $"Rule '{name}' references app '{reference}', which is not defined.",
+                        value.Span,
+                        $"Define it with: app \"{reference}\" {{ process = \"...\" }}"));
+                    continue;
+                }
+
+                appReferences.Add(reference);
+            }
+        }
+
+        List<WmCommand> commands = child.Child("do") is { } doBlock
+            ? ParseCommandBlock(doBlock, null)
+            : [];
+
+        if (matchers.Count == 0 && appReferences.Count == 0)
+        {
+            Report(Diagnostic.Error(
+                "SHB0417",
+                $"Rule '{name}' has no conditions, so it would match every window.",
+                child.Span,
+                "Add a match block, e.g. match { process = \"firefox\" }."));
+            return null;
+        }
+
+        if (commands.Count == 0)
+        {
+            Report(Diagnostic.Warning(
+                "SHB0418", $"Rule '{name}' runs no commands.", child.Span));
+            return null;
+        }
+
+        // The two adoption verbs are consulted only when a window is first considered,
+        // which is the manage trigger and no other. Written under title-change or
+        // focus they parsed, loaded, and were then stripped out at the moment the rule
+        // fired - so a rule that plainly said `ignore` did nothing at all, and the
+        // report showed it matching. The rule is kept for whatever else it runs.
+        if (trigger is not RuleTrigger.OnManage)
+        {
+            foreach (WmCommand command in commands)
+            {
+                if (command is not (IgnoreCommand or ManageCommand)) continue;
+
+                Report(Diagnostic.Warning(
+                    "SHB0452",
+                    $"Rule '{name}' runs '{command.Name}' on=\"{triggerName}\", where it does nothing.",
+                    SpanOf(child, "on"),
+                    $"'{command.Name}' decides whether a window is taken on at all, so it only " +
+                    "acts in a rule with on=\"manage\" (the default). Move it to one, or drop it."));
+            }
+        }
+
+        return new WindowRule(name, trigger, matchers, appReferences, commands, child.Span);
     }
 
     // ---- value helpers -----------------------------------------------------

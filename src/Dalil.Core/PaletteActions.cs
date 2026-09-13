@@ -41,6 +41,22 @@ namespace Dalil.Core;
 /// copying by name, so the way to get the rule out is a thing you can see.
 /// </para>
 /// </param>
+/// <param name="Applies">
+/// When set, choosing this asks the window manager to add the rule to the configuration
+/// file and reload. The one action that writes to the user's file, and it says so in
+/// its name; nothing here applies anything by implication.
+/// </param>
+/// <param name="Removes">
+/// When set, choosing this asks the window manager to take the rule out of the
+/// configuration file and reload. The other half of <paramref name="Applies"/>, so
+/// that whatever the palette added it can also undo.
+/// </param>
+/// <param name="Composes">
+/// When set, choosing this fetches the window's report and opens the rules that could
+/// be written for it. A report rather than the row's own attributes, because the
+/// choices depend on things only the report knows: whether the filter could be
+/// overruled, and which rules already match.
+/// </param>
 public sealed record PaletteAction(
     string Name,
     string Description,
@@ -50,7 +66,21 @@ public sealed record PaletteAction(
     IReadOnlyList<PaletteAction>? Children = null,
     long? Explains = null,
     string? Expands = null,
-    string? Copies = null);
+    string? Copies = null,
+    RuleToAdd? Applies = null,
+    RuleToRemove? Removes = null,
+    long? Composes = null);
+
+/// <summary>A rule to be added to the configuration file, when somebody chooses to.</summary>
+/// <param name="Kdl">The rule, as the palette showed it.</param>
+/// <param name="Handle">The window it was written for, so the answer can say what became of it.</param>
+public sealed record RuleToAdd(string Kdl, long? Handle);
+
+/// <summary>A rule to be removed from the configuration file, as a report identified it.</summary>
+/// <param name="Name">The rule's name, as the report gave it.</param>
+/// <param name="Line">The line it begins on, as the report gave it.</param>
+/// <param name="Handle">The window concerned, so the answer can say what became of it.</param>
+public sealed record RuleToRemove(string Name, int Line, long? Handle);
 
 /// <summary>
 /// What the palette can do to a window, beyond going to it.
@@ -259,17 +289,15 @@ public static class PaletteActions
         // to transcribe them into KDL by hand, which is a transcription job with one
         // very easy way to get it silently wrong.
         //
-        // Enter reads it; Ctrl+Enter is where copying it and opening the file live.
-        // Reading stays on Enter because it is the step that has to come first - a rule
-        // pasted unread is a rule with an empty `do` block pasted unread.
-        string rule = RuleComposer.Rule(null, window.ClassName, window.ProcessName, window.Title);
-
+        // Opens a list rather than a rule, because which rule depends on the window:
+        // one that is managed wants ignoring, one the filter turned down wants managing,
+        // and one a rule already decides wants that rule removed. The report says which,
+        // so the report is fetched first - see RuleChoices.
         actions.Add(new PaletteAction(
-            "Write a rule for it",
-            "Compose the KDL that would match this window, ready to paste",
+            "Write a rule for it\u2026",
+            "Ignore it, manage it, float it or send it somewhere - as the KDL that would, ready to add",
             string.Empty,
-            Children: ForRule(rule),
-            Expands: rule));
+            Composes: window.Handle));
 
         actions.Add(new PaletteAction(
             "Close it",
@@ -392,40 +420,258 @@ public static class PaletteActions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The two steps between reading the rule and having it in the file: getting it
-    /// onto the clipboard, and getting the file open to paste it into. Both were
-    /// possible before - Ctrl+Shift+C in the rule frame, and the path from "config
-    /// path" into an editor by hand - and neither was written anywhere on the screen,
-    /// which is how a feature that composed the rule for you came to be read as a
-    /// feature that showed you something you could not have.
+    /// Three steps between reading the rule and having it in the file, and the first is
+    /// the one that takes the other two off the user's hands: the window manager adds
+    /// the rule and reloads. It says so in its name, because it is the one row in the
+    /// palette that writes to a file somebody maintains by hand, and the answer it
+    /// comes back with carries the way to undo it.
     /// </para>
     /// <para>
-    /// Still nothing is applied. Copying is copying, and opening the file is opening
-    /// the file; what goes into it, and which verb goes into the <c>do</c> block, is
-    /// the user's business. See <see cref="RuleComposer"/>.
+    /// Copying and opening the file remain, for the user who would rather place the
+    /// rule themselves. Both were possible before - Ctrl+Shift+C in the rule frame, and
+    /// the path from "config path" into an editor by hand - and neither was written
+    /// anywhere on the screen.
     /// </para>
     /// </remarks>
     /// <param name="rule">The composed rule, as <see cref="RuleComposer"/> wrote it.</param>
-    public static IReadOnlyList<PaletteAction> ForRule(string rule)
+    /// <param name="handle">The window it was written for, or null.</param>
+    /// <param name="complete">
+    /// Whether the rule's <c>do</c> block has been decided. An undecided rule is one the
+    /// loader would drop, so adding it is not offered - the user finishes it by hand.
+    /// </param>
+    public static IReadOnlyList<PaletteAction> ForRule(string rule, long? handle = null, bool complete = true)
     {
         ArgumentNullException.ThrowIfNull(rule);
 
-        return
-        [
-            new PaletteAction(
-                "Copy the rule",
-                "Put the whole rule on the clipboard, ready to paste into shubbak.kdl",
-                string.Empty,
-                Copies: rule),
+        List<PaletteAction> actions = [];
 
-            // The palette's own command rather than the manager's: the file is the
-            // palette's to find, and opening it is the shell's to do.
-            new PaletteAction(
-                "Open the config",
-                "Open shubbak.kdl with whatever edits .kdl files, to paste the rule into",
-                PaletteEntries.BuiltinOpenConfig),
-        ];
+        if (complete)
+        {
+            actions.Add(new PaletteAction(
+                "Add it to the config and reload",
+                "Append the rule to shubbak.kdl, reload, and say what happened to the window",
+                string.Empty,
+                Applies: new RuleToAdd(rule, handle)));
+        }
+
+        actions.Add(new PaletteAction(
+            "Copy the rule",
+            "Put the whole rule on the clipboard, ready to paste into shubbak.kdl",
+            string.Empty,
+            Copies: rule));
+
+        // The palette's own command rather than the manager's: the file is the
+        // palette's to find, and opening it is the shell's to do.
+        actions.Add(new PaletteAction(
+            "Open the config",
+            "Open shubbak.kdl with whatever edits .kdl files, to paste the rule into",
+            PaletteEntries.BuiltinOpenConfig));
+
+        return actions;
     }
+
+    /// <summary>
+    /// The rules that could be written for one window, best first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every row is a complete rule - the verb decided, the name saying what it does -
+    /// so the common case is Enter to read it and Ctrl+Enter to add it, and nothing to
+    /// type. The order is decided by the window's state: a managed window most often
+    /// wants ignoring, a window the filter turned down most often wants managing, and
+    /// a window a rule already decides most often wants that rule gone. The first row
+    /// is the one that inverts what the window is now.
+    /// </para>
+    /// <para>
+    /// Nothing is offered that would do nothing. <c>manage</c> is left out when the
+    /// filter's reason cannot be overruled - a cloaked window, a child control - and
+    /// when the window is manageable anyway; a rule that looked right and did nothing
+    /// is the worst thing this list could hand somebody. When the daemon does not say
+    /// whether the reason can be overruled, the rule is offered and its description
+    /// says it may not work.
+    /// </para>
+    /// <para>
+    /// The undecided rule is last and always there, for the user who wants the matchers
+    /// written and the verb left to them.
+    /// </para>
+    /// </remarks>
+    /// <param name="report">The window, as <c>inspect</c> described it.</param>
+    /// <param name="focusedWorkspace">Where the user is, left out of "send it to".</param>
+    /// <param name="workspaces">Every workspace, for "send it to". Empty leaves that out.</param>
+    public static IReadOnlyList<PaletteAction> RuleChoices(
+        WindowReport report,
+        string? focusedWorkspace,
+        IReadOnlyList<string>? workspaces = null)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+
+        List<PaletteAction> choices = [];
+        long handle = report.Handle;
+
+        // Rules already deciding for this window. Ignoring and forcing count only on
+        // the manage trigger, which is the only one where those verbs act.
+        List<RuleReport> ignoring = [.. report.Rules.Where(r => r.Matched && OnManage(r) && Does(r, "ignore"))];
+        List<RuleReport> forcing = [.. report.Rules.Where(r => r.Matched && OnManage(r) && Does(r, "manage"))];
+
+        foreach (RuleReport rule in ignoring)
+        {
+            choices.Add(new PaletteAction(
+                "Stop ignoring it",
+                $"Remove rule \"{rule.Name}\" (line {rule.Line}) from the config and reload",
+                string.Empty,
+                Removes: new RuleToRemove(rule.Name, rule.Line, handle)));
+        }
+
+        foreach (RuleReport rule in forcing)
+        {
+            choices.Add(new PaletteAction(
+                "Stop forcing it",
+                $"Remove rule \"{rule.Name}\" (line {rule.Line}) from the config and reload",
+                string.Empty,
+                Removes: new RuleToRemove(rule.Name, rule.Line, handle)));
+        }
+
+        string subject = report.ProcessName is { Length: > 0 } ? report.ProcessName : report.ClassName;
+        string verdict = report.VerdictSummary is { Length: > 0 } ? report.VerdictSummary : "the filter turns it down";
+
+        // The filter's opinion, and whether a rule may argue with it. A daemon that
+        // predates the field leaves the question open.
+        bool overridable = report.Overridable ?? true;
+        bool certain = report.Overridable is not null;
+
+        PaletteAction Choice(string name, string description, params string[] does) =>
+            Complete(report, name, description, does);
+
+        PaletteAction Ignore(string description) => Choice("Ignore it", description, "ignore");
+
+        if (report.Managed)
+        {
+            bool floating = string.Equals(report.Node?.State, "Floating", StringComparison.OrdinalIgnoreCase);
+
+            // Managed although the filter says no: forced, by a rule or by hand. A rule
+            // is what makes the forcing outlast a reload - unless one already does.
+            if (!report.Manageable && forcing.Count == 0 && overridable)
+            {
+                choices.Add(Choice(
+                    "Manage it",
+                    $"Keep managing it across reloads - the filter would turn it down: {verdict}",
+                    "manage"));
+            }
+
+            choices.Add(Ignore("Never tile this window - it is released on the next reload and left alone after that"));
+
+            choices.Add(floating
+                ? Choice("Keep it floating", "Float it every time it appears, rather than only until it is closed", "float")
+                : Choice("Float it", "Take it out of the tiling flow every time it appears", "float"));
+
+            choices.Add(floating
+                ? Choice("Tile it", "Put it into the tiling flow every time it appears", "tile")
+                : Choice("Keep it tiled", "Tile it every time it appears, even if the default is to float", "tile"));
+
+            if (Destinations(report.Node?.Workspace, focusedWorkspace, workspaces) is { Count: > 0 } sendTo)
+            {
+                choices.Add(new PaletteAction(
+                    "Send it to workspace\u2026",
+                    "Open it on that workspace from now on",
+                    string.Empty,
+                    Children: [.. sendTo.Select(w => Choice(w, $"Open {subject} on {w} from now on", $"move --workspace \"{RuleComposer.Escape(w)}\""))]));
+            }
+        }
+        else if (report.ExcludedByRule && ignoring.Count == 0)
+        {
+            // Released by hand, and a reload would take it back. This is what makes the
+            // release stick, and it is the row this list exists for.
+            choices.Add(Ignore("Make the release stick - a reload would otherwise take it back"));
+        }
+        else if (report.Manageable)
+        {
+            // Passes the filter and is not in the tree: not adopted yet, or excluded by
+            // a rule listed above. A manage rule would change nothing.
+            if (ignoring.Count == 0)
+                choices.Add(Ignore("Never tile this window"));
+        }
+        else if (overridable && ignoring.Count == 0)
+        {
+            string caveat = certain ? string.Empty : " - if the filter's reason allows it";
+
+            choices.Add(Choice("Manage it", $"Take it on despite the filter: {verdict}{caveat}", "manage"));
+            choices.Add(Choice("Manage it, floating", $"Take it on and keep it out of the tiling flow{caveat}", "manage", "float"));
+
+            if (Destinations(null, focusedWorkspace, workspaces) is { Count: > 0 } onto)
+            {
+                choices.Add(new PaletteAction(
+                    "Manage it on workspace\u2026",
+                    "Take it on and open it there from now on",
+                    string.Empty,
+                    Children: [.. onto.Select(w => Choice(w, $"Manage {subject} on {w}{caveat}", "manage", $"move --workspace \"{RuleComposer.Escape(w)}\""))]));
+            }
+
+            choices.Add(Ignore("Leave it alone even if the filter changes its mind"));
+        }
+        else if (ignoring.Count == 0)
+        {
+            // The filter's reason is a fact, not an opinion - no rule can take this
+            // window on, and offering one would look right and do nothing.
+            choices.Add(Ignore($"Leave it alone for good - no rule can take it on: {verdict}"));
+        }
+
+        // Matched rules that shape rather than decide, offered for removal too.
+        foreach (RuleReport rule in report.Rules)
+        {
+            if (!rule.Matched || ignoring.Contains(rule) || forcing.Contains(rule)) continue;
+            if (rule.Does is not { Count: > 0 } does) continue;
+
+            choices.Add(new PaletteAction(
+                $"Remove \"{rule.Name}\"",
+                $"It runs {string.Join(", ", does)} on this window (line {rule.Line}); remove it from the config and reload",
+                string.Empty,
+                Removes: new RuleToRemove(rule.Name, rule.Line, handle)));
+        }
+
+        // Always last, always there: the matchers written and the verb left open.
+        string undecided = RuleComposer.Rule(null, report.ClassName, report.ProcessName, report.Title, null, report.ProcessPath);
+
+        choices.Add(new PaletteAction(
+            "Match it, decide later",
+            "The matchers written out and the do block left for you - to copy and finish by hand",
+            string.Empty,
+            Children: ForRule(undecided, handle, complete: false),
+            Expands: undecided));
+
+        return choices;
+    }
+
+    /// <summary>One complete rule as a row: read on Enter, add or copy from Ctrl+Enter.</summary>
+    private static PaletteAction Complete(WindowReport report, string name, string description, string[] does)
+    {
+        string rule = RuleComposer.Rule(null, report.ClassName, report.ProcessName, report.Title, does, report.ProcessPath);
+
+        return new PaletteAction(
+            name,
+            description,
+            string.Empty,
+            Children: ForRule(rule, report.Handle, complete: true),
+            Expands: rule);
+    }
+
+    /// <summary>Where a rule could send the window: every workspace but the one it is on.</summary>
+    private static List<string> Destinations(string? current, string? focused, IReadOnlyList<string>? workspaces)
+    {
+        if (workspaces is not { Count: > 0 }) return [];
+
+        // Its own workspace is left out, and so is the focused one when the window is
+        // not managed - a rule sending it where the user already is would be the
+        // default placement written down.
+        string? exclude = current ?? focused;
+
+        return [.. workspaces.Where(w => !string.Equals(w, exclude, StringComparison.OrdinalIgnoreCase))];
+    }
+
+    private static bool OnManage(RuleReport rule) =>
+        rule.Trigger is null || string.Equals(rule.Trigger, "manage", StringComparison.OrdinalIgnoreCase);
+
+    private static bool Does(RuleReport rule, string verb) =>
+        rule.Does is { } does && does.Contains(verb, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Aim and act, once per window, as one message.</summary>
     /// <remarks>
@@ -566,7 +812,10 @@ public static class PaletteActions
                 // flag was set here and read nowhere, which is how "Close it" came to
                 // look and behave exactly like "Float it".
                 Destructive: action.Destructive,
-                Copies: action.Copies));
+                Copies: action.Copies,
+                Applies: action.Applies,
+                Removes: action.Removes,
+                Composes: action.Composes));
         }
 
         return entries;

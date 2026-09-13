@@ -224,7 +224,42 @@ the bar. Rules can fire `on="manage"` (the default), `on="title-change"` or
 `on="focus"`. The `do { }` block takes **any** command — it is the same parser your
 keybindings use, so there is no second vocabulary to learn. `ignore` and `manage` are
 the two that only make sense here: `ignore` tells Shubbak to leave a window alone,
-`manage` tells it to take on a window the built-in filter passed over.
+`manage` tells it to take on a window the built-in filter passed over. Both decide
+whether a window is taken on at all, so both act only on the `manage` trigger; written
+under `title-change` or `focus` they do nothing, and the loader says so (`SHB0452`).
+
+`manage` overrules the filter's *opinions* — a tool window, a window missing from
+Alt+Tab, one with no title yet, one Windows says cannot be activated — and not its
+*facts*: a cloaked window, a child control, the shell's own windows and a window with
+no area cannot be managed by any rule. `shubbak inspect` and the palette both say which
+kind a verdict is.
+
+Every `rules { }` block in the file counts, in file order, so a block appended at the
+end is simply more rules. That is what lets a tool add one for you:
+
+```
+shubbak rule list                          # every rule in force, with its line
+shubbak rule add --ignore                  # click a window; a rule that ignores it
+shubbak rule add 0x2041E --manage --float  # by handle, taking it on and floating it
+shubbak rule add --workspace 2 --print     # show the rule instead of adding it
+shubbak rule remove "ignore ms-teams"      # and take it out again
+```
+
+`rule add` composes the rule from the window's class and process, appends it to the
+file as a block of its own under a `// Added by Shubbak` comment, validates the whole
+file as the window manager would load it, and reloads — and refuses, leaving the file
+untouched, if the file already has errors, if the rule would not load, or if the rule
+runs `shell-exec` without `allow-shell-exec-over-ipc`. `rule remove` cuts the rule's
+lines, takes the block with it when the rule was all it held, and prints the rule so it
+can be put back. The palette does the same from a window's row; see
+[Dalil](dalil.md). Every tool that does this goes through the window manager, and
+`general { allow-config-edits-over-ipc #false }` turns all of them off.
+
+Saving the file reloads it. Reload used to be entirely command-driven, so editing the
+file meant remembering to press the reload key; the window manager now watches the
+file and reloads a moment after any editor saves it, with the same gate as the key - a
+file with errors is reported and the running configuration is kept. Turn it off with
+`general { reload-on-save #false }`.
 
 ### "Why isn't this window tiling?"
 
@@ -237,13 +272,13 @@ shubbak inspect --all      # every top-level window, with a verdict for each
 ```
 
 You get every matchable attribute of the window, whether Shubbak will manage it,
-**the specific reason if it won't**, and which of your rules matched — and for each
-`app` that did not match, the matcher that failed. There are sixteen distinct reasons
-a window gets skipped and each one explains itself in plain English. Copy the
-attributes straight into a rule and you are done; the palette's "Write a rule for it"
-does the copying. `inspect --all` runs entirely locally, so it works when the window
-manager is not running at all. [Troubleshooting](troubleshooting.md) lists the common
-verdicts.
+**the specific reason if it won't** and whether a rule could change that, and which of
+your rules matched and what each one does — and for each `app` that did not match, the
+matcher that failed. There are sixteen distinct reasons a window gets skipped and each
+one explains itself in plain English. Then `shubbak rule add`, or the palette's "Write
+a rule for it…", writes the rule and adds it. `inspect --all` runs entirely locally, so
+it works when the window manager is not running at all. [Troubleshooting](troubleshooting.md)
+lists the common verdicts.
 
 ## Monitors by name
 

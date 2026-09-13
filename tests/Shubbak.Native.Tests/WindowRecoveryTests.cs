@@ -172,4 +172,64 @@ public sealed class WindowRecoveryTests
 
         Assert.False(committer.IsConcealing(window.Handle));
     }
+
+    [Fact]
+    public void ReleasingAConcealedWindowBringsItBack()
+    {
+        // The release path. A window on an inactive workspace is concealed by Shubbak,
+        // and a rule that releases it at reload used to forget it while concealed - a
+        // process running with no window anywhere. Restore is what the release now
+        // does: the concealment undone by the route that applied it, and forgotten.
+        using var window = new TestWindow();
+        var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
+
+        committer.Conceal(window.Handle);
+        TestWindow.PumpUntil(() => !Win32Window.IsVisible(window.Handle));
+
+        Assert.True(committer.Restore(window.Handle));
+        TestWindow.PumpUntil(() => Win32Window.IsVisible(window.Handle));
+
+        Assert.True(Win32Window.IsVisible(window.Handle));
+        Assert.False(committer.IsConcealing(window.Handle));
+    }
+
+    [Fact]
+    public void ReleasingAWindowSomeoneElseHidLeavesItAlone()
+    {
+        // The same path releases a window whose application hid it itself - to the
+        // tray, say - and showing that one again would be fighting the application over
+        // its own window. Nothing this instance did not conceal is touched.
+        using var window = new TestWindow(visible: false);
+        var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
+
+        Assert.False(Win32Window.IsVisible(window.Handle));
+
+        Assert.False(committer.Restore(window.Handle));
+        TestWindow.PumpOnce();
+
+        Assert.False(Win32Window.IsVisible(window.Handle));
+    }
+
+    [Fact]
+    public void ReleasingAMinimisedConcealedWindowStillUndoesTheConcealment()
+    {
+        // Reveal leaves a minimised window minimised, because the layout runs
+        // constantly and must not override a deliberate choice. A release is once, and
+        // a window minimised and then concealed for its workspace has to be un-concealed
+        // or it comes back from the taskbar to nowhere.
+        using var window = new TestWindow();
+        var committer = new WindowCommitter { HideMethod = WindowHideMethod.Hide };
+
+        WindowActions.Minimise(window.Handle);
+        TestWindow.PumpUntil(() => Win32Window.IsMinimised(window.Handle));
+
+        committer.Conceal(window.Handle);
+        TestWindow.PumpOnce();
+        Assert.True(committer.IsConcealing(window.Handle));
+
+        Assert.True(committer.Restore(window.Handle));
+        TestWindow.PumpOnce();
+
+        Assert.False(committer.IsConcealing(window.Handle));
+    }
 }

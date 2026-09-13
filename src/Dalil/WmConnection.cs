@@ -195,6 +195,63 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Asks the window manager to add rules to the configuration file and reload.
+    /// </summary>
+    /// <remarks>
+    /// The window manager does the editing: it knows which file is in effect, it has
+    /// the loader to validate with, and it has to reload anyway. The palette sends the
+    /// text it showed, and says it was the palette, for the marker above the block and
+    /// the log line.
+    /// </remarks>
+    /// <returns>What happened, or null with the reason in <paramref name="failure"/>.</returns>
+    public Task<RuleChange?> AddRuleAsync(string kdl, long? handle, Action<string> failure) =>
+        EditRulesAsync(
+            "add-rule",
+            JsonSerializer.Serialize(new RuleAddition(kdl, handle, "the palette"), IpcJsonContext.Default.RuleAddition),
+            failure);
+
+    /// <summary>Asks the window manager to take one rule out of the configuration file and reload.</summary>
+    /// <returns>What happened, or null with the reason in <paramref name="failure"/>.</returns>
+    public Task<RuleChange?> RemoveRuleAsync(string name, int line, long? handle, Action<string> failure) =>
+        EditRulesAsync(
+            "remove-rule",
+            JsonSerializer.Serialize(new RuleRemoval(name, line, handle), IpcJsonContext.Default.RuleRemoval),
+            failure);
+
+    private async Task<RuleChange?> EditRulesAsync(string method, string payload, Action<string> failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+
+        try
+        {
+            await using IpcClient client = new();
+            await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
+
+            IpcResponse response = await client.SendAsync(method, payload, _stopping.Token).ConfigureAwait(false);
+
+            if (!response.Ok)
+            {
+                failure(response.Error ?? "The window manager would not change the file.");
+                return null;
+            }
+
+            RuleChange? change = response.Data is { Length: > 0 } json
+                ? JsonSerializer.Deserialize(json, IpcJsonContext.Default.RuleChange)
+                : null;
+
+            if (change is null) failure("The window manager sent an answer that could not be read.");
+
+            return change;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(LogCategory.Ipc, $"{method} failed: {ex.Message}");
+            failure($"Could not ask: {ex.Message}");
+            return null;
+        }
+    }
+
     /// <summary>Reads everything the palette can offer.</summary>
     /// <remarks>
     /// Several queries rather than one. They are asked together and only when the
@@ -213,11 +270,17 @@ public sealed class WmConnection : IAsyncDisposable
     /// How many things are wrong with the palette's own settings, so the command list
     /// can offer to show them. Zero leaves that row out.
     /// </param>
+    /// <param name="everyWindow">
+    /// Whether the inspect list should hold every window the filter turned down, shape
+    /// and all, rather than the ones worth listing by default. Asked for by a row in
+    /// that list, and forgotten when the palette closes.
+    /// </param>
     public async Task<PaletteSources> ReadAsync(
         bool includeUnmanaged,
         IReadOnlyList<PaletteMacro>? macros = null,
         long foreground = 0,
-        int configProblems = 0)
+        int configProblems = 0,
+        bool everyWindow = false)
     {
         try
         {
@@ -226,6 +289,13 @@ public sealed class WmConnection : IAsyncDisposable
 
             IReadOnlyList<WindowCandidate> windows = await QueryAsync(
                 client, "all-windows", IpcJsonContext.Default.IReadOnlyListWindowCandidate) ?? [];
+
+            // The wider list is asked for separately and only when wanted. It is the
+            // ordinary list plus the windows the filter turned down for their shape,
+            // which on a real desktop is dozens of rows nobody asked to search through.
+            IReadOnlyList<WindowCandidate> skipped = everyWindow
+                ? await QueryAsync(client, "every-window", IpcJsonContext.Default.IReadOnlyListWindowCandidate) ?? windows
+                : windows;
 
             IReadOnlyList<CommandInfo> commands = await QueryAsync(
                 client, "commands", IpcJsonContext.Default.IReadOnlyListCommandInfo) ?? [];
@@ -328,7 +398,7 @@ public sealed class WmConnection : IAsyncDisposable
                 // includeUnmanaged. That setting keeps unmanaged windows out of the
                 // ordinary list; honouring it here would leave the one mode whose
                 // whole purpose is showing them permanently empty.
-                PaletteEntries.ForSkipped(windows, here, names, several),
+                PaletteEntries.ForSkipped(skipped, here, names, several, everyWindow),
 
                 here,
                 names,

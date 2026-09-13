@@ -193,11 +193,29 @@ public static class PaletteEntries
         IEnumerable<WindowCandidate> windows,
         string? focusedWorkspace = null,
         IReadOnlyList<string>? workspaces = null,
-        bool severalMonitors = false)
+        bool severalMonitors = false,
+        bool everything = false)
     {
         ArgumentNullException.ThrowIfNull(windows);
 
         List<PaletteEntry> entries = [];
+
+        // The way to the wider list, and back. The ordinary list leaves out the windows
+        // the filter turned down for their shape - tool windows, popups, windows that
+        // keep out of Alt+Tab - which are the very windows a manage rule exists for, and
+        // which could otherwise only be reached with a handle from somewhere else. A row
+        // rather than a setting, because wanting them is a moment and not a preference:
+        // on an ordinary desktop there are dozens and almost none is anybody's business.
+        entries.Add(new PaletteEntry(
+            everything ? "Back to the usual list" : "Show every window",
+            everything
+                ? "Leave out the tool windows and popups again"
+                : "Include the tool windows, popups and untitled windows Shubbak never lists - the ones a manage rule is for",
+            ["dalil"],
+            BuiltinEveryWindow,
+
+            // Above every window, so it can be found without knowing it is there.
+            Rank: 3));
 
         foreach (WindowCandidate window in windows)
         {
@@ -694,6 +712,15 @@ public static class PaletteEntries
     /// </remarks>
     public const string BuiltinOpenConfig = "dalil:open-config";
 
+    /// <summary>The command that widens the inspect list to every window, and narrows it again.</summary>
+    /// <remarks>
+    /// Stays open, like clearing the marks: it changes what the list shows, and
+    /// dismissing the palette to change a list would throw away the search that got
+    /// there. The widening lasts until the palette closes - it is a moment, not a
+    /// preference.
+    /// </remarks>
+    public const string BuiltinEveryWindow = "dalil:every-window";
+
     /// <summary>The command that re-reads the palette's own section.</summary>
     public const string BuiltinReload = "dalil:reload";
 
@@ -711,6 +738,19 @@ public static class PaletteEntries
     /// <summary>Whether a command belongs to the palette rather than to the window manager.</summary>
     public static bool IsBuiltin(string? command) =>
         command is { Length: > 0 } && command.StartsWith("dalil:", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a command of the palette's own changes what is showing rather than
+    /// asking for something, so the palette stays open to show it.
+    /// </summary>
+    /// <remarks>
+    /// Every other command closes the palette first, because the thing asked for
+    /// usually raises a window and a topmost palette would cover it. These two ask for
+    /// nothing: they correct the list under the selection, and dismissing the palette
+    /// to correct a list would throw away the search that got there.
+    /// </remarks>
+    public static bool StaysOpen(string? command) =>
+        command is BuiltinClearMarks or BuiltinEveryWindow;
 
     /// <summary>Describes every workspace as a row.</summary>
     /// <remarks>
@@ -846,13 +886,24 @@ public static class PaletteEntries
     /// what to do about it - are exactly the ones too long to fit.
     /// </para>
     /// </remarks>
-    public static IReadOnlyList<PaletteEntry> ForReport(WindowReport report)
+    public static IReadOnlyList<PaletteEntry> ForReport(WindowReport report) =>
+        ForReport(report, focusedWorkspace: null, workspaces: null);
+
+    /// <summary>
+    /// Turns a window manager report into rows, with the workspaces a rule could send
+    /// the window to.
+    /// </summary>
+    /// <param name="report">The report.</param>
+    /// <param name="focusedWorkspace">Where the user is, for the rule choices.</param>
+    /// <param name="workspaces">Every workspace, for the rule choices.</param>
+    public static IReadOnlyList<PaletteEntry> ForReport(
+        WindowReport report, string? focusedWorkspace, IReadOnlyList<string>? workspaces)
     {
         ArgumentNullException.ThrowIfNull(report);
 
         List<PaletteEntry> entries = [];
 
-        void Add(string label, string value) => entries.Add(new PaletteEntry(
+        void Add(string label, string value, IReadOnlyList<PaletteAction>? actions = null) => entries.Add(new PaletteEntry(
             value,
             label,
             [],
@@ -863,31 +914,24 @@ public static class PaletteEntries
             // other lists are sorted would shuffle the reasoning.
             -entries.Count,
             SwitchesTo: null,
-            Actions: null,
+            Actions: actions,
             Explains: null,
             Expands: $"{label}  {value}"));
 
         // First, because it is the thing somebody reading this report is on their way
         // to doing. Everything below explains why the window behaves as it does; this
-        // is what changes it, already written out, using the two attributes the rest of
-        // the report is about to spend twenty lines establishing.
-        //
-        // Enter reads it. Ctrl+Enter copies it or opens the file it belongs in - the two
-        // steps that used to be a chord in the documentation and a path on the
-        // clipboard, and that the screen never mentioned.
-        string composed = RuleComposer.RuleFromReport(
-            report.ClassName, report.ProcessName, report.ProcessPath, report.Title);
-
+        // is what changes it - as a list of the rules that could, each complete, best
+        // first, decided by the very facts the rest of the report lays out.
         entries.Add(new PaletteEntry(
-            "Write a rule for it",
+            "Write a rule for it\u2026",
             "compose",
-            ["\u21B5 read it"],
+            ["\u21B5 choose"],
             string.Empty,
             Rank: 1,
             SwitchesTo: null,
-            Actions: PaletteActions.ForRule(composed),
+            Actions: PaletteActions.RuleChoices(report, focusedWorkspace, workspaces),
             Explains: null,
-            Expands: composed));
+            Expands: null));
 
         Add("handle", $"0x{report.Handle:X}");
         Add("title", report.Title);
@@ -900,7 +944,17 @@ public static class PaletteEntries
         Add("visible", report.Visible ? "yes" : "no");
         Add("cloaked", report.Cloaked);
         Add("minimised", report.Minimised ? "yes" : "no");
-        Add("manageable", $"{(report.Manageable ? "yes" : "no")} - {report.Verdict}");
+
+        // Whether a rule could argue with the verdict, when the verdict is no. The
+        // question anybody reading "no" asks next.
+        Add("manageable", report.Manageable
+            ? $"yes - {report.Verdict}"
+            : report.Overridable switch
+            {
+                true => $"no - {report.Verdict} (a manage rule can override this)",
+                false => $"no - {report.Verdict} (no rule can override this)",
+                null => $"no - {report.Verdict}",
+            });
 
         if (report.Node is { } node)
         {
@@ -924,6 +978,10 @@ public static class PaletteEntries
         // Only the rules, not a heading followed by them. A heading is a row you can
         // select and land on that says nothing, and the label column already carries
         // the word "rule" on every line beneath it.
+        //
+        // Each carries its verbs and its trigger, when the daemon says them, and each
+        // can be taken out of the file from here: a rule that matched and should not
+        // have is found in this list, and this is where the finding happens.
         if (report.Rules.Count == 0)
         {
             Add("rules", "(none configured)");
@@ -931,7 +989,12 @@ public static class PaletteEntries
         else
         {
             foreach (RuleReport rule in report.Rules)
-                Add(rule.Matched ? "rule  [x]" : "rule  [ ]", $"{rule.Name}  (line {rule.Line})");
+            {
+                string does = rule.Does is { Count: > 0 } verbs ? $"  {string.Join(", ", verbs)}" : string.Empty;
+                string when = rule.Trigger is { Length: > 0 } trigger && trigger != "manage" ? $"  on {trigger}" : string.Empty;
+
+                Add(rule.Matched ? "rule  [x]" : "rule  [ ]", $"{rule.Name}{does}{when}  (line {rule.Line})", ForRuleRow(rule, report.Handle));
+            }
         }
 
         // What turns "my rule does not fire" into a one-glance diagnosis: the rule is
@@ -943,6 +1006,107 @@ public static class PaletteEntries
             foreach (string matcher in app.FailedMatchers)
                 Add("failed", matcher);
         }
+
+        return entries;
+    }
+
+    /// <summary>What can be done to a rule from the row that names it in a report.</summary>
+    private static IReadOnlyList<PaletteAction> ForRuleRow(RuleReport rule, long handle) =>
+    [
+        new PaletteAction(
+            "Remove it from the config and reload",
+            $"Take rule \"{rule.Name}\" (line {rule.Line}) out of shubbak.kdl; the answer offers to put it back",
+            string.Empty,
+            Removes: new RuleToRemove(rule.Name, rule.Line, handle)),
+
+        new PaletteAction(
+            "Open the config",
+            $"Open shubbak.kdl with whatever edits .kdl files - the rule is at line {rule.Line}",
+            BuiltinOpenConfig),
+    ];
+
+    /// <summary>
+    /// What adding or removing a rule did, as rows, with the way back.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The first row says what happened, in full: which rule, which line, which file,
+    /// and what became of the window - released, adopted, or nothing yet. A clipboard
+    /// gives no sign that anything worked; a file edited in another process gives even
+    /// less, and this is the row that stands in for both.
+    /// </para>
+    /// <para>
+    /// The second row is the undo, because the edit was made without asking. A rule
+    /// added can be removed again by the name and line the answer carries; a rule
+    /// removed can be put back from the text the answer carries. The file is left as it
+    /// was found either way - see <c>ConfigEditor</c>.
+    /// </para>
+    /// </remarks>
+    /// <param name="change">What the window manager did.</param>
+    /// <param name="added">Whether the change was an addition, as opposed to a removal.</param>
+    public static IReadOnlyList<PaletteEntry> ForRuleChange(RuleChange change, bool added)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+
+        string names = string.Join(", ", change.Names.Select(n => $"\"{n}\""));
+        string file = Path.GetFileName(change.Path);
+
+        string what = added
+            ? $"Added {names} at line {change.Line} of {file}"
+            : $"Removed {names} from line {change.Line} of {file}";
+
+        string then = change.Reloaded
+            ? " and reloaded."
+            : " - but the reload was refused, so the running configuration is unchanged. `shubbak check-config` says why.";
+
+        string outcome = change.Outcome is { Length: > 0 } fate ? $" {fate}" : string.Empty;
+
+        List<PaletteEntry> entries =
+        [
+            new PaletteEntry(
+                $"{what}{then}{outcome}",
+                string.Empty,
+                [],
+                string.Empty,
+                Rank: 4,
+                Expands: $"{what}{then}{outcome}"),
+        ];
+
+        if (added)
+        {
+            entries.Add(new PaletteEntry(
+                "Remove it again",
+                $"Take {names} back out of {file} and reload",
+                [],
+                string.Empty,
+                Rank: 3,
+                Removes: new RuleToRemove(change.Names.Count > 0 ? change.Names[0] : string.Empty, change.Line, null)));
+        }
+        else
+        {
+            entries.Add(new PaletteEntry(
+                "Put it back",
+                $"Add {names} to {file} again and reload",
+                [],
+                string.Empty,
+                Rank: 3,
+                Applies: new RuleToAdd(change.RuleText, null)));
+        }
+
+        entries.Add(new PaletteEntry(
+            added ? "Copy the rule" : "Copy the removed rule",
+            "Put it on the clipboard",
+            [],
+            string.Empty,
+            Rank: 2,
+            Copies: change.RuleText));
+
+        entries.Add(new PaletteEntry(
+            "Open the config",
+            $"Open {file} with whatever edits .kdl files",
+            ["dalil"],
+            BuiltinOpenConfig,
+            Rank: 1));
 
         return entries;
     }

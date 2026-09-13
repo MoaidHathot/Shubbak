@@ -59,9 +59,10 @@ internal static class Program
                 "inspect" => await InspectAsync(args).ConfigureAwait(false),
                 "query" => await QueryAsync(args).ConfigureAwait(false),
                 "sub" or "subscribe" => await SubscribeAsync(args).ConfigureAwait(false),
-                "check-config" => CheckConfig(args),
-                "config-path" => ShowConfigPath(args),
-                "config" => ConfigCommand.Run(args),
+            "check-config" => CheckConfig(args),
+            "config-path" => ShowConfigPath(args),
+            "config" => ConfigCommand.Run(args),
+            "rule" or "rules" => await RuleCommand.RunAsync(args, ConnectAsync).ConfigureAwait(false),
                 "autostart" => Autostart.Run(args),
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
                 "monitors" => await MonitorsAsync().ConfigureAwait(false),
@@ -827,7 +828,8 @@ internal static class Program
 
         Console.WriteLine();
         Console.WriteLine($"{total} window(s) listed, {manageable} manageable.");
-        Console.WriteLine("Override a verdict with a rule:  rules { rule \"x\" { match { process = \"...\" } do { manage } } }");
+        Console.WriteLine("Override a verdict with a rule:  shubbak rule add <handle> --manage");
+        Console.WriteLine("  (or by hand:  rules { rule \"x\" { match { process = \"...\" } do { manage } } })");
 
         return 0;
 
@@ -1185,6 +1187,22 @@ internal static class Program
           config-path          Print which config file is in effect, or list
                                everywhere that was searched if none was found.
 
+          rule list            The rules in force, with the line each is on and
+                               what each does.
+          rule add [handle]    Write a rule for a window into the config and
+                               reload. Says what the rule does with one or more of
+                               --ignore, --manage, --float, --tile or
+                               --workspace <name>. With no handle, waits 3 seconds
+                               then uses the foreground window. The window manager
+                               appends the rule as a block of its own, validates
+                               the file first, and refuses rather than leaving it
+                               broken.
+                    --print    Print the rule instead of adding it.
+                    --file <p> Add the rules in a KDL file instead (- for stdin).
+          rule remove <name>   Take a rule out of the config and reload. Prints
+                               the rule so it can be put back.
+                    --line <n> Which one, when two rules share a name.
+
           status               Report whether a window manager is running.
 
           --version            Print the version and exit. Answered by this binary
@@ -1194,8 +1212,9 @@ internal static class Program
         QUERIES
           query [what]         Print state as JSON.
                                what: state (default), windows, all-windows,
-                                     workspaces, monitors, focused, layouts,
-                                     commands, bindings, contexts, arrangements
+                                     every-window, workspaces, monitors, focused,
+                                     layouts, commands, bindings, contexts,
+                                     arrangements, rules
           layouts              List the available layouts.
           monitors             Describe each display, with a `monitor` definition
                                ready to paste into the config. Displays are named

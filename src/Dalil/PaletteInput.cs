@@ -21,6 +21,15 @@ internal enum PaletteChoice
     /// <summary>Put the row's text on the clipboard.</summary>
     Copy,
 
+    /// <summary>Ask the window manager to add the row's rule to the config and reload.</summary>
+    Apply,
+
+    /// <summary>Ask the window manager to take the row's rule out of the config and reload.</summary>
+    Remove,
+
+    /// <summary>Fetch the window's report and open the rules that could be written for it.</summary>
+    Compose,
+
     /// <summary>Open the list the row carries.</summary>
     OpenChildren,
 
@@ -157,6 +166,12 @@ internal static class PaletteInput
         // twelve lines would be the one thing left to do that reads as nothing done.
         if (entry.Copies is { Length: > 0 }) return PaletteChoice.Copy;
 
+        // And some exist to change the configuration file, or to open the list of rules
+        // that could. Each says so in its name; none happens by implication.
+        if (entry.Applies is not null) return PaletteChoice.Apply;
+        if (entry.Removes is not null) return PaletteChoice.Remove;
+        if (entry.Composes is not null) return PaletteChoice.Compose;
+
         // Some rows are longer than a row. Opening one shows the whole thing rather
         // than the part that fit, which is the only way to read a path, the sentence
         // about elevation, or a composed rule without leaving the palette for a shell.
@@ -274,6 +289,9 @@ internal static class PaletteInput
         { SwitchesTo: not null } => "go",
         { Explains: not null } => "inspect",
         { Copies.Length: > 0 } => "copy",
+        { Applies: not null } => "add it",
+        { Removes: not null } => "remove it",
+        { Composes: not null } => "choose",
         { Expands.Length: > 0 } => "read it",
         { HasActions: true, Command.Length: 0 } => "open",
         { Destructive: true, Command.Length: > 0 } => "ask first",

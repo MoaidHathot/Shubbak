@@ -24,9 +24,12 @@ public class PaletteInputTests
         long? explains = null,
         string? expands = null,
         bool prompts = false,
-        string? copies = null) =>
+        string? copies = null,
+        RuleToAdd? applies = null,
+        RuleToRemove? removes = null,
+        long? composes = null) =>
         new(primary, secondary, [], command, 0, switchesTo, actions, explains, expands,
-            Prompts: prompts, Copies: copies);
+            Prompts: prompts, Copies: copies, Applies: applies, Removes: removes, Composes: composes);
 
     // ---- chords ------------------------------------------------------------------
 
@@ -375,6 +378,39 @@ public class PaletteInputTests
     }
 
     [Fact]
+    public void ARowThatEditsTheConfigurationSaysSoAndIsChosenForIt()
+    {
+        // The three rows that reach outside the palette - into the file, or into a
+        // fetch - each have a choice of their own, so the window can raise the right
+        // request and stay open for the answer.
+        Assert.Equal(
+            PaletteChoice.Apply,
+            PaletteInput.Choose(Entry(command: "", applies: new RuleToAdd("rules { }", 42)), PaletteMode.Windows, insideOverlay: true));
+
+        Assert.Equal(
+            PaletteChoice.Remove,
+            PaletteInput.Choose(Entry(command: "", removes: new RuleToRemove("x", 7, 42)), PaletteMode.Windows, insideOverlay: true));
+
+        Assert.Equal(
+            PaletteChoice.Compose,
+            PaletteInput.Choose(Entry(command: "", composes: 42), PaletteMode.Windows, insideOverlay: true));
+    }
+
+    [Fact]
+    public void ARequestBeatsAListAndAText()
+    {
+        // A row that both applies and carries a list applies: the list is what
+        // Ctrl+Enter is for, and Enter on "Add it" was pressed to add it.
+        PaletteEntry entry = Entry(
+            command: "",
+            applies: new RuleToAdd("rules { }", 42),
+            expands: "rules { }",
+            actions: [new PaletteAction("a", "b", "c")]);
+
+        Assert.Equal(PaletteChoice.Apply, PaletteInput.Choose(entry, PaletteMode.Windows, insideOverlay: true));
+    }
+
+    [Fact]
     public void ARowCarryingAListOpensItButOnlyInsideAFrame()
     {
         PaletteEntry entry = Entry(
@@ -677,15 +713,26 @@ public class PaletteInputTests
     [Fact]
     public void TheRuleRowAdvertisesCtrlEnter()
     {
-        // The row that reads on Enter and carries copying and opening behind Ctrl+Enter
-        // has to say so, or the two actions are as hidden as the chord they replace.
+        // The row that reads on Enter and carries adding, copying and opening behind
+        // Ctrl+Enter has to say so, or the three actions are as hidden as the chord
+        // they replace.
         PaletteEntry rule = Entry(
-            "Write a rule for it",
+            "Ignore it",
             command: "",
             expands: "rules { }",
-            actions: PaletteActions.ForRule("rules { }"));
+            actions: PaletteActions.ForRule("rules { }", 42));
 
         Assert.Equal("\u21B5 read it  \u2303\u21B5 actions  \u2303C copy  Esc back", Bar(rule, expanded: false));
+    }
+
+    [Fact]
+    public void TheRowsThatReachOutsideSayWhatEnterWillDo()
+    {
+        // A key cap promising "read it" over a row that edits a file would be the one
+        // lie in this bar that costs something.
+        Assert.Equal("\u21B5 add it  Esc back", Bar(Entry("Add it to the config and reload", command: "", applies: new RuleToAdd("rules { }", 42)), expanded: false));
+        Assert.Equal("\u21B5 remove it  Esc back", Bar(Entry("Stop ignoring it", command: "", removes: new RuleToRemove("x", 7, 42)), expanded: false));
+        Assert.Equal("\u21B5 choose  Esc back", Bar(Entry("Write a rule for it\u2026", command: "", composes: 42), expanded: false));
     }
 
     [Fact]
@@ -730,6 +777,9 @@ public class PaletteInputTests
             (Entry(command: "", switchesTo: PaletteMode.Help), "go", PaletteChoice.SwitchMode),
             (Entry(command: "", explains: 42), "inspect", PaletteChoice.Inspect),
             (Entry(command: "", copies: "x"), "copy", PaletteChoice.Copy),
+            (Entry(command: "", applies: new RuleToAdd("x", 42)), "add it", PaletteChoice.Apply),
+            (Entry(command: "", removes: new RuleToRemove("x", 7, 42)), "remove it", PaletteChoice.Remove),
+            (Entry(command: "", composes: 42), "choose", PaletteChoice.Compose),
             (Entry(command: "", expands: "x"), "read it", PaletteChoice.Expand),
             (Entry(command: "", actions: [new PaletteAction("a", "b", "c")]), "open", PaletteChoice.OpenChildren),
             (Destructive(), "ask first", PaletteChoice.Confirm),

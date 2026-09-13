@@ -154,6 +154,31 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     public event Action<long, string>? ExplainRequested;
 
+    /// <summary>
+    /// Raised with a window handle and a title when a row asks for the rules that could
+    /// be written for the window.
+    /// </summary>
+    /// <remarks>
+    /// The same shape as <see cref="ExplainRequested"/>, and for the same reason: the
+    /// choices depend on the window's report, which has to be fetched, so the palette
+    /// stays open and the host calls <see cref="ShowRuleChoices"/> when it arrives.
+    /// </remarks>
+    public event Action<long, string>? ComposeRequested;
+
+    /// <summary>
+    /// Raised when a row asks for its rule to be added to the configuration file.
+    /// </summary>
+    /// <remarks>
+    /// The one thing the palette asks for that changes a file the user maintains by
+    /// hand, so the row that raises it says so in its name. The window manager does
+    /// the writing, validates first, and answers with what happened; the host calls
+    /// <see cref="ShowRuleChange"/> with the answer, which carries the undo.
+    /// </remarks>
+    public event Action<RuleToAdd, string>? ApplyRuleRequested;
+
+    /// <summary>Raised when a row asks for its rule to be taken out of the configuration file.</summary>
+    public event Action<RuleToRemove, string>? RemoveRuleRequested;
+
     /// <summary>Raised when the process should stop.</summary>
     public static event Action? RequestShutdown;
 
@@ -374,7 +399,19 @@ public sealed class PaletteWindow : IDisposable
         _open = false;
 
         PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_HIDE);
+
+        Closed?.Invoke();
     }
+
+    /// <summary>
+    /// Raised when the palette has been put away, however that happened.
+    /// </summary>
+    /// <remarks>
+    /// For the host's own per-showing state - the widened inspect list, today - which
+    /// is a moment rather than a preference and should not be waiting the next time the
+    /// palette opens.
+    /// </remarks>
+    public event Action? Closed;
 
     // ---- input ---------------------------------------------------------------
 
@@ -626,7 +663,8 @@ public sealed class PaletteWindow : IDisposable
             new PaletteEntry(
                 action.Name, action.Description, [], action.Command,
                 Explains: action.Explains, Expands: action.Expands,
-                Destructive: action.Destructive, Copies: action.Copies),
+                Destructive: action.Destructive, Copies: action.Copies,
+                Applies: action.Applies, Removes: action.Removes, Composes: action.Composes),
             selected.Entry.Primary);
     }
 
@@ -649,6 +687,24 @@ public sealed class PaletteWindow : IDisposable
         if (action.Copies is { Length: > 0 } text)
         {
             CopyAndClose(text);
+            return true;
+        }
+
+        if (action.Applies is { } addition)
+        {
+            ApplyRuleRequested?.Invoke(addition, Breadcrumb(leaf));
+            return true;
+        }
+
+        if (action.Removes is { } removal)
+        {
+            RemoveRuleRequested?.Invoke(removal, Breadcrumb(leaf));
+            return true;
+        }
+
+        if (action.Composes is { } subject)
+        {
+            ComposeRequested?.Invoke(subject, Breadcrumb(leaf));
             return true;
         }
 
@@ -738,7 +794,7 @@ public sealed class PaletteWindow : IDisposable
     {
         if (!_open) return;
 
-        Push(title, PaletteEntries.ForReport(report));
+        Push(title, PaletteEntries.ForReport(report, _here, _workspaces));
     }
 
     /// <summary>Says why a report could not be fetched, where the report would have been.</summary>
@@ -747,6 +803,37 @@ public sealed class PaletteWindow : IDisposable
         if (!_open) return;
 
         Push(title, PaletteEntries.ForReportFailure(reason));
+    }
+
+    /// <summary>
+    /// Shows the rules that could be written for a window, once its report has arrived.
+    /// </summary>
+    /// <remarks>
+    /// The same arrangement as <see cref="ShowReport"/>: the row that asked was chosen
+    /// a moment ago and the palette stayed open for this. The workspaces are the
+    /// palette's own, read when it opened, so "send it to" names the same list every
+    /// other picker does.
+    /// </remarks>
+    public void ShowRuleChoices(string title, WindowReport report)
+    {
+        if (!_open) return;
+
+        Push(title, PaletteActions.AsEntries(PaletteActions.RuleChoices(report, _here, _workspaces)));
+    }
+
+    /// <summary>
+    /// Shows what adding or removing a rule did, with the way back.
+    /// </summary>
+    /// <remarks>
+    /// Pushed on top of whatever asked, rather than replacing it, so Escape returns to
+    /// the list of rules and the frame beneath that to the report - the same route
+    /// back as everywhere else.
+    /// </remarks>
+    public void ShowRuleChange(string title, RuleChange change, bool added)
+    {
+        if (!_open) return;
+
+        Push(title, PaletteEntries.ForRuleChange(change, added));
     }
 
     /// <summary>
@@ -1014,6 +1101,20 @@ public sealed class PaletteWindow : IDisposable
                 CopyAndClose(entry.Copies!);
                 return;
 
+            case PaletteChoice.Apply:
+                // Fetched, like a report: the window manager edits the file and says
+                // what happened, and the answer needs somewhere to arrive.
+                ApplyRuleRequested?.Invoke(entry.Applies!, Breadcrumb(entry.Primary));
+                return;
+
+            case PaletteChoice.Remove:
+                RemoveRuleRequested?.Invoke(entry.Removes!, Breadcrumb(entry.Primary));
+                return;
+
+            case PaletteChoice.Compose:
+                ComposeRequested?.Invoke(entry.Composes!.Value, Breadcrumb(entry.Primary));
+                return;
+
             case PaletteChoice.OpenChildren:
                 Push(Breadcrumb(entry.Primary), PaletteActions.AsEntries(entry.ResolveActions()));
                 return;
@@ -1055,6 +1156,14 @@ public sealed class PaletteWindow : IDisposable
         {
             _model.ClearMarks();
             Pop();
+            return;
+        }
+
+        // Widening the list is a correction too, and one the host answers: the palette
+        // stays where it is and the host refills the list it is looking at.
+        if (PaletteEntries.StaysOpen(command))
+        {
+            CommandRequested?.Invoke(command);
             return;
         }
 

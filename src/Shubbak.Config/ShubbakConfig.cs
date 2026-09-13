@@ -189,6 +189,45 @@ public sealed record ShubbakConfig
     public bool AllowShellExecOverIpc { get; init; }
 
     /// <summary>
+    /// Whether the configuration file may be edited over the IPC pipe.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// On by default, and the asymmetry with <see cref="AllowShellExecOverIpc"/> is
+    /// deliberate. The pipe is scoped to the account, and every process running as the
+    /// user can already open the file and write to it; refusing to do so on their behalf
+    /// would protect nothing. What the pipe adds is the reload, and a reload is
+    /// something any client can already ask for.
+    /// </para>
+    /// <para>
+    /// The edits themselves are narrow: rules can be added and removed, and nothing
+    /// else can be written - a block that is not a rule is refused, and a rule that
+    /// runs <c>shell-exec</c> is refused unless the pipe may run it directly. Somebody
+    /// who nevertheless wants their file left alone by every tool says so here.
+    /// </para>
+    /// </remarks>
+    public bool AllowConfigEditsOverIpc { get; init; } = true;
+
+    /// <summary>
+    /// Whether saving the configuration file reloads it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// On by default. Reload used to be entirely command-driven, so editing the file
+    /// meant remembering to press the reload key - and the first sign of having
+    /// forgotten was a rule that appeared not to work. The watcher is a directory
+    /// notification with nothing polled, so a daemon nobody is editing pays nothing.
+    /// </para>
+    /// <para>
+    /// The reload it triggers is the ordinary one, gate and all: a file with errors is
+    /// reported and the running configuration is kept, exactly as it is for
+    /// <c>wm-reload-config</c>. Saving mid-edit costs a message in the log, not a
+    /// desktop.
+    /// </para>
+    /// </remarks>
+    public bool ReloadOnSave { get; init; } = true;
+
+    /// <summary>
     /// Whether windows on inactive workspaces keep their taskbar button.
     /// </summary>
     /// <remarks>

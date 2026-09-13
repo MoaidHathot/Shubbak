@@ -311,30 +311,72 @@ public sealed class WindowCommitter
         {
             if (!Win32Window.Exists(handle)) continue;
 
-            // Reversed by the same route that concealed it. Cloaking goes through the
-            // shell, so un-cloaking must too: DwmSetWindowAttribute is scoped to the
-            // owning process and silently refuses every window Shubbak manages, which
-            // made shutdown report windows restored while leaving them all cloaked.
-            switch (method)
-            {
-                case ConcealMethod.Cloaked:
-                    Win32ApplicationView.Uncloak(handle);
-                    RestoreTaskbarButton(handle);
-                    break;
-
-                case ConcealMethod.Minimised:
-                    PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_RESTORE);
-                    break;
-
-                default:
-                    PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
-                    break;
-            }
-
+            Undo(handle, method);
             restored++;
         }
 
         return restored;
+    }
+
+    /// <summary>
+    /// Brings one window back that this instance concealed, and forgets that it did.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a window being let go of. <see cref="Reveal"/> is the layout's reveal and
+    /// leaves a minimised window minimised, because the layout runs constantly and
+    /// must not keep overriding a deliberate choice; but a minimised window that was
+    /// also cloaked for its workspace has to be un-cloaked when it is released, or it
+    /// comes back from the taskbar to nowhere. So this is <see cref="RestoreAll"/> for
+    /// one window: the concealment is reversed by the route that applied it, whatever
+    /// else the window is doing.
+    /// </para>
+    /// <para>
+    /// Nothing happens to a window this instance did not conceal. A window its own
+    /// application hid is the application's business.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether the window had been concealed by this instance.</returns>
+    public bool Restore(nint handle)
+    {
+        ConcealMethod method;
+
+        lock (_lastCommitted)
+        {
+            if (!_concealed.TryGetValue(handle, out method)) return false;
+
+            _concealed.Remove(handle);
+        }
+
+        if (Win32Window.Exists(handle)) Undo(handle, method);
+
+        return true;
+    }
+
+    /// <summary>Reverses one concealment by the route that applied it.</summary>
+    /// <remarks>
+    /// Cloaking goes through the shell, so un-cloaking must too: DwmSetWindowAttribute
+    /// is scoped to the owning process and silently refuses every window Shubbak
+    /// manages, which made shutdown report windows restored while leaving them all
+    /// cloaked.
+    /// </remarks>
+    private void Undo(nint handle, ConcealMethod method)
+    {
+        switch (method)
+        {
+            case ConcealMethod.Cloaked:
+                Win32ApplicationView.Uncloak(handle);
+                RestoreTaskbarButton(handle);
+                break;
+
+            case ConcealMethod.Minimised:
+                PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_RESTORE);
+                break;
+
+            default:
+                PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+                break;
+        }
     }
 
     /// <summary>

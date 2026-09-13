@@ -17,17 +17,72 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
-- **The composed rule can leave the palette.** "Write a rule for it" composed the KDL
-  and showed it, one line per row, and that was where it stopped: the rows could not
-  be edited, Ctrl+C took one line, and the chord that copied the whole rule -
-  Ctrl+Shift+C - was written in the manual and nowhere on the screen. So the feature
-  that wrote the rule for you read as a feature that showed you something you could
-  not have. **Ctrl+Enter** on the row now offers **Copy the rule**, which puts the
-  whole rule on the clipboard and closes, and **Open the config**, which opens
-  `shubbak.kdl` with whatever Windows opens `.kdl` files with - the shell association
-  decides, not a `dalil` setting, because that answer already exists once. The same two
-  actions sit on the rule row at the top of every inspect report. Still nothing is
-  applied and nothing edits the file; the `do` block is still yours to fill in.
+- **The palette writes the rule and adds it.** The common reason to want a rule is
+  the common thing `toggle-managed` cannot do: make a window stay ignored, or stay
+  managed, across a reload and a restart - the toggle is remembered in memory and
+  forgotten at both. "Write a rule for it…" now opens the rules that could be written
+  for the window, each complete and named for what it does - `ignore ms-teams`,
+  `manage WhatsApp`, `msedge on 2` - best first: a managed window is offered **Ignore
+  it**, a window the filter turned down is offered **Manage it** (and floating, and on
+  a workspace), a window a rule already decides is offered **Stop ignoring it** /
+  **Stop forcing it**, which removes that rule. Enter reads the rule; Ctrl+Enter's
+  **Add it to the config and reload** appends it to `shubbak.kdl` and reloads, and the
+  answer says what happened to the window - released, adopted, or nothing - with
+  **Remove it again** right under it, because it did not ask first. **Copy the rule**
+  and **Open the config** remain. Every rule row in an inspect report can be removed
+  the same way, and removal offers to put the rule back. "Match it, decide later" is
+  the old behaviour, always last: the matchers written, the `do` block left to you,
+  and no offer to add what the loader would drop.
+- **The window manager edits the file, and refuses before it breaks it.** Two new pipe
+  methods, `add-rule` and `remove-rule`. The daemon knows which file is in effect, has
+  the loader, and has to reload anyway. Adding appends a `rules { }` block of its own
+  under a `// Added by Shubbak` comment; removing cuts the rule's lines and takes the
+  block and the comment with it when the rule was all it held, so adding and removing
+  leave the file as it was found, line endings, byte-order mark and all. Every edit is
+  validated as the window manager would load it and refused - file untouched - when the
+  file already has errors, when the rule would not load or would be dropped, when the
+  block holds anything that is not a rule, and when a rule runs `shell-exec` without
+  `allow-shell-exec-over-ipc`. Removal is by name **and** line, as a report gave them,
+  and refused when the file no longer agrees. `general { allow-config-edits-over-ipc
+  #false }` turns it all off; on by default, because every process that can reach the
+  pipe can already reach the file.
+- **`shubbak rule list`, `rule add` and `rule remove`.** The same from a terminal:
+  `rule add --ignore` clicks a window as `inspect` does, `--manage --float`,
+  `--workspace 2`, `--print` to see the rule instead, `--file rules.kdl` (or `-`) to
+  add rules written by hand; `rule remove "ignore ms-teams"` finds the line from the
+  list and prints the rule so it can be put back. `query rules` lists the rules in
+  force with their lines, verbs and triggers.
+- **Saving the config reloads it.** Reload was entirely command-driven, so editing the
+  file meant remembering to press the reload key, and the first sign of having
+  forgotten was a rule that appeared not to work. The window manager watches the
+  file's folder - a directory notification, nothing polled, so a file nobody is
+  editing costs nothing - and reloads a moment after any editor saves it, in-place or
+  write-rename alike, one reload per save. The reload is the ordinary one, gate and
+  all: a save with errors is reported and the running configuration is kept. Its own
+  writes are recognised and not loaded twice. `general { reload-on-save #false }`
+  turns it off. Measured: 3 ms of CPU per reload on a 48 KB file with every open window
+  re-examined, no growth in memory across sixty of them.
+- **Every `rules { }` block counts.** The loader read the first and dropped every other
+  one in silence, which made "paste this at the end of your file" wrong advice for
+  every file the starter config produces. Blocks are read in file order, unnamed rules
+  are numbered across them, and a context's blocks likewise.
+- **`SHB0452`: `ignore` or `manage` under `on="title-change"` or `on="focus"`.** Both
+  decide whether a window is taken on at all, so both act only on the manage trigger;
+  written elsewhere they parsed, loaded and were stripped at the moment the rule fired,
+  and the report showed the rule matching. A warning; the rule is kept for whatever
+  else it does.
+- **Show every window.** The inspect list left out the windows the filter turned down
+  for their shape - tool windows, popups, windows that keep out of Alt+Tab, windows
+  with no title yet - which are precisely the windows a `manage` rule exists for, so
+  the rule could only be written with a handle from somewhere else. A row at the top of
+  `!` now widens the list to them and back; the widening lasts until the palette
+  closes. `query every-window` is the same over the pipe. On one desktop: 10 rows
+  became 28, in the same 16 ms.
+- **Reports say whether a rule could change the verdict.** `inspect`, the palette and
+  `query all-windows` now carry whether the filter's reason can be overruled by
+  `manage` - a tool window can, a cloaked window cannot - and each rule's verbs and
+  trigger, so a matched rule's consequence is read off the line rather than looked up.
+  All appended and optional; an older client sees what it always did.
 - **`open config`** in the command list, beside `config path`. The path is still what a
   terminal, a bug report or an editor that is already open wants; this is for when the
   next thing to happen is typing into the file.
@@ -47,6 +102,19 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Releasing a window on another workspace left it cloaked, with no way to reach it.**
+  A window on an inactive workspace is cloaked by Shubbak. Letting go of it - which a
+  rule does at reload when it says `ignore` - forgot the concealment without undoing
+  it, leaving a process running with no window anywhere: not in Alt+Tab, not on the
+  taskbar, not on any workspace. Releasing by hand never hit it, because the foreground
+  window is by definition on show; found the first time "Ignore it" was tried on a
+  window that was somewhere else. The release now undoes exactly what Shubbak did to
+  the window, minimised or not, and nothing else - a window its application hid itself
+  is released without being fought over. Three tests on real windows.
+- **An unreadable config file was an exception, not a diagnostic.** `LoadFile` read the
+  file unguarded, so a reload while an editor still held it would have thrown into the
+  message loop. It now reports `SHB0400` with the reason, as a missing file always did -
+  which matters rather more now that a save is what triggers a reload.
 - **The hint bar under an expanded rule said only `Esc back`.** Inside a frame the bar
   asked the selected row whether it had anything to copy, and the rows of an expanded
   frame - the lines of one value - carry nothing, so the one frame that exists to be

@@ -180,6 +180,18 @@ public enum PaletteMode
 /// does. Distinct from <paramref name="Expands"/>, which is text to be opened and
 /// read: this is the row that says "Copy the rule", and Enter on it has to copy.
 /// </param>
+/// <param name="Applies">
+/// The rule choosing this row adds to the configuration file, when that is what
+/// choosing it does. The palette stays open for the answer, which has to be fetched.
+/// </param>
+/// <param name="Removes">
+/// The rule choosing this row takes out of the configuration file, when that is what
+/// choosing it does. Likewise fetched.
+/// </param>
+/// <param name="Composes">
+/// The window choosing this row writes rules for, when that is what choosing it does.
+/// The report is fetched first, because the rules worth offering depend on it.
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -197,7 +209,10 @@ public sealed record PaletteEntry(
     bool Unavailable = false,
     Func<IReadOnlyList<PaletteAction>>? ActionsFactory = null,
     bool Prompts = false,
-    string? Copies = null)
+    string? Copies = null,
+    RuleToAdd? Applies = null,
+    RuleToRemove? Removes = null,
+    long? Composes = null)
 {
     /// <summary>Whether there is anything Ctrl+Enter could show, without working out what.</summary>
     public bool HasActions => Actions is { Count: > 0 } || ActionsFactory is not null;

@@ -145,6 +145,15 @@ public sealed record MonitorInfoDto(
 /// The same answer as <paramref name="ExclusionReason"/> in a few words, for a client
 /// with one clipped line rather than a paragraph. Null exactly when that is.
 /// </param>
+/// <param name="Manageable">
+/// The filter's own verdict, before rules and before the tree. Null from a daemon that
+/// predates the field.
+/// </param>
+/// <param name="Overridable">
+/// Whether a <c>manage</c> rule could overturn a verdict of no. True for the filter's
+/// heuristics, false for its facts, null when the verdict was yes or from a daemon that
+/// predates the field.
+/// </param>
 public sealed record WindowCandidate(
     long Handle,
     string Title,
@@ -170,7 +179,13 @@ public sealed record WindowCandidate(
     // oddly and not why.
     string? Scratchpad = null,
     IReadOnlyList<string>? Tags = null,
-    string? ExclusionSummary = null);
+    string? ExclusionSummary = null,
+
+    // The filter's verdict, and whether a rule may overturn it. Appended and optional
+    // for the same reason as the three above: a client composing a `manage` rule
+    // needs to know whether the rule would do anything.
+    bool? Manageable = null,
+    bool? Overridable = null);
 
 /// <summary>A command verb, as described to clients.</summary>
 /// <remarks>
@@ -235,6 +250,11 @@ public sealed record BindingInfo(
 /// <param name="Node">What the tree knows, when it is managed. Null when it is not.</param>
 /// <param name="Rules">Every configured rule, and whether it matched this window.</param>
 /// <param name="Apps">Every configured app definition, and why it did not match.</param>
+/// <param name="Overridable">
+/// Whether a <c>manage</c> rule could overturn the verdict, when the verdict is no.
+/// Appended and optional. True for the filter's heuristics and false for its facts;
+/// null when the window is manageable anyway, or from a daemon that predates the field.
+/// </param>
 public sealed record WindowReport(
     long Handle,
     string Title,
@@ -257,7 +277,8 @@ public sealed record WindowReport(
     bool ExcludedByRule,
     ManagedWindowReport? Node,
     IReadOnlyList<RuleReport> Rules,
-    IReadOnlyList<AppReport> Apps);
+    IReadOnlyList<AppReport> Apps,
+    bool? Overridable = null);
 
 /// <summary>What the tree knows about a window it manages.</summary>
 /// <param name="Id">Node id, as the tree numbers it.</param>
@@ -283,7 +304,91 @@ public sealed record ManagedWindowReport(
 /// <param name="Name">The rule's name, as written in the config.</param>
 /// <param name="Line">Where it is written, so it can be found and edited.</param>
 /// <param name="Matched">Whether this window satisfies it.</param>
-public sealed record RuleReport(string Name, int Line, bool Matched);
+/// <param name="Does">
+/// The verbs its <c>do</c> block runs, by name. Appended and optional. A client
+/// deciding whether to offer "ignore this window" needs to know that a matching rule
+/// already does, and one offering to remove a rule needs to say what it would stop.
+/// </param>
+/// <param name="Trigger">
+/// When it runs: <c>manage</c>, <c>title-change</c> or <c>focus</c>. Appended and
+/// optional.
+/// </param>
+public sealed record RuleReport(
+    string Name,
+    int Line,
+    bool Matched,
+    IReadOnlyList<string>? Does = null,
+    string? Trigger = null);
+
+/// <summary>
+/// One configured rule, as <c>query rules</c> lists them.
+/// </summary>
+/// <param name="Name">The rule's name, or the one the loader gave it.</param>
+/// <param name="Line">Where it is written.</param>
+/// <param name="Trigger">When it runs.</param>
+/// <param name="Does">The verbs its <c>do</c> block runs, by name.</param>
+/// <param name="Context">The context it belongs to, or null for a rule that always applies.</param>
+public sealed record RuleInfo(
+    string Name,
+    int Line,
+    string Trigger,
+    IReadOnlyList<string> Does,
+    string? Context);
+
+/// <summary>
+/// A request to add rules to the configuration file, over <c>add-rule</c>.
+/// </summary>
+/// <remarks>
+/// The text is the rule as the client showed it, so what the user read is what lands
+/// in the file. The daemon appends it as a block of its own and reloads; see
+/// <c>ConfigEditor</c> for what it refuses.
+/// </remarks>
+/// <param name="Kdl">A <c>rules { }</c> block, or bare <c>rule</c> nodes.</param>
+/// <param name="Handle">
+/// The window the rule was written for, if any, so the answer can say what the reload
+/// did to it.
+/// </param>
+/// <param name="Source">Who is asking, for the comment above the block and the log.</param>
+public sealed record RuleAddition(string Kdl, long? Handle = null, string? Source = null);
+
+/// <summary>
+/// A request to remove one rule from the configuration file, over <c>remove-rule</c>.
+/// </summary>
+/// <remarks>
+/// Named and placed as a report described it, and refused when the two no longer
+/// agree: the file may have been edited since the report was taken.
+/// </remarks>
+/// <param name="Name">The rule's name, as <see cref="RuleReport.Name"/> gave it.</param>
+/// <param name="Line">The line it begins on, as <see cref="RuleReport.Line"/> gave it.</param>
+/// <param name="Handle">The window concerned, if any, for the outcome.</param>
+public sealed record RuleRemoval(string Name, int Line, long? Handle = null);
+
+/// <summary>
+/// What adding or removing a rule did.
+/// </summary>
+/// <param name="Path">The file that was edited.</param>
+/// <param name="Line">Where the rule begins - or began - in it.</param>
+/// <param name="Names">The rules concerned, as a report names them.</param>
+/// <param name="RuleText">
+/// The rule, without surrounding indentation: what was added, or what was removed and
+/// could be put back with <c>add-rule</c>.
+/// </param>
+/// <param name="Reloaded">
+/// Whether the new file is now the running configuration. False when the reload was
+/// refused, which the daemon guards against by validating first and which can still
+/// happen if the file changed underneath it.
+/// </param>
+/// <param name="Outcome">
+/// What happened to the window, in a sentence, when a handle was given and the daemon
+/// could tell: released, adopted, or unchanged. Null otherwise.
+/// </param>
+public sealed record RuleChange(
+    string Path,
+    int Line,
+    IReadOnlyList<string> Names,
+    string RuleText,
+    bool Reloaded,
+    string? Outcome);
 
 /// <summary>One configured app definition, and why it did not match.</summary>
 /// <remarks>
@@ -409,6 +514,11 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(ManagedWindowReport))]
 [JsonSerializable(typeof(RuleReport))]
 [JsonSerializable(typeof(AppReport))]
+[JsonSerializable(typeof(RuleInfo))]
+[JsonSerializable(typeof(IReadOnlyList<RuleInfo>))]
+[JsonSerializable(typeof(RuleAddition))]
+[JsonSerializable(typeof(RuleRemoval))]
+[JsonSerializable(typeof(RuleChange))]
 [JsonSerializable(typeof(ContextReport))]
 [JsonSerializable(typeof(WhenReport))]
 [JsonSerializable(typeof(ConditionReport))]

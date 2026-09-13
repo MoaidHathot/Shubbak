@@ -28,12 +28,109 @@ internal sealed partial class WmDaemonIpc
             "command" => RunCommandAsync(request, client),
             "query" => QueryAsync(request),
             "inspect" => InspectAsync(request),
+            "add-rule" => AddRuleAsync(request, client),
+            "remove-rule" => RemoveRuleAsync(request, client),
             "diagnose" => DiagnoseAsync(request),
             "log-level" => SetLogLevelAsync(request),
             "ping" => Task.FromResult(new IpcResponse(request.Id, true, "pong")),
             _ => Task.FromResult(new IpcResponse(
                 request.Id, false, null, $"unknown method '{request.Method}'")),
         };
+    }
+
+    /// <summary>
+    /// Adds rules to the configuration file, and reloads.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The one method that writes to the user's file, and narrow on purpose: rules, and
+    /// nothing else, appended as a block of their own. What may be written is decided
+    /// in <c>ConfigEditor</c>, which refuses anything that is not a rule, anything the
+    /// loader would reject or drop, and - unless the pipe may run it directly - a rule
+    /// that runs <c>shell-exec</c>. The whole method is gated by
+    /// <c>allow-config-edits-over-ipc</c>, which is on by default because every process
+    /// that can reach the pipe can already reach the file.
+    /// </para>
+    /// <para>
+    /// On the loop, because it rewrites the running configuration.
+    /// </para>
+    /// </remarks>
+    private Task<IpcResponse> AddRuleAsync(IpcRequest request, IpcClientInfo client)
+    {
+        if (Parse(request, IpcJsonContext.Default.RuleAddition, out RuleAddition? addition, out string? problem) is false)
+            return Task.FromResult(new IpcResponse(request.Id, false, null, problem));
+
+        if (addition!.Kdl is not { Length: > 0 })
+            return Task.FromResult(new IpcResponse(request.Id, false, null, "no rule given"));
+
+        string requestedBy = Describe(client).Description;
+
+        return _daemon.InvokeAsync(() =>
+        {
+            RuleChange? change = _daemon.AddRule(addition, requestedBy, out string? refusal);
+
+            return change is null
+                ? new IpcResponse(request.Id, false, null, refusal ?? "the rule was not added")
+                : new IpcResponse(request.Id, true, JsonSerializer.Serialize(change, IpcJsonContext.Default.RuleChange));
+        });
+    }
+
+    /// <summary>Removes one rule from the configuration file, and reloads.</summary>
+    /// <remarks>
+    /// Identified by name and line together, as a report gave them, and refused when the
+    /// file no longer agrees with the report. See <c>ConfigEditor.PlanRemoval</c>.
+    /// </remarks>
+    private Task<IpcResponse> RemoveRuleAsync(IpcRequest request, IpcClientInfo client)
+    {
+        if (Parse(request, IpcJsonContext.Default.RuleRemoval, out RuleRemoval? removal, out string? problem) is false)
+            return Task.FromResult(new IpcResponse(request.Id, false, null, problem));
+
+        if (removal!.Name is not { Length: > 0 } || removal.Line <= 0)
+            return Task.FromResult(new IpcResponse(request.Id, false, null, "a rule is named by its name and the line it begins on"));
+
+        string requestedBy = Describe(client).Description;
+
+        return _daemon.InvokeAsync(() =>
+        {
+            RuleChange? change = _daemon.RemoveRule(removal, requestedBy, out string? refusal);
+
+            return change is null
+                ? new IpcResponse(request.Id, false, null, refusal ?? "the rule was not removed")
+                : new IpcResponse(request.Id, true, JsonSerializer.Serialize(change, IpcJsonContext.Default.RuleChange));
+        });
+    }
+
+    /// <summary>Reads a JSON payload, or says why it could not.</summary>
+    private static bool Parse<T>(
+        IpcRequest request, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> shape, out T? value, out string? problem)
+        where T : class
+    {
+        value = null;
+
+        if (request.Payload is not { Length: > 0 } json)
+        {
+            problem = "no payload given";
+            return false;
+        }
+
+        try
+        {
+            value = JsonSerializer.Deserialize(json, shape);
+        }
+        catch (JsonException ex)
+        {
+            problem = $"the payload could not be read: {ex.Message}";
+            return false;
+        }
+
+        if (value is null)
+        {
+            problem = "the payload was empty";
+            return false;
+        }
+
+        problem = null;
+        return true;
     }
 
     /// <summary>
@@ -244,9 +341,12 @@ internal sealed partial class WmDaemonIpc
         // of it touches the tree. Marshalling it onto the tick would put that work in
         // front of the layout pass for no reason, and the tick is the one thread that
         // must not wait for anything. Only the join needs to be there.
-        if (what is "all-windows")
+        if (what is "all-windows" or "every-window")
         {
-            List<WindowCatalogue.Discovered> discovered = WindowCatalogue.Discover();
+            // every-window is the wider list: the windows the filter turned down for
+            // their shape as well as for their kind, which are the ones a manage rule
+            // exists for and which the ordinary list never shows.
+            List<WindowCatalogue.Discovered> discovered = WindowCatalogue.Discover(everything: what is "every-window");
 
             return _daemon.InvokeAsync(() => new IpcResponse(request.Id, true,
                 JsonSerializer.Serialize(
@@ -303,13 +403,16 @@ internal sealed partial class WmDaemonIpc
                 "arrangements" => JsonSerializer.Serialize(
                     _daemon.DescribeArrangements(), IpcJsonContext.Default.IReadOnlyListArrangementInfo),
 
+                "rules" => JsonSerializer.Serialize(
+                    _daemon.DescribeRules(), IpcJsonContext.Default.IReadOnlyListRuleInfo),
+
                 _ => string.Empty,
             };
 
             return json.Length == 0
                 ? new IpcResponse(request.Id, false, null,
-                    $"unknown query '{what}'. Try: state, windows, all-windows, workspaces, " +
-                    "monitors, focused, layouts, commands, bindings, contexts, arrangements")
+                    $"unknown query '{what}'. Try: state, windows, all-windows, every-window, workspaces, " +
+                    "monitors, focused, layouts, commands, bindings, contexts, arrangements, rules")
                 : new IpcResponse(request.Id, true, json);
         });
     }
