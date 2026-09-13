@@ -851,7 +851,10 @@ bar {
             // into a glyph, so matching the drawn text would mean writing box-drawing
             // characters and keeping them in step with whichever glyph the filter
             // picks. Matching the source means writing the layout's name.
-            text id="layout"  template="{{ layout | icon }}" colour="#7f849c" {
+            //
+            // Clicking it steps the focused workspace to the next layout - the same
+            // `layout --cycle` a keybinding sends; `--cycle-back` goes the other way.
+            text id="layout"  template="{{ layout | icon }}" colour="#7f849c" on-click="layout --cycle" {
                 when of="layout" not="splith" colour="#a6e3a1"
             }
 

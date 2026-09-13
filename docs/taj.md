@@ -131,8 +131,9 @@ Anything with an `on-click` is a control: the pointer becomes a hand and the wid
 lights up under it — a pill lightens, a bare glyph gains the same faint pill the
 workspaces use — or takes `hover-background` and `hover-colour` of its own. The value
 of `on-click` is a command, the same ones a keybinding runs, so clicking a workspace
-sends what a keybinding would, and `on-click="wm-resume"` on the `{{ suspended }}` pill
-is the way back that does not need the keyboard.
+sends what a keybinding would, `on-click="layout --cycle"` on the layout glyph steps
+through the layouts, and `on-click="wm-resume"` on the `{{ suspended }}` pill is the
+way back that does not need the keyboard.
 
 One verb is the bar's own and never reaches the window manager: `keyboard`. Put
 `on-click="keyboard next"` on the language indicator and clicking it switches the
