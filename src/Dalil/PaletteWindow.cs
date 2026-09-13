@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Dalil.Core;
@@ -123,6 +124,29 @@ public sealed class PaletteWindow : IDisposable
 
     /// <summary>Lists opened from a row, innermost last.</summary>
     private readonly Stack<Overlay> _overlays = new();
+
+    /// <summary>When the palette was last shown, for <see cref="TimeSinceShown"/>.</summary>
+    private long _shownAtTicks;
+
+    /// <summary>How many times the foreground has been asked for since the palette was shown.</summary>
+    private int _foregroundAttempts;
+
+    /// <summary>
+    /// Whether the palette has been in front at any point this showing.
+    /// </summary>
+    /// <remarks>
+    /// The difference between a palette that was left and one that was never reached.
+    /// Losing the foreground after having it is a blur, and <c>close-on-blur</c> says
+    /// what to do about that; never having had it is being stranded, and a stranded
+    /// palette is put away whatever the setting, because nobody can reach it.
+    /// </remarks>
+    private bool _hadForeground;
+
+    /// <summary>
+    /// What last kept the palette from the foreground, in words, for the log when it
+    /// finally gets there or the host gives up. Null while nothing has.
+    /// </summary>
+    private string? _obstacle;
 
     /// <summary>Where the pointer was last seen, so a resting cursor is ignored.</summary>
     private (int X, int Y) _lastMouse = (int.MinValue, int.MinValue);
@@ -333,6 +357,13 @@ public sealed class PaletteWindow : IDisposable
         if (!wasOpen)
         {
             PositionOnTargetMonitor();
+
+            // Stamped before the show, so the grace it starts covers the show itself.
+            _shownAtTicks = Stopwatch.GetTimestamp();
+            _foregroundAttempts = 0;
+            _hadForeground = false;
+            _obstacle = null;
+
             PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOW);
         }
 
@@ -356,21 +387,54 @@ public sealed class PaletteWindow : IDisposable
     /// One case is not transient and no amount of retrying will fix it: the window
     /// being left behind belongs to a process at a higher integrity level.
     /// <c>AttachThreadInput</c> across that boundary is refused by UIPI, which is the
-    /// same wall that stops the window manager tiling elevated windows. The message
-    /// says so rather than leaving the user to conclude the palette is broken.
+    /// same wall that stops the window manager tiling elevated windows. The final
+    /// warning, when the host gives up, says so rather than leaving the user to
+    /// conclude the palette is broken.
+    /// </para>
+    /// <para>
+    /// Each attempt is written down at debug and the one that finally lands is written
+    /// at info when it was not the first, naming what stood in the way. A palette that
+    /// took three tries to reach the keyboard is working, and is also the only evidence
+    /// there will be when somebody asks why it flickered.
     /// </para>
     /// </remarks>
     public bool EnsureForeground()
     {
         if (_handle.IsNull || !_open) return false;
 
-        if (Foreground.Take(_handle)) return true;
+        _foregroundAttempts++;
 
-        Log.Warn(LogCategory.Wm,
-            "the palette is on screen but could not take the keyboard. " +
-            "Something is holding the foreground: a menu or a drag still finishing, " +
-            "or a window belonging to a process running higher than Dalil, which " +
-            "Windows will not let it take focus from.");
+        ForegroundAttempt attempt = Foreground.Take(_handle);
+
+        if (attempt.InFront)
+        {
+            if (_foregroundAttempts > 1)
+            {
+                Log.Info(LogCategory.Wm,
+                    $"the palette took the keyboard on attempt {_foregroundAttempts}, " +
+                    $"{TimeSinceShown.TotalMilliseconds:F0} ms after opening; before that " +
+                    (_obstacle ?? "it was not in front"));
+            }
+            else if (attempt.Nudged)
+            {
+                // The second route on the first try: the ordinary one was refused, which
+                // on a fresh desktop means a UWP frame was in front. Worth a line, because
+                // it is the answer to "why did the first open ever fail".
+                Log.Debug(LogCategory.Wm,
+                    $"the palette took the keyboard after a nudge, {TimeSinceShown.TotalMilliseconds:F0} ms after opening " +
+                    $"(attach {(attempt.Attached ? "ok" : "refused")}, request {(attempt.Accepted ? "accepted" : "refused")})");
+            }
+
+            _hadForeground = true;
+            _obstacle = null;
+            return true;
+        }
+
+        _obstacle = attempt.Describe();
+
+        Log.Debug(LogCategory.Wm,
+            $"foreground attempt {_foregroundAttempts}, {TimeSinceShown.TotalMilliseconds:F0} ms after opening: " +
+            _obstacle);
 
         return false;
     }
@@ -384,6 +448,35 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     public unsafe bool IsStranded =>
         _open && !_handle.IsNull && PInvoke.GetForegroundWindow() != _handle;
+
+    /// <summary>How long the palette has been on screen this time; zero when it is not.</summary>
+    /// <remarks>
+    /// What the host judges a stranded palette by. Inside <see cref="PaletteInput.OpeningGrace"/>
+    /// of being shown, not being in front is a switch that has not landed yet and is
+    /// retried; after it, it is a palette nobody can reach and is put away.
+    /// </remarks>
+    public TimeSpan TimeSinceShown => _open ? Stopwatch.GetElapsedTime(_shownAtTicks) : TimeSpan.Zero;
+
+    /// <summary>What stood in the way the last time the foreground was asked for and not given.</summary>
+    public string LastForegroundObstacle => _obstacle ?? "unknown";
+
+    /// <summary>Whether the palette has been in front at any point this showing.</summary>
+    public bool HadForeground => _hadForeground;
+
+    /// <summary>Whether losing the foreground dismisses the palette, as the configuration says.</summary>
+    public bool ClosesOnBlur => _config.CloseOnBlur;
+
+    /// <summary>
+    /// Raised when the palette lost the foreground moments after being shown, and kept
+    /// itself open on the assumption that it was taken rather than left.
+    /// </summary>
+    /// <remarks>
+    /// The host answers by scheduling the same repairs a failed open gets. The window
+    /// does not take the foreground back from inside <c>WM_ACTIVATE</c>: that message
+    /// is the system part-way through handing activation to somebody else, and asking
+    /// for it back in the middle of that is asking two windows to be active at once.
+    /// </remarks>
+    public event Action? ForegroundLost;
 
     /// <summary>Hides the palette.</summary>
     public void Close()
@@ -1485,14 +1578,65 @@ public sealed class PaletteWindow : IDisposable
                         break;
 
                     case PInvoke.WM_ACTIVATE:
-                        // WA_INACTIVE. The user clicked elsewhere, or something else
-                        // took the foreground - either way the palette has been
-                        // dismissed. Not when it is giving focus away itself, which
-                        // produces the identical message.
-                        if ((wParam.Value & 0xFFFF) == 0 && window._config.CloseOnBlur && !window._closing)
+                    {
+                        // WA_ACTIVE or WA_CLICKACTIVE. Remembered as having been in front
+                        // only when the system agrees: this thread's own SetActiveWindow
+                        // produces the same message whether or not the foreground moved,
+                        // and a palette that was never in front must not be mistaken for
+                        // one that was and then left.
+                        if ((wParam.Value & 0xFFFF) != 0)
+                        {
+                            if (PInvoke.GetForegroundWindow() == hwnd) window._hadForeground = true;
+                            return new LRESULT(0);
+                        }
+
+                        // WA_INACTIVE. Not when the palette is giving focus away itself,
+                        // which produces the identical message.
+                        if (window._closing) return new LRESULT(0);
+
+                        // Who has it now. The message names the window being activated
+                        // only when it is on this thread; across threads - every case
+                        // that matters here - the handle is null and the answer is read
+                        // from the system instead.
+                        nint taker = lParam.Value != 0 ? lParam.Value : (nint)PInvoke.GetForegroundWindow().Value;
+                        string holder = Foreground.Describe(taker);
+
+                        // In the first moments after opening, whatever close-on-blur says.
+                        // Nobody clicks away from a palette they asked for a quarter of a
+                        // second ago; a deactivation that early is the previous window's
+                        // thread finishing an activation the system had already queued,
+                        // or a window manager pass putting focus where it thinks it goes,
+                        // and the palette is the thing the user wanted. It stays, says so,
+                        // and asks the host to take the foreground back.
+                        if (PaletteInput.IsSettlingIn(window.TimeSinceShown))
+                        {
+                            window._obstacle = $"the foreground went to {holder}";
+
+                            Log.Info(LogCategory.Wm,
+                                $"the palette lost the foreground to {holder} " +
+                                $"{window.TimeSinceShown.TotalMilliseconds:F0} ms after opening; taking it back");
+
+                            window.ForegroundLost?.Invoke();
+                            return new LRESULT(0);
+                        }
+
+                        // The user clicked elsewhere, or something else took the
+                        // foreground - either way the palette has been left, and
+                        // close-on-blur says whether that dismisses it. Said at the
+                        // default level and naming the taker: one line per dismissal,
+                        // and the only evidence there is when the palette is reported
+                        // to have closed by itself.
+                        if (window._config.CloseOnBlur)
+                        {
+                            Log.Info(LogCategory.Wm,
+                                $"put away: the foreground went to {holder} " +
+                                $"{window.TimeSinceShown.TotalMilliseconds:F0} ms after opening");
+
                             window.Close();
+                        }
 
                         return new LRESULT(0);
+                    }
 
                     case PInvoke.WM_CLOSE:
                         RequestShutdown?.Invoke();

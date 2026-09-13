@@ -102,6 +102,40 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **The palette's first opening showed its frame and hid it again.** On a fresh session
+  the first `alt+shift+space` drew the palette for a frame and put it away; the second
+  press worked. The loop that puts away a palette nobody can reach ran straight after
+  the call that showed it, and a foreground switch that had not landed by then - which
+  on a desktop settling after logon is most of them - was read as a palette stranded.
+  A palette now has half a second of opening grace: inside it, a foreground that is
+  missing or lost is retried, never given up on, whatever `close-on-blur` says; past
+  it, a palette that had the keyboard and lost it was *left*, which `close-on-blur`
+  decides and which is never fought over, and one that never had it is stranded and
+  is put away with a warning naming what stood in the way. The list is also read as
+  soon as the palette connects, so the first opening shows the commands rather than an
+  empty box for its first tenth of a second.
+- **The palette could not take the keyboard from a UWP window.** `AttachThreadInput`
+  refuses a UWP frame (`ApplicationFrameHost`, error 5) and `SetForegroundWindow` then
+  refuses too: seven attempts and a give-up at half a second, every time Settings or
+  Media Player was in front. When the attached route is refused, the palette now sends
+  one key-up of a key that means nothing (`VK_NONAME`) and asks again - the foreground
+  lock yields to a process that has just produced input - and takes the keyboard in
+  about twenty-five milliseconds. The log says when a nudge was needed.
+- **A layout pass took the keyboard back from the palette a second after it opened.**
+  Every pass ended by bringing the tree's focused window to the front whenever anything
+  else had the foreground, and on a desktop still settling after logon there is a pass
+  a second or two in: Taj's second bar registers its strip late and the work area
+  shrinks under it. That pass took the foreground from the palette - and would have
+  from an application's dialog, the Start menu or an elevated Task Manager - and the
+  palette read it as the user having left. A pass may now take the foreground from
+  anything only when it is serving a change of focus - a workspace switch, a focus key,
+  a window arriving or leaving, which is how such a window is meant to be left -
+  and otherwise only from nothing, from the shell, or from a window Shubbak manages. At
+  trace it says whose foreground it left alone. Four tests state the rule.
+- **A palette put away by a blur said nothing.** Both routes - the deactivation
+  message and the loop's own check - logged at debug, so a report that the palette
+  "closed by itself" had no evidence at the default level. Both now say at info who
+  has the foreground and how long after opening.
 - **Releasing a window on another workspace left it cloaked, with no way to reach it.**
   A window on an inactive workspace is cloaked by Shubbak. Letting go of it - which a
   rule does at reload when it says `ignore` - forgot the concealment without undoing

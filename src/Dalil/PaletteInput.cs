@@ -72,6 +72,70 @@ internal static class PaletteInput
     internal const string InspectChord = "Ctrl+Shift+I";
 
     /// <summary>
+    /// How long a palette has, from being shown, to end up in front before anybody
+    /// draws a conclusion from it not being.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Taking the foreground is not instantaneous. <c>SetForegroundWindow</c> accepts
+    /// the request and the switch lands when the thread losing the foreground gets
+    /// round to being told, which on a desktop still starting up - the case the
+    /// palette is first opened in - is a few milliseconds to a few hundred after the
+    /// call returns. Read the answer too early and it says the previous window is
+    /// still in front, which is true and means nothing.
+    /// </para>
+    /// <para>
+    /// The palette used to read it twice, immediately, and hide itself on the second
+    /// miss - within the same turn of the message loop that showed it. On a machine
+    /// where the switch took a moment, the first press showed a frame and took it
+    /// away, and the second press worked because the first had, by then, been granted.
+    /// Nothing about that was wrong with the machine.
+    /// </para>
+    /// <para>
+    /// Half a second is long enough to be sure and short enough that a palette which
+    /// genuinely cannot be reached does not sit there looking normal. Inside it a
+    /// palette that is not in front is retried; a palette that loses the foreground is
+    /// taken back rather than dismissed; and only after it does either count against
+    /// the palette.
+    /// </para>
+    /// </remarks>
+    internal static readonly TimeSpan OpeningGrace = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// When to try again for the foreground after an attempt that did not land, as
+    /// delays from the attempt.
+    /// </summary>
+    /// <remarks>
+    /// Not immediately: an immediate retry finds the same lock the first attempt did,
+    /// which is what the retry is for getting past. Spaced through the grace, and one
+    /// beyond it, so that the loop is woken at least once after the grace has run out
+    /// and the palette is judged on time rather than at the next quarter-second tick.
+    /// </remarks>
+    internal static readonly IReadOnlyList<TimeSpan> RepairSchedule =
+    [
+        TimeSpan.FromMilliseconds(140),
+        TimeSpan.FromMilliseconds(300),
+        TimeSpan.FromMilliseconds(460),
+        TimeSpan.FromMilliseconds(620),
+    ];
+
+    /// <summary>Whether a palette shown this long ago is still entitled to the benefit of the doubt.</summary>
+    internal static bool IsSettlingIn(TimeSpan sinceShown) => sinceShown < OpeningGrace;
+
+    /// <summary>
+    /// The least time between two attempts for the foreground made on the loop's own
+    /// initiative.
+    /// </summary>
+    /// <remarks>
+    /// The loop wakes on every message, and a moving mouse is a message every few
+    /// milliseconds. Each attempt joins this thread's input queue to another's and
+    /// splits them again, which is cheap once and a strange thing to do fifty times in
+    /// half a second. A switch that is going to land does not need asking more often
+    /// than this.
+    /// </remarks>
+    internal static readonly TimeSpan RetryInterval = TimeSpan.FromMilliseconds(40);
+
+    /// <summary>
     /// The chord a keystroke spells, or null when it spells none.
     /// </summary>
     /// <remarks>

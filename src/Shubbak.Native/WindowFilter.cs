@@ -259,6 +259,21 @@ public static class WindowFilter
     };
 
     /// <summary>
+    /// Whether a window is the desktop itself or the shell's own top-level surface.
+    /// </summary>
+    /// <remarks>
+    /// Two calls and two comparisons - cheap enough to ask on every layout pass, which
+    /// is what it is for. The shell holding the foreground is the one unmanaged window
+    /// the layout may take it from: nothing the user is interacting with lives there.
+    /// </remarks>
+    public static bool IsShellWindow(nint handle)
+    {
+        var hwnd = new HWND(handle);
+
+        return hwnd == PInvoke.GetShellWindow() || hwnd == PInvoke.GetDesktopWindow();
+    }
+
+    /// <summary>
     /// Whether Shubbak should manage this window, and why not if it should not.
     /// </summary>
     /// <param name="handle">Native window handle.</param>
@@ -294,7 +309,7 @@ public static class WindowFilter
         if (handle == 0 || !PInvoke.IsWindow(hwnd))
             return ManageDecision.No(ExclusionReason.NotAWindow);
 
-        if (hwnd == PInvoke.GetShellWindow() || hwnd == PInvoke.GetDesktopWindow())
+        if (IsShellWindow(handle))
             return ManageDecision.No(ExclusionReason.ShellWindow);
 
         // Invisible windows are normally not ours to touch. During recovery they are

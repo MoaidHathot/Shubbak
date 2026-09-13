@@ -4159,20 +4159,86 @@ public sealed class WmDaemon : IDisposable
     /// was actually looking at, and the resulting foreground event then switched the
     /// desktop to that workspace, where nothing had been placed yet.
     /// </para>
+    /// <para>
+    /// And, when the focused window is the same one the previous pass saw, only from a
+    /// window of Shubbak's own, from the shell, or from nothing. A pass that is serving
+    /// a change of focus - a workspace switch, a focus key, a window arriving or
+    /// leaving - is carrying out something the user asked for, and may take the
+    /// foreground from whatever has it; <see cref="ResolveTarget"/> explains that
+    /// moving focus out of an unmanaged window is exactly how such a window is left. A
+    /// pass that changes nothing about focus is housekeeping - the work area shrank
+    /// under a bar, a window drifted or left full-screen, a title changed - and has no
+    /// such licence. Taking the foreground then means taking it from an application's
+    /// own dialog, a menu, the Start menu, an elevated Task Manager, or the command
+    /// palette, which is Shubbak's own and a tool window by design. On a desktop still
+    /// settling after logon, the second bar registering its strip a second or two in
+    /// was enough: the resulting pass took the keyboard back from the palette within a
+    /// second of it opening, every time, and the palette read that as the user having
+    /// left.
+    /// </para>
     /// </remarks>
     private void FocusIfDisplayed()
     {
-        if (_wm.FocusedWindow is not { } focused)
+        WindowNode? focused = _wm.FocusedWindow;
+
+        // Recorded before any of the early returns, so a pass that finds the system
+        // already agreeing with the tree still counts as having seen this window.
+        // Following a click to a managed window raises exactly such a pass, and if it
+        // did not update the record the next housekeeping pass would read the click as
+        // a change of focus still owed.
+        bool servingAFocusChange = !ReferenceEquals(focused, _focusedAtLastPass);
+        _focusedAtLastPass = focused;
+
+        if (focused is null)
         {
             ReleaseStaleForeground();
             return;
         }
 
         if (!focused.IsOnADisplayedWorkspace) return;
-        if (Win32Window.GetForeground() == (nint)focused.Handle) return;
+
+        nint foreground = Win32Window.GetForeground();
+        if (foreground == (nint)focused.Handle) return;
+
+        if (!MayTakeForegroundFrom(
+                foreground, servingAFocusChange, _windows.IsManaged(foreground), WindowFilter.IsShellWindow(foreground)))
+        {
+            if (Log.IsEnabled(LogLevel.Trace))
+            {
+                Log.Trace(LogCategory.Layout,
+                    $"leaving the foreground with 0x{foreground:X} [{Win32Window.GetClassName(foreground)}]: not ours, and nothing about focus changed");
+            }
+
+            return;
+        }
 
         WindowActions.Focus((nint)focused.Handle);
     }
+
+    /// <summary>The focused window the previous layout pass saw, if any.</summary>
+    /// <remarks>
+    /// Compared by reference. A node lives as long as its window is managed, so the
+    /// same node on two consecutive passes means the same window, and a window that
+    /// left and came back is a new node and reads as a change.
+    /// </remarks>
+    private WindowNode? _focusedAtLastPass;
+
+    /// <summary>
+    /// Whether a layout pass may take the foreground away from the window that has it.
+    /// </summary>
+    /// <param name="foreground">The window in front, or zero for none.</param>
+    /// <param name="servingAFocusChange">
+    /// Whether the tree's focused window differs from the one the previous pass saw.
+    /// </param>
+    /// <param name="managed">Whether the window in front is one Shubbak manages.</param>
+    /// <param name="shell">Whether it is the desktop or the shell's own surface.</param>
+    /// <remarks>
+    /// Pure, so the rule can be held to account. Serving a change of focus, from
+    /// anything; otherwise from nothing, from the shell, and from a window of Shubbak's
+    /// own - never from a window somebody else put in front.
+    /// </remarks>
+    internal static bool MayTakeForegroundFrom(nint foreground, bool servingAFocusChange, bool managed, bool shell) =>
+        servingAFocusChange || foreground == 0 || managed || shell;
 
     /// <summary>
     /// Takes the foreground off a window Shubbak manages when the tree says nothing

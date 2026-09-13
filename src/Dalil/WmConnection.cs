@@ -52,6 +52,22 @@ public sealed class WmConnection : IAsyncDisposable
     public event Action? Stale;
 
     /// <summary>
+    /// Raised on a background thread when a connection to the window manager has been
+    /// made - at startup, and again after every reconnection.
+    /// </summary>
+    /// <remarks>
+    /// For the one read the palette makes before it is asked for anything. The lists
+    /// used to be read only when the palette opened, so the first open of a session
+    /// showed an empty box - two rows tall, saying "Nothing to show" - for the hundred
+    /// milliseconds the read took, and then grew into the list. Every later open had
+    /// the previous open's lists to show meanwhile. One read at connection time gives
+    /// the first open the same start as the rest, and costs one read per connection
+    /// rather than one per event, which is the price <see cref="Stale"/> is careful
+    /// not to pay for a closed palette.
+    /// </remarks>
+    public event Action? Connected;
+
+    /// <summary>
     /// Raised on a background thread when the window manager is going away. The
     /// argument is whether it asked everything to go with it.
     /// </summary>
@@ -460,6 +476,12 @@ public sealed class WmConnection : IAsyncDisposable
             {
                 await using IpcClient client = new();
                 await client.ConnectAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+
+                // The pipe is open, which is all a read needs. Said before the
+                // subscription rather than after its first event, because the first
+                // event is very often the signal that opens the palette - and a read
+                // that starts then is the read this exists to get ahead of.
+                Connected?.Invoke();
 
                 IAsyncEnumerator<IpcEvent> events =
                     client.SubscribeAsync(Topics, token).GetAsyncEnumerator(token);

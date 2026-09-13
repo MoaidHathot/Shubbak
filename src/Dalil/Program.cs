@@ -242,6 +242,10 @@ internal static class Program
         // The widened inspect list is a moment, not a preference.
         s_palette.Closed += () => s_everyWindow = false;
 
+        // A palette that lost the foreground moments after opening kept itself open and
+        // wants it back; the same repairs a failed open gets.
+        s_palette.ForegroundLost += () => ScheduleForegroundRepair(s_palette!);
+
         PaletteWindow.RequestShutdown += () => s_running = false;
 
         s_connection = new WmConnection();
@@ -249,6 +253,16 @@ internal static class Program
         s_connection.Stale += () => Post(MarkStale);
         s_connection.Reloaded += () => Post(ReloadConfig);
         s_connection.ShuttingDown += everything => Post(() => OnWindowManagerLeaving(everything));
+
+        // Read once on connecting, open or not, so the first open of a session has
+        // lists to show rather than an empty box that grows into them; see
+        // WmConnection.Connected. A reconnection reads again for the same reason -
+        // the world moved while the window manager was away.
+        s_connection.Connected += () => Post(() =>
+        {
+            if (s_palette is { } palette) Refresh(palette);
+        });
+
         s_connection.Start();
 
         Log.Info(LogCategory.Wm,
@@ -527,20 +541,76 @@ internal static class Program
     /// <para>
     /// <c>PaletteWindow.IsStranded</c> was written for exactly this, with a careful
     /// explanation of why it mattered, and was then referenced from nowhere at all -
-    /// so the failure it describes has been unhandled ever since. It is checked here,
-    /// on the loop's own quarter-second tick, which costs one
-    /// <c>GetForegroundWindow</c> and only while the palette is open.
+    /// so the failure it describes has been unhandled ever since. It is checked here
+    /// after every drain, which costs one <c>GetForegroundWindow</c> and only while
+    /// the palette is open.
+    /// </para>
+    /// <para>
+    /// After every drain is also immediately after <c>Open</c>, and that was the bug
+    /// this used to have: a palette whose foreground switch had not landed by the end
+    /// of the very call that showed it was hidden again in the same turn of the loop,
+    /// a frame after appearing. So a palette still inside its opening grace is only
+    /// ever retried here; the scheduled repairs keep the loop turning through the
+    /// grace, and the first turn after it is where a palette that is still not in
+    /// front is finally given up on - saying what stood in the way, which is the one
+    /// fact anybody investigating will want.
+    /// </para>
+    /// <para>
+    /// Past the grace, a palette that is not in front is one of two things, and the
+    /// old code treated them alike. One that had the keyboard and lost it was
+    /// <em>left</em>: the user clicked elsewhere or Alt+Tabbed away, and taking the
+    /// foreground back - which this did, before closing - meant fighting the very
+    /// switch the user was making, and with <c>close-on-blur #false</c> meant winning
+    /// it, every quarter of a second, for as long as the palette stayed open. That is a
+    /// blur, and close-on-blur decides it. One that never had the keyboard is
+    /// <em>stranded</em>, and is put away whatever the setting, because nobody can
+    /// reach it.
     /// </para>
     /// </remarks>
     private static void RescueStrandedPalette()
     {
         if (s_palette is not { IsOpen: true } palette || !palette.IsStranded) return;
 
-        if (palette.EnsureForeground()) return;
+        if (PaletteInput.IsSettlingIn(palette.TimeSinceShown))
+        {
+            // Paced. The loop wakes on every message, and asking for the foreground
+            // joins and splits input queues each time; once every few frames is as
+            // often as a switch that is going to land needs to be asked.
+            if (Stopwatch.GetElapsedTime(s_lastRescueTicks) < PaletteInput.RetryInterval) return;
 
-        Log.Warn(LogCategory.Wm, "the palette is on screen but unreachable; putting it away");
+            s_lastRescueTicks = Stopwatch.GetTimestamp();
+            _ = palette.EnsureForeground();
+            return;
+        }
+
+        if (palette.HadForeground)
+        {
+            // Left, not stranded. WM_ACTIVATE has usually already answered this; this
+            // is the same answer for the moment between the foreground moving and the
+            // message arriving, and no answer at all when blur is not meant to close.
+            if (!palette.ClosesOnBlur) return;
+
+            // At the default level, naming who has it. A palette that closed because
+            // the user clicked away is one line per dismissal; a palette that "closed
+            // by itself" is a report whose only evidence is this line.
+            Log.Info(LogCategory.Wm,
+                $"put away: the palette lost the foreground to {Foreground.DescribeCurrent()} " +
+                $"{palette.TimeSinceShown.TotalMilliseconds:F0} ms after opening");
+
+            palette.Close();
+            return;
+        }
+
+        Log.Warn(LogCategory.Wm,
+            $"the palette is on screen but unreachable {palette.TimeSinceShown.TotalMilliseconds:F0} ms after opening " +
+            $"({palette.LastForegroundObstacle}); putting it away. A window running higher than Dalil - an " +
+            "elevated terminal, say - is the one thing this cannot take the keyboard from.");
+
         palette.Close();
     }
+
+    /// <summary>When the loop last asked for the foreground on its own initiative.</summary>
+    private static long s_lastRescueTicks;
 
     /// <summary>Queues work for the message loop and wakes it.</summary>
     private static void Post(Action work)
@@ -721,7 +791,8 @@ internal static class Program
     }
 
     /// <summary>
-    /// Reads the world and hands it to an open palette.
+    /// Reads the world and hands it to the palette - to show, when it is open, and to
+    /// have ready, when it is not.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -729,6 +800,11 @@ internal static class Program
     /// apart - which they had, in the small way that matters: one of them primed the
     /// completions and the other did too, in slightly different words, and a third
     /// thing added later would have had to remember both.
+    /// </para>
+    /// <para>
+    /// Safe on a closed palette, and called on one exactly once per connection: the
+    /// lists are kept whatever the window is doing, and only the window itself is left
+    /// alone. That is what gives the first open of a session something to show.
     /// </para>
     /// <para>
     /// The icons are worked out here, on this thread, before anything is posted. That
@@ -770,26 +846,41 @@ internal static class Program
     }
 
     /// <summary>
-    /// Tries once more, shortly, to get the keyboard - and gives up rather than
-    /// leaving a window nobody can reach.
+    /// Tries again for the keyboard, a few times over the opening grace, and leaves
+    /// giving up to the loop's stranded check.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Taking the foreground fails for reasons that pass: a menu still closing, a drag
-    /// still finishing, an application still starting. A second attempt a few frames
-    /// later usually succeeds, and doing it after a delay rather than immediately is
-    /// the entire point - an immediate retry hits the same lock. Anything that
-    /// survives that is caught by the loop's own stranded check.
+    /// still finishing, an application still starting, and - the common one on a
+    /// desktop that is itself still starting - a switch the system has accepted and
+    /// not yet carried out. An attempt a few frames later usually succeeds, and doing
+    /// it after a delay rather than immediately is the entire point: an immediate
+    /// retry hits the same lock.
+    /// </para>
+    /// <para>
+    /// Several attempts rather than one, spaced through the grace and one past it, so
+    /// the loop is woken after the grace has run out and judges the palette then
+    /// rather than at whatever quarter-second tick comes next. Each is a posted
+    /// action; a palette that has meanwhile been reached, or closed, makes them no-ops.
+    /// </para>
     /// </remarks>
     private static void ScheduleForegroundRepair(PaletteWindow palette)
     {
         _ = Task.Run(async () =>
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(140)).ConfigureAwait(false);
+            TimeSpan elapsed = TimeSpan.Zero;
 
-            Post(() =>
+            foreach (TimeSpan at in PaletteInput.RepairSchedule)
             {
-                if (palette.IsOpen) _ = palette.EnsureForeground();
-            });
+                await Task.Delay(at - elapsed).ConfigureAwait(false);
+                elapsed = at;
+
+                Post(() =>
+                {
+                    if (palette.IsOpen && palette.IsStranded) _ = palette.EnsureForeground();
+                });
+            }
         });
     }
 

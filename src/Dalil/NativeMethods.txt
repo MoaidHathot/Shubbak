@@ -43,6 +43,14 @@ WM_SYSKEYDOWN
 GetKeyState
 VIRTUAL_KEY
 
+// The one event this process injects, ever: a key-up of a key nobody has bound and
+// nobody is holding, so that Windows counts this process as having provided the last
+// input and lets SetForegroundWindow through. See Foreground.
+SendInput
+INPUT
+INPUT_TYPE
+KEYBD_EVENT_FLAGS
+
 // --- message loop --------------------------------------------------------------------
 PeekMessage
 PEEK_MESSAGE_REMOVE_TYPE

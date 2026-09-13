@@ -919,6 +919,12 @@ dalil {
     // text is a round trip into GDI per row.
     visible-rows  12
 
+    // Whether the palette is put away when it loses the keyboard - a click
+    // elsewhere, Alt+Tab. The first half-second after opening is not a blur
+    // whatever this says: a foreground that has not landed yet is retried, not
+    // given up on. A palette that never gets the keyboard at all - something
+    // elevated is in front - is put away regardless, with a warning saying what
+    // stood in the way.
     close-on-blur  #true
 
     // Windows Shubbak does not manage are listed by default, with the reason it

@@ -793,4 +793,85 @@ public class PaletteInputTests
             Assert.Equal(choice, PaletteInput.Choose(row, PaletteMode.Windows, insideOverlay: true));
         }
     }
+
+    // ---- taking the keyboard, and how long to give it ---------------------------------
+
+    [Fact]
+    public void APaletteJustShownIsGivenTheBenefitOfTheDoubt()
+    {
+        // The bug this exists for. A palette whose foreground switch had not landed by
+        // the end of the call that showed it was hidden again in the same turn of the
+        // loop - a frame after appearing - and the second press worked because the
+        // first had, by then, been granted. Inside the grace, not being in front is a
+        // switch still landing; only after it is it a palette nobody can reach.
+        Assert.True(PaletteInput.IsSettlingIn(TimeSpan.Zero));
+        Assert.True(PaletteInput.IsSettlingIn(TimeSpan.FromMilliseconds(140)));
+        Assert.True(PaletteInput.IsSettlingIn(PaletteInput.OpeningGrace - TimeSpan.FromMilliseconds(1)));
+
+        Assert.False(PaletteInput.IsSettlingIn(PaletteInput.OpeningGrace));
+        Assert.False(PaletteInput.IsSettlingIn(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public void TheGraceIsLongEnoughToBeSureAndShortEnoughToNotice()
+    {
+        // A switch the system has accepted lands within a few frames on a quiet
+        // desktop and within a few hundred milliseconds on one still starting up. A
+        // palette that genuinely cannot be reached must not sit there looking normal
+        // for long, because it swallows nothing and answers nothing while it does.
+        Assert.InRange(PaletteInput.OpeningGrace, TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(1));
+    }
+
+    [Fact]
+    public void TheRepairsAreSpacedThroughTheGraceAndOneFallsBeyondIt()
+    {
+        IReadOnlyList<TimeSpan> schedule = PaletteInput.RepairSchedule;
+
+        // Never immediately: an immediate retry finds the same lock the first attempt did.
+        Assert.True(schedule[0] >= TimeSpan.FromMilliseconds(100), "the first retry is too soon to get past anything");
+
+        // Ascending, so the delays between them are what the loop sleeps for.
+        for (int i = 1; i < schedule.Count; i++)
+            Assert.True(schedule[i] > schedule[i - 1], $"repair {i} is not after repair {i - 1}");
+
+        // At least one inside the grace, or the grace would pass with nothing tried,
+        // and one beyond it, so the loop is woken to judge the palette on time rather
+        // than at whatever quarter-second tick comes next.
+        Assert.Contains(schedule, at => PaletteInput.IsSettlingIn(at));
+        Assert.Contains(schedule, at => !PaletteInput.IsSettlingIn(at));
+
+        // And the loop's own attempts are paced no faster than a few frames apart, so
+        // a moving mouse does not turn the grace into fifty joined-and-split queues.
+        Assert.InRange(PaletteInput.RetryInterval, TimeSpan.FromMilliseconds(16), schedule[0]);
+    }
+
+    [Fact]
+    public void AFailedAttemptSaysWhoWasInTheWay()
+    {
+        // The one fact anybody investigating a palette that flickered will want, and
+        // the fact the old bool threw away.
+        var refusedThenNudged = new ForegroundAttempt(InFront: false, Attached: false, Accepted: false, Nudged: true, Holder: 0);
+        var pending = new ForegroundAttempt(InFront: false, Attached: true, Accepted: true, Nudged: false, Holder: 0);
+        var elevated = new ForegroundAttempt(InFront: false, Attached: false, Accepted: false, Nudged: false, Holder: 0);
+
+        // The second route is tried exactly when the first was refused.
+        Assert.True(refusedThenNudged.NudgeTried);
+        Assert.False(pending.NudgeTried);
+        Assert.True(elevated.NudgeTried);
+
+        Assert.Equal("nothing kept the foreground (attach refused, request refused, nudged and still refused)", refusedThenNudged.Describe());
+        Assert.Equal("nothing kept the foreground (attach ok, request accepted)", pending.Describe());
+        Assert.Equal(
+            "nothing kept the foreground (attach refused, request refused, nudge refused - is the window in front running higher than Dalil?)",
+            elevated.Describe());
+
+        // And the two ways of getting there are told apart, because the second is the
+        // one that says a UWP frame was in the way.
+        Assert.Equal("in front", new ForegroundAttempt(true, true, true, false, 0).Describe());
+        Assert.Equal("in front, after a nudge", new ForegroundAttempt(true, false, false, true, 0).Describe());
+
+        // A handle that is not a window is described as nothing rather than looked up.
+        Assert.Equal("nothing", Foreground.Describe(0));
+        Assert.Equal("nothing", Foreground.Describe(0x7FFF_FFF0));
+    }
 }
