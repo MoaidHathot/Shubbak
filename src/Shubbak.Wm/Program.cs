@@ -61,7 +61,7 @@ internal static class Program
         // stock blue.
         SystemColours.Adopt();
 
-        string? configPath = ResolveConfigPath(args);
+        string? configPath = ResolveConfigPath(args, out bool firstRun);
 
         // A terminal-facing operation by definition: it exists to print diagnostics
         // with carets under them, so it takes a console whether or not one was asked
@@ -84,15 +84,24 @@ internal static class Program
 
         if (!instance.Held) return 1;
 
+        // --autostart: register this very binary, with these very arguments, before
+        // going any further. The terminal switches are dropped from what is recorded
+        // for the same reason ApplicationRestart drops them: a process started at
+        // logon has no terminal to attach to, and asking for one puts a console window
+        // on the desktop. Failure is logged and not fatal - not starting at logon is a
+        // smaller problem than not starting.
+        if (args.Contains("--autostart", StringComparer.Ordinal))
+            RegisterAutostart(args);
+
         // An installer that replaces these files closes this process first, through
         // Restart Manager, and starts again afterwards only the processes that asked.
         // Without the terminal switches: a restarted daemon has no terminal to attach
         // to, and asking for one would put a console window on the desktop instead.
         // The bar, the palette and the watcher are not registered; the config's
         // startup commands bring them back with the window manager.
-        ApplicationRestart.Register(args.Where(a => a is not ("--foreground" or "--console")));
+        ApplicationRestart.Register(args.Where(a => a is not ("--foreground" or "--console" or "--autostart")));
 
-        using var daemon = new WmDaemon();
+        using var daemon = new WmDaemon { FirstRun = firstRun };
 
         Console.CancelKeyPress += (_, e) =>
         {
@@ -314,23 +323,82 @@ internal static class Program
         return errors == 0 ? 0 : 1;
     }
 
+    /// <summary>Registers this binary to start at logon, for <c>--autostart</c>.</summary>
+    private static void RegisterAutostart(string[] args)
+    {
+        if (Environment.ProcessPath is not { Length: > 0 } self)
+        {
+            Log.Warn(LogCategory.Wm, "--autostart: cannot tell where this executable is, so nothing was registered");
+            return;
+        }
+
+        IEnumerable<string> kept = args.Where(a => a is not ("--autostart" or "--foreground" or "--console"));
+
+        try
+        {
+            string command = RunKey.Register(self, kept);
+            Log.Info(LogCategory.Wm, $"registered to start at logon: {command}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn(LogCategory.Wm, $"--autostart: could not write the Run key: {ex.Message}");
+            Note($"shubbak-wm: could not register to start at logon: {ex.Message}");
+        }
+    }
+
     /// <summary>
-    /// Finds the config file.
+    /// Finds the config file - or, on a first run, writes one.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Delegates to <see cref="ConfigPathResolver"/> so the daemon, the CLI and the
     /// bar cannot disagree about which file is in effect - and reports where nothing
     /// was found, since "no config file" is useless when the file exists but the
     /// search looked elsewhere.
+    /// </para>
+    /// <para>
+    /// When nothing is found anywhere, the starter is written where <c>shubbak config
+    /// init</c> would write it, and loaded. Before this, a window manager started with
+    /// no config ran on defaults: it tiled every window and bound no keys, and the
+    /// only thing that said so was a warning in a log nobody had opened. That was the
+    /// experience of everyone who clicked the Start Menu shortcut before reading the
+    /// docs - which is to say, of most people - and there is no version of it that is
+    /// better than a working desktop and a note saying which file to edit. The file is
+    /// never overwritten, and <c>--config</c> is honoured even when the path it names
+    /// does not exist, because a path the user typed is an instruction.
+    /// </para>
     /// </remarks>
-    private static string? ResolveConfigPath(string[] args)
+    /// <param name="args">The command line, for <c>--config</c>.</param>
+    /// <param name="firstRun">Whether a config was written just now.</param>
+    private static string? ResolveConfigPath(string[] args, out bool firstRun)
     {
+        firstRun = false;
+
         ConfigLocation location = ConfigPathResolver.ResolveAndLog(Value(args, "--config"));
+
+        if (location.Found) return location.Path;
+
+        string target = ConfigPathResolver.DefaultWriteLocation();
+
+        try
+        {
+            if (StarterConfig.WriteIfMissing(target))
+            {
+                firstRun = true;
+                Log.Info(LogCategory.Config, $"first run: wrote the starter config to {target}");
+                Note($"shubbak-wm: no config found, so the starter was written to {target}");
+                return target;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Log.Warn(LogCategory.Config, $"could not write the starter config to {target}: {ex.Message}");
+        }
 
         // Not fatal - the daemon runs on defaults - so this is a Note rather than a
         // Fail. ResolveAndLog has already put it in the log either way, which is where
         // a report will read it from when nobody was watching a terminal.
-        if (!location.Found) Note(location.DescribeSearch());
+        Note(location.DescribeSearch());
 
         return location.Path;
     }
@@ -387,6 +455,18 @@ internal static class Program
                                two window managers on one desktop fight over every
                                window and run every keybinding twice.
 
+          --autostart          Also register this binary to start at logon, with
+                               the same arguments (less this one and the terminal
+                               ones), before starting. What the installer's "start
+                               now" checkbox runs. `shubbak autostart disable`
+                               undoes it.
+
+        FIRST RUN
+          With no config anywhere in the search order, the starter config is written
+          to the first location - the same file `shubbak config init` writes - and
+          loaded, and the tray icon says so. An existing file is never overwritten,
+          and a --config path is honoured even when it does not exist yet.
+
         GETTING OUT OF THE WAY
           shubbak wm-toggle-suspend
 
@@ -419,7 +499,7 @@ internal static class Program
             shubbak-wm --foreground --log-level trace --log-file only.log
 
         STARTING IT WITH WINDOWS
-          shubbak autostart enable
+          shubbak autostart enable        or        shubbak-wm --autostart
 
           Registers this binary to run at logon, from wherever it currently lives.
           `shubbak autostart status` says whether it is registered and from where.

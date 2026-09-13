@@ -11,9 +11,12 @@
   the user, not to the package, and an uninstall that deleted them would be taking
   something it never gave.
 
-  Nothing is started and nothing is registered to start at logon. Both are the
-  user's decision, made with `shubbak autostart enable`, and an installer running
-  elevated is the wrong process to write a per-user Run key from.
+  Nothing is started and nothing is registered to start at logon unless the person
+  at the final dialog leaves its checkbox ticked. That runs the window manager with
+  its autostart switch, as the logged-on user: the dialog's action runs in the
+  unelevated client half of the install, which is the right process to write a
+  per-user Run key from and the right one to be a window manager. winget's silent
+  install never shows the dialog, so its notes say `shubbak setup` instead.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
@@ -61,6 +64,29 @@
     -->
     <ui:WixUI Id="WixUI_Minimal" />
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <!--
+      The final dialog's one optional checkbox, ticked by default. Somebody who
+      double-clicked the MSI has no terminal open and the docs are a click they have
+      not made yet; a window manager that is installed and not running is a folder
+      of executables. With no config anywhere the window manager writes the starter
+      and says so from the tray, so this one click is the whole of the setup.
+    -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start Shubbak now, and at every logon" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
+
+    <CustomAction Id="StartShubbak"
+                  Directory="INSTALLFOLDER"
+                  ExeCommand="&quot;[INSTALLFOLDER]shubbak-wm.exe&quot; --autostart"
+                  Return="asyncNoWait" />
+
+    <UI>
+      <Publish Dialog="ExitDialog"
+               Control="Finish"
+               Event="DoAction"
+               Value="StartShubbak"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+    </UI>
 
     <Feature Id="Main" Title="Shubbak" Level="1" AllowAbsent="no">
       <ComponentGroupRef Id="Executables" />

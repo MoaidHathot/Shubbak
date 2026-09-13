@@ -74,12 +74,13 @@ Documentations:
 # reviewer. winget shows the icon compiled into the executable regardless.
 
 InstallationNotes: |-
-  Nothing is running yet, and there is no config until you write one. In a new terminal
-  (this one has the PATH it started with):
+  Nothing is running yet. In a new terminal (this one has the PATH it started with):
 
-      shubbak config init          write a starter config: keys, the bar, the palette
-      shubbak-wm                   start the window manager now
-      shubbak autostart enable     and have it start at logon from now on
+      shubbak setup
+
+  That writes a starter config, registers the window manager to start at logon, and
+  starts it. Then alt+shift+space opens the palette, and ? inside it lists every key.
+  `shubbak doctor` checks the install if anything seems off.
 
   Installed the default way, Shubbak lives in Program Files and can tile windows that
   belong to elevated programs. Installed with --scope user it is a portable copy under

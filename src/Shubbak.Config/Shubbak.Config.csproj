@@ -4,6 +4,13 @@
     <ProjectReference Include="..\Shubbak.Core\Shubbak.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The starter config `shubbak config init` writes and the window manager
+         writes on a first run. A file rather than a string constant so it can be
+         read, diffed and validated as KDL. -->
+    <EmbeddedResource Include="StarterConfig.kdl" LogicalName="Shubbak.Config.StarterConfig.kdl" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

@@ -32,7 +32,8 @@ public readonly record struct ConfigLocation(
             output.Append("  ").AppendLine(candidate);
 
         output.AppendLine();
-        output.AppendLine("Run 'shubbak config init' to write a starter config there.");
+        output.AppendLine("Run 'shubbak setup' to write a starter config there and start everything,");
+        output.AppendLine("or 'shubbak config init' to write the file alone.");
         output.AppendLine("Or set SHUBBAK_CONFIG, set XDG_CONFIG_HOME, or pass --config <path>.");
 
         return output.ToString();
@@ -192,7 +193,7 @@ public static class ConfigPathResolver
         if (location.Found)
             Log.Info(LogCategory.Config, $"config: {location.Path} (via {location.Origin})");
         else
-            Log.Warn(LogCategory.Config, "no config file found; using defaults, which bind no keys. Run 'shubbak config init' to write a starter config.");
+            Log.Warn(LogCategory.Config, "no config file found anywhere in the search path");
 
         return location;
     }

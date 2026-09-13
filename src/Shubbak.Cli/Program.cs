@@ -66,6 +66,8 @@ internal static class Program
             "check-config" => CheckConfig(args),
             "config-path" => ShowConfigPath(args),
             "config" => ConfigCommand.Run(args),
+            "setup" => SetupCommand.Run(args),
+            "doctor" => DoctorCommand.Run(args),
             "rule" or "rules" => await RuleCommand.RunAsync(args, ConnectAsync).ConfigureAwait(false),
                 "autostart" => Autostart.Run(args),
                 "layouts" => await LayoutsAsync().ConfigureAwait(false),
@@ -1062,15 +1064,24 @@ internal static class Program
           shubbak <command> [args]
 
         GETTING STARTED
-          config init          Write a starter config - keys, the bar, the palette and
-                               the watcher - where the window manager will find it.
-          shubbak-wm           Start the window manager (a separate program). Add
-                               --foreground to keep it attached to this terminal.
-          autostart enable     Have it start at logon from now on.
+          setup                Everything a new install needs, in one go: write a
+                               starter config if there is none, register the window
+                               manager to start at logon, and start it now. Safe to
+                               run again. --no-autostart and --no-start skip a step;
+                               --config <path> uses and records a file of your own.
+          doctor               Check the install: PATH, config, autostart, whether
+                               each of the four programs is running, and the things
+                               that commonly go wrong. Each line says how to fix it.
           status               Is it running? paused? suspended?
           stop                 Stop it and everything it started. Also the thing to
                                run before replacing the executables by hand; winget
                                and the MSI do it themselves.
+
+          The pieces of setup, for doing one at a time:
+            config init        Write the starter config only.
+            shubbak-wm         Start the window manager only (a separate program;
+                               --foreground keeps it attached to this terminal).
+            autostart enable   Register it to start at logon only.
 
           The full guide: https://github.com/MoaidHathot/Shubbak/blob/main/docs/getting-started.md
 
@@ -1187,6 +1198,9 @@ internal static class Program
           config init          Write a starter config, if there is not one already.
                     --path <p> Write it somewhere specific.
                     --force    Overwrite an existing file.
+
+          setup                Config, autostart and start, in one. See GETTING STARTED.
+          doctor               A checklist of the install. See GETTING STARTED.
 
           config-path          Print which config file is in effect, or list
                                everywhere that was searched if none was found.

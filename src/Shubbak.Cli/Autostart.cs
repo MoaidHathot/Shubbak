@@ -1,4 +1,4 @@
-using Microsoft.Win32;
+using Shubbak.Native;
 
 namespace Shubbak.Cli;
 
@@ -14,33 +14,15 @@ namespace Shubbak.Cli;
 /// answers people arrived at differed in ways that mattered.
 /// </para>
 /// <para>
-/// <b>Why the <c>Run</c> key and not the alternatives.</b> The Startup folder needs a
-/// shortcut, which is a binary file this would have to author through COM. Task
-/// Scheduler can start a process before the shell is ready and needs either elevation
-/// or an XML definition. The <c>Run</c> key is one string under <c>HKCU</c>, needs no
-/// privileges, is inspectable with any registry editor, and is removed by writing
-/// nothing - which also means an uninstall that misses it leaves one dangling value
-/// rather than a scheduled task nobody can find.
-/// </para>
-/// <para>
-/// <b>Why this lives in the CLI.</b> <c>shubbak-wm</c> is a GUI-subsystem binary with
-/// no console; a command whose entire output is text belongs in the console binary.
-/// The daemon is named rather than assumed - see <see cref="FindDaemon"/> - so the
-/// registration records where the daemon actually is, not where the CLI is.
+/// The registry work is <see cref="RunKey"/>, shared with the window manager's own
+/// <c>--autostart</c> switch. What is here is the command line around it: finding
+/// the daemon, the messages, and <c>status</c>, which is the part that needs a
+/// console. The daemon is named rather than assumed - see <see cref="FindDaemon"/> -
+/// so the registration records where the daemon actually is, not where the CLI is.
 /// </para>
 /// </remarks>
 internal static class Autostart
 {
-    /// <summary>Where Windows looks for per-user startup commands.</summary>
-    /// <remarks>
-    /// <c>HKCU</c> rather than <c>HKLM</c>: a window manager is a property of a user's
-    /// session, not of the machine, and <c>HKLM</c> would need elevation to write.
-    /// </remarks>
-    private const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-
-    /// <summary>The value name, which is also what Task Manager's Startup tab shows.</summary>
-    private const string ValueName = "Shubbak";
-
     private const string DaemonExe = "shubbak-wm.exe";
 
     public static int Run(string[] args)
@@ -78,20 +60,8 @@ internal static class Autostart
         // non-standard config can be made to survive a reboot without hand-editing
         // the registry:  shubbak autostart enable --config D:\dotfiles\shubbak.kdl
         string[] extra = args.Length > 2 ? args[2..] : [];
-        string command = BuildCommand(daemon, extra);
 
-        try
-        {
-            using RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true)
-                ?? throw new InvalidOperationException($"could not open HKCU\\{RunKey}");
-
-            key.SetValue(ValueName, command, RegistryValueKind.String);
-        }
-        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException or InvalidOperationException)
-        {
-            Console.Error.WriteLine($"shubbak: could not write the startup entry: {ex.Message}");
-            return 1;
-        }
+        if (Register(daemon, extra) is not { } command) return 1;
 
         Console.WriteLine($"Shubbak will start at logon: {command}");
         Console.WriteLine();
@@ -100,19 +70,50 @@ internal static class Autostart
         return 0;
     }
 
+    /// <summary>
+    /// Writes the Run key entry and returns the command it holds, or null with the
+    /// reason already printed.
+    /// </summary>
+    /// <remarks>
+    /// Separated from <see cref="Enable"/> so that <c>shubbak setup</c> can register
+    /// the daemon as one step of several without inheriting the paragraph of advice
+    /// the standalone command prints.
+    /// </remarks>
+    internal static string? Register(string daemon, string[] extra)
+    {
+        try
+        {
+            return RunKey.Register(daemon, extra);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            Console.Error.WriteLine($"shubbak: could not write the startup entry: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>The command the Run key currently holds, or null when there is none.</summary>
+    internal static string? Registered()
+    {
+        try
+        {
+            return RunKey.Registered();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            return null;
+        }
+    }
+
     private static int Disable()
     {
         try
         {
-            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-
-            if (key?.GetValue(ValueName) is null)
+            if (!RunKey.Unregister())
             {
                 Console.WriteLine("Shubbak was not set to start at logon. Nothing to do.");
                 return 0;
             }
-
-            key.DeleteValue(ValueName, throwOnMissingValue: false);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
@@ -140,8 +141,7 @@ internal static class Autostart
 
         try
         {
-            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(RunKey);
-            command = key?.GetValue(ValueName) as string;
+            command = RunKey.Registered();
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
         {
@@ -149,7 +149,7 @@ internal static class Autostart
             return 1;
         }
 
-        if (string.IsNullOrWhiteSpace(command))
+        if (command is null)
         {
             Console.WriteLine("Not set to start at logon.");
             Console.WriteLine("hint: shubbak autostart enable");
@@ -180,37 +180,14 @@ internal static class Autostart
         return 0;
     }
 
-    /// <summary>
-    /// Whether two paths name the same executable, following symbolic links.
-    /// </summary>
-    /// <remarks>
-    /// winget's portable install puts the executables in one directory and a symlink
-    /// to each in another that is on PATH, so the registered path and the running
-    /// copy can differ as strings while being one file. Comparing the strings said
-    /// "this is not the copy that will start at logon" to somebody whose install was
-    /// entirely in order, which is the kind of warning that teaches people to ignore
-    /// warnings.
-    /// </remarks>
-    internal static bool SameFile(string left, string right)
-    {
-        if (string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), StringComparison.OrdinalIgnoreCase))
-            return true;
+    /// <inheritdoc cref="RunKey.SameFile"/>
+    internal static bool SameFile(string left, string right) => RunKey.SameFile(left, right);
 
-        return string.Equals(FinalTarget(left), FinalTarget(right), StringComparison.OrdinalIgnoreCase);
-    }
+    /// <inheritdoc cref="RunKey.BuildCommand"/>
+    internal static string BuildCommand(string daemon, string[] extra) => RunKey.BuildCommand(daemon, extra);
 
-    private static string FinalTarget(string path)
-    {
-        try
-        {
-            var file = new FileInfo(path);
-            return file.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? file.FullName;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return Path.GetFullPath(path);
-        }
-    }
+    /// <inheritdoc cref="RunKey.ExecutableFrom"/>
+    internal static string ExecutableFrom(string command) => RunKey.ExecutableFrom(command);
 
     /// <summary>
     /// Finds the daemon beside this executable, then on <c>PATH</c>.
@@ -227,7 +204,7 @@ internal static class Autostart
     /// which is empty under NativeAOT - which is how Shubbak ships.
     /// </para>
     /// </remarks>
-    private static string? FindDaemon()
+    internal static string? FindDaemon()
     {
         if (Path.GetDirectoryName(Environment.ProcessPath) is { Length: > 0 } directory)
         {
@@ -254,40 +231,5 @@ internal static class Autostart
         }
 
         return null;
-    }
-
-    /// <summary>Builds the command line the Run key will hold.</summary>
-    /// <remarks>
-    /// The executable is always quoted. An unquoted path containing a space is read by
-    /// Windows as a command plus arguments, so an install under
-    /// <c>C:\Program Files\Shubbak</c> would try to run <c>C:\Program</c> - the classic
-    /// unquoted-service-path bug, silent until the day someone installs to the
-    /// default location.
-    /// </remarks>
-    internal static string BuildCommand(string daemon, string[] extra)
-    {
-        string command = '"' + daemon + '"';
-
-        foreach (string argument in extra)
-            command += argument.Contains(' ', StringComparison.Ordinal)
-                ? " \"" + argument + '"'
-                : " " + argument;
-
-        return command;
-    }
-
-    /// <summary>Extracts the executable from a stored command line.</summary>
-    internal static string ExecutableFrom(string command)
-    {
-        command = command.Trim();
-
-        if (command.StartsWith('"'))
-        {
-            int closing = command.IndexOf('"', 1);
-            if (closing > 0) return command[1..closing];
-        }
-
-        int space = command.IndexOf(' ', StringComparison.Ordinal);
-        return space < 0 ? command : command[..space];
     }
 }

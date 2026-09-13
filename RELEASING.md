@@ -212,15 +212,20 @@ Never ship that one.
 On a clean machine or a Windows Sandbox, with the artefacts from a `workflow_dispatch`
 run (signed) or the local build (unsigned, `-PortableWm`):
 
-- `msiexec /i shubbak-<v>-win-x64.msi` - then in a **new** terminal: `where shubbak`
-  finds `C:\Program Files\Shubbak\shubbak.exe`; Apps & Features lists Shubbak with its
+- `msiexec /i shubbak-<v>-win-x64.msi` - the last page has *Start Shubbak now, and at
+  every logon* ticked. Leave it: on Finish, windows tile, the bar appears on every
+  monitor, the tray icon is there and shows a "starter config written" notification,
+  and `HKCU\...\Run\Shubbak` exists. Then in a **new** terminal: `where shubbak` finds
+  `C:\Program Files\Shubbak\shubbak.exe`; Apps & Features lists Shubbak with its
   icon; the Start Menu has one entry.
-- `shubbak config init` → `shubbak-wm --foreground` → windows tile, the bar appears on
-  every monitor, the tray icon is there, `alt+space` opens the palette,
-  `alt+shift+space` cycles the layout. `shubbak status` answers.
+- `shubbak stop`, delete `%USERPROFILE%\.config\shubbak`, then `shubbak setup` writes
+  the config, says `autostart enabled`, starts the window manager, and prints the
+  keys. `alt+shift+space` opens the palette - on the keys list the first time, the
+  windows list after - and `alt+w` cycles the layout. `shubbak status` answers and
+  `shubbak doctor` is all `ok` and `info`.
 - With the signed MSI only: Task Manager tiles. `shubbak inspect` on it says so rather
   than reporting an integrity-level refusal.
-- `shubbak autostart enable`, log off and on: it starts, and starts the other three.
+- Log off and on: it starts, and starts the other three.
 - `shubbak stop` stops all four and returns 0 within ten seconds.
 - Upgrade: start everything, then `msiexec /i <newer>.msi /qn`. The four processes go
   away, the files are replaced, and `shubbak-wm` comes back on its own (Restart
@@ -351,11 +356,14 @@ required". Major upgrades are by a fixed `UpgradeCode`
 (`{FCFFCA55-3741-45D5-9410-3429B9DF9BFD}`, also in the winget manifest; never change
 it) and a per-build `ProductCode`.
 
-It does **not** start anything, register anything to start at logon, or touch the
-user's files. `shubbak autostart enable` is the user's decision, and an installer
-running elevated is the wrong process to write a per-user Run key from. The config
-under `~\.config\shubbak` and the session under `%LOCALAPPDATA%\Shubbak` survive an
-uninstall for the same reason.
+The elevated half of the install does **not** start anything, register anything to
+start at logon, or touch the user's files. The one thing that does is the checkbox on
+the final dialog - *Start Shubbak now, and at every logon* - which runs
+`shubbak-wm --autostart` from the unelevated client half of the install, as the
+logged-on user; that is the right process to write a per-user Run key from and the
+right one to be a window manager. Silent installs never show the dialog, so winget's
+notes say `shubbak setup`. The config under `~\.config\shubbak` and the session under
+`%LOCALAPPDATA%\Shubbak` survive an uninstall for the same reason.
 
 ### How an upgrade while running works
 

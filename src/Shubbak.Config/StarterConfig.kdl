@@ -1,0 +1,580 @@
+// Shubbak configuration.
+//
+// One file for all four programs: the window manager, Taj (the bar), Dalil (the
+// palette) and Ayn (the watcher). Everything here has a default, so anything you
+// delete keeps working. The fully annotated reference - every setting, and why it
+// is there - is shubbak.example.kdl, beside the executables and in the repository.
+//
+//   shubbak check-config       validate this file, with carets under mistakes
+//   shubbak wm-reload-config   apply it without restarting (alt+shift+r does too)
+//   shubbak config-path        which file is actually in effect
+//   shubbak doctor             is everything installed, running and reachable?
+//
+// The keys, all on Alt. Inside the palette, "?" lists them too.
+//
+//   alt + shift + space        the command palette (Dalil): every window, every command
+//   alt + ctrl + space         the palette, opened on its commands list
+//   alt + h j k l              focus left / down / up / right
+//   alt + shift + h j k l      move the window
+//   alt + u p i o              resize: narrower, wider, shorter, taller
+//   alt + shift + u            give every window in the container an equal share
+//   alt + r                    resize mode: h j k l or the arrows, then escape
+//   alt + 1..9 0               go to workspace;  alt + shift + N  send the window there
+//   alt + shift + tab          back to the window you were just in
+//   alt + y                    back to the workspace you were just on
+//   alt + w                    cycle the layout
+//   alt + shift + s f g z v    layout: split, fibonacci, grid, monocle, master-left
+//   alt + v                    flip the split direction for the next window
+//   alt + x                    fullscreen within the work area;  alt + shift + x  the whole monitor
+//   alt + m                    minimise
+//   alt + shift + m            float / tile the window
+//   alt + shift + n            take on a window Shubbak passed over, or let one go
+//   alt + n                    stash the window in the scratchpad; again to bring it back
+//   alt + a f d s              move the whole workspace to the monitor left / right / up / down
+//   alt + shift + q            close the window
+//   alt + shift + p            pause mode: Shubbak's keys off, everything else through
+//   alt + shift + t            stop arranging windows (keys still work)
+//   alt + shift + o            suspend: release the keyboard entirely, for a game
+//   alt + shift + r            reload this file;  alt + shift + w  redraw
+//   alt + shift + e            exit Shubbak: the window manager, the bar, the palette, the watcher
+
+general {
+    // New windows start tiled rather than floating.
+    initial-window-state "tiling"
+
+    // The layout a new workspace starts in. One of:
+    //   splith  splitv  fibonacci  fibonacci-v  fibonacci-mirrored
+    //   master-left  master-right  master-top  master-bottom  grid  monocle
+    default-layout "splith"
+
+    // Pressing the key for the workspace you are already on takes you back to the
+    // previous one, so one key flips between two.
+    toggle-workspace-on-refocus #true
+
+    // "Put this away" and "go there" stay separate intentions. The alt+shift+N
+    // bindings below combine them explicitly with --focus.
+    follow-window-on-move #false
+
+    // Windows on inactive workspaces are cloaked, not hidden. A cloaked window
+    // still reports as visible to Win32, so if Shubbak exits or is killed the next
+    // run adopts it and brings it back. "hide" cannot be recovered from.
+    hide-method "cloak"
+
+    // Concealed windows keep their taskbar button, so the taskbar stays a complete
+    // list of what is open. #false makes an inactive workspace vanish entirely.
+    keep-in-taskbar #true
+
+    // The bar, the palette and the watcher are separate programs, started here
+    // when the window manager starts. Each reads its own section of this file.
+    // Delete a line and its section to do without one.
+    startup-command "taj"
+    startup-command "dalil"
+    startup-command "ayn"
+}
+
+logging {
+    level "info"
+
+    // An empty path means the standard location, %LOCALAPPDATA%\Shubbak\. Each
+    // program writes its own file there: shubbak.log, taj.log, dalil.log, ayn.log.
+    // `shubbak diagnose -o report.md` collects them with everything else.
+    file ""
+}
+
+gaps {
+    // Real pixels: Shubbak compensates for the invisible drop shadow around every
+    // window, so what is written here is what appears on screen.
+    inner 8
+
+    // Around the work area. The bar has already taken its strip from the screen,
+    // so nothing here needs to make room for it.
+    outer {
+        top 4
+        right 4
+        bottom 8
+        left 4
+    }
+}
+
+window-effects {
+    // A border on the focused window, so the eye finds the keyboard's target.
+    border #true
+    focused-colour "#8dbcff"
+    unfocused-colour "#a1a1a1"
+
+    // Untiled windows get their own colour, so it is obvious at a glance why a
+    // window is ignoring the layout.
+    floating-colour "#f9e2af"
+    floating-unfocused-colour "#6c5f3f"
+}
+
+animation {
+    enabled #true
+
+    // Follow the display's refresh rate. A number overrides it.
+    fps "auto"
+
+    // Below this many pixels a move is applied instantly - animating a three-pixel
+    // nudge reads as lag, not motion.
+    minimum-distance 8
+
+    // The curve matters more than the duration: ease-out covers most of the
+    // distance immediately, which is why it reads as responsive rather than slow.
+    // Curves: linear, ease-in, ease-out, ease-in-out, ease-out-back, ease-out-expo
+    window-move      duration=140 curve="ease-out"
+    layout-change    duration=180 curve="ease-out"
+    workspace-switch duration=120 curve="ease-out"
+}
+
+// ---------------------------------------------------------------------------
+// Windows to leave alone.
+//
+// Named matchers, so the rule below reads as a list of programs rather than a wall
+// of regexes. Operators: = exact, ~= regex, ^= prefix, $= suffix, *= contains; all
+// case-insensitive. `shubbak inspect` prints every matchable attribute of a window
+// and says which of these matched, and `shubbak rule add --ignore` writes one for
+// the window in front without editing this file by hand.
+// ---------------------------------------------------------------------------
+
+// The Win+R box. #32770 is the standard dialog class, so this matches on the title
+// too - otherwise it would take every Save and Open dialog with it.
+app "run-dialog" {
+    class = "#32770"
+    title = "Run"
+}
+
+// A browser's popped-out video. Meant to float over everything.
+app "browser-picture-in-picture" {
+    title regex=r"[Pp]icture.in.[Pp]icture"
+    class regex=r"Chrome_WidgetWin_1|MozillaDialogClass"
+}
+
+app "powerpoint-slideshow" {
+    title regex=r"[Pp]ower[Pp]oint [Ss]lide [Ss]how"
+}
+
+// The PowerToys accent-character popup.
+app "powertoys-accent" {
+    process = "PowerToys.PowerAccent"
+}
+
+rules {
+    rule "leave these alone" {
+        match {
+            app "run-dialog"
+            app "browser-picture-in-picture"
+            app "powerpoint-slideshow"
+            app "powertoys-accent"
+        }
+        do { ignore }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces
+//
+// Declared workspaces persist when empty, so their keys keep working. Give one a
+// display-name to have the bar show a word instead of the number, and pin one to a
+// monitor with monitor="name" - `shubbak monitors` prints a definition for each
+// display, ready to paste above this block.
+// ---------------------------------------------------------------------------
+
+workspaces {
+    workspace "1"
+    workspace "2"
+    workspace "3"
+    workspace "4"
+    workspace "5"
+    workspace "6"
+    workspace "7"
+    workspace "8"
+    workspace "9"
+    workspace "0"
+}
+
+// ---------------------------------------------------------------------------
+// Contexts
+//
+// Named conditions on the desktop. The first three are facts the watcher (ayn)
+// supplies while they hold - nothing in this file decides them, which is why they
+// have no `when`. The rest are composed from them: a meeting is the microphone
+// being open, because Teams and its kind keep the device open for the whole call,
+// muted or not. `shubbak contexts` says which hold and why.
+// ---------------------------------------------------------------------------
+
+contexts {
+    context "camera-in-use" { }
+    context "microphone-in-use" { }
+    context "microphone-muted" { }
+
+    context "meeting" {
+        when { context "microphone-in-use" }
+    }
+
+    // Exactly one of these two holds during a meeting, so the bar shows exactly
+    // one microphone: green and live, or red and muted.
+    context "meeting-live" {
+        when { context "meeting"; !context "microphone-muted" }
+    }
+    context "meeting-muted" {
+        when { context "meeting"; context "microphone-muted" }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keybindings
+// ---------------------------------------------------------------------------
+
+keybindings {
+    // The palette. Shubbak does not know what a palette is: this raises a named
+    // signal, and Dalil is the program listening for it. alt+space is left alone
+    // because PowerToys Run and the system menu both want it.
+    bind "alt+shift+space" { signal "palette" }
+    bind "alt+ctrl+space"  { signal "palette" "commands" }
+
+    // An action from the `dalil` section, straight from a key. This one asks a
+    // question, so it opens the palette with the picker one Enter away.
+    bind "alt+ctrl+w" { signal "palette" "run" "Send it to..." }
+
+    // Back to where you just were. Press either twice and you are where you started.
+    bind "alt+shift+tab" { focus-recent-window }
+    bind "alt+y"         { focus --recent-workspace }
+
+    // Move focus around the tree.
+    bind "alt+h" { focus --direction left }
+    bind "alt+j" { focus --direction down }
+    bind "alt+k" { focus --direction up }
+    bind "alt+l" { focus --direction right }
+
+    // Move the focused window instead of the focus.
+    bind "alt+shift+h" { move --direction left }
+    bind "alt+shift+j" { move --direction down }
+    bind "alt+shift+k" { move --direction up }
+    bind "alt+shift+l" { move --direction right }
+
+    // Resize. Writes back to the tree's ratios, so the next layout pass keeps it.
+    bind "alt+u" { resize --width -2% }
+    bind "alt+p" { resize --width +2% }
+    bind "alt+i" { resize --height -2% }
+    bind "alt+o" { resize --height +2% }
+    bind "alt+shift+u" { equalise }
+    bind "alt+r" { wm-enable-binding-mode --name resize }
+
+    // Layout belongs to a container, not a workspace, so these apply to whatever
+    // container the focused window is in.
+    bind "alt+w"       { layout --cycle }
+    bind "alt+shift+s" { layout --set splith }
+    bind "alt+shift+f" { layout --set fibonacci }
+    bind "alt+shift+g" { layout --set grid }
+    bind "alt+shift+z" { layout --set monocle }
+    bind "alt+shift+v" { layout --set master-left }
+    bind "alt+v"       { toggle-tiling-direction }
+
+    // The window itself.
+    bind "alt+x"       { toggle-fullscreen }
+    bind "alt+shift+x" { toggle-fullscreen --monitor }
+    bind "alt+m"       { toggle-minimized }
+    bind "alt+shift+m" { toggle-floating }
+    bind "alt+shift+n" { toggle-managed }
+    bind "alt+shift+q" { close }
+
+    // Stash a window out of sight; the same key summons it back on top of whatever
+    // workspace you are on. Named slots are independent - add more with other names.
+    bind "alt+n" { scratchpad --name notes }
+
+    // The whole workspace, to another monitor.
+    bind "alt+a" { move-workspace --direction left }
+    bind "alt+f" { move-workspace --direction right }
+    bind "alt+d" { move-workspace --direction up }
+    bind "alt+s" { move-workspace --direction down }
+
+    // Three degrees of "leave me alone", separately, because wanting one without
+    // the others is normal:
+    //   alt+shift+p   Shubbak's keys off; every other key reaches the application.
+    //   alt+shift+t   stop arranging windows; the keys still work.
+    //   alt+shift+o   let go of the keyboard hook entirely - for a game with
+    //                 anti-cheat. The same key brings it back, and so does
+    //                 `shubbak wm-resume`.
+    // The bar shows a pill for each while it holds, and each pill is clickable.
+    bind "alt+shift+p" { wm-enable-binding-mode --name pause }
+    bind "alt+shift+t" { wm-toggle-pause }
+    bind "alt+shift+o" { wm-toggle-suspend }
+
+    // Lifecycle. Reload re-reads this file for the window manager and tells the
+    // bar, the palette and the watcher to re-read it too. exit-all takes all four
+    // down; `wm-exit` stops the window manager alone and the others wait for it.
+    bind "alt+shift+r" { wm-reload-config }
+    bind "alt+shift+w" { wm-redraw }
+    bind "alt+shift+e" { exit-all }
+
+    // One pair of bindings per workspace declared above, generated rather than
+    // written out - so they cannot drift out of sync with the list.
+    for-each "workspace" {
+        bind "alt+{name}"       { focus --workspace "{name}" }
+        bind "alt+shift+{name}" { move --workspace "{name}" --focus }
+    }
+}
+
+binding-modes {
+    // Resize with h j k l or the arrows until escape or enter.
+    mode "resize" {
+        bind "h"      { resize --width -2% }
+        bind "left"   { resize --width -2% }
+        bind "l"      { resize --width +2% }
+        bind "right"  { resize --width +2% }
+        bind "k"      { resize --height +2% }
+        bind "up"     { resize --height +2% }
+        bind "j"      { resize --height -2% }
+        bind "down"   { resize --height -2% }
+        bind "escape" { wm-disable-binding-mode }
+        bind "enter"  { wm-disable-binding-mode }
+    }
+
+    // Shubbak's keys off. `pass-through` is the whole point: without it the mode
+    // would swallow every key it has no binding for. Escape is deliberately not an
+    // exit - a game or a full-screen video needs it more. Ways out: the same key,
+    // the pill on the bar, or `shubbak wm-disable-binding-mode` from any shell.
+    mode "pause" pass-through=#true {
+        bind "alt+shift+p" { wm-disable-binding-mode }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dalil - the palette
+//
+// Type to filter; Tab or Ctrl+1..8 to change mode; Enter to act; Ctrl+Enter for what
+// else can be done; "?" for every key. Prefixes: ">" commands, "#" workspaces,
+// "~" layouts, "%" monitors, "$" scratchpad, "!" inspect.
+//
+// Actions are named sequences of the same commands a keybinding runs, reached from
+// the commands list by typing roughly what they are called. A `param` turns one row
+// into a question: `from=` draws the choices from a list the palette already holds
+// (workspaces, layouts, binding-modes, scratchpads, directions); `values=` writes
+// them out. Two params ask one after the other.
+// ---------------------------------------------------------------------------
+
+dalil {
+    open-on-signal "palette"
+
+    // Windows Shubbak is not managing are listed too - they are the ones most
+    // likely to be lost.
+    show-unmanaged #true
+    confirm-destructive #true
+
+    action "Go to..." description="Any workspace, chosen by name rather than by key" {
+        param "ws" from="workspaces"
+        focus --workspace "{ws}"
+    }
+
+    action "Send it to..." description="Move this window there and stay where you are" {
+        param "ws" from="workspaces"
+        move --workspace "{ws}"
+    }
+
+    action "Send it and follow..." description="Move this window there and go with it" {
+        param "ws" from="workspaces"
+        move --workspace "{ws}"
+        focus --workspace "{ws}"
+    }
+
+    action "Layout..." description="Set this container's layout" {
+        param "l" from="layouts"
+        layout --set "{l}"
+    }
+
+    action "Arrange..." description="Go somewhere and lay it out, in one gesture" {
+        param "ws" from="workspaces"
+        param "l"  from="layouts"
+        focus --workspace "{ws}"
+        layout --set "{l}"
+        equalise
+    }
+
+    // Written out rather than discovered: the slot you want for stashing is the
+    // empty one, and `from="scratchpads"` lists the ones already holding a window.
+    action "Stash it in..." description="Put this window away in a named slot" {
+        param "s" values="notes terminal chat"
+        scratchpad --name "{s}"
+    }
+
+    action "Enter mode..." description="One of the modal keymaps, without remembering its key" {
+        param "m" from="binding-modes"
+        wm-enable-binding-mode --name "{m}"
+    }
+
+    action "Push this workspace..." description="Send the whole workspace to another monitor" {
+        param "d" from="directions"
+        move-workspace --direction "{d}"
+    }
+
+    action "Reset this workspace" description="Side by side, equal shares, redrawn" {
+        layout --set "splith"
+        equalise
+        wm-redraw
+    }
+
+    action "Put it back in the flow" description="Tile this window and give everything an equal share" {
+        tile
+        equalise
+    }
+
+    action "Gaming" description="Let go of the keyboard entirely - alt+shift+o takes it back" {
+        wm-suspend
+    }
+
+    action "Reset everything" description="Re-read this file, then put every window back where it belongs" {
+        wm-reload-config
+        wm-redraw
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ayn - the watcher
+//
+// The window manager's eyes on the rest of the machine: the camera and the
+// microphone, today. It holds the three contexts above while a device is in use or
+// the microphone is muted. Every setting has a default; this only pins the names
+// down beside the contexts so that renaming one means renaming both.
+// `ayn --report` says what Windows thinks is using each device right now.
+// ---------------------------------------------------------------------------
+
+ayn {
+    camera     { in-use "camera-in-use" }
+    microphone { in-use "microphone-in-use"; muted "microphone-muted" }
+    settle 500
+}
+
+// ---------------------------------------------------------------------------
+// Taj - the bar
+//
+// One per monitor, each reserving its own strip of screen. Widgets bind to sources
+// with {{ name }} templates and re-render only when a source they use changes. Any
+// program that writes lines to stdout can drive a widget:
+//   source "weather" kind="command" command="pwsh -NoProfile -File weather.ps1"
+// ---------------------------------------------------------------------------
+
+bar {
+    // The interval is how often a value is checked, not how often the bar redraws.
+    // `timezone` takes a Windows id or an IANA one, for a second clock.
+    source "clock"    kind="time" format="ddd d MMM HH:mm" interval=500
+
+    // The input language of the window in front, as a two-letter code.
+    source "keyboard" kind="keyboard" interval=250
+
+    profile "default" {
+        height 34
+
+        // Translucent over an acrylic blur of whatever is behind. Raise the alpha
+        // towards "ff" for a solid bar. Windows 10 has no acrylic and shows the
+        // colour on its own.
+        background "#18182599"
+        backdrop "acrylic"
+
+        // A one-pixel hairline where the bar meets the windows.
+        border "#ffffff14"
+
+        // To float the bar off the screen edges with rounded corners, uncomment:
+        // margin 8
+        // radius 8
+
+        foreground "#cdd6f4"
+        font "Segoe UI"
+        font-size 15
+        padding 10
+
+        zone "left" justify="start" gap=2 {
+            // hide-empty leaves out workspaces with no windows, except the one you
+            // are on. Four states, since with two monitors two workspaces are on
+            // screen but only one has the keyboard:
+            //   colour           has windows, not on screen
+            //   empty-colour     nothing on it
+            //   active-colour    on screen, on another monitor
+            //   focused-colour   on screen and taking your keystrokes
+            workspaces hide-empty=#true \
+                active-background="#00000000" \
+                colour="#ffffffcc" \
+                empty-colour="#ffffff59" \
+                active-colour="#8dbcff" \
+                focused-colour="#1dfb8d" \
+                hover-colour="#ffffff" \
+                hover-background="#ffffff1f" \
+                radius=6
+        }
+
+        zone "centre" justify="center" grow=1 {
+            // The focused window's icon, then its title. A hollow square appears
+            // between them while the window is fullscreen within the work area.
+            icon size=20
+            text id="window-state" template="{{ window.state | state-icon }}" colour="#f9e2af"
+            text template="{{ window.title }}" colour="#ffffffb3" {
+                when of="window.state" value="fullscreen" colour="#f9e2af"
+            }
+        }
+
+        zone "right" justify="end" gap=14 {
+            // Everything that is only there when something is up sits left of the
+            // readouts that are always there, so the eye finds the unusual thing
+            // first. Each pill is clickable, because each is a state the keyboard
+            // may not be able to get you out of.
+
+            // Red: Shubbak has let go of the keyboard (alt+shift+o). From the
+            // outside this looks exactly like a crash; click to resume.
+            text id="suspended" template="{{ suspended }}" colour="#1e1e2e" \
+                 background="#f38ba8" bold=#true on-click="wm-resume"
+
+            // Amber: Shubbak has stopped arranging windows (alt+shift+t).
+            text id="paused" template="{{ paused }}" colour="#1e1e2e" \
+                 background="#f9e2af" bold=#true on-click="wm-toggle-pause"
+
+            // Orange: something in this file is wrong, as the bar sees it. Click to
+            // re-read the file.
+            text id="config" template="{{ config }}" colour="#1e1e2e" \
+                 background="#fab387" bold=#true on-click="wm-reload-config"
+
+            // The active binding mode - resize, pause - while one is on.
+            text id="mode" template="{{ binding_mode }}" colour="#1e1e2e" \
+                 background="#f38ba8" bold=#true on-click="wm-disable-binding-mode"
+
+            // What ayn sees, as glyphs from the icon font Windows ships. `then:`
+            // turns a held context into a glyph and an idle one into nothing.
+            text id="camera" template="{{ context.camera-in-use | then:\u{E722} }}" \
+                 font="Segoe MDL2 Assets" font-size=15 colour="#a6e3a1"
+
+            // The microphone in a meeting: green and live, click to mute; red and
+            // muted, click to unmute. The click is a signal the watcher answers.
+            text id="mic" template="{{ context.meeting-live | then:\u{E720} }}" \
+                 font="Segoe MDL2 Assets" font-size=15 colour="#a6e3a1" \
+                 on-click="signal ayn microphone mute"
+            text id="mic-off" template="{{ context.meeting-muted | then:\u{EC54} }}" \
+                 font="Segoe MDL2 Assets" font-size=15 colour="#1e1e2e" background="#f38ba8" \
+                 on-click="signal ayn microphone unmute"
+
+            // Keyboard language. Click to switch the window in front to its next
+            // layout. Add `when value="XX" colour="..."` to highlight one.
+            text id="lang" template="{{ keyboard }}" colour="#ffffff73" \
+                 bold=#true on-click="keyboard next"
+
+            // The layout as a glyph that looks like the arrangement. Dim while it
+            // is the ordinary split, green the moment it is anything else. Click to
+            // cycle.
+            text id="layout" template="{{ layout | icon }}" colour="#ffffff73" \
+                 bold=#true font-size=17 on-click="layout --cycle" {
+                when of="layout" not="splith" colour="#1dfb8d"
+            }
+
+            // `accent` is the colour Windows is set to, so the clock follows the
+            // machine rather than a blue picked once.
+            text id="clock" template="{{ clock }}" colour="accent" bold=#true
+        }
+    }
+
+    // A quieter bar for a presentation: `extends` inherits everything not
+    // overridden. Bring it in with a rule, which picks the first that matches:
+    //   rule use="presentation" workspace="5"
+    profile "presentation" extends="default" {
+        zone "centre" justify="center" grow=1 { }
+        zone "right" justify="end" gap=10 {
+            text id="clock" template="{{ clock }}" colour="accent" bold=#true
+        }
+    }
+}

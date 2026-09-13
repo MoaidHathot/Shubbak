@@ -210,6 +210,18 @@ public sealed class WmDaemon : IDisposable
     private readonly TrayIcon _tray = new();
 
     /// <summary>
+    /// Whether the config was written just now, on the user's behalf, because there
+    /// was none.
+    /// </summary>
+    /// <remarks>
+    /// Set by the entry point, which is where the writing happens, and read once the
+    /// tray icon is up: that is the earliest moment there is anywhere to say so that
+    /// somebody who started the window manager from the Start Menu will see. The
+    /// notification names the file and the one key that leads to everything else.
+    /// </remarks>
+    public bool FirstRun { get; init; }
+
+    /// <summary>
     /// Whether the hooks have been let go of.
     /// </summary>
     /// <remarks>
@@ -410,6 +422,10 @@ public sealed class WmDaemon : IDisposable
 
         RunStartupCommands();
         phase = ReportPhase("startup commands", phase);
+
+        // After the companions are launched, so that by the time the toast is read the
+        // bar it mentions is on screen and the palette it mentions is listening.
+        if (FirstRun) AnnounceFirstRun();
 
         SettleWorkArea();
         _ = ReportPhase("settling the work area", phase);
@@ -4467,6 +4483,27 @@ public sealed class WmDaemon : IDisposable
         }
 
         _tray.SetTooltip(TrayTooltip());
+    }
+
+    /// <summary>
+    /// Tells a first-time user what just happened and what to press.
+    /// </summary>
+    /// <remarks>
+    /// The notification is the whole of the onboarding for somebody who started the
+    /// window manager without a terminal - the Start Menu shortcut, the installer's
+    /// checkbox, a double-click. It names the file so they know what to edit, and one
+    /// key: the palette, whose <c>?</c> lists every other key. Short, because the
+    /// shell truncates it at 256 characters and because a toast is not a manual.
+    /// </remarks>
+    private void AnnounceFirstRun()
+    {
+        string where = _configPath is { Length: > 0 } path ? path : "your config folder";
+
+        _tray.ShowNotification(
+            "Shubbak is running",
+            $"A starter config was written to {where}. " +
+            "alt+shift+space opens the palette; type ? there for every key. " +
+            "alt+shift+e exits.");
     }
 
     /// <summary>Shows the folder the config was loaded from.</summary>

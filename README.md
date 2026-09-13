@@ -80,7 +80,7 @@ I liked about them and changes what kept getting in my way:
 With winget:
 
 ```
-winget install MoaidHathot.Shubbak
+winget install shubbak
 ```
 
 That installs the MSI under `Program Files`, which is what lets Shubbak tile windows
@@ -89,7 +89,7 @@ running elevated itself. For a portable copy under your own profile, with no
 administrator prompt:
 
 ```
-winget install MoaidHathot.Shubbak --scope user
+winget install shubbak --scope user
 ```
 
 With Scoop:
@@ -100,33 +100,40 @@ scoop install shubbak
 ```
 
 Or take the MSI or the zip from [Releases](https://github.com/MoaidHathot/Shubbak/releases),
-for x64 or for ARM64. The zip unpacks anywhere. Everything is signed.
+for x64 or for ARM64. The zip unpacks anywhere. Everything is signed. (`shubbak` is
+the winget moniker; `MoaidHathot.Shubbak` is the full id, if you prefer.)
 
 ## First steps
 
 Open a new terminal, then:
 
 ```
-shubbak config init          # a starter config: keys, five workspaces, the bar, the palette, the watcher
-shubbak-wm --foreground      # run the window manager, attached to this terminal
-shubbak autostart enable     # and start it at logon from now on
+shubbak setup
 ```
 
-In that order. Without a config the window manager tiles everything and binds no keys.
+That writes a starter config if you have none, registers the window manager to start
+at logon, and starts it. Your windows tile, a bar appears along the top of each
+monitor, and a Shubbak icon sits in the tray. If you double-clicked the MSI instead,
+the last page of the installer has a checkbox that does the same thing.
 
-The starter's keys are all on Alt:
+The starter config is a working desktop rather than a skeleton: borders, animation, ten
+workspaces, a bar with every indicator that matters, a palette with a dozen actions,
+and the watcher for the camera and microphone. Everything is on Alt:
 
 | Keys | What |
 |---|---|
+| `alt+shift+space` | The command palette. `?` inside it lists every key |
 | `alt` + `h` `j` `k` `l` | Focus left, down, up, right |
 | `alt+shift` + `h` `j` `k` `l` | Move the window |
-| `alt` + `1`…`5` | Go to a workspace; with `shift`, send the window there |
-| `alt+space` | The command palette |
-| `alt+shift+space` | Cycle the layout |
+| `alt` + `1`…`9` `0` | Go to a workspace; with `shift`, send the window there |
+| `alt+w` | Cycle the layout |
+| `alt+shift+m` | Float the window, or tile it again |
 | `alt+shift+q` | Close the window |
+| `alt+shift+p` | Pause Shubbak's keys, so a game or a video gets them |
 | `alt+shift+r` | Reload the config |
 
-Editing the config, upgrading, uninstalling and where the logs are: see
+`shubbak doctor` checks the install when something seems off. Editing the config,
+upgrading, uninstalling and where the logs are: see
 [Getting started](docs/getting-started.md).
 
 ## A taste of the config
@@ -154,7 +161,7 @@ workspaces {
 keybindings {
     bind "alt+h" { focus --direction left }
     bind "alt+l" { focus --direction right }
-    bind "alt+space" { signal "palette" }
+    bind "alt+shift+space" { signal "palette" }
 
     for-each "workspace" {
         bind "alt+{name}"       { focus --workspace "{name}" }

@@ -107,12 +107,12 @@ public class StarterConfigTests
     }
 
     /// <summary>
-    /// The five declared workspaces survive parsing.
+    /// The ten declared workspaces survive parsing.
     /// </summary>
     [Fact]
     public void TheWorkspacesAreDeclared()
     {
-        Assert.Equal(5, Load().Config.Workspaces.Count);
+        Assert.Equal(10, Load().Config.Workspaces.Count);
     }
 
     /// <summary>
@@ -124,10 +124,10 @@ public class StarterConfigTests
     {
         ConfigLoadResult result = Load();
 
-        // Five workspaces, two bindings each.
+        // Ten workspaces, two bindings each, plus the hand-written ones.
         Assert.True(
-            result.Config.Keybindings.Count >= 10,
-            $"expected at least the 10 generated bindings, found {result.Config.Keybindings.Count}");
+            result.Config.Keybindings.Count >= 20,
+            $"expected at least the 20 generated bindings, found {result.Config.Keybindings.Count}");
     }
 
     /// <summary>
@@ -137,5 +137,69 @@ public class StarterConfigTests
     public void ItBindsSomethingUsable()
     {
         Assert.NotEmpty(Load().Config.Keybindings);
+    }
+
+    /// <summary>
+    /// The palette opens on <c>alt+shift+space</c>. <c>alt+space</c> is the system menu
+    /// and PowerToys Run, and the collision was the first thing every new user hit.
+    /// </summary>
+    [Fact]
+    public void ThePaletteIsOnAltShiftSpace()
+    {
+        Assert.Contains(
+            Load().Config.Keybindings,
+            binding => string.Equals(binding.Key.Display, "alt+shift+space", StringComparison.OrdinalIgnoreCase) &&
+                       binding.Commands.Any(command => command is Shubbak.Core.Commands.SignalCommand { Signal: "palette" }));
+    }
+
+    /// <summary>
+    /// The escape hatches. A newcomer's first bad moment is a key that does nothing,
+    /// and these are the three ways of making that deliberate - so the starter has to
+    /// bind each and the bar has to show each, or the moment looks like a crash.
+    /// </summary>
+    [Fact]
+    public void TheEscapeHatchesAreBound()
+    {
+        ConfigLoadResult result = Load();
+
+        Assert.Contains(result.Config.BindingModes, mode => mode.Name == "pause" && mode.PassThrough);
+        Assert.Contains(result.Config.BindingModes, mode => mode.Name == "resize");
+        Assert.Contains(result.Config.Keybindings, b => b.Commands.Any(c => c is Shubbak.Core.Commands.TogglePauseCommand));
+        Assert.Contains(result.Config.Keybindings, b => b.Commands.Any(c => c is Shubbak.Core.Commands.ToggleSuspendCommand));
+    }
+
+    /// <summary>
+    /// Every action in the palette section is well-formed. A starter shipping an action
+    /// the palette reports as a problem is teaching the mistake.
+    /// </summary>
+    [Fact]
+    public void ThePaletteActionsAreUsable()
+    {
+        Dalil.Core.DalilConfigLoad palette = Dalil.Core.DalilConfigLoader.Validate(ConfigCommand.Starter);
+
+        Assert.NotEmpty(palette.Config.Macros);
+        Assert.All(palette.Config.Macros, macro => Assert.True(
+            string.IsNullOrEmpty(macro.Problem),
+            $"action \"{macro.Name}\": {macro.Problem}"));
+    }
+
+    /// <summary>
+    /// Every action a keybinding runs by name exists in the palette section, or the key
+    /// opens an empty commands list with a warning in the log.
+    /// </summary>
+    [Fact]
+    public void EveryActionAKeyRunsExists()
+    {
+        Dalil.Core.DalilConfigLoad palette = Dalil.Core.DalilConfigLoader.Validate(ConfigCommand.Starter);
+        HashSet<string> names = palette.Config.Macros.Select(m => m.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Shubbak.Core.Commands.SignalCommand raised in Load().Config.Keybindings
+                     .SelectMany(b => b.Commands)
+                     .OfType<Shubbak.Core.Commands.SignalCommand>()
+                     .Where(s => s.Arguments.Count >= 2 && s.Arguments[0] == "run"))
+        {
+            string name = string.Join(' ', raised.Arguments.Skip(1));
+            Assert.True(names.Contains(name), $"a key runs the action \"{name}\", which the dalil section does not define");
+        }
     }
 }

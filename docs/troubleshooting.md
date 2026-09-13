@@ -46,6 +46,14 @@ If the verdict is `manageable: yes` but a rule matched, the rule is why.
 ## "It is not loading my config"
 
 ```
+shubbak doctor
+```
+
+goes through the install as a checklist and names the config in effect, whether it
+parses, and whether the window manager and its three companions are running. For the
+config question alone:
+
+```
 shubbak config-path
 ```
 
@@ -53,6 +61,11 @@ Prints the file in effect and how it was found. If nothing was found it lists **
 location it looked in**, which is usually enough on its own — "no config file" is a
 useless thing to be told when the file is sitting right there and the search looked
 somewhere else.
+
+A window manager started with no config anywhere writes the starter to the first user
+location and loads that - so if your file is somewhere the search does not reach, the
+symptom is the starter's keys working rather than yours, and `config-path` says
+which file won.
 
 Search order, first match wins:
 

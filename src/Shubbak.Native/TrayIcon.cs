@@ -200,6 +200,51 @@ public sealed unsafe class TrayIcon : IDisposable
     }
 
     /// <summary>
+    /// Shows a notification from the icon: a title and a few lines of text.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Windows 10 and 11 draw these as toasts in the corner and keep them in the
+    /// notification centre, so one that is missed is not lost. Used sparingly - a
+    /// window manager that talks is a window manager people turn off - and today for
+    /// exactly one thing: the first run, when a config has just been written on the
+    /// user's behalf and there may be no terminal open to have said so.
+    /// </para>
+    /// <para>
+    /// The buffers are fixed-size: 64 characters for the title, 256 for the text.
+    /// Anything longer is cut rather than refused.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether the shell accepted it.</returns>
+    public bool ShowNotification(string title, string text)
+    {
+        if (!_shown) return false;
+
+        NOTIFYICONDATAW data = Describe();
+        data.uFlags = NOTIFY_ICON_DATA_FLAGS.NIF_INFO;
+        data.dwInfoFlags = NOTIFY_ICON_INFOTIP_FLAGS.NIIF_INFO;
+
+        Fill(data.szInfoTitle.AsSpan(), title);
+        Fill(data.szInfo.AsSpan(), text);
+
+        if (PInvoke.Shell_NotifyIcon(NOTIFY_ICON_MESSAGE.NIM_MODIFY, in data))
+            return true;
+
+        Log.Warn(LogCategory.Wm, $"could not show the tray notification: {Marshal.GetLastWin32Error()}");
+        return false;
+    }
+
+    /// <summary>Copies into a fixed-size, NUL-terminated buffer, cutting to fit.</summary>
+    private static void Fill(Span<char> destination, string value)
+    {
+        destination.Clear();
+
+        int max = destination.Length - 1;
+        ReadOnlySpan<char> source = value.Length > max ? value.AsSpan(0, max) : value;
+        source.CopyTo(destination);
+    }
+
+    /// <summary>
     /// Handles a message seen by the daemon's pump.
     /// </summary>
     /// <remarks>

@@ -216,6 +216,10 @@ Shell_NotifyIcon
 NOTIFYICONDATAW
 NOTIFY_ICON_MESSAGE
 NOTIFY_ICON_DATA_FLAGS
+// For the balloon a first run shows: "a config was written here, alt+shift+space
+// opens the palette". The one moment the window manager has something to say to
+// somebody who may have no terminal open and no idea what to press.
+NOTIFY_ICON_INFOTIP_FLAGS
 
 // The icon shown is the executable's own, so the tray matches Alt-Tab and the
 // taskbar rather than being a second thing to keep in step.

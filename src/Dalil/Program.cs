@@ -665,6 +665,18 @@ internal static class Program
         if (RunRequested(signal.Arguments)) return;
 
         PaletteMode mode = ModeFrom(signal.Arguments);
+
+        // The very first time the palette is opened on this machine, with no mode
+        // asked for, it opens on the list of keys instead of the list of windows. A
+        // newcomer has just pressed the one chord the setup told them about, and the
+        // most useful thing to show them is every other chord; the windows list is a
+        // Tab away and is what they get from then on.
+        if (signal.Arguments.Count == 0 && FirstOpen.Claim())
+        {
+            Log.Info(LogCategory.Wm, "first open on this machine: showing the keys");
+            mode = PaletteMode.Help;
+        }
+
         Log.Debug(LogCategory.Wm, $"opening in {PaletteModel.NameOf(mode)} mode");
 
         Post(() => Open(mode));

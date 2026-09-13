@@ -3,8 +3,9 @@
 One KDL file drives the window manager, the bar, the palette and the watcher. This
 page is the reference for it: where it lives, what goes in it, and how each part
 behaves. The fully annotated example, every setting with the reasoning beside it, is
-[`shubbak.example.kdl`](shubbak.example.kdl); the short starter that
-`shubbak config init` writes is the one to inherit from.
+[`shubbak.example.kdl`](shubbak.example.kdl); the starter that `shubbak setup` (or
+`shubbak config init`) writes is the one to inherit from - a working desktop rather
+than a skeleton, short enough to read in one sitting and delete from.
 
 ## Where the file lives
 
@@ -25,8 +26,13 @@ The window manager, the CLI, the bar, the palette and the watcher all share one
 resolver, so they cannot disagree about which file is loaded. `shubbak config-path`
 prints the file in effect and how it was found, or lists everywhere it looked.
 
-Without a config the window manager runs on defaults: every window is tiled and no
-key is bound. `shubbak config init` writes a starter where the resolver will find it.
+Without a config anywhere, the window manager writes the starter to the first of the
+user locations above - `$XDG_CONFIG_HOME/shubbak/shubbak.kdl` if that is set,
+otherwise `%USERPROFILE%\.config\shubbak\shubbak.kdl` - and loads it, and the tray
+icon says so. `shubbak setup` and `shubbak config init` write the same file from a
+terminal. None of them ever overwrites a file that exists. The one exception is
+`--config <path>` naming a file that does not exist: that is honoured as written and
+reported as missing, since a path you typed is an instruction rather than a search.
 
 ## The file talks back
 

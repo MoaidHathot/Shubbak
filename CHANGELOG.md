@@ -17,6 +17,51 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **`shubbak setup`: from a fresh install to a running desktop in one command.** It
+  writes the starter config if there is none, registers the window manager to start at
+  logon, starts it, and prints the keys - each step skipped when already done, so
+  running it twice is harmless and running it after a half-finished first attempt
+  finishes the job. `--no-autostart` and `--no-start` leave a step out; `--config
+  <path>` uses a file of your own and records it in the Run key. The winget and Scoop
+  installation notes, the README and the getting-started page now say this one
+  command where they used to list three across two executables.
+- **The window manager writes its own config on a first run.** Started with no config
+  anywhere in the search order, `shubbak-wm` used to run on defaults - every window
+  tiled, no key bound, no bar, no palette - and the only thing that said so was a
+  warning in a log nobody had opened. That was the experience of anyone who clicked
+  the Start Menu shortcut before reading the docs. It now writes the starter to the
+  first user location (the same file `config init` writes), loads it, and the tray
+  icon shows a notification naming the file and the one key that leads to everything
+  else. An existing file is never overwritten, and an explicit `--config` path is
+  still honoured even when it does not exist. `TrayIcon.ShowNotification` is the new
+  piece underneath.
+- **`shubbak-wm --autostart`** registers the binary to start at logon, with the same
+  arguments less the terminal ones, before starting. The Run-key code moved from the
+  CLI into `Shubbak.Native.RunKey` so the two cannot write different things;
+  `shubbak autostart` is unchanged on the outside.
+- **The MSI's final dialog has a checkbox** - *Start Shubbak now, and at every logon* -
+  ticked by default, which runs `shubbak-wm --autostart` as the logged-on user from the
+  unelevated client half of the install. Somebody who double-clicks the MSI now gets a
+  working desktop from the installer alone. Silent installs never show the dialog and
+  are unaffected.
+- **`shubbak doctor`: the install as a checklist.** Where `diagnose` writes a report
+  for somebody else to read, this answers a dozen yes-or-no questions for the person
+  at the keyboard, each with the command that fixes a no: are the four executables
+  where they should be; is the install directory on this terminal's PATH (the thing
+  that is stale right after an install); which config is in effect and does it parse
+  in all four loaders; does the Run key exist and point at this copy; is each of the
+  four programs running, and if the config starts one that is not, where its log is;
+  is `alt+space` bound while PowerToys Run is running; is another tiling window
+  manager up; does the config name a font or a backdrop this Windows does not have;
+  is a portable install expecting to move elevated windows; is there a crash report
+  from the last week. Exits non-zero when something is wrong, so a script can ask.
+- **The palette opens on its key list the first time.** The very first time Dalil is
+  opened on a machine with no mode asked for, it shows `?` - every key and every
+  prefix - instead of the window list. A newcomer has just pressed the one chord the
+  setup told them about, and the most useful thing to show them is every other chord;
+  the windows are a Tab away and are what they get from then on. One empty marker
+  file, `%LOCALAPPDATA%\Shubbak\dalil.opened`, is the record; delete it to see the
+  keys again.
 - **The focused window's icon, on the bar and over the pipe.** A new pipe method,
   `window-icon`, answers with a window's icon as pixels: the daemon asks the window
   the way the taskbar does (`WM_GETICON`), then its class, then takes the executable's
@@ -164,6 +209,46 @@ schedule and breaking either is a different kind of event:
   it; a client that reads `{}` as it always did is unaffected. `shubbak stop` remains
   the way from outside, and the only one that works when the window manager is
   already gone.
+
+### Changed
+
+- **The starter config is a desktop rather than a skeleton.** What `config init`,
+  `setup` and a first run write is now a translation of the author's own daily
+  config with the machine-specific parts taken out: borders in the focus colour with
+  a separate colour for floating windows; animation on, following the display's
+  refresh rate; ten workspaces; rules that leave the Run box, picture-in-picture
+  video, PowerPoint slideshows and the PowerToys accent popup alone; `logging { }` so
+  `diagnose` has a file to collect; keys for the recent window and workspace,
+  equalise, every layout, fullscreen in both sizes, minimise, managed/floating,
+  one scratchpad, moving a workspace between monitors, and the three degrees of
+  "leave me alone" - pause mode, stop arranging, suspend - each with its pill on the
+  bar; a `resize` mode and a pass-through `pause` mode; `meeting`, `meeting-live` and
+  `meeting-muted` composed from the watcher's facts so the bar shows exactly one
+  microphone; a dozen palette actions, most of them questions (*Go to...*, *Send it
+  to...*, *Layout...*, *Arrange...*, *Enter mode...*), plus *Gaming*, *Reset this
+  workspace* and *Reset everything*; and a bar with a translucent acrylic background,
+  workspace colours for empty / has windows / on another monitor / has the keyboard,
+  the focused window's icon and title, every pill, the camera and microphone glyphs,
+  the keyboard language, the layout glyph and the clock in the Windows accent colour,
+  with a `presentation` profile left defined as an example. Roughly four hundred
+  lines to the old hundred and eighty, and still one sitting to read. The setting
+  `focus-follows-cursor`, which parsed and did nothing, is gone from it.
+- **The palette is on `alt+shift+space`**, not `alt+space`. Windows uses `alt+space`
+  for the window menu and PowerToys Run takes it by default, and the collision was
+  the first thing every new user hit. `alt+ctrl+space` opens the palette on its
+  commands list; `alt+w` cycles the layout, which `alt+shift+space` used to do.
+- **The starter is a file, not a string constant.** It lives at
+  `src/Shubbak.Config/StarterConfig.kdl` and is embedded, so it can be read, diffed
+  and validated as KDL, and so that the window manager can write it as well as the
+  CLI. `StarterConfig.Text` and `StarterConfig.WriteIfMissing` are the API; the tests
+  that hold it to account now also check that the palette is on `alt+shift+space`,
+  that every escape hatch is bound, that every action is well-formed and that every
+  action a key runs by name exists.
+- **`shubbak --help`'s GETTING STARTED** leads with `setup` and `doctor`, with the
+  three individual pieces listed under them. `shubbak-wm --help` documents
+  `--autostart` and what happens on a first run. The "no config file found" message
+  suggests `shubbak setup` first and `config init` second. The docs use the winget
+  moniker - `winget install shubbak` - which the manifest has declared all along.
 
 ### Fixed
 
