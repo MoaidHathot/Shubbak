@@ -227,6 +227,8 @@ internal static class DoctorCommand
         // The companions only matter if the config asks for them.
         IReadOnlyList<string> startup = config is { } loaded ? loaded.Config.StartupCommands : [];
 
+        CheckStartupCommands(lines, startup);
+
         foreach ((string component, string what) in new[] { ("taj", "bar"), ("dalil", "palette"), ("ayn", "watcher") })
         {
             bool wanted = startup.Any(c => c.Contains(component, StringComparison.OrdinalIgnoreCase));
@@ -239,6 +241,68 @@ internal static class DoctorCommand
             else if (!wanted)
                 lines.Add(new(Verdict.Info, what, $"{component} is not started by the config", $"add `startup-command \"{component}\"` under general {{ }} to have one"));
         }
+    }
+
+    /// <summary>
+    /// How each companion's <c>startup-command</c> will resolve, the way the window
+    /// manager resolves it: a bare name beside <c>shubbak-wm.exe</c>, then PATH.
+    /// </summary>
+    /// <remarks>
+    /// Two things this catches. A bare <c>taj</c> that is nowhere - a zip unpacked
+    /// with a file missing, or a copy of the window manager on its own - which the
+    /// window manager reports only in its log. And an absolute path to one of the
+    /// three, which works on the machine it was written on and on no other: the
+    /// author's own config had <c>W:\...\dist\taj.exe</c> for months, and it took a
+    /// second machine to notice. A bare name is the portable spelling, and the fix.
+    /// </remarks>
+    private static void CheckStartupCommands(List<Line> lines, IReadOnlyList<string> startup)
+    {
+        string? daemonDirectory = Autostart.FindDaemon() is { } daemon ? Path.GetDirectoryName(daemon) : null;
+
+        foreach (string command in startup)
+        {
+            string file = FirstToken(command.StartsWith("shell-exec ", StringComparison.OrdinalIgnoreCase) ? command[11..] : command);
+            string bare = Path.GetFileNameWithoutExtension(file);
+
+            if (bare is not ("taj" or "dalil" or "ayn")) continue;
+
+            bool isPath = file.AsSpan().IndexOfAny(@"\/:") >= 0;
+
+            if (isPath)
+            {
+                string verdict = File.Exists(file) ? "exists here" : "does not exist here";
+                lines.Add(new(
+                    Verdict.Warn,
+                    "startup",
+                    $"`{command}` names {bare} by absolute path, which {verdict} and is specific to this machine",
+                    $"write `startup-command \"{bare}\"`; a bare name is found beside shubbak-wm.exe, then on PATH"));
+                continue;
+            }
+
+            string? beside = daemonDirectory is null ? null : FindBeside(daemonDirectory, bare);
+            string? onPath = beside is null ? FindOnPath(bare) : null;
+
+            if (beside is not null)
+                lines.Add(new(Verdict.Ok, "startup", $"`{bare}` resolves beside the window manager: {beside}"));
+            else if (onPath is not null)
+                lines.Add(new(Verdict.Warn, "startup", $"`{bare}` is not beside shubbak-wm.exe; PATH would start {onPath}", "keep the five executables together, so the bar that starts is the one that shipped with the window manager"));
+            else
+                lines.Add(new(Verdict.Fail, "startup", $"`{bare}` is not beside shubbak-wm.exe or on PATH, so it will not start", "reinstall, or put the install directory on PATH"));
+        }
+    }
+
+    private static string FirstToken(string commandLine)
+    {
+        commandLine = commandLine.Trim();
+
+        if (commandLine.StartsWith('"'))
+        {
+            int closing = commandLine.IndexOf('"', 1);
+            if (closing > 0) return commandLine[1..closing];
+        }
+
+        int space = commandLine.IndexOf(' ', StringComparison.Ordinal);
+        return space < 0 ? commandLine : commandLine[..space];
     }
 
     // ---- things that fight -------------------------------------------------

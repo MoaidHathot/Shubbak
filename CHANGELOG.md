@@ -55,6 +55,10 @@ schedule and breaking either is a different kind of event:
   manager up; does the config name a font or a backdrop this Windows does not have;
   is a portable install expecting to move elevated windows; is there a crash report
   from the last week. Exits non-zero when something is wrong, so a script can ask.
+  It also resolves each companion's `startup-command` the way the window manager
+  does - a bare name beside `shubbak-wm.exe`, then PATH - and warns about an
+  absolute path to `taj`, `dalil` or `ayn`, which works on the machine it was
+  written on and on no other; a bare name is the portable spelling.
 - **The palette opens on its key list the first time.** The very first time Dalil is
   opened on a machine with no mode asked for, it shows `?` - every key and every
   prefix - instead of the window list. A newcomer has just pressed the one chord the
