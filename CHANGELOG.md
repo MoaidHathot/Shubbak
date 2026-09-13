@@ -32,6 +32,17 @@ schedule and breaking either is a different kind of event:
   Underneath: `VisualKind.Image`, `ImageBitmap`, and an `IImageRenderer` capability
   the composited renderer implements with area-averaged scaling, so a 32-pixel icon
   drawn at 20 keeps its edges.
+- **The palette takes its icons from the same place.** Dalil used to send
+  `WM_GETICON` to every window it listed, with a timeout to bound what a hung one
+  could do and no answer at all for a window that had never set an icon. It now asks
+  the window manager's `window-icon` over the pipe, on the background thread that
+  already reads the list, once per window it has not seen - so a window that set no
+  icon shows the one its taskbar button does, the palette sends no message to any
+  window, and both processes share one implementation and, in effect, one cache. The
+  opaque renderer draws the pixels through `AlphaBlend` after resampling them to the
+  row's icon square with the same area-averaging the bar uses, from a scratch surface
+  kept between rows. The handle-based `IIconRenderer` and its `DrawIconEx` path are
+  gone; nothing drew through them any more.
 - **`accent` is a colour.** Anywhere a colour is written - the bar, the palette's
   theme, a focus border - `accent` is the colour Windows is set to, read from the
   compositor, and any colour may be followed by an opacity: `accent 40%`,

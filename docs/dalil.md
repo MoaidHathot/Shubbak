@@ -161,7 +161,12 @@ those open the palette with the name already typed and the picker one Enter away
 Rows carry the application's icon and badges so you can see at a glance what you are
 looking at: `unmanaged`, `minimised`, `cloaked`, `floating`, `fullscreen`, `sticky`,
 `elevated`, `stashed`, `also on <workspace>`. Unmanaged windows also carry the reason
-in the dim text, so you do not have to open anything to find out why.
+in the dim text, so you do not have to open anything to find out why. The icons come
+from the window manager over the pipe — the same [`window-icon`](scripting.md#asking)
+the bar uses — fetched on the background thread that reads the list, once per window
+the palette has not seen, so a window that never set an icon still shows the one its
+taskbar button does, and the palette itself never sends a message to a window it
+lists.
 
 The search box tells you when tiling is paused, when a binding mode is eating your
 keys, when the window manager has suspended itself, and when it cannot be reached at

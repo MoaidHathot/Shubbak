@@ -6,7 +6,6 @@ using Shubbak.Ui.Rendering;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Gdi;
-using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Shubbak.Ui.Gdi;
 
@@ -33,7 +32,7 @@ namespace Shubbak.Ui.Gdi;
 /// time any value changes.
 /// </para>
 /// </remarks>
-public sealed class GdiRenderer : IRenderer, IIconRenderer
+public sealed class GdiRenderer : IRenderer, IImageRenderer
 {
     private readonly HWND _window;
 
@@ -227,47 +226,113 @@ public sealed class GdiRenderer : IRenderer, IIconRenderer
         }
     }
 
-    // ---- icons -------------------------------------------------------------
+    // ---- images ------------------------------------------------------------
 
     /// <summary>
-    /// Draws an icon into the back buffer, scaled to the rectangle.
+    /// Draws a bitmap into the back buffer, scaled to the rectangle and blended by its
+    /// alpha.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <c>DrawIconEx</c> with an explicit size rather than <c>DrawIcon</c>, because the
-    /// latter draws at whatever size the icon happens to be and the palette's rows are
-    /// sized by the user's font. A 32-pixel icon dropped into a 16-pixel square without
-    /// scaling covers the title next to it.
+    /// The back buffer is an opaque device bitmap with no pixels to reach, so the
+    /// blend is GDI's: <c>AlphaBlend</c> with <c>AC_SRC_ALPHA</c>, which expects exactly
+    /// the premultiplied pixels an <see cref="ImageBitmap"/> holds. It is asked to
+    /// stretch nothing - it does not filter, and a 32-pixel icon squeezed to 18 by it
+    /// loses rows - so the picture is resampled first, by the same area-averaging the
+    /// composited renderer uses, into a scratch DIB of the size it is drawn at.
     /// </para>
     /// <para>
-    /// <c>DI_NORMAL</c> blends the icon's mask and image, which is what gives a
-    /// transparent background over whatever the row is painted in. The back buffer has
-    /// no alpha channel, so this is the only way the corners come out right.
-    /// </para>
-    /// <para>
-    /// Failure is silent by design. An icon handle can be stale by the time it is
-    /// drawn - the application that owned it may have exited between the list being
-    /// built and the frame being painted - and a missing icon is a cosmetic loss, not
-    /// something worth interrupting a paint over.
+    /// The scratch surface is kept between calls and remade only when the size changes:
+    /// a list of rows draws its icons all at one size, and creating and destroying a
+    /// section per icon per frame would be the most GDI work in the frame.
     /// </para>
     /// </remarks>
-    public void DrawIcon(nint icon, Rect rect)
+    public unsafe void DrawImage(ImageBitmap image, Rect rect)
     {
-        if (icon == 0 || rect.IsEmpty || _memoryDc.IsNull) return;
+        ArgumentNullException.ThrowIfNull(image);
+
+        if (rect.IsEmpty || _memoryDc.IsNull) return;
 
         Rect local = ToLocal(rect);
 
-        _ = PInvoke.DrawIconEx(
-            _memoryDc,
-            local.Left,
-            local.Top,
-            new HICON(icon),
-            local.Width,
-            local.Height,
-            0,
-            HBRUSH.Null,
-            DI_FLAGS.DI_NORMAL);
+        if (!EnsureScratch(local.Width, local.Height)) return;
+
+        uint[] scaled = Pixels.Scale(image, local.Width, local.Height);
+        scaled.AsSpan().CopyTo(new Span<uint>(_scratchBits, scaled.Length));
+
+        // The batch has to reach the section before it is read as a source.
+        PInvoke.GdiFlush();
+
+        var blend = new BLENDFUNCTION
+        {
+            BlendOp = (byte)PInvoke.AC_SRC_OVER,
+            BlendFlags = 0,
+            SourceConstantAlpha = 255,
+            AlphaFormat = (byte)PInvoke.AC_SRC_ALPHA,
+        };
+
+        _ = PInvoke.AlphaBlend(
+            _memoryDc, local.Left, local.Top, local.Width, local.Height,
+            _scratchDc, 0, 0, local.Width, local.Height,
+            blend);
     }
+
+    /// <summary>A 32-bit DIB of the given size for images to be blended from.</summary>
+    private unsafe bool EnsureScratch(int width, int height)
+    {
+        if (!_scratchBitmap.IsNull && _scratchWidth == width && _scratchHeight == height) return true;
+
+        ReleaseScratch();
+
+        var info = new BITMAPINFO();
+        info.bmiHeader.biSize = (uint)sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;   // top-down, like the pixels it receives
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = (uint)BI_COMPRESSION.BI_RGB;
+
+        void* bits = null;
+        HBITMAP bitmap = PInvoke.CreateDIBSection(HDC.Null, &info, DIB_USAGE.DIB_RGB_COLORS, &bits, HANDLE.Null, 0);
+
+        if (bitmap.IsNull || bits is null) return false;
+
+        _scratchDc = PInvoke.CreateCompatibleDC(HDC.Null);
+        _scratchPrevious = PInvoke.SelectObject(_scratchDc, bitmap);
+        _scratchBitmap = bitmap;
+        _scratchBits = (uint*)bits;
+        _scratchWidth = width;
+        _scratchHeight = height;
+
+        return true;
+    }
+
+    private void ReleaseScratch()
+    {
+        if (!_scratchDc.IsNull)
+        {
+            if (!_scratchPrevious.IsNull) PInvoke.SelectObject(_scratchDc, _scratchPrevious);
+            PInvoke.DeleteDC(_scratchDc);
+            _scratchDc = HDC.Null;
+        }
+
+        if (!_scratchBitmap.IsNull)
+        {
+            PInvoke.DeleteObject(_scratchBitmap);
+            _scratchBitmap = HBITMAP.Null;
+        }
+
+        _scratchPrevious = HGDIOBJ.Null;
+        unsafe { _scratchBits = null; }
+        _scratchWidth = _scratchHeight = 0;
+    }
+
+    private HDC _scratchDc;
+    private HBITMAP _scratchBitmap;
+    private HGDIOBJ _scratchPrevious;
+    private unsafe uint* _scratchBits;
+    private int _scratchWidth;
+    private int _scratchHeight;
 
     // ---- resources ---------------------------------------------------------
 
@@ -378,6 +443,7 @@ public sealed class GdiRenderer : IRenderer, IIconRenderer
         _disposed = true;
 
         ReleaseBuffer();
+        ReleaseScratch();
 
         foreach (HBRUSH brush in _brushes.Values) PInvoke.DeleteObject(brush);
         _brushes.Clear();

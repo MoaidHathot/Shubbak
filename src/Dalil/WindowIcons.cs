@@ -1,7 +1,5 @@
 using System.Collections.Concurrent;
-using Windows.Win32;
-using Windows.Win32.Foundation;
-using Windows.Win32.UI.WindowsAndMessaging;
+using Shubbak.Ui.Layout;
 
 namespace Dalil;
 
@@ -15,155 +13,90 @@ namespace Dalil;
 /// is found, and it costs nothing to look at.
 /// </para>
 /// <para>
-/// It does not cost nothing to fetch. <c>WM_GETICON</c> is a synchronous message to
-/// another process, which means a window belonging to an application that has stopped
-/// pumping messages will not answer until the timeout expires. Twelve of those on a
-/// paint is a third of a second of a window that exists to feel instant, so nothing
-/// here is ever called from the paint path: the handles are resolved on the background
-/// thread that already fetches the window list, and drawing is a dictionary read that
-/// cannot block and cannot fail.
+/// It used to be fetched by the palette itself: a <c>WM_GETICON</c> to each window,
+/// which is a synchronous message into another process, with a timeout to bound what
+/// a hung one could do to the priming pass and no answer at all for a window that had
+/// never set an icon. The window manager now answers <c>window-icon</c> over the pipe
+/// for any client, asking the window as the taskbar does, then its class, then the
+/// executable - so a window that set none still shows the icon its taskbar button
+/// does - and remembering the answer for everyone who asks. The palette asks it, once
+/// per window it has not seen, on the background thread that already reads the list,
+/// and the pixels it gets back are drawn without any process being asked anything.
 /// </para>
 /// <para>
-/// The handles are not owned. A class icon belongs to the application that registered
-/// the class and a window icon belongs to the window; destroying either would be
-/// destroying somebody else's resource, and both outlive anything this process does
-/// with them. So there is nothing to release and no lifetime to manage - only a
-/// dictionary to keep from growing for ever.
+/// Never called from the paint path. Drawing is a dictionary read that cannot block
+/// and cannot fail; the fetch happens where the list is fetched, and the window
+/// manager's own cache makes the second open of a session a few sub-millisecond
+/// answers rather than a message per window.
 /// </para>
 /// </remarks>
 internal static class WindowIcons
 {
-    /// <summary>How long to wait for one application to answer.</summary>
-    /// <remarks>
-    /// Short, and it is a ceiling rather than a cost: a responsive application answers
-    /// in microseconds because the message is handled by <c>DefWindowProc</c> without
-    /// ever reaching its code. The timeout exists only to bound what a hung one can do
-    /// to the priming pass, and a missing icon is a much smaller problem than a
-    /// palette that takes a second to fill in.
-    /// </remarks>
-    private const uint AnswerTimeoutMs = 40;
-
     /// <summary>
     /// How many windows to remember icons for.
     /// </summary>
     /// <remarks>
     /// Dalil is resident for the length of a login session, and windows open and close
-    /// all day. Without a bound this is a slow leak of one dictionary entry per window
-    /// ever seen - not large, and not something that should be discovered after a
-    /// fortnight of uptime.
+    /// all day. Without a bound this is a slow leak of a few kilobytes per window ever
+    /// seen - not large, and not something that should be discovered after a fortnight
+    /// of uptime. Cleared wholesale rather than evicted one at a time: every entry is
+    /// equally cheap to rebuild and the next priming pass refills whatever is still on
+    /// screen, so a policy would be more code than it could possibly save.
     /// </remarks>
     private const int Capacity = 512;
 
-    private static readonly ConcurrentDictionary<long, nint> s_icons = new();
+    /// <summary>
+    /// The size asked for. A hint to the window manager about which variant to prefer;
+    /// the renderer resamples whatever comes to the row's icon square, which at an
+    /// ordinary scale is smaller than this and at a high one is not.
+    /// </summary>
+    private const int PreferredSize = 32;
 
-    private const int IconSmall = 0;
-    private const int IconBig = 1;
-
-    /// <summary>The one Windows synthesises from the big icon when there is no small one.</summary>
-    private const int IconSmall2 = 2;
+    private static readonly ConcurrentDictionary<long, ImageBitmap?> s_icons = new();
 
     /// <summary>
-    /// Works out the icons for a set of windows, on whatever thread calls this.
+    /// Fetches the icons of the windows that have none remembered yet.
     /// </summary>
     /// <remarks>
     /// Must not be the message loop. Everything about the timing here assumes a caller
     /// with nothing waiting on it, which is why it is invoked from the same background
-    /// task that reads the window list rather than from anywhere near a repaint.
+    /// task that reads the window list rather than from anywhere near a repaint. A
+    /// window the window manager has no icon for is remembered as such, or it would be
+    /// asked about on every open for as long as it lived.
     /// </remarks>
-    internal static void Prime(IEnumerable<long> handles)
+    internal static async Task PrimeAsync(WmConnection connection, IReadOnlyList<long> handles)
     {
+        ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(handles);
 
-        // Cleared wholesale rather than evicted one at a time. There is no useful
-        // recency information here - every entry is equally cheap to rebuild and the
-        // next priming pass refills whatever is still on screen - so a policy would be
-        // more code than it could possibly save.
         if (s_icons.Count > Capacity) s_icons.Clear();
 
-        foreach (long handle in handles)
-        {
-            if (s_icons.ContainsKey(handle)) continue;
+        List<long> missing = [];
 
-            s_icons[handle] = Resolve(handle);
-        }
+        foreach (long handle in handles)
+            if (!s_icons.ContainsKey(handle) && !missing.Contains(handle)) missing.Add(handle);
+
+        if (missing.Count == 0) return;
+
+        IReadOnlyDictionary<long, ImageBitmap?> read =
+            await connection.ReadIconsAsync(missing, PreferredSize).ConfigureAwait(false);
+
+        foreach ((long handle, ImageBitmap? image) in read)
+            s_icons[handle] = image;
     }
 
     /// <summary>
-    /// The icon for a window, or zero.
+    /// The icon for a window, or null.
     /// </summary>
     /// <remarks>
-    /// A pure read. Zero means either "no icon" or "not looked up yet", and the
+    /// A pure read. Null means either "no icon" or "not looked up yet", and the
     /// difference does not matter to a caller whose only options are to draw one or
-    /// not - so both are answered without asking Windows anything, which is what makes
+    /// not - so both are answered without asking anyone anything, which is what makes
     /// this safe to call while painting.
     /// </remarks>
-    internal static nint Get(long handle) =>
-        s_icons.TryGetValue(handle, out nint icon) ? icon : 0;
+    internal static ImageBitmap? Get(long handle) =>
+        s_icons.TryGetValue(handle, out ImageBitmap? icon) ? icon : null;
 
     /// <summary>Forgets everything, for a configuration reload that turned icons off.</summary>
     internal static void Clear() => s_icons.Clear();
-
-    /// <summary>
-    /// Asks a window for its icon, in descending order of how good the answer is.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The window first and the class second, because that is the order they take
-    /// effect in: an application that calls <c>WM_SETICON</c> is deliberately
-    /// overriding whatever its class says, usually per document or per profile, and the
-    /// class icon is the fallback the system itself uses.
-    /// </para>
-    /// <para>
-    /// <c>ICON_SMALL2</c> before <c>ICON_SMALL</c>: it is the one Windows will
-    /// synthesise by downscaling the big icon when the application never supplied a
-    /// small one, which is most of them.
-    /// </para>
-    /// </remarks>
-    private static nint Resolve(long handle)
-    {
-        var window = new HWND((nint)handle);
-
-        if (!PInvoke.IsWindow(window)) return 0;
-
-        foreach (int which in (ReadOnlySpan<int>)[IconSmall2, IconSmall, IconBig])
-        {
-            if (Ask(window, which) is var icon && icon != 0) return icon;
-        }
-
-        foreach (GET_CLASS_LONG_INDEX which in
-                 (ReadOnlySpan<GET_CLASS_LONG_INDEX>)
-                 [GET_CLASS_LONG_INDEX.GCLP_HICONSM, GET_CLASS_LONG_INDEX.GCLP_HICON])
-        {
-            // A plain read of the window class structure. It cannot block, cannot
-            // reach another process's code, and is the reason a hung application still
-            // usually manages to show an icon.
-            nint icon = (nint)PInvoke.GetClassLongPtr(window, which);
-
-            if (icon != 0) return icon;
-        }
-
-        return 0;
-    }
-
-    /// <summary>One <c>WM_GETICON</c>, bounded and never fatal.</summary>
-    private static unsafe nint Ask(HWND window, int which)
-    {
-        nuint result = 0;
-
-        LRESULT sent = PInvoke.SendMessageTimeout(
-            window,
-            PInvoke.WM_GETICON,
-            new WPARAM((nuint)which),
-            new LPARAM(0),
-
-            // ABORTIFHUNG returns immediately for a window already known to be
-            // unresponsive rather than waiting out the full timeout for it, which is
-            // what keeps a priming pass over a desktop with one dead application from
-            // taking as long as the desktop is wide.
-            SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_ABORTIFHUNG | SEND_MESSAGE_TIMEOUT_FLAGS.SMTO_BLOCK,
-            AnswerTimeoutMs,
-            &result);
-
-        return sent == 0 ? 0 : (nint)result;
-    }
 }

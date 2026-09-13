@@ -51,7 +51,10 @@ FONT_CLIP_PRECISION
 FONT_QUALITY
 FONT_WEIGHT
 
-// --- icons -------------------------------------------------------------------------
-// Only for hosts that draw them; the bar never does. See IIconRenderer.
-DrawIconEx
-DI_FLAGS
+// --- images ------------------------------------------------------------------------
+// The opaque renderer blends a picture in through GDI, from a premultiplied DIB it
+// fills itself; the composited one needs nothing here, having pixels of its own.
+AlphaBlend
+BLENDFUNCTION
+AC_SRC_OVER
+AC_SRC_ALPHA

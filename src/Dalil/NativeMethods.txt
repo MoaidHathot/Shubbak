@@ -95,12 +95,6 @@ GetDpiForWindow
 DwmSetWindowAttribute
 DWMWINDOWATTRIBUTE
 
-// --- application icons ---------------------------------------------------------------
-// Asked for on a background thread and cached, never from the paint path: WM_GETICON is
-// a synchronous cross-process call and a hung application would otherwise stall a frame.
-// See WindowIcons.
-SendMessageTimeout
-SEND_MESSAGE_TIMEOUT_FLAGS
-GetClassLongPtr
-GET_CLASS_LONG_INDEX
-WM_GETICON
+// Application icons are not asked for here any more. The window manager answers
+// `window-icon` over the pipe for any client - see WindowIcons and Shubbak.Native's
+// WindowIconReader - so the palette sends no message to any window it lists.

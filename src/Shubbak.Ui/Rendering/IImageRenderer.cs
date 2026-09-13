@@ -8,17 +8,19 @@ namespace Shubbak.Ui.Rendering;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A capability rather than a member of <see cref="IRenderer"/>, for the reason
-/// <see cref="IIconRenderer"/> gives: the core interface is small on purpose, and a
-/// renderer that cannot composite should not have to grow a method to say so. The
-/// painter draws an <see cref="VisualKind.Image"/> node through this when the
-/// renderer offers it, and draws the node's background and border without it when
-/// the renderer does not.
+/// Deliberately not part of <see cref="IRenderer"/>. That interface is small on
+/// purpose - filled rectangles, borders and text - and every member added to it is a
+/// member every renderer must implement whether or not it has anything to draw with.
+/// A capability instead: the painter draws an <see cref="VisualKind.Image"/> node
+/// through this when the renderer offers it, and draws the node's background and
+/// border without it when the renderer does not, so a renderer that cannot composite
+/// degrades to a gap rather than to a crash.
 /// </para>
 /// <para>
-/// Where <see cref="IIconRenderer"/> takes a handle that belongs to somebody else,
-/// this takes pixels that belong to nobody - the form an icon has after crossing the
-/// pipe, and the form a renderer with its own alpha channel wants anyway.
+/// It takes pixels rather than a handle. A handle belongs to whoever made it and
+/// means nothing across a pipe; pixels are the form an icon has after crossing one,
+/// the form a renderer with its own alpha channel wants anyway, and the reason
+/// <c>Shubbak.Ui</c> can stay free of Win32.
 /// </para>
 /// </remarks>
 public interface IImageRenderer

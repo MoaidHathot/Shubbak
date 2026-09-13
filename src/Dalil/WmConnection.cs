@@ -2,6 +2,7 @@ using System.Text.Json;
 using Dalil.Core;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
+using Shubbak.Ui.Layout;
 
 namespace Dalil;
 
@@ -95,6 +96,71 @@ public sealed class WmConnection : IAsyncDisposable
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not send '{command}': {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Asks the window manager for the icons of some windows, as pixels.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One connection for the lot rather than one per window: a palette lists dozens,
+    /// and connecting costs about as much as asking. Sequential on that connection,
+    /// which is what the pipe does anyway; the window manager's own cache means every
+    /// window but the ones it has never been asked about answers in well under a
+    /// millisecond.
+    /// </para>
+    /// <para>
+    /// A window the window manager has no icon for gets a null entry rather than no
+    /// entry, so the caller can remember the absence and stop asking. A connection that
+    /// fails partway returns what it had; the rest is asked about next time.
+    /// </para>
+    /// </remarks>
+    /// <param name="handles">The windows.</param>
+    /// <param name="preferredSize">Roughly the size they will be drawn at, in pixels.</param>
+    public async Task<IReadOnlyDictionary<long, ImageBitmap?>> ReadIconsAsync(IReadOnlyList<long> handles, int preferredSize)
+    {
+        ArgumentNullException.ThrowIfNull(handles);
+
+        var icons = new Dictionary<long, ImageBitmap?>(handles.Count);
+
+        if (handles.Count == 0) return icons;
+
+        try
+        {
+            await using IpcClient client = new();
+            await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
+
+            foreach (long handle in handles)
+            {
+                IpcResponse response = await client
+                    .SendAsync(WindowIcon.Method, $"{handle} {preferredSize}", _stopping.Token)
+                    .ConfigureAwait(false);
+
+                icons[handle] = response.Ok && response.Data is { } json ? DecodeIcon(json) : null;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(LogCategory.Ipc, $"could not read window icons: {ex.Message}");
+        }
+
+        return icons;
+    }
+
+    /// <summary>A <see cref="WindowIcon"/>'s JSON as a bitmap, or null if it is not one.</summary>
+    private static ImageBitmap? DecodeIcon(string json)
+    {
+        try
+        {
+            WindowIcon? icon = JsonSerializer.Deserialize(json, IpcJsonContext.Default.WindowIcon);
+
+            return icon?.Decode() is { } bytes ? ImageBitmap.FromBgra(icon.Width, icon.Height, bytes) : null;
+        }
+        catch (JsonException ex)
+        {
+            Log.Warn(LogCategory.Ipc, $"malformed icon payload: {ex.Message}");
+            return null;
         }
     }
 

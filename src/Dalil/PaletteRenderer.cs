@@ -10,11 +10,12 @@ namespace Dalil;
 /// <param name="OverlayTitle">The list opened from a row, when one is showing.</param>
 /// <param name="Icons">
 /// How to find a window's application icon, or null to draw none. A function rather
-/// than a cache reference so the renderer stays testable and knows nothing about Win32.
+/// than a cache reference so the renderer stays testable and knows nothing about
+/// where the pixels came from.
 /// </param>
-/// <param name="IconRenderer">
-/// The renderer's icon capability, when it has one. Null degrades to the layout that
-/// existed before icons did, rather than to a crash or a gap.
+/// <param name="ImageRenderer">
+/// The renderer's picture-drawing capability, when it has one. Null degrades to the
+/// layout that existed before icons did, rather than to a crash or a gap.
 /// </param>
 /// <param name="OverlayIsExpanded">
 /// Whether the list showing is one value broken across rows rather than a list of
@@ -24,8 +25,8 @@ namespace Dalil;
 /// </param>
 internal readonly record struct PaletteChrome(
     string? OverlayTitle = null,
-    Func<long, nint>? Icons = null,
-    IIconRenderer? IconRenderer = null,
+    Func<long, ImageBitmap?>? Icons = null,
+    IImageRenderer? ImageRenderer = null,
     bool OverlayIsExpanded = false);
 
 /// <summary>
@@ -376,12 +377,12 @@ internal static class PaletteRenderer
         }
 
         if (layout.IconSize > 0 &&
-            chrome.IconRenderer is { } icons &&
+            chrome.ImageRenderer is { } images &&
             chrome.Icons is { } lookup &&
             entry.IconHandle is { } handle &&
-            lookup(handle) is var icon && icon != 0)
+            lookup(handle) is { } icon)
         {
-            icons.DrawIcon(icon, layout.IconBounds(slot));
+            images.DrawImage(icon, layout.IconBounds(slot));
         }
 
         Colour title = entry.Destructive

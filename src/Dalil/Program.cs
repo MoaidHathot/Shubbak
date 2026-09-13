@@ -811,9 +811,10 @@ internal static class Program
     /// alone. That is what gives the first open of a session something to show.
     /// </para>
     /// <para>
-    /// The icons are worked out here, on this thread, before anything is posted. That
-    /// is the whole of the icon performance story: <c>WM_GETICON</c> is a synchronous
-    /// call into another process and must never happen while a frame is being painted.
+    /// The icons are fetched here, on this thread, before anything is posted. That is
+    /// the whole of the icon performance story: they come from the window manager over
+    /// the pipe, one request per window not seen before, and must never be waited for
+    /// while a frame is being painted.
     /// </para>
     /// </remarks>
     private static void Refresh(PaletteWindow palette)
@@ -830,7 +831,7 @@ internal static class Program
                 .ConfigureAwait(false);
 
             if (s_config.ShowIcons && read.WindowHandles is { Count: > 0 } handles)
-                WindowIcons.Prime(handles);
+                await WindowIcons.PrimeAsync(s_connection, handles).ConfigureAwait(false);
 
             Post(() =>
             {

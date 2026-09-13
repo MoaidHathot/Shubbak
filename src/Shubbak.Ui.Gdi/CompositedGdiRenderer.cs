@@ -233,18 +233,10 @@ public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer
     /// Draws a bitmap scaled to the rectangle, blended over the frame.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Each destination pixel takes the area-weighted average of the source pixels it
-    /// covers, which is the right filter for the case that actually occurs - a 32-pixel
-    /// icon drawn at 20 or 24 - where nearest-neighbour drops rows and columns and
-    /// bilinear blurs. It degrades to bilinear-ish when enlarging, which a bar has no
-    /// reason to do. Premultiplied all the way through, so an icon's transparent
-    /// fringe averages towards nothing rather than towards black.
-    /// </para>
-    /// <para>
-    /// A pixel copy when the sizes already match, because that is the case a bar
+    /// Resampled by <see cref="Pixels.Scale"/> - area-averaged, so a 32-pixel icon
+    /// drawn at 20 keeps its edges - and then composited pixel by pixel, premultiplied
+    /// throughout. A pixel copy when the sizes already match, which is the case a bar
     /// meets on every repaint once its icon is the size it asked for.
-    /// </para>
     /// </remarks>
     public void DrawImage(ImageBitmap image, Rect rect)
     {
@@ -256,70 +248,16 @@ public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer
         Rect clip = local.Intersect(SurfaceRect);
         if (clip.IsEmpty) return;
 
-        ReadOnlySpan<uint> source = image.Pixels;
-
-        double scaleX = (double)image.Width / local.Width;
-        double scaleY = (double)image.Height / local.Height;
+        uint[] scaled = Pixels.Scale(image, local.Width, local.Height);
 
         for (int y = clip.Top; y < clip.Bottom; y++)
         {
             uint* row = _frame.Bits + (y * _frame.Width);
-
-            double sy0 = (y - local.Top) * scaleY;
-            double sy1 = sy0 + scaleY;
+            int sourceRow = (y - local.Top) * local.Width;
 
             for (int x = clip.Left; x < clip.Right; x++)
-            {
-                double sx0 = (x - local.Left) * scaleX;
-                double sx1 = sx0 + scaleX;
-
-                uint pixel = scaleX == 1.0 && scaleY == 1.0
-                    ? source[((int)sy0 * image.Width) + (int)sx0]
-                    : Average(source, image.Width, image.Height, sx0, sy0, sx1, sy1);
-
-                BlendPremultiplied(ref row[x], pixel);
-            }
+                BlendPremultiplied(ref row[x], scaled[sourceRow + (x - local.Left)]);
         }
-    }
-
-    /// <summary>The area-weighted mean of the source over a box in source coordinates.</summary>
-    private static uint Average(ReadOnlySpan<uint> source, int width, int height, double x0, double y0, double x1, double y1)
-    {
-        double b = 0, g = 0, r = 0, a = 0, total = 0;
-
-        int firstY = Math.Max(0, (int)Math.Floor(y0));
-        int lastY = Math.Min(height - 1, (int)Math.Ceiling(y1) - 1);
-        int firstX = Math.Max(0, (int)Math.Floor(x0));
-        int lastX = Math.Min(width - 1, (int)Math.Ceiling(x1) - 1);
-
-        for (int sy = firstY; sy <= lastY; sy++)
-        {
-            double weightY = Math.Min(sy + 1, y1) - Math.Max(sy, y0);
-            if (weightY <= 0) continue;
-
-            for (int sx = firstX; sx <= lastX; sx++)
-            {
-                double weightX = Math.Min(sx + 1, x1) - Math.Max(sx, x0);
-                if (weightX <= 0) continue;
-
-                double weight = weightX * weightY;
-                uint p = source[(sy * width) + sx];
-
-                b += (p & 0xFF) * weight;
-                g += ((p >> 8) & 0xFF) * weight;
-                r += ((p >> 16) & 0xFF) * weight;
-                a += (p >> 24) * weight;
-                total += weight;
-            }
-        }
-
-        if (total <= 0) return 0;
-
-        return Pack(
-            (int)Math.Round(r / total),
-            (int)Math.Round(g / total),
-            (int)Math.Round(b / total),
-            (int)Math.Round(a / total));
     }
 
     /// <summary>Source-over of one premultiplied pixel onto another.</summary>
