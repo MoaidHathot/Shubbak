@@ -96,9 +96,13 @@ call and leaves with it.
 ### The focused window's icon
 
 ```kdl
-zone "centre" justify="center" grow=1 {
-    icon size=20
-    text template="{{ window.title }}"
+bar {
+    profile "default" {
+        zone "centre" justify="center" grow=1 {
+            icon size=20
+            text template="{{ window.title }}"
+        }
+    }
 }
 ```
 

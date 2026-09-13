@@ -146,6 +146,17 @@ public sealed class PowerThrottlingTests
 
         try
         {
+            // What this machine can do at all, before anything is asked of it. A virtual
+            // machine, or a hosted runner sharing two cores with nine other test hosts,
+            // may not deliver a 7 ms wait even with the fine timer held and nothing
+            // ignoring it - and then there is nothing for the ignore bit to take away or
+            // the opt-out to give back. Without this the next reading looked like the
+            // mechanism biting when it was the machine being coarse, and the assertion
+            // after it demanded a resolution the machine had never shown.
+            int baseline = PassesIn300Ms();
+
+            if (baseline <= 30) return;
+
             // Windows 10 has no such mechanism and rejects the control bit. Nothing to
             // observe there, and nothing at stake either: the heuristic this guards
             // against does not exist on that build.
@@ -165,8 +176,8 @@ public sealed class PowerThrottlingTests
 
             Assert.True(
                 honoured > 30,
-                $"Windows ignored the fine timer ({ignored} passes in 300 ms at 7 ms) and OptOut did not " +
-                $"make it honour it again ({honoured} passes); HonorsTimerResolution={PowerThrottling.HonorsTimerResolution}" +
+                $"Windows ignored the fine timer ({ignored} passes in 300 ms at 7 ms, against {baseline} before the bit was set) " +
+                $"and OptOut did not make it honour it again ({honoured} passes); HonorsTimerResolution={PowerThrottling.HonorsTimerResolution}" +
                 $"{(PowerThrottling.TimerResolutionFailure is { } why ? $" ({why})" : "")}");
         }
         finally
