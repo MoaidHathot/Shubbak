@@ -256,6 +256,21 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A window dragged onto a fibonacci, grid or master-stack workspace is tiled by that
+  layout, not by where the mouse let go.** Dropping beside a window wrapped the target
+  in a manual split whose axis came from whichever edge the cursor was nearest, which
+  is right inside `splith` and `splitv` - the tree is the layout there, and a drop
+  across the axis is how nesting is asked for - and wrong everywhere else, where the
+  layout decides the geometry from the order alone and a hand-made split has no
+  business being. Worse, when the workspace had held a single window, flattening then
+  made that split the workspace's layout: a window dragged onto a `fibonacci-v`
+  monitor turned it into `splitv` or `splith` depending on the drop, and the layout
+  chosen for that monitor was gone until somebody set it again. In an automatic layout
+  the edge now decides only the order - leading edge before the target, trailing edge
+  after - and the layout draws the result, exactly as the keyboard's `move` has always
+  done; `splith` and `splitv` are unchanged. The docs now also say which way round
+  *horizontal* and *vertical* run, since `fibonacci-v` stacking two windows top and
+  bottom is the layout doing what its name means, not the bug.
 - **A long window title no longer squeezes the clock.** The bar's layout shared
   overflow out proportionally among every child, so a title longer than the centre
   zone took width from the readouts beside it - and the guard against that was

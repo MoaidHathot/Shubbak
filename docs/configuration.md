@@ -186,6 +186,19 @@ sit inside a columns region with no special case. Eleven of them:
 `splith` `splitv` `fibonacci` `fibonacci-v` `fibonacci-mirrored` `master-left`
 `master-right` `master-top` `master-bottom` `grid` `monocle`
 
+*Horizontal* and *vertical* name the direction the windows are laid out in, as in i3:
+`splith` puts them side by side in a row, `splitv` stacks them top to bottom. So
+`fibonacci` opens with a left/right divide and `fibonacci-v` with a top/bottom one -
+two windows in `fibonacci-v` are one above the other. If you think of the divider
+rather than the windows, the names read the other way round; the names follow the
+windows.
+
+`splith` and `splitv` are the two **manual** layouts: the tree is the layout, a window
+goes exactly where you put it, and `split` nests one inside the other. The other nine
+are **automatic**: they take the windows in order and decide the geometry themselves,
+which is what makes a fourth terminal need no thought. That difference shows up in
+what the mouse can do - see [Mouse](#mouse).
+
 `layout --set <name>` picks one for the focused container; `layout --cycle` walks a
 short list, deliberately ordered so each one looks obviously different from the last.
 `shubbak layouts` lists them, and the palette's `~` mode says what each actually does.
@@ -404,8 +417,17 @@ fastest display by default (`fps "auto"`) and is re-read when monitors come and 
 ## Mouse
 
 Drag a tiled window onto the middle of another to **swap** them, or near an edge to
-**insert** beside it. Drag a border to resize, and the resize is written back into the
-tree's ratios, so the next layout pass respects it instead of undoing it.
+**insert** beside it. What "beside" means depends on the layout of the container you
+drop into. In a manual split (`splith`, `splitv`) the edge is taken literally: a drop
+along the split's axis slots the window in on that side, and a drop across it - on
+the top edge of a window in a row - nests a new split there, which is how you build
+nesting with the mouse. In an automatic layout (`fibonacci`, `grid`, `master-*`) the
+layout owns the geometry, so the edge decides only the order: the leading edge puts
+the window before the target, the trailing edge after it, and the layout draws the
+result - drop onto a `fibonacci-v` monitor and you get two windows stacked as
+`fibonacci-v` stacks them, wherever the mouse was. Drag a border to resize, and the
+resize is written back into the tree's ratios, so the next layout pass respects it
+instead of undoing it.
 `focus-follows-cursor` in `general` does what it says; `cursor-jump` moves the pointer
 to the window that just took focus, on every focus change or only when it crosses
 monitors.

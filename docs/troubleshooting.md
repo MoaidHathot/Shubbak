@@ -146,12 +146,20 @@ Dropping a tiled window is resolved against the tree:
 | Where you drop | What happens |
 |---|---|
 | middle of another window | the two swap places |
-| near its left/right edge | inserted beside it, horizontally |
-| near its top/bottom edge | stacked with it, vertically |
+| near its left/right edge | inserted beside it - in a manual split, horizontally |
+| near its top/bottom edge | inserted beside it - in a manual split, stacked vertically |
 | far from any window | nothing; it snaps back |
 
 The edge zone is the outer quarter of each side, leaving the middle half as the swap
 zone. A drop landing in the gap between two tiles still resolves to the nearest one.
+
+The edge means what it says only in `splith` and `splitv`, where the tree is the layout
+and a drop across the split's axis nests a new one. In an automatic layout -
+`fibonacci`, `grid`, `master-*` - the layout decides the geometry and the edge decides
+only the order: the leading edge puts the dropped window before the target, the
+trailing edge after it. So a window dropped onto a `fibonacci-v` monitor lands
+stacked, because that is how `fibonacci-v` places a second window, whichever edge the
+cursor was nearest; the layout you set for that monitor stays in charge.
 
 Dragging a **border** resizes instead, converting the new size back into the tree's
 ratios. A move of fewer than 8px, or a size change of fewer than 4px, is ignored -

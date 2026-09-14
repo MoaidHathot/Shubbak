@@ -1408,10 +1408,26 @@ public sealed class WindowManager
     /// Inserts a dragged window beside the window it was dropped next to.
     /// </summary>
     /// <remarks>
-    /// When the target's container already runs along the requested axis, this is a
-    /// reparent. When it does not - dropping to the left of a window inside a
-    /// vertical stack - the target is first wrapped in a new container of the right
-    /// axis, which is precisely the nesting the user asked for by dropping there.
+    /// <para>
+    /// Manual split is the one layout in which the tree <i>is</i> the layout, so a
+    /// drop is read against its axis. Along it, this is a reparent. Across it -
+    /// dropping to the left of a window inside a vertical stack - the target is first
+    /// wrapped in a new split of the right axis, which is precisely the nesting the
+    /// user asked for by dropping there.
+    /// </para>
+    /// <para>
+    /// Every other layout places its children by their order and decides the geometry
+    /// itself: the spiral, the grid and master-stack each take a flat list and put the
+    /// first child where the layout says the first child goes. A drop into one of
+    /// those can choose the order - leading edge before the target, trailing edge
+    /// after - and nothing else, because there is no axis of the container's for the
+    /// drop to agree or disagree with. Wrapping the target in a split there put a
+    /// hand-made split inside an automatic layout, with its axis taken from whichever
+    /// edge the cursor happened to be nearest; and when the workspace had held one
+    /// window, that split became its only child and took over. A window dragged onto
+    /// a <c>fibonacci-v</c> monitor made it <c>splitv</c> or <c>splith</c>, decided by
+    /// the mouse, and the layout chosen for that monitor was gone.
+    /// </para>
     /// </remarks>
     private WmResult InsertBeside(WindowNode window, DropTarget drop)
     {
@@ -1420,7 +1436,7 @@ public sealed class WindowManager
 
         WorkspaceNode? from = window.Workspace;
 
-        if (parent.Layout.PrimaryAxis == drop.Axis)
+        if (parent.Layout is not SplitLayout split || split.Axis == drop.Axis)
         {
             int index = parent.IndexOf(drop.Target);
             if (index < 0) return Reject("drop", "The drop target moved.");
