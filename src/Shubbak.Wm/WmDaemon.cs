@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using Shubbak.Config;
@@ -364,6 +365,13 @@ public sealed class WmDaemon : IDisposable
         _arrangements.Load();
         _wm = new WindowManager();
         _executor = new CommandExecutor(_wm);
+
+        // The one thing the sink cannot work out for itself: which window had the
+        // foreground before it. The hook records every change the system reports,
+        // except to Shubbak's own windows, which is exactly the right answer. Read
+        // through the field rather than captured, so the source made on resume is the
+        // one consulted; null while suspended, when the sink is retired anyway.
+        _sink.PreviousForeground = () => _winEvents?.LastForeground ?? 0;
     }
 
     public WindowManager Manager => _wm;
@@ -2501,6 +2509,20 @@ public sealed class WmDaemon : IDisposable
         nint foreground = Win32Window.GetForeground();
         if (foreground == 0) return true;
 
+        // The focus sink in front means nothing is: it holds the keyboard because the
+        // workspace has nothing to hold it, or because its only window is minimised. The
+        // tree already says which - no focused window, or that minimised one - and the
+        // command is answered from there: toggle-minimized brings the window it put
+        // away back, which is the promise the key makes, and the rest are refused as
+        // having no window, which is the truth. Refusing here instead named the sink
+        // as an unmanaged window the user should adopt, which is absurd advice about
+        // a window they cannot see.
+        //
+        // The desktop is deliberately not given the same pass. A person can be
+        // working on it - its icons - and the close key must not reach a window they
+        // are not looking at.
+        if (_sink.Is(foreground)) return true;
+
         // Managed, so Shubbak's own idea of focus is the authority - even when the two
         // disagree. They disagree constantly for a moment at a time: SetForegroundWindow
         // is asynchronous, so immediately after a focus command the desktop still names
@@ -4215,7 +4237,15 @@ public sealed class WmDaemon : IDisposable
         bool servingAFocusChange = !ReferenceEquals(focused, _focusedAtLastPass);
         _focusedAtLastPass = focused;
 
-        if (focused is null)
+        // Nothing to raise: no focused window, or a focused window that is minimised.
+        // The second is deliberate on the tree's side - minimising the only window on
+        // a workspace leaves focus on it so that the same key brings it back - and
+        // raising it here would undo the minimise, because Focus restores a minimised
+        // window before activating it. That happened whenever the foreground had gone
+        // somewhere this pass may take it from: the desktop on one monitor, the focus
+        // sink on two. Either way the workspace is showing nothing, and the keyboard
+        // goes where it goes for an empty workspace.
+        if (!HasSomethingToRaise(focused))
         {
             ReleaseStaleForeground();
             return;
@@ -4254,6 +4284,31 @@ public sealed class WmDaemon : IDisposable
     /// left and came back is a new node and reads as a change.
     /// </remarks>
     private WindowNode? _focusedAtLastPass;
+
+    /// <summary>
+    /// Whether the tree's focused window is one a layout pass should bring to the
+    /// front.
+    /// </summary>
+    /// <param name="focused">The focused window, or null for none.</param>
+    /// <remarks>
+    /// <para>
+    /// Not when there is none, and not when it is minimised. The tree keeps focus on
+    /// the only window of a workspace when that window is minimised, so that the key
+    /// which put it away brings it back (<c>toggle-minimized</c> remembers it, but the
+    /// direct reading of the command has to hold as well). That is a fact about where
+    /// the next command lands, not an instruction to show the window - and
+    /// <c>WindowActions.Focus</c> restores a minimised window on its way to activating
+    /// it, so reading it as one undid the minimise on the very next pass.
+    /// </para>
+    /// <para>
+    /// Pure, so the rule can be stated in a test. Judged on the tree's state rather
+    /// than on <c>IsIconic</c>, because the two disagree for a moment in both
+    /// directions - Windows told the tree first, or the tree told Windows first - and
+    /// the tree's state is what the user asked for.
+    /// </para>
+    /// </remarks>
+    internal static bool HasSomethingToRaise([NotNullWhen(true)] WindowNode? focused) =>
+        focused is not null && focused.State != WindowState.Minimised;
 
     /// <summary>
     /// Whether a layout pass may take the foreground away from the window that has it.

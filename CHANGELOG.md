@@ -276,15 +276,43 @@ schedule and breaking either is a different kind of event:
   or minimising after it took the foreground from the sink, which used to move the
   point of action to the other monitor by the same route; minimising is why it is an
   owned window rather than a tool window, since the walk Windows performs for a
-  minimise skips tool windows and does not skip owned ones. The one visible cost is
-  Alt+Esc, which walks the same way and stops on it for a press. `general {
-  empty-workspace-focus "hold" }` is the default; `"desktop"` keeps the previous
-  behaviour for anyone who would rather Shubbak owned no visible window (SHB0453 for
-  anything else). The sink is created on first use, so that setting never creates it,
-  and it is hidden while paused or suspended so that a window closing then behaves as
-  it would with no window manager. Thirteen tests against real windows on real threads
-  pin the behaviour, including a characterisation of the desktop losing that will fail
-  the day Windows changes its mind; five more cover the setting.
+  minimise skips tool windows and does not skip owned ones. Alt+Esc walks the same way
+  and so reaches it; when it does, the sink passes the keyboard straight on to the
+  window Alt+Esc was headed for and drops to the bottom of the order, so no press is
+  lost to it. Telling that cycle from a fallback needed measuring, three times. The
+  window being deactivated, which `WM_ACTIVATE` is documented to carry, is null across
+  threads; `SC_NEXTWINDOW` through `DefWindowProc` does nothing when asked from a window
+  of our own; and `WM_ACTIVATEAPP`, which does name the other side, names the thread
+  that had the keyboard rather than the one that owns the window - for the Windows 11
+  Notepad those differ, and the keyboard's thread owns nothing on screen, so a real
+  Alt+Esc from Notepad was read as a fallback and kept. What is exact is the window
+  itself, and the window manager already knows it: the hook records the last window the
+  system reported taking the foreground, at the moment the event arrives, and the sink
+  asks for it. A cycle has Alt held and that window still on screen; a fallback has it
+  gone, hidden or minimised whatever the keyboard is doing; and it is judged on that
+  window alone, not its thread or process, because Alt+F4 on one browser window while
+  another is open on the other monitor is a fallback too. The walk itself skips what
+  Windows' own skips, cloaked windows included, so a cycle passed on never lands on a
+  workspace Shubbak has concealed. While the sink holds the keyboard, a command that
+  acts on the focused window is answered from the tree rather than refused as aimed at
+  an unmanaged window - so `toggle-minimized` brings back the window it put away, as
+  it promises to. `general { empty-workspace-focus "hold" }` is the default;
+  `"desktop"` keeps the previous behaviour for anyone who would rather Shubbak owned no
+  visible window (SHB0453 for anything else). The sink is created on first use, so
+  that setting never creates it, and it is hidden while paused or suspended so that a
+  window closing then behaves as it would with no window manager. Eighteen tests
+  against real windows on real threads pin the behaviour - a real Alt+Esc passed on, a
+  real Alt+F4 not, and a characterisation of the desktop losing that will fail the day
+  Windows changes its mind - and five more cover the setting. Measured on the live
+  desktop against Notepad as well: launch, Alt+Esc, minimise and restore, each once.
+- **Minimising the only window on a workspace no longer brings it straight back.** The
+  tree keeps focus on that window on purpose, so that the key which put it away brings
+  it back; the layout pass read that as a window to raise, and raising a minimised
+  window restores it. It happened whenever the foreground had gone somewhere the pass
+  may take it from - the desktop on one monitor, the focus sink on two, where the
+  window had opened on a workspace entered empty and so went back to the sink every
+  time. A minimised focused window is now nothing to raise, and the keyboard rests
+  where it rests for an empty workspace. Three tests state the rule.
 - **The window manager can take the foreground from a UWP window.** `AttachThreadInput`
   refuses the thread behind `ApplicationFrameHost` - Settings, the Store, Media Player -
   and `SetForegroundWindow` then refuses too, so a focus key, a workspace switch or the

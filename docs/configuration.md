@@ -355,10 +355,10 @@ general {
 foreground to the window that had it before, and that window is now Shubbak's, on the
 monitor you are looking at. It also catches the last window on a workspace closing or
 minimising after it, which used to jump to the other monitor for the same reason. The
-window is never on the taskbar or in Alt+Tab; the one place it shows is Alt+Esc, which
-walks windows in stacking order and stops on it for a press. `desktop` is for anyone
-who would rather Shubbak owned no such window — on a single monitor the two behave the
-same.
+window is never on the taskbar or in Alt+Tab, and when Alt+Esc — which walks windows in
+stacking order — reaches it, it hands the keyboard straight on to the next window, so
+no press is lost to it. `desktop` is for anyone who would rather Shubbak owned no such
+window — on a single monitor the two behave the same.
 
 ## Contexts
 

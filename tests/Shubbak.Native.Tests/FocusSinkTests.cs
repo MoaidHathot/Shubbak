@@ -1,6 +1,7 @@
 using Shubbak.Core.Geometry;
 using Windows.Win32;
 using Windows.Win32.Foundation;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
 using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Shubbak.Native.Tests;
@@ -66,6 +67,7 @@ public sealed class FocusSinkTests
 
         using var launcher = new TestWindow("Launcher", style: AppStyle);
         Assert.True(launcher.Activate(), Desktop.WhyNotInFront("the launcher"));
+        host.PreviousForeground = launcher.Handle;
         Assert.False(host.HoldsForeground);
 
         if (destroyed) launcher.Destroy(); else launcher.Hide();
@@ -91,6 +93,7 @@ public sealed class FocusSinkTests
             "Palette", style: AppStyle,
             exStyle: WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_TOPMOST);
         Assert.True(launcher.Activate(), Desktop.WhyNotInFront("the launcher"));
+        host.PreviousForeground = launcher.Handle;
 
         launcher.Hide();
 
@@ -158,6 +161,7 @@ public sealed class FocusSinkTests
 
         using var window = new TestWindow("Opened on the empty workspace", style: AppStyle);
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the window"));
+        host.PreviousForeground = window.Handle;
         Assert.False(host.HoldsForeground);
 
         switch (how)
@@ -169,6 +173,177 @@ public sealed class FocusSinkTests
 
         TestWindow.PumpUntil(() => host.HoldsForeground, 1000);
         Assert.True(host.HoldsForeground, "the foreground went to " + Describe(Win32Window.GetForeground(), other));
+
+        // And it stays there: a fallback is not a cycle, and nothing is passed on.
+        TestWindow.PumpOnce();
+        Assert.True(host.HoldsForeground, "the sink passed a fallback on to " + Describe(Win32Window.GetForeground(), other));
+        Assert.Equal(0, host.PassedOn);
+    }
+
+    /// <summary>
+    /// Alt+F4 is a fallback with Alt held: the window closed, so nothing is passed on.
+    /// </summary>
+    /// <remarks>
+    /// The case that rules out judging on the keyboard alone. Closing the last window
+    /// on a workspace with Alt+F4 lands the foreground on the sink with Alt still down,
+    /// exactly as Alt+Esc does - and passing it on would send the keyboard to the
+    /// other monitor, which is the bug the sink exists to fix.
+    /// </remarks>
+    [Fact]
+    public void AltF4OnTheLastWindowIsNotPassedOn()
+    {
+        using var restore = new ForegroundGuard();
+        using var other = new TestWindow("Other", style: AppStyle);
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
+
+        using var host = new SinkHost();
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
+
+        using var window = new TestWindow("Closed with Alt+F4", style: AppStyle);
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the window"));
+        host.PreviousForeground = window.Handle;
+
+        Keyboard.Press(VIRTUAL_KEY.VK_MENU);
+
+        try
+        {
+            window.Destroy();
+            TestWindow.PumpUntil(() => host.HoldsForeground, 1000);
+            TestWindow.PumpOnce();
+        }
+        finally
+        {
+            Keyboard.Release(VIRTUAL_KEY.VK_MENU);
+        }
+
+        Assert.True(host.HoldsForeground, "the foreground went to " + Describe(Win32Window.GetForeground(), other));
+        Assert.Equal(0, host.PassedOn);
+    }
+
+    /// <summary>
+    /// Alt+Esc reaching the sink is passed on to the window it was headed for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The stacking order is W, sink, Other, top to bottom - the shape the desktop is
+    /// in after a window opens on a formerly empty workspace. A real Alt+Esc from W
+    /// lands on the sink, since Windows' own walk does not skip an owned window; the
+    /// sink then hands the keyboard on to Other and goes to the bottom of the order.
+    /// The user sees one press move from W to Other, which is what Alt+Esc means.
+    /// </para>
+    /// <para>
+    /// A real keystroke, because the judgement reads the keyboard: Alt is held for the
+    /// switch as a person holds it, and released after.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void AltEscReachingItIsPassedOn()
+    {
+        using var restore = new ForegroundGuard();
+        using var other = new TestWindow("Other", style: AppStyle);
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
+
+        using var host = new SinkHost();
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
+
+        using var window = new TestWindow("W", style: AppStyle);
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("W"));
+        host.PreviousForeground = window.Handle;
+
+        Keyboard.AltEsc();
+
+        TestWindow.PumpUntil(() => other.HoldsForeground, 1500);
+
+        Assert.True(other.HoldsForeground, "the foreground stayed on " + Describe(Win32Window.GetForeground(), other));
+        Assert.Equal(1, host.PassedOn);
+    }
+
+    /// <summary>
+    /// The two conditions of the judgement, and why both are needed.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true, true)]     // Alt+Esc: Alt down, the window it came from still on screen
+    [InlineData(true, false, false)]   // Alt+F4: Alt down, the window gone - however many siblings its thread or process still shows
+    [InlineData(false, true, false)]   // the window still on screen but no Alt: nothing Windows is known to do, and not read as a cycle
+    [InlineData(false, false, false)]  // a plain close, hide or minimise, or a launcher putting itself away
+    public void ACycleNeedsAltDownAndThePreviousWindowStillShowing(bool alt, bool stillShowing, bool cycled)
+    {
+        Assert.Equal(cycled, FocusSink.WasCycledOnto(alt, stillShowing));
+    }
+
+    /// <summary>
+    /// Nobody told the sink who had the foreground: an activation is then never a cycle.
+    /// </summary>
+    [Fact]
+    public void WithNothingKnownAboutThePreviousForegroundAltEscIsKept()
+    {
+        using var restore = new ForegroundGuard();
+        using var other = new TestWindow("Other", style: AppStyle);
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
+
+        using var host = new SinkHost { TellsPreviousForeground = false };
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
+
+        using var window = new TestWindow("W", style: AppStyle);
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("W"));
+        host.PreviousForeground = window.Handle;
+
+        Keyboard.AltEsc();
+
+        TestWindow.PumpUntil(() => host.HoldsForeground, 1000);
+        TestWindow.PumpOnce();
+
+        Assert.True(host.HoldsForeground, "the foreground went to " + Describe(Win32Window.GetForeground(), other));
+        Assert.Equal(0, host.PassedOn);
+    }
+
+    /// <summary>What Alt+Esc stops on, as far as it could be measured.</summary>
+    [Fact]
+    public void ACycleStopIsOnScreenAndAbleToTakeTheKeyboard()
+    {
+        using var restore = new ForegroundGuard();
+
+        using var plain = new TestWindow("Plain", style: AppStyle);
+        Assert.True(FocusSink.IsCycleStop(plain.Handle));
+
+        using var hidden = new TestWindow("Hidden", visible: false, style: AppStyle);
+        Assert.False(FocusSink.IsCycleStop(hidden.Handle));
+
+        using var tool = new TestWindow("Tool", style: AppStyle, exStyle: WINDOW_EX_STYLE.WS_EX_TOOLWINDOW);
+        Assert.False(FocusSink.IsCycleStop(tool.Handle));
+
+        using var toolButApp = new TestWindow(
+            "Tool that asks to be an app", style: AppStyle,
+            exStyle: WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_APPWINDOW);
+        Assert.True(FocusSink.IsCycleStop(toolButApp.Handle));
+
+        using var noActivate = new TestWindow("Declines the keyboard", style: AppStyle, exStyle: WINDOW_EX_STYLE.WS_EX_NOACTIVATE);
+        Assert.False(FocusSink.IsCycleStop(noActivate.Handle));
+
+        using var minimised = new TestWindow("Minimised", style: AppStyle);
+        minimised.Minimise();
+        Assert.False(FocusSink.IsCycleStop(minimised.Handle));
+
+        // Cloaked: on another virtual desktop, or on a workspace Shubbak has concealed.
+        // Windows' own Alt+Esc skips these - measured - and so must the walk, or a
+        // cycle passed on from the sink would switch the desktop to a hidden workspace.
+        using var cloaked = new TestWindow("Cloaked", style: AppStyle);
+        Assert.True(Win32Window.Cloak(cloaked.Handle));
+        Assert.False(FocusSink.IsCycleStop(cloaked.Handle));
+
+        // Owned by a window that is on screen: the owner is the stop, as it is for a
+        // dialog, and activating it brings the owned window forward.
+        using var owner = new TestWindow("Owner", style: AppStyle);
+        using var dialog = new TestWindow("Dialog", style: AppStyle, owner: owner);
+        Assert.False(FocusSink.IsCycleStop(dialog.Handle));
+        Assert.True(FocusSink.IsCycleStop(owner.Handle));
+
+        // Gone: the window Alt+F4 closed. And nothing, for a manager that does not know.
+        var closed = new TestWindow("Closed", style: AppStyle);
+        nint closedHandle = closed.Handle;
+        closed.Destroy();
+        Assert.False(FocusSink.IsCycleStop(closedHandle));
+        Assert.False(FocusSink.IsCycleStop(0));
     }
 
     /// <summary>Taking what is already held is a no-op that still says yes.</summary>
@@ -367,9 +542,18 @@ public sealed class FocusSinkTests
     /// does, and runs every call to it there.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The sink's window has to be pumped by the thread that created it, and taking
     /// the foreground sends messages to that thread synchronously. The test thread does
     /// not pump, so the sink cannot live there.
+    /// </para>
+    /// <para>
+    /// It also stands in for the window manager as the sink's source of "who had the
+    /// foreground before me". The daemon answers from the last foreground event the
+    /// system reported; here the test says so after each activation it performs, which
+    /// is the same information by a shorter route - a hook in this process would skip
+    /// this process's windows.
+    /// </para>
     /// </remarks>
     private sealed class SinkHost : IDisposable
     {
@@ -381,6 +565,7 @@ public sealed class FocusSinkTests
         private readonly FocusSink _sink = new();
         private uint _threadId;
         private bool _disposed;
+        private nint _previousForeground;
 
         public SinkHost()
         {
@@ -389,11 +574,25 @@ public sealed class FocusSinkTests
 
             if (!_ready.Wait(TimeSpan.FromSeconds(5)))
                 throw new InvalidOperationException("the sink host never started");
+
+            _sink.PreviousForeground = () => TellsPreviousForeground ? Volatile.Read(ref _previousForeground) : 0;
         }
+
+        /// <summary>The window the manager last saw take the foreground, as the test reports it.</summary>
+        public nint PreviousForeground
+        {
+            get => Volatile.Read(ref _previousForeground);
+            set => Volatile.Write(ref _previousForeground, value);
+        }
+
+        /// <summary>Whether the sink is told anything at all; off models a manager that does not know.</summary>
+        public bool TellsPreviousForeground { get; init; } = true;
 
         public nint Handle => _sink.Handle;
 
         public (int X, int Y) Position => _sink.Position;
+
+        public int PassedOn => _sink.PassedOn;
 
         public bool HoldsForeground => _sink.HoldsForeground;
 

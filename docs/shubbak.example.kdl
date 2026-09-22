@@ -67,9 +67,9 @@ general {
     // The same window catches the last window on a workspace closing or minimising
     // after it, which used to move the point of action to the other monitor too.
     //
-    // The one visible cost: Alt+Esc, which walks windows in stacking order without
-    // the Alt+Tab picture, stops on it for a press. Alt+Tab and the taskbar never
-    // list it.
+    // Alt+Tab and the taskbar never list it. Alt+Esc, which walks windows in
+    // stacking order without the Alt+Tab picture, does reach it - and it passes the
+    // keyboard straight on to the next window, so no press is lost to it.
     empty-workspace-focus "hold"
 
     // What a command that targets a window does when the focused window is one

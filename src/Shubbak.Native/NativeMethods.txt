@@ -202,6 +202,18 @@ WM_HOTKEY
 // Shubbak's that is shown and takes the foreground on purpose, so that an empty
 // workspace has something of its own to hold the keyboard. Zero-sized, owned, and
 // excluded from the filter by class.
+//
+// When Alt+Esc cycles onto it, the sink passes the gesture on rather than costing a
+// press. Telling a cycle from a fallback is a question about the window that had the
+// foreground before the sink - which the window manager supplies, since WM_ACTIVATE's
+// window is null across threads and WM_ACTIVATEAPP's thread is the one that had the
+// keyboard rather than the one that owns the window (both measured). Passing on is a
+// walk of the stacking order with GetWindow, because SC_NEXTWINDOW through
+// DefWindowProc does nothing when asked from here.
+WM_ACTIVATE
+IsWindowEnabled
+GetWindow
+GET_WINDOW_CMD
 RegisterClassEx
 WNDCLASSEXW
 CreateWindowEx

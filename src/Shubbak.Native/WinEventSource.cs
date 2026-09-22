@@ -158,6 +158,28 @@ public sealed class WinEventSource : IDisposable
         get { lock (_gate) return _queue.Count; }
     }
 
+    /// <summary>
+    /// The window the system most recently reported as having taken the foreground,
+    /// or zero before any has.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Recorded in the hook callback, at the moment the event arrives, rather than
+    /// when the notification is drained. The difference is a tick, and there is one
+    /// reader for whom a tick is too late: the focus sink, judging why it was just
+    /// activated. Its own messages are dispatched from the same pump before the
+    /// drain runs, so a record kept by the drain would still name the window before
+    /// the one that matters.
+    /// </para>
+    /// <para>
+    /// Never a window of this process - the hook skips it - which is what makes the
+    /// answer useful: it is always the last window that was not Shubbak's own.
+    /// </para>
+    /// </remarks>
+    public nint LastForeground => _lastForeground;
+
+    private nint _lastForeground;
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static unsafe void Callback(
         HWINEVENTHOOK hook, uint eventId, HWND hwnd, int idObject, int idChild,
@@ -175,6 +197,9 @@ public sealed class WinEventSource : IDisposable
 
             WinEventKind? kind = MapKind(eventId);
             if (kind is null) return;
+
+            // A field write on the pump's own thread; see LastForeground.
+            if (kind == WinEventKind.Foreground) source._lastForeground = (nint)hwnd.Value;
 
             source.Enqueue(new WinEventNotification(kind.Value, (nint)hwnd.Value));
         }

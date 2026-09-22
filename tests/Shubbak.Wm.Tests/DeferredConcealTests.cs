@@ -323,3 +323,58 @@ public sealed class StaleForegroundTests
         Assert.False(WmDaemon.IsStaleForeground(null, focused: null));
     }
 }
+
+/// <summary>
+/// Whether the layout pass has a focused window to bring to the front at all.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The tree keeps focus on the only window of a workspace when it is minimised, so
+/// that the key which put it away brings it back. That is a fact about where the next
+/// command lands, not an instruction to show the window - and the pass read it as one:
+/// <c>WindowActions.Focus</c> restores a minimised window on its way to activating it,
+/// so minimising the last window on a workspace brought it straight back whenever the
+/// foreground had gone somewhere the pass may take it from. The desktop, on one
+/// monitor; the focus sink, on two, where it went every time.
+/// </para>
+/// <para>
+/// Judged on the tree's state rather than the window's, because the two disagree for
+/// a moment in both directions and the tree's is what the user asked for.
+/// </para>
+/// </remarks>
+public sealed class SomethingToRaiseTests
+{
+    private static WindowNode Window() => new(
+        handle: 1,
+        new WindowIdentity { ProcessName = "process", ClassName = "Class", Title = "a" });
+
+    [Fact]
+    public void NothingFocusedIsNothingToRaise()
+    {
+        Assert.False(WmDaemon.HasSomethingToRaise(null));
+    }
+
+    [Fact]
+    public void AMinimisedFocusedWindowIsNothingToRaise()
+    {
+        // The reported case: alt+m on the only window of a workspace entered empty. The
+        // sink took the foreground when the window minimised, the pass saw the tree
+        // still focused on the window, and un-minimised it.
+        WindowNode window = Window();
+        window.State = WindowState.Minimised;
+
+        Assert.False(WmDaemon.HasSomethingToRaise(window));
+    }
+
+    [Theory]
+    [InlineData(WindowState.Tiling)]
+    [InlineData(WindowState.Floating)]
+    [InlineData(WindowState.Fullscreen)]
+    public void AnyOtherFocusedWindowIsRaised(WindowState state)
+    {
+        WindowNode window = Window();
+        window.State = state;
+
+        Assert.True(WmDaemon.HasSomethingToRaise(window));
+    }
+}
