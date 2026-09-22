@@ -285,6 +285,16 @@ schedule and breaking either is a different kind of event:
   it would with no window manager. Thirteen tests against real windows on real threads
   pin the behaviour, including a characterisation of the desktop losing that will fail
   the day Windows changes its mind; five more cover the setting.
+- **The window manager can take the foreground from a UWP window.** `AttachThreadInput`
+  refuses the thread behind `ApplicationFrameHost` - Settings, the Store, Media Player -
+  and `SetForegroundWindow` then refuses too, so a focus key, a workspace switch or the
+  focus sink asked to act while such a window was in front did nothing. The palette met
+  the same wall first and got past it by providing one input event - a key-up of
+  `VK_NONAME`, which nothing handles - since a process that has just provided input may
+  take the foreground; `WindowActions.Focus` now does the same, only after a refusal,
+  so the ordinary case costs nothing extra. It also attaches input only across
+  processes, which is where the restriction lives. Measured by running the sink's tests
+  with Settings in front: sixteen of sixteen, where the first step used to be refused.
 - **A window dragged onto a fibonacci, grid or master-stack workspace is tiled by that
   layout, not by where the mouse let go.** Dropping beside a window wrapped the target
   in a manual split whose axis came from whichever edge the cursor was nearest, which

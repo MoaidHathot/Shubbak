@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Shubbak.Core.Geometry;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -40,6 +41,17 @@ public static class WindowActions
     /// attached couples the two threads' input state and causes symptoms that look
     /// like random keyboard freezes.
     /// </para>
+    /// <para>
+    /// And when the attached request is refused, one more thing, learned by the
+    /// palette first. <c>AttachThreadInput</c> to the thread behind a UWP frame -
+    /// Settings, the Store, whatever <c>ApplicationFrameHost</c> is showing - fails
+    /// with access denied, and every <c>SetForegroundWindow</c> then fails too. The
+    /// way past it is the other clause of Windows' rule: a process that has just
+    /// provided input may take the foreground. So this process provides one event: a
+    /// key-up, through <c>SendInput</c>, of a key nobody has bound and nobody is
+    /// holding, which every window ignores and the keyboard hook lets through. Then it
+    /// asks once more. Tried only on refusal, so the ordinary case costs nothing extra.
+    /// </para>
     /// </remarks>
     public static unsafe bool Focus(nint handle)
     {
@@ -65,12 +77,42 @@ public static class WindowActions
                 attached = PInvoke.AttachThreadInput(ours, theirs, true);
 
             PInvoke.BringWindowToTop(hwnd);
-            return PInvoke.SetForegroundWindow(hwnd);
+            if (PInvoke.SetForegroundWindow(hwnd)) return true;
         }
         finally
         {
             if (attached) PInvoke.AttachThreadInput(ours, theirs, false);
         }
+
+        // Refused. Provide an input event and ask again; see the remarks.
+        if (!Nudge()) return false;
+
+        PInvoke.BringWindowToTop(hwnd);
+        return PInvoke.SetForegroundWindow(hwnd);
+    }
+
+    /// <summary>
+    /// The key whose release is injected by <see cref="Nudge"/>: <c>VK_NONAME</c>,
+    /// which the keyboard layout maps to nothing and no application handles.
+    /// </summary>
+    private const VIRTUAL_KEY Neutral = (VIRTUAL_KEY)0xFC;
+
+    /// <summary>
+    /// Provides one input event, so that this process has provided the last one.
+    /// </summary>
+    /// <returns>
+    /// Whether Windows took it. It does not when the window in front runs at a higher
+    /// integrity level than this process.
+    /// </returns>
+    private static bool Nudge()
+    {
+        var input = new INPUT { type = INPUT_TYPE.INPUT_KEYBOARD };
+        input.Anonymous.ki.wVk = Neutral;
+        input.Anonymous.ki.dwFlags = KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
+
+        Span<INPUT> one = [input];
+
+        return PInvoke.SendInput(one, Marshal.SizeOf<INPUT>()) == 1;
     }
 
     /// <summary>

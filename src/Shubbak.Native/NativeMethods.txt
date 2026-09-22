@@ -91,6 +91,15 @@ WINDOWPLACEMENT
 SetForegroundWindow
 BringWindowToTop
 AttachThreadInput
+
+// The second route to the foreground, when attaching input is refused. Windows lets
+// the process that provided the last input event take the foreground, so one key-up
+// of a key nobody has bound is provided. See WindowActions.Focus; Dalil does the
+// same thing for the same reason.
+SendInput
+INPUT
+INPUT_TYPE
+KEYBD_EVENT_FLAGS
 SetWindowLong
 PostMessage
 SendMessageTimeout

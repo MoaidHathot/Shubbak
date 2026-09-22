@@ -29,7 +29,8 @@ namespace Shubbak.Native.Tests;
 /// <para>
 /// These take the foreground for real, briefly, and give it back at the end of each
 /// test. Like every test in this project they refuse to run beside a live window
-/// manager.
+/// manager; and they are skipped, saying so, on a window station where no process can
+/// be given the foreground at all - see <see cref="FactOnAnInteractiveDesktopAttribute"/>.
 /// </para>
 /// </remarks>
 public sealed class FocusSinkTests
@@ -49,20 +50,20 @@ public sealed class FocusSinkTests
     /// the window that had the foreground before the workspace was switched away
     /// from it. Without the sink, this is where the foreground would go.
     /// </remarks>
-    [Theory]
+    [TheoryOnAnInteractiveDesktop]
     [InlineData(false)]
     [InlineData(true)]
     public void TheLauncherHandsTheForegroundBackToTheSink(bool destroyed)
     {
         using var restore = new ForegroundGuard();
         using var other = new TestWindow("Other", style: AppStyle);
-        Assert.True(other.Activate(), "the test host could not take the foreground");
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
 
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary), "the sink could not take the foreground");
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         using var launcher = new TestWindow("Launcher", style: AppStyle);
-        Assert.True(launcher.Activate());
+        Assert.True(launcher.Activate(), Desktop.WhyNotInFront("the launcher"));
         Assert.False(host.HoldsForeground);
 
         if (destroyed) launcher.Destroy(); else launcher.Hide();
@@ -74,20 +75,20 @@ public sealed class FocusSinkTests
     /// <summary>
     /// The tool-window shaped launcher - the command palette is one - is no different.
     /// </summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void AToolWindowLauncherHandsItBackToo()
     {
         using var restore = new ForegroundGuard();
         using var other = new TestWindow("Other", style: AppStyle);
-        Assert.True(other.Activate(), "the test host could not take the foreground");
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
 
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         using var launcher = new TestWindow(
             "Palette", style: AppStyle,
             exStyle: WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_TOPMOST);
-        Assert.True(launcher.Activate());
+        Assert.True(launcher.Activate(), Desktop.WhyNotInFront("the launcher"));
 
         launcher.Hide();
 
@@ -104,19 +105,19 @@ public sealed class FocusSinkTests
     /// measurement the design rests on. Should a future Windows start returning the
     /// foreground to the desktop, this fails and the sink becomes optional.
     /// </remarks>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void TheDesktopIsNotHandedTheForegroundBack()
     {
         using var restore = new ForegroundGuard();
         using var other = new TestWindow("Other", style: AppStyle);
-        Assert.True(other.Activate(), "the test host could not take the foreground");
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
 
         // Parked from a thread of ours, as the daemon did.
         using var host = new SinkHost();
         Assert.True(host.Invoke(WindowActions.FocusDesktop), "the desktop could not be given the foreground");
 
         using var launcher = new TestWindow("Launcher", style: AppStyle);
-        Assert.True(launcher.Activate());
+        Assert.True(launcher.Activate(), Desktop.WhyNotInFront("the launcher"));
 
         launcher.Hide();
 
@@ -140,7 +141,7 @@ public sealed class FocusSinkTests
     /// The sink is an owned popup instead, and this is the test that would notice a
     /// change of mind.
     /// </remarks>
-    [Theory]
+    [TheoryOnAnInteractiveDesktop]
     [InlineData("destroy")]
     [InlineData("hide")]
     [InlineData("minimise")]
@@ -148,13 +149,13 @@ public sealed class FocusSinkTests
     {
         using var restore = new ForegroundGuard();
         using var other = new TestWindow("Other", style: AppStyle);
-        Assert.True(other.Activate(), "the test host could not take the foreground");
+        Assert.True(other.Activate(), Desktop.WhyNotInFront("\"Other\""));
 
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         using var window = new TestWindow("Opened on the empty workspace", style: AppStyle);
-        Assert.True(window.Activate());
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the window"));
         Assert.False(host.HoldsForeground);
 
         switch (how)
@@ -169,16 +170,16 @@ public sealed class FocusSinkTests
     }
 
     /// <summary>Taking what is already held is a no-op that still says yes.</summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void TakingTwiceIsHarmless()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
 
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
         nint first = host.Handle;
 
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
         Assert.Equal(first, host.Handle);
         Assert.True(host.HoldsForeground);
     }
@@ -193,13 +194,13 @@ public sealed class FocusSinkTests
     /// was. A launcher that opens on the foreground window's monitor would open on the
     /// wrong one until the sink follows the point of action.
     /// </remarks>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void TakingForAnotherMonitorMovesItThere()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
 
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
         Assert.Equal((0, 0), host.Position);
 
         // Another monitor, or the same one at a different origin: the origin is all the
@@ -217,12 +218,12 @@ public sealed class FocusSinkTests
     /// <summary>
     /// Nothing about it is ever a window to tile, under every setting the filter has.
     /// </summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void ItIsNeverManageable()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         nint handle = host.Handle;
 
@@ -239,12 +240,12 @@ public sealed class FocusSinkTests
     /// The filter names the shape: an owned window without a title bar is refused as
     /// an owned popup, before its class is even looked at.
     /// </remarks>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void ItIsAnOwnedPopupRatherThanAToolWindow()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         nint handle = host.Handle;
 
@@ -260,12 +261,12 @@ public sealed class FocusSinkTests
     /// Alt+F4 with the keyboard on the sink asks it to close. It declines: destroyed,
     /// it would be gone for the rest of the session with nothing to notice.
     /// </summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void ItDeclinesToClose()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         nint handle = host.Handle;
         PInvoke.SendMessage(new HWND(handle), PInvoke.WM_CLOSE, default, default);
@@ -278,12 +279,12 @@ public sealed class FocusSinkTests
     /// Retiring hides it and does not leave the keyboard on a window that is about to
     /// vanish: the foreground is handed to the desktop first.
     /// </summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void RetiringHidesItAndHandsTheForegroundOn()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         host.Retire();
 
@@ -293,26 +294,26 @@ public sealed class FocusSinkTests
     }
 
     /// <summary>A retired sink can be taken again.</summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void ItCanBeTakenAgainAfterRetiring()
     {
         using var restore = new ForegroundGuard();
         using var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
         host.Retire();
 
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
         Assert.True(host.HoldsForeground);
         Assert.True(Win32Window.IsVisible(host.Handle));
     }
 
     /// <summary>Disposing removes both windows, and disposing twice is harmless.</summary>
-    [Fact]
+    [FactOnAnInteractiveDesktop]
     public void DisposingLeavesNothingBehind()
     {
         using var restore = new ForegroundGuard();
         var host = new SinkHost();
-        Assert.True(host.Take(Primary));
+        Assert.True(host.Take(Primary), Desktop.WhyNotInFront("the sink"));
 
         host.Dispose();
         host.Dispose();
