@@ -256,6 +256,35 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **An application launched from an empty workspace opens on that workspace, not on
+  the other monitor.** Switch to an empty workspace on one display, open a launcher -
+  PowerToys Command Palette, Dalil, the Start menu - start Edge, and more often than
+  not Edge appeared on the workspace displayed on the other monitor. The keyboard has
+  to be somewhere while a workspace is empty, and Shubbak parked it on the desktop.
+  When the launcher hid itself, Windows handed the foreground to the window that had
+  it before the launcher - and Windows never chooses the desktop for that, so it chose
+  the first application window it found: the one on the other monitor. Shubbak followed
+  that as a focus change, the point of action moved across, and the new window was
+  placed where focus now was. Measured cross-process on a live desktop, with the
+  desktop losing every time; the earlier fix only ever worked with one monitor, where
+  every other candidate was concealed. The keyboard is now held instead by an invisible
+  window of Shubbak's own - zero pixels, owned so it is on no taskbar and in no Alt+Tab
+  list, placed on the monitor whose workspace is empty - and that is the window
+  Windows hands the foreground back to. `Shubbak.Native.FocusSink` is the new piece;
+  the filter refuses its class by name, the hook never reports it, and it declines
+  Alt+F4. The same window also catches the last window on a workspace closing, hiding
+  or minimising after it took the foreground from the sink, which used to move the
+  point of action to the other monitor by the same route; minimising is why it is an
+  owned window rather than a tool window, since the walk Windows performs for a
+  minimise skips tool windows and does not skip owned ones. The one visible cost is
+  Alt+Esc, which walks the same way and stops on it for a press. `general {
+  empty-workspace-focus "hold" }` is the default; `"desktop"` keeps the previous
+  behaviour for anyone who would rather Shubbak owned no visible window (SHB0453 for
+  anything else). The sink is created on first use, so that setting never creates it,
+  and it is hidden while paused or suspended so that a window closing then behaves as
+  it would with no window manager. Thirteen tests against real windows on real threads
+  pin the behaviour, including a characterisation of the desktop losing that will fail
+  the day Windows changes its mind; five more cover the setting.
 - **A window dragged onto a fibonacci, grid or master-stack workspace is tiled by that
   layout, not by where the mouse let go.** Dropping beside a window wrapped the target
   in a manual split whose axis came from whichever edge the cursor was nearest, which

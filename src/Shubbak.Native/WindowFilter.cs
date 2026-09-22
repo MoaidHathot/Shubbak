@@ -256,6 +256,15 @@ public static class WindowFilter
         "ShubbakTray",
         "TajBarWindow",
         "DalilPaletteWindow",
+
+        // The focus sink: the window that holds the keyboard while an empty workspace
+        // is displayed. Unlike the tray window it is shown, and it is the one window
+        // of Shubbak's that takes the foreground on purpose - so a foreground event
+        // for it, were one ever delivered, must never read as a window to adopt. The
+        // hook skips this process, and to the structural gates above it is an owned
+        // popup with no title bar and no size; this is the guarantee that depends on
+        // none of that.
+        FocusSink.WindowClass,
     };
 
     /// <summary>

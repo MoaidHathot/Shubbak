@@ -113,6 +113,19 @@ public sealed record ShubbakConfig
     public NewWindowPlacement NewWindowPlacement { get; init; } = NewWindowPlacement.FollowFocus;
 
     /// <summary>
+    /// Where the keyboard goes when the workspace being looked at has nothing to
+    /// focus.
+    /// </summary>
+    /// <remarks>
+    /// Held by a window of Shubbak's own by default, because Windows returns the
+    /// foreground to whatever had it before when a launcher closes, and if that was
+    /// a window on the other monitor the application the launcher started opens
+    /// there. <see cref="EmptyWorkspaceFocus.Desktop"/> is the older behaviour, kept
+    /// for anyone who would rather Shubbak owned no visible window at all.
+    /// </remarks>
+    public EmptyWorkspaceFocus EmptyWorkspaceFocus { get; init; } = EmptyWorkspaceFocus.Hold;
+
+    /// <summary>
     /// Switch back to the previous workspace when re-focusing the active one.
     /// </summary>
     /// <remarks>

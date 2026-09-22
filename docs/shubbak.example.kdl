@@ -51,6 +51,27 @@ general {
     // working on one monitor could open it on the other.
     new-window-placement "focus"
 
+    // Where the keyboard goes when the workspace you are looking at is empty.
+    //
+    //   hold     (default) - on an invisible, zero-sized window of Shubbak's own,
+    //                        placed on that monitor.
+    //   desktop            - on the desktop, which is what Shubbak did before.
+    //
+    // The keyboard has to be somewhere, and Windows gives it back to whatever had
+    // it when the next thing to take it lets go. On an empty workspace the next
+    // thing is a launcher, and when the launcher closes the keyboard would go to
+    // the window that had it before - which the desktop is never chosen to be, so
+    // on two monitors it went to whatever was displayed on the other one, and the
+    // application the launcher started opened there. Holding it on a window of
+    // Shubbak's own on the empty monitor is what keeps both where you are looking.
+    // The same window catches the last window on a workspace closing or minimising
+    // after it, which used to move the point of action to the other monitor too.
+    //
+    // The one visible cost: Alt+Esc, which walks windows in stacking order without
+    // the Alt+Tab picture, stops on it for a press. Alt+Tab and the taskbar never
+    // list it.
+    empty-workspace-focus "hold"
+
     // What a command that targets a window does when the focused window is one
     // Shubbak does not manage - a dialog, a tray popup, an app it passed over.
     //

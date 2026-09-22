@@ -25,6 +25,14 @@ WM_QUIT
 PostMessage
 WM_CLOSE
 
+// Running an action on a test window's own thread - activating it, hiding it,
+// destroying it - the way the application that owns a real window would, so that the
+// focus sink is measured against the same bookkeeping Windows keeps for real windows.
+WM_APP
+GetForegroundWindow
+GetShellWindow
+PostQuitMessage
+
 // Moving a test window without telling the window manager, so the drift check can be
 // exercised against an application that repositions itself.
 SetWindowPos

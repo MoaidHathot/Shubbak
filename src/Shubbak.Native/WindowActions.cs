@@ -23,10 +23,17 @@ public static class WindowActions
     /// <remarks>
     /// <para>
     /// <c>SetForegroundWindow</c> is heavily restricted: Windows refuses it unless
-    /// the calling thread already owns the foreground, to stop applications stealing
+    /// the calling process already owns the foreground, to stop applications stealing
     /// focus. A window manager legitimately needs to do exactly that, so it uses the
     /// documented workaround of temporarily attaching its input queue to the current
     /// foreground thread's, which makes the call succeed.
+    /// </para>
+    /// <para>
+    /// Only across processes, because the restriction is per process: a foreground
+    /// held by any thread of this one is permission enough, and attaching to a thread
+    /// of one's own merges two queues that were deliberately separate. The daemon
+    /// never meets that case - its windows share one thread - but the tests that
+    /// give the focus sink real windows to take the foreground from do.
     /// </para>
     /// <para>
     /// The attachment is always undone, including on failure - leaving input queues
@@ -46,13 +53,15 @@ public static class WindowActions
         if (foreground == hwnd) return true;
 
         uint ours = PInvoke.GetCurrentThreadId();
-        uint theirs = foreground.IsNull ? 0 : Win32Window.GetThreadId((nint)foreground.Value);
+        uint theirProcess = 0;
+        uint theirs = foreground.IsNull ? 0 : PInvoke.GetWindowThreadProcessId(foreground, &theirProcess);
+        bool foreign = theirs != 0 && theirs != ours && theirProcess != (uint)Environment.ProcessId;
 
         bool attached = false;
 
         try
         {
-            if (theirs != 0 && theirs != ours)
+            if (foreign)
                 attached = PInvoke.AttachThreadInput(ours, theirs, true);
 
             PInvoke.BringWindowToTop(hwnd);
@@ -78,9 +87,14 @@ public static class WindowActions
     /// switch to the empty one.
     /// </para>
     /// <para>
-    /// The desktop is the one window that is always present, always visible, and
-    /// belongs to no workspace, so parking the foreground there makes the system
-    /// agree with the tree instead of contradicting it.
+    /// The desktop is always present and belongs to no workspace, which is why it was
+    /// the first choice. It is not the fallback Windows chooses, though: when a
+    /// launcher that took the foreground from the desktop lets go, Windows does not
+    /// give it back to the desktop but to the first eligible application window - on a
+    /// second monitor, the one displayed there. Measured cross-process, and it is why
+    /// <see cref="FocusSink"/> exists. This remains the resting place when the sink is
+    /// not wanted or could not take the foreground, and the place the sink hands the
+    /// foreground to before it is hidden or destroyed.
     /// </para>
     /// <para>
     /// GlazeWM does the same thing - its log says "Setting focus to the desktop

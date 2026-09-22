@@ -330,6 +330,36 @@ every dock is gone. Bars follow too: Taj opens one on a display that arrives and
 closes the one on a display that goes, and a bar `rule` can say `monitor="laptop"` in
 the same words.
 
+## Two monitors and an empty workspace
+
+Switch to an empty workspace on one monitor, open a launcher, start something, and it
+should open there. The keyboard has to be somewhere while the workspace is empty, and
+Windows hands it back to whatever had it when the launcher lets go — so if that was a
+window on the other monitor, that is where the point of action moves and where the
+new window lands. Two settings in `general` decide this:
+
+```kdl
+general {
+    // Which workspace a new window lands on: "focus" (the one you are looking at)
+    // or "window" (the active workspace of the monitor it opened on).
+    new-window-placement "focus"
+
+    // Where the keyboard rests while the workspace you are looking at is empty:
+    // "hold" keeps it on an invisible, zero-sized window of Shubbak's own on that
+    // monitor; "desktop" gives it to the desktop, as Shubbak used to.
+    empty-workspace-focus "hold"
+}
+```
+
+`hold` is the default, and is what makes the launcher case work: Windows returns the
+foreground to the window that had it before, and that window is now Shubbak's, on the
+monitor you are looking at. It also catches the last window on a workspace closing or
+minimising after it, which used to jump to the other monitor for the same reason. The
+window is never on the taskbar or in Alt+Tab; the one place it shows is Alt+Esc, which
+walks windows in stacking order and stops on it for a press. `desktop` is for anyone
+who would rather Shubbak owned no such window — on a single monitor the two behave the
+same.
+
 ## Contexts
 
 A talk from the laptop alone, then on a projector, then docked to two monitors for a

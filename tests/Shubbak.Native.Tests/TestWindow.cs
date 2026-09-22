@@ -37,8 +37,12 @@ internal sealed class TestWindow : IDisposable
     private static bool s_registered;
     private static readonly Lock s_gate = new();
 
+    /// <summary>Posted to the window to run whatever <see cref="Invoke"/> queued.</summary>
+    private const uint InvokeMessage = PInvoke.WM_APP + 0x51;
+
     private readonly Thread _thread;
     private readonly ManualResetEventSlim _ready = new(false);
+    private readonly Queue<Action> _pending = new();
 
     private HWND _handle;
     private Exception? _failure;
@@ -126,6 +130,100 @@ internal sealed class TestWindow : IDisposable
     public unsafe nint Handle => (nint)_handle.Value;
 
     public bool IsVisible => PInvoke.IsWindowVisible(_handle);
+
+    /// <summary>Whether this window holds the system foreground.</summary>
+    public bool HoldsForeground => !_handle.IsNull && PInvoke.GetForegroundWindow() == _handle;
+
+    /// <summary>
+    /// Runs <paramref name="action"/> on the window's own thread and waits for it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For the operations whose consequences Windows works out on behalf of the
+    /// thread that performs them. When the active window is hidden or destroyed, the
+    /// choice of which window to activate next is made from that thread's queue, so a
+    /// test measuring that choice has to hide and destroy the way an application does
+    /// - from the thread that owns the window - rather than from the test thread.
+    /// </para>
+    /// <para>
+    /// A message posted to the window, picked out of the pump below before it is
+    /// dispatched. Waited on with a timeout, so a window whose thread has died fails
+    /// the test rather than hanging the run.
+    /// </para>
+    /// </remarks>
+    public void Invoke(Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        using var done = new ManualResetEventSlim(false);
+        Exception? failure = null;
+
+        lock (_pending)
+        {
+            _pending.Enqueue(() =>
+            {
+                try { action(); }
+                catch (Exception ex) { failure = ex; }
+                finally { done.Set(); }
+            });
+        }
+
+        if (!PInvoke.PostMessage(_handle, InvokeMessage, default, default))
+            throw new InvalidOperationException("the test window's thread is not accepting work");
+
+        if (!done.Wait(TimeSpan.FromSeconds(5)))
+            throw new TimeoutException("the test window's thread did not run the action");
+
+        if (failure is not null) throw new InvalidOperationException("the action failed on the window's thread", failure);
+    }
+
+    /// <summary>
+    /// Takes the foreground, as an application activating its own window would.
+    /// </summary>
+    /// <returns>Whether the window holds the foreground afterwards.</returns>
+    /// <remarks>
+    /// Through the same call the window manager uses, from the window's own thread.
+    /// The attachment that call makes to take the foreground from another process is
+    /// what lets a test host that was not in front get there at all.
+    /// </remarks>
+    public bool Activate()
+    {
+        bool ok = false;
+        Invoke(() => ok = WindowActions.Focus(Handle));
+
+        // The activation is synchronous, but the foreground is a system-wide fact and
+        // a moment is allowed for it to settle before it is read.
+        PumpUntil(() => HoldsForeground, 1000);
+
+        return ok && HoldsForeground;
+    }
+
+    /// <summary>Hides the window from its own thread, as a launcher putting itself away does.</summary>
+    public void Hide() => Invoke(() => PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_HIDE));
+
+    /// <summary>Minimises the window from its own thread.</summary>
+    public void Minimise() => Invoke(() => PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_MINIMIZE));
+
+    /// <summary>
+    /// Destroys the window from its own thread, as an application closing does.
+    /// </summary>
+    /// <remarks>
+    /// The thread's pump then ends, so the instance is spent: <see cref="Dispose"/> is
+    /// still safe to call and does nothing more.
+    /// </remarks>
+    public void Destroy()
+    {
+        if (_handle.IsNull) return;
+
+        Invoke(() =>
+        {
+            PInvoke.DestroyWindow(_handle);
+            _handle = HWND.Null;
+            PInvoke.PostQuitMessage(0);
+        });
+
+        _thread.Join(TimeSpan.FromSeconds(5));
+    }
 
     /// <summary>
     /// Puts the window back on screen behind Shubbak's back.
@@ -230,6 +328,16 @@ internal sealed class TestWindow : IDisposable
         while (PInvoke.GetMessage(out MSG message, default, 0, 0))
         {
             if (message.message is PInvoke.WM_QUIT or PInvoke.WM_CLOSE) break;
+
+            // Work queued by Invoke, run here on the window's own thread.
+            if (message.message == InvokeMessage && message.hwnd == _handle)
+            {
+                Action? work;
+                lock (_pending) work = _pending.Count > 0 ? _pending.Dequeue() : null;
+
+                work?.Invoke();
+                continue;
+            }
 
             PInvoke.TranslateMessage(in message);
             PInvoke.DispatchMessage(in message);

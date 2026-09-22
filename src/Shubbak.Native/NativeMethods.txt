@@ -175,8 +175,8 @@ WM_HOTKEY
 
 // --- the tray icon --------------------------------------------------------------
 //
-// The daemon's first and only window. Hidden and never shown, but top-level rather
-// than message-only: a message-only window is invisible to EnumWindows, which was the
+// The daemon's first window. Hidden and never shown, but top-level rather than
+// message-only: a message-only window is invisible to EnumWindows, which was the
 // point, but it is also invisible to the two things that need to tell this process to
 // leave - the session ending, and an installer replacing the files under it. Both
 // speak WM_QUERYENDSESSION and WM_ENDSESSION to top-level windows only. The window
@@ -188,6 +188,11 @@ WM_HOTKEY
 // menu is open - acceptable on this thread, which is not on the input path, and
 // unacceptable on the keyboard hook's, which is why the tray lives here and not
 // there.
+//
+// The same handful of calls also makes the focus sink (FocusSink): the one window of
+// Shubbak's that is shown and takes the foreground on purpose, so that an empty
+// workspace has something of its own to hold the keyboard. Zero-sized, owned, and
+// excluded from the filter by class.
 RegisterClassEx
 WNDCLASSEXW
 CreateWindowEx

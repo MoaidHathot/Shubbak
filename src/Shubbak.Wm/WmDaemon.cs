@@ -210,6 +210,16 @@ public sealed class WmDaemon : IDisposable
     private readonly TrayIcon _tray = new();
 
     /// <summary>
+    /// The window that holds the keyboard while an empty workspace is displayed.
+    /// </summary>
+    /// <remarks>
+    /// Constructed here and created on first use, so a configuration that says
+    /// <c>empty-workspace-focus "desktop"</c> never owns the window at all. See
+    /// <see cref="ReleaseStaleForeground"/> for why it exists.
+    /// </remarks>
+    private readonly FocusSink _sink = new();
+
+    /// <summary>
     /// Whether the config was written just now, on the user's behalf, because there
     /// was none.
     /// </summary>
@@ -4216,8 +4226,14 @@ public sealed class WmDaemon : IDisposable
         nint foreground = Win32Window.GetForeground();
         if (foreground == (nint)focused.Handle) return;
 
+        // The focus sink counts as the shell here: a surface nobody is working in,
+        // holding the keyboard only because nothing else was. A window arriving on the
+        // empty workspace is a change of focus and would take it anyway; this is for
+        // the pass after a hand-off the application refused, which must be free to try
+        // again rather than leave the keyboard on a window that does nothing with it.
         if (!MayTakeForegroundFrom(
-                foreground, servingAFocusChange, _windows.IsManaged(foreground), WindowFilter.IsShellWindow(foreground)))
+                foreground, servingAFocusChange, _windows.IsManaged(foreground),
+                WindowFilter.IsShellWindow(foreground) || _sink.Is(foreground)))
         {
             if (Log.IsEnabled(LogLevel.Trace))
             {
@@ -4257,8 +4273,8 @@ public sealed class WmDaemon : IDisposable
         servingAFocusChange || foreground == 0 || managed || shell;
 
     /// <summary>
-    /// Takes the foreground off a window Shubbak manages when the tree says nothing
-    /// is focused.
+    /// Puts the system foreground somewhere harmless when the tree says nothing is
+    /// focused.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -4273,40 +4289,75 @@ public sealed class WmDaemon : IDisposable
     /// is indistinguishable from clicking that window's taskbar button - measured, on
     /// a live desktop, by activating a concealed window and watching it raise the
     /// event without uncloaking. So it cannot be filtered out at the far end, and an
-    /// attempt to do that broke the taskbar instead.
+    /// attempt to do that broke the taskbar instead. The cause has to be removed:
+    /// when the tree has no focused window, no window Shubbak manages may hold the
+    /// system foreground.
     /// </para>
     /// <para>
-    /// Removing the cause works where filtering the symptom did not: with the
-    /// foreground parked on the desktop there is nothing stale for Windows to return
-    /// to. GlazeWM does this when its last window closes and not when a workspace is
-    /// switched to, which is why the switching half is still an open bug there and
-    /// the closing half is not.
+    /// Where to put it instead took two attempts. The desktop was first, on the
+    /// reasoning that it belongs to no workspace and is always there. It is also never
+    /// chosen: Windows hands the foreground back to the window that was active before
+    /// the one letting go, and if that is not eligible it walks the stacking order
+    /// from the top - and the desktop is at the bottom and skipped besides. On one
+    /// monitor every candidate above it was concealed, so the desktop appeared to
+    /// work. On two, the first eligible window is whatever is displayed on the other
+    /// display, and that is precisely the window the whole exercise is meant to keep
+    /// the foreground away from. Reported as: switching to an empty workspace on one
+    /// monitor, launching an application, and finding it on the other monitor's
+    /// workspace. Measured, cross-process, with the desktop losing every time.
     /// </para>
     /// <para>
-    /// This first released only a window that was off screen, and that narrowing let
-    /// the bug straight back in on a second monitor. Every monitor displays a
-    /// workspace at all times, so a window on the other display is on a displayed
-    /// workspace and was exempted - while being the likeliest thing Windows hands the
-    /// foreground to, precisely because it is genuinely visible. Reported as:
-    /// switching to an empty workspace on one monitor, launching an application, and
-    /// finding it on the other monitor's workspace. No concealed window is involved
-    /// anywhere in that, which is why the earlier fix never touched it.
+    /// So the foreground is given to a window of Shubbak's own instead - see
+    /// <see cref="FocusSink"/> - placed on the monitor whose workspace is empty. That
+    /// makes it the window Windows hands the foreground back to when the launcher
+    /// closes, and also when the last window on the workspace closes, hides or
+    /// minimises after having taken the foreground from it. The desktop remains
+    /// available by configuration for anyone who would rather Shubbak owned no such
+    /// window, and as the fallback should the sink refuse to take the foreground.
     /// </para>
     /// <para>
-    /// So the rule is about the tree, not about the screen: when Shubbak has no
-    /// focused window, no window Shubbak manages may hold the system foreground. It
-    /// is still narrow where narrowness earns something - the desktop already holding
-    /// it, and any window Shubbak does not manage, are left alone, which is what
-    /// keeps a dialog or a launcher the user is actually working in out of it.
+    /// Still narrow where narrowness earns something. A window Shubbak does not manage
+    /// and that is not the shell - a dialog, a launcher still open, an elevated Task
+    /// Manager - is left alone, which is what keeps something the user is actually
+    /// working in out of it. The shell itself is not exempt: the desktop holding the
+    /// foreground is where an earlier release left it, or where a fresh logon did, and
+    /// is exactly the state in which a launcher closing goes to the other monitor.
     /// </para>
     /// </remarks>
     private void ReleaseStaleForeground()
     {
         nint foreground = Win32Window.GetForeground();
-        if (foreground == 0) return;
 
-        if (!_windows.TryGet(foreground, out WindowNode? stale)) return;
-        if (!IsStaleForeground(stale, _wm.FocusedWindow)) return;
+        bool sinkHasIt = _sink.Is(foreground);
+        bool held = !sinkHasIt && _windows.TryGet(foreground, out WindowNode? stale) && IsStaleForeground(stale, _wm.FocusedWindow);
+        bool unclaimed = foreground == 0 || WindowFilter.IsShellWindow(foreground);
+
+        if (!sinkHasIt && !held && !unclaimed) return;
+
+        // Not while suspended: a redraw asked for then still lays out, but suspended
+        // means out of the way, and the sink was hidden on the way in for that reason.
+        //
+        // Asked even when the sink already has the foreground, because the monitor may
+        // have changed under it: the last window on the other display closing hands
+        // the foreground back to a sink still sitting on the previous empty workspace's
+        // monitor, and a launcher that opens on the foreground window's monitor would
+        // open there. Take moves it and does nothing else in that case.
+        if (_config.EmptyWorkspaceFocus == EmptyWorkspaceFocus.Hold && !_suspended &&
+            _wm.FocusedMonitor is { } monitor &&
+            _sink.Take(monitor.WorkArea))
+        {
+            if (!sinkHasIt && Log.IsEnabled(LogLevel.Debug))
+            {
+                Log.Debug(LogCategory.Window,
+                    $"foreground taken from {(held ? $"unfocused 0x{foreground:X}" : "the shell")} by the focus sink on {monitor.DeviceId}");
+            }
+
+            return;
+        }
+
+        // Nothing of Shubbak's has it and nothing of Shubbak's is to take it: the
+        // desktop holding the foreground is the resting state of this mode.
+        if (!held) return;
 
         if (WindowActions.FocusDesktop() && Log.IsEnabled(LogLevel.Debug))
         {
@@ -4591,6 +4642,10 @@ public sealed class WmDaemon : IDisposable
 
         _winEvents?.Dispose();
         _winEvents = null;
+
+        // For the same reason as pausing: nothing is watching the desktop, so nothing
+        // of Shubbak's should be eligible to be handed the keyboard.
+        _sink.Retire();
 
         // Anything half-observed belongs to a world we are no longer watching.
         _settling.Clear();
@@ -5686,6 +5741,10 @@ public sealed class WmDaemon : IDisposable
         _committer.HideMethod = _config.HideMethod;
         _committer.KeepInTaskbar = _config.KeepInTaskbar;
 
+        // A reload that turns the sink off puts it away; one that turns it on has the
+        // pass the reload schedules to bring it out, if the workspace is empty.
+        if (_config.EmptyWorkspaceFocus != EmptyWorkspaceFocus.Hold) _sink.Retire();
+
         // The active mode is carried across when it still exists, and named when it
         // does not. Silently dropping it left the keyboard on the default bindings
         // while the state machine, the report and the bar all still announced the mode.
@@ -6255,6 +6314,19 @@ public sealed class WmDaemon : IDisposable
             // the same reason a swallowing binding mode is.
             if (wmEvent is WindowTagsChanged tagged) ReportTags(tagged);
 
+            // Paused means Shubbak's hands are off the desktop, and a window of its own
+            // eligible to be handed the keyboard is a hand still on it: the next window
+            // to close would leave the foreground on the sink with nothing arranging
+            // anything. Hidden, it is skipped. Resuming asks for one pass, which brings
+            // it back if the workspace is still empty - a resume with nothing changed
+            // underneath would otherwise schedule none, and leave the keyboard on the
+            // desktop for exactly the launcher-then-other-monitor case the sink is for.
+            if (wmEvent is PauseChanged paused)
+            {
+                if (paused.Paused) _sink.Retire();
+                else if (_config.EmptyWorkspaceFocus == EmptyWorkspaceFocus.Hold) _layoutDirty = true;
+            }
+
             if (wmEvent is CommandRejected rejected)
             {
                 // At info when the reason is that the window in front is not managed.
@@ -6359,6 +6431,11 @@ public sealed class WmDaemon : IDisposable
         // Before the loop goes: removing the icon needs the window it belongs to, and
         // an icon left behind is a ghost the user has to hover over to clear.
         _tray.Dispose();
+
+        // Likewise before the loop goes, and after the windows are back: if the sink
+        // holds the keyboard it hands it to the desktop on the way out, which needs
+        // this thread able to make that call.
+        _sink.Dispose();
 
         // Process-wide, so leaving it raised would outlive the reason for it.
         _timerResolution.Dispose();

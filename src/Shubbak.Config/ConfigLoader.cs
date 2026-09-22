@@ -319,7 +319,7 @@ public sealed class ConfigLoader
         "cursor-jump", "initial-window-state", "hide-method", "keep-in-taskbar",
         "default-layout", "unmanaged-window-commands", "allow-shell-exec-over-ipc",
         "allow-config-edits-over-ipc", "reload-on-save",
-        "startup-command", "new-window-placement",
+        "startup-command", "new-window-placement", "empty-workspace-focus",
     ];
 
     private static readonly string[] KnownAnimationKeys =
@@ -392,6 +392,7 @@ public sealed class ConfigLoader
             CursorJumpOnWindowFocus = CursorJump(node, "window"),
             InitialWindowState = InitialState(node, config.InitialWindowState),
             NewWindowPlacement = Placement(node, config.NewWindowPlacement),
+            EmptyWorkspaceFocus = EmptyFocus(node, config.EmptyWorkspaceFocus),
             HideMethod = HideMethod(node, config.HideMethod),
             UnmanagedWindowCommands = UnmanagedCommands(node, config.UnmanagedWindowCommands),
             AllowShellExecOverIpc = Bool(node, "allow-shell-exec-over-ipc", config.AllowShellExecOverIpc),
@@ -455,6 +456,34 @@ public sealed class ConfigLoader
                     SpanOf(node, "new-window-placement"),
                     "Use 'focus' to open new windows on the workspace you are looking at, " +
                     "or 'window' to open them on the monitor the window itself appeared on."));
+                return fallback;
+        }
+    }
+
+    /// <summary>
+    /// Reads <c>empty-workspace-focus</c>: <c>"hold"</c> or <c>"desktop"</c>.
+    /// </summary>
+    /// <remarks>
+    /// An unrecognised value is an error rather than a silent fallback, for the same
+    /// reason as the placement above: the two behaviours are indistinguishable until a
+    /// window opens on the wrong monitor, and a typo should not quietly choose one.
+    /// </remarks>
+    private EmptyWorkspaceFocus EmptyFocus(KdlNode node, EmptyWorkspaceFocus fallback)
+    {
+        string? text = Text(node, "empty-workspace-focus", null);
+        if (text is null) return fallback;
+
+        switch (text.ToLowerInvariant())
+        {
+            case "hold": return EmptyWorkspaceFocus.Hold;
+            case "desktop": return EmptyWorkspaceFocus.Desktop;
+            default:
+                Report(Diagnostic.Error(
+                    "SHB0453",
+                    $"Unknown empty workspace focus '{text}'.",
+                    SpanOf(node, "empty-workspace-focus"),
+                    "Use 'hold' to keep the keyboard on the empty workspace's monitor with " +
+                    "an invisible window of Shubbak's own, or 'desktop' to give it to the desktop."));
                 return fallback;
         }
     }
