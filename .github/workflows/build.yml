@@ -186,8 +186,17 @@ jobs:
       # Natively: the test hosts are ARM64 processes loading ARM64-compiled Win32
       # bindings, so the platform layer is exercised on the architecture people will
       # run it on rather than through emulation.
+      #
+      # Less the tests that must take the foreground to measure anything - the focus
+      # sink's, which ask which window Windows hands the foreground to. This image comes
+      # up with a "Microsoft account" sign-in surface (a Windows.UI.Core.CoreWindow in
+      # WWAHost) in front, which refuses AttachThreadInput and is not moved by an
+      # injected input event either, so every one of them failed at its first step for
+      # a reason that has nothing to do with the code. The x64 job runs them all; the
+      # behaviour they pin is Windows', not the architecture's. Diagnosed from the
+      # assertion message, which names the window in front for exactly this purpose.
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity quiet --logger "console;verbosity=minimal" -p:ShubbakRid=win-arm64
+        run: dotnet test --no-build --configuration Release --verbosity quiet --logger "console;verbosity=minimal" -p:ShubbakRid=win-arm64 --filter "Requires!=Foreground"
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

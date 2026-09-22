@@ -29,10 +29,12 @@ namespace Shubbak.Native.Tests;
 /// <para>
 /// These take the foreground for real, briefly, and give it back at the end of each
 /// test. Like every test in this project they refuse to run beside a live window
-/// manager; and they are skipped, saying so, on a window station where no process can
-/// be given the foreground at all - see <see cref="FactOnAnInteractiveDesktopAttribute"/>.
+/// manager. And they carry the <c>Requires=Foreground</c> trait, which the ARM64 job in CI
+/// filters out: that runner's image has a sign-in surface in front that no process can
+/// take the foreground from - see <see cref="Desktop.RequiresForeground"/>.
 /// </para>
 /// </remarks>
+[Trait("Requires", Desktop.RequiresForeground)]
 public sealed class FocusSinkTests
 {
     /// <summary>Where the sink is put: the top-left of the primary display.</summary>
@@ -50,7 +52,7 @@ public sealed class FocusSinkTests
     /// the window that had the foreground before the workspace was switched away
     /// from it. Without the sink, this is where the foreground would go.
     /// </remarks>
-    [TheoryOnAnInteractiveDesktop]
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void TheLauncherHandsTheForegroundBackToTheSink(bool destroyed)
@@ -75,7 +77,7 @@ public sealed class FocusSinkTests
     /// <summary>
     /// The tool-window shaped launcher - the command palette is one - is no different.
     /// </summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void AToolWindowLauncherHandsItBackToo()
     {
         using var restore = new ForegroundGuard();
@@ -105,7 +107,7 @@ public sealed class FocusSinkTests
     /// measurement the design rests on. Should a future Windows start returning the
     /// foreground to the desktop, this fails and the sink becomes optional.
     /// </remarks>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void TheDesktopIsNotHandedTheForegroundBack()
     {
         using var restore = new ForegroundGuard();
@@ -141,7 +143,7 @@ public sealed class FocusSinkTests
     /// The sink is an owned popup instead, and this is the test that would notice a
     /// change of mind.
     /// </remarks>
-    [TheoryOnAnInteractiveDesktop]
+    [Theory]
     [InlineData("destroy")]
     [InlineData("hide")]
     [InlineData("minimise")]
@@ -170,7 +172,7 @@ public sealed class FocusSinkTests
     }
 
     /// <summary>Taking what is already held is a no-op that still says yes.</summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void TakingTwiceIsHarmless()
     {
         using var restore = new ForegroundGuard();
@@ -194,7 +196,7 @@ public sealed class FocusSinkTests
     /// was. A launcher that opens on the foreground window's monitor would open on the
     /// wrong one until the sink follows the point of action.
     /// </remarks>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void TakingForAnotherMonitorMovesItThere()
     {
         using var restore = new ForegroundGuard();
@@ -218,7 +220,7 @@ public sealed class FocusSinkTests
     /// <summary>
     /// Nothing about it is ever a window to tile, under every setting the filter has.
     /// </summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void ItIsNeverManageable()
     {
         using var restore = new ForegroundGuard();
@@ -240,7 +242,7 @@ public sealed class FocusSinkTests
     /// The filter names the shape: an owned window without a title bar is refused as
     /// an owned popup, before its class is even looked at.
     /// </remarks>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void ItIsAnOwnedPopupRatherThanAToolWindow()
     {
         using var restore = new ForegroundGuard();
@@ -261,7 +263,7 @@ public sealed class FocusSinkTests
     /// Alt+F4 with the keyboard on the sink asks it to close. It declines: destroyed,
     /// it would be gone for the rest of the session with nothing to notice.
     /// </summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void ItDeclinesToClose()
     {
         using var restore = new ForegroundGuard();
@@ -279,7 +281,7 @@ public sealed class FocusSinkTests
     /// Retiring hides it and does not leave the keyboard on a window that is about to
     /// vanish: the foreground is handed to the desktop first.
     /// </summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void RetiringHidesItAndHandsTheForegroundOn()
     {
         using var restore = new ForegroundGuard();
@@ -294,7 +296,7 @@ public sealed class FocusSinkTests
     }
 
     /// <summary>A retired sink can be taken again.</summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void ItCanBeTakenAgainAfterRetiring()
     {
         using var restore = new ForegroundGuard();
@@ -308,7 +310,7 @@ public sealed class FocusSinkTests
     }
 
     /// <summary>Disposing removes both windows, and disposing twice is harmless.</summary>
-    [FactOnAnInteractiveDesktop]
+    [Fact]
     public void DisposingLeavesNothingBehind()
     {
         using var restore = new ForegroundGuard();
