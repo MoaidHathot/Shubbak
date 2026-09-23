@@ -30,10 +30,12 @@ namespace Ayn;
 /// </remarks>
 internal sealed class RegistryConsentStore : IConsentStore, IDisposable
 {
-    private const string StorePath =
+    /// <summary>Where Windows keeps the store, relative to either hive.</summary>
+    internal const string WindowsStorePath =
         @"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\";
 
     private readonly List<Watched> _watched = [];
+    private readonly string _storePath;
 
     /// <summary>The leaf under the store for each device.</summary>
     /// <remarks>
@@ -48,6 +50,15 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
         (DeviceKind.Screen, "graphicsCaptureProgrammatic"),
     ];
 
+    /// <summary>The leaf under the store that records a device's use.</summary>
+    internal static string LeafFor(DeviceKind device)
+    {
+        foreach ((DeviceKind candidate, string leaf) in Leaves)
+            if (candidate == device) return leaf;
+
+        throw new ArgumentOutOfRangeException(nameof(device), device, "no consent store leaf for this device");
+    }
+
     /// <summary>Watches every device.</summary>
     public RegistryConsentStore() : this(DeviceKinds.All) { }
 
@@ -55,9 +66,25 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
     /// Watches the devices named, so a file that reports nothing about the screen does
     /// not hold its key open or wake for every share somebody else starts.
     /// </summary>
-    public RegistryConsentStore(IReadOnlyList<DeviceKind> devices)
+    public RegistryConsentStore(IReadOnlyList<DeviceKind> devices) : this(devices, WindowsStorePath) { }
+
+    /// <summary>
+    /// Watches the devices named under a store at the given path, relative to each
+    /// hive and ending in a backslash.
+    /// </summary>
+    /// <remarks>
+    /// Windows's own store, save in tests, which build one of their own under a
+    /// scratch key. Windows's has whichever leaves the machine has been asked for: a
+    /// build agent that has never shared its screen has no <c>graphicsCaptureProgrammatic</c>
+    /// key, and a test that assumed otherwise was red on four runs of the build before
+    /// anyone read why.
+    /// </remarks>
+    internal RegistryConsentStore(IReadOnlyList<DeviceKind> devices, string storePath)
     {
         ArgumentNullException.ThrowIfNull(devices);
+        ArgumentNullException.ThrowIfNull(storePath);
+
+        _storePath = storePath;
 
         foreach (DeviceKind device in devices) Watch(device);
     }
@@ -85,7 +112,7 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
             {
                 if (leafDevice != device) continue;
 
-                RegistryKey? key = Open(hive, StorePath + leaf);
+                RegistryKey? key = Open(hive, _storePath + leaf);
 
                 if (key is null)
                 {

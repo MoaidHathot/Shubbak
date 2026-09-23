@@ -883,6 +883,15 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **The consent-store tests no longer assume what the machine has.** Two of them
+  asserted that Windows's store has a `graphicsCaptureProgrammatic` leaf, which a
+  build agent that has never shared its screen does not, and CI was red for four runs
+  before anyone read why. They now build a store of their own under a scratch key,
+  with the leaves each test needs - which also lets them prove the reload path end to
+  end: a leaf watched after the store was built fires its own event when a program
+  starts using the device, and the read names the program. One test still looks at
+  Windows's store, checking the store's answer against the registry's own rather than
+  against a developer's machine.
 - **A racy message-loop test.** `PostedWorkRunsOnTheLoopsThread` read the loop's
   thread id from a field the loop's pass wrote, but a turn drains the inbox before it
   runs the pass, so work posted before the loop's first turn - the thread not yet
