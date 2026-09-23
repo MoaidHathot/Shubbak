@@ -44,7 +44,7 @@ src/
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the watcher: the rest of the machine, as contexts
-tests/              2386 test methods across 14 projects
+tests/              2389 test methods across 14 projects
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests: one package, the MSI and the portable zip
@@ -59,7 +59,7 @@ replaced behind the `Shubbak.Native` boundary without touching any of the logic.
 
 ## Tests
 
-**2386 test methods**, around a second to run. Everything except the platform layer and
+**2389 test methods**, around a second to run. Everything except the platform layer and
 the renderer runs headless, so the entire behavioural surface — tree, layout, focus,
 animation, tags, sessions, the state machine, the config diagnostics, the palette's
 matching, the bar's model — is testable in milliseconds with no window manager
