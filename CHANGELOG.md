@@ -883,6 +883,12 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **CI authenticates the WinGet client update.** `tools/ensure-winget.ps1` updates the
+  runner's client through Microsoft's module, which asks GitHub's API for the release
+  and its assets - anonymously unless a token is in the environment, and anonymous
+  calls share a rate limit with every other build on the runner's address. One run
+  failed on that alone. The build and release workflows now pass the workflow token,
+  as the winget job already did, and the script warns when it has none.
 - **The consent-store tests no longer assume what the machine has.** Two of them
   asserted that Windows's store has a `graphicsCaptureProgrammatic` leaf, which a
   build agent that has never shared its screen does not, and CI was red for four runs

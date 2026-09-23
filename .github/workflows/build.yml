@@ -56,8 +56,16 @@ jobs:
       # The manifests are templates with placeholder hashes, but everything else in
       # them - schema, fields, values - is what will be submitted, and the real client
       # is the only validator that matters.
+      #
+      # GH_TOKEN: updating the client goes through GitHub's API, which the WinGet
+      # module calls anonymously unless a token is in the environment - and anonymous
+      # calls share a rate limit with everything else on the runner's address. One
+      # run failed on exactly that, while the same step had passed on every earlier
+      # run. The workflow token is read-only and the module wants nothing more of it.
       - name: Validate the winget manifests
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           ./tools/ensure-winget.ps1
           winget validate --manifest packaging/winget

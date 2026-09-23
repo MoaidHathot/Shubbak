@@ -198,6 +198,9 @@ jobs:
       - name: Hash the packages and fill the manifests
         id: manifests
         shell: pwsh
+        env:
+          # For ensure-winget.ps1's update path, which calls GitHub's API; see build.yml.
+          GH_TOKEN: ${{ github.token }}
         run: |
           ./tools/ensure-winget.ps1
           ./tools/build-release.ps1 -Manifests

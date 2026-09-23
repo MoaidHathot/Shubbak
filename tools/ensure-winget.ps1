@@ -9,6 +9,12 @@
     Microsoft.WinGet.Client's Repair-WinGetPackageManager, which is Microsoft's own
     route for putting the latest stable client on a machine, dependencies included.
 
+    The update goes through GitHub's API - one call to find the release, one for its
+    assets - which the module makes anonymously unless GH_TOKEN or GITHUB_TOKEN is in
+    the environment. Anonymous calls share a rate limit with everything else on the
+    machine's address, and on a hosted runner that is everyone's builds; CI sets the
+    token and this script says when it has none, so the failure reads as what it is.
+
     Prints the version it ends up with. Exits non-zero if no usable client can be had.
 
 .EXAMPLE
@@ -47,6 +53,10 @@ if ($found -and $found.Version -ge $Minimum) {
 }
 
 Write-Output ($(if ($found) { "winget $($found.Version) is older than $Minimum; updating." } else { 'winget is not available; installing.' }))
+
+if (-not ($env:GH_TOKEN -or $env:GITHUB_TOKEN)) {
+    Write-Warning 'No GH_TOKEN or GITHUB_TOKEN in the environment: the WinGet module will call GitHub anonymously, and a hosted runner shares that rate limit with every other build on its address.'
+}
 
 # Repair-WinGetPackageManager installs or updates App Installer and its framework
 # dependencies. -Latest takes the newest stable; -Force reinstalls even when a client
