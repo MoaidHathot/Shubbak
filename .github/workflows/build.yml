@@ -144,6 +144,23 @@ jobs:
 
           Write-Output "Documented test count is correct: $declared"
 
+      # The diagnostics catalogue is generated from the source, and a page that is
+      # generated once and then left drifts the first time somebody adds a code and
+      # forgets the script. Regenerated here and compared; a difference names the fix.
+      - name: Check the diagnostics catalogue is current
+        shell: pwsh
+        run: |
+          ./tools/list-diagnostics.ps1 | Out-Null
+
+          $drift = git diff --name-only -- docs/diagnostics.md
+
+          if ($drift) {
+            git --no-pager diff -- docs/diagnostics.md
+            throw "docs/diagnostics.md is out of date; run tools/list-diagnostics.ps1 and commit the result."
+          }
+
+          Write-Output "Diagnostics catalogue is current"
+
       # The release, unsigned, for both architectures: publishes the five executables
       # and the uiAccess window manager for each and checks them (machine type, PE
       # subsystem, embedded manifest, and the reported version where this machine can

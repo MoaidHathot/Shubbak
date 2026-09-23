@@ -868,6 +868,11 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **CI regenerates the diagnostics catalogue and fails on drift.** `docs/diagnostics.md`
+  is produced by `tools/list-diagnostics.ps1`; the build now runs the script and
+  compares, so a code added without the page being regenerated is caught at the pull
+  request rather than by a reader. Checked by planting a code: the step fired and named
+  the fix.
 - **The three companions share one host.** The bar, the palette and the watcher each
   carried their own copy of the same plumbing - the help-and-version preamble, the
   single-instance lock, the log file named after the program, the DPI opt-in, a
