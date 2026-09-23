@@ -6,6 +6,7 @@ using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Dwm;
 using Windows.Win32.System.Threading;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
 using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Shubbak.Native;
@@ -69,6 +70,17 @@ public static class Win32Window
     public static bool IsMinimised(nint handle) => PInvoke.IsIconic(new HWND(handle));
 
     public static bool IsMaximised(nint handle) => PInvoke.IsZoomed(new HWND(handle));
+
+    /// <summary>Whether any mouse button is held at this moment.</summary>
+    /// <remarks>
+    /// The tell that a foreground change is a click: a window activated by a button
+    /// press raises its foreground event while the button is still down. All three
+    /// buttons, so a swapped mouse reads the same as an ordinary one.
+    /// </remarks>
+    public static bool IsAMouseButtonDown() =>
+        (PInvoke.GetAsyncKeyState((int)VIRTUAL_KEY.VK_LBUTTON) & 0x8000) != 0 ||
+        (PInvoke.GetAsyncKeyState((int)VIRTUAL_KEY.VK_RBUTTON) & 0x8000) != 0 ||
+        (PInvoke.GetAsyncKeyState((int)VIRTUAL_KEY.VK_MBUTTON) & 0x8000) != 0;
 
     /// <summary>
     /// Whether the window's thread has stopped answering messages.

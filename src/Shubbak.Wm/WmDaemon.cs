@@ -1511,7 +1511,15 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.Foreground:
                 if (_windows.TryGet(handle, out WindowNode? focused))
                 {
-                    if (ShouldFollowForeground(focused, WindowCommitter.IsConcealed(handle)) &&
+                    if (IsOwnActivationOfANoFocusArrival(handle))
+                    {
+                        // A window a rule said no-focus to, activating itself a beat
+                        // after it arrived, as a freshly launched program does. Not
+                        // the user's choice, so not followed: the tree's is asserted
+                        // once more instead.
+                        PutFocusBackAfter(handle);
+                    }
+                    else if (ShouldFollowForeground(focused, WindowCommitter.IsConcealed(handle)) &&
                         !ReferenceEquals(_wm.FocusedWindow, focused))
                     {
                         Publish(_wm.FocusWindow(focused));
@@ -1750,6 +1758,12 @@ public sealed class WmDaemon : IDisposable
             !ReferenceEquals(focusedBefore, window))
         {
             Publish(_wm.FocusWindow(focusedBefore));
+
+            // Remembered, because this is not the end of it: the program will take the
+            // foreground itself a moment from now, and that has to be read as its own
+            // doing rather than followed. See NoFocusArrival.
+            _noFocusArrivals[handle] = Stopwatch.GetTimestamp();
+
             Log.Debug(LogCategory.Window, $"no-focus: focus stays with 0x{focusedBefore.Handle:X} after 0x{handle:X} arrived");
         }
 
@@ -2019,6 +2033,7 @@ public sealed class WmDaemon : IDisposable
 
         _committer.Forget(handle);
         _maximiseGrace.Remove(handle);
+        _noFocusArrivals.Remove(handle);
         _animation.Remove(window.Handle);
         _dragOrigin.Remove(handle);
         Publish(_wm.UnmanageWindow(window));
@@ -5008,6 +5023,50 @@ public sealed class WmDaemon : IDisposable
 
     private bool InMaximiseGrace(nint handle, long now) =>
         _maximiseGrace.TryGetValue(handle, out long since) && Stopwatch.GetElapsedTime(since, now) < NativeMaximise.Grace;
+
+    /// <summary>When each window a rule said <c>no-focus</c> to arrived; see <see cref="NoFocusArrival"/>.</summary>
+    private readonly Dictionary<nint, long> _noFocusArrivals = [];
+
+    /// <summary>
+    /// Whether a foreground event for this window is the self-activation of an
+    /// arrival under <c>no-focus</c>, to be put back rather than followed.
+    /// </summary>
+    /// <remarks>
+    /// The record is dropped the first time the answer is no - the grace has lapsed,
+    /// or the user clicked the window - since from then on its foreground events are
+    /// anybody's and there is nothing left to judge.
+    /// </remarks>
+    private bool IsOwnActivationOfANoFocusArrival(nint handle)
+    {
+        if (!_noFocusArrivals.TryGetValue(handle, out long arrived)) return false;
+
+        bool own = NoFocusArrival.IsOwnActivation(Stopwatch.GetElapsedTime(arrived), Win32Window.IsAMouseButtonDown());
+
+        if (!own) _noFocusArrivals.Remove(handle);
+
+        return own;
+    }
+
+    /// <summary>
+    /// Asserts the tree's focus over a window that took the foreground on its own.
+    /// </summary>
+    /// <remarks>
+    /// Nothing when the tree has come to agree with the system in the meantime - a
+    /// <c>focus</c> command can have chosen the arrival by now - or when the window
+    /// the tree names is not one a pass would raise either.
+    /// </remarks>
+    private void PutFocusBackAfter(nint arrival)
+    {
+        WindowNode? keeper = _wm.FocusedWindow;
+
+        if (!HasSomethingToRaise(keeper) || (nint)keeper.Handle == arrival || !keeper.IsOnADisplayedWorkspace)
+            return;
+
+        WindowActions.Focus((nint)keeper.Handle);
+
+        if (Log.IsEnabled(LogLevel.Debug))
+            Log.Debug(LogCategory.Window, $"no-focus: 0x{arrival:X} took the foreground itself; put back on 0x{keeper.Handle:X}");
+    }
 
     private long _lastNativeFullscreenTicks;
 

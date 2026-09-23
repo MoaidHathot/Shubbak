@@ -181,7 +181,13 @@ schedule and breaking either is a different kind of event:
   stays where it was - for the chat that pops when a message lands and the updater
   that opens a window nobody asked for. Managing gave every new window focus, since
   that is what a window somebody opened wants, and the only remedy for the other kind
-  was a rule that sent it to another workspace.
+  was a rule that sent it to another workspace. Holds against the program's own
+  activation too: a freshly launched program takes the foreground itself a beat after
+  its window is shown - Notepad, 27 ms after being managed - and the first cut of the
+  rule followed that as if the user had clicked, so it kept focus about half the time
+  when tried live. For a second and a half after the arrival that activation is put
+  back instead; a click on the window is followed whenever it comes. Five launches in a
+  row kept the foreground where it was.
 - **`release=#true` on a binding** runs it when the key comes up rather than when it
   goes down: a push-to-talk, or a `signal` that should fire as a held key is let go.
   The press is still swallowed, so the key reaches no application either way; the hook

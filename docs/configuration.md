@@ -259,6 +259,17 @@ Alt+Tab, one with no title yet, one Windows says cannot be activated — and not
 no area cannot be managed by any rule. `shubbak inspect` and the palette both say which
 kind a verdict is.
 
+`no-focus` is the third verb that belongs only here. A managed window normally gets
+focus when it arrives, since that is what a window somebody opened wants; a window
+that arrives on its own — a notification, a chat that pops when a message lands, an
+updater — wants the opposite, and until now the only remedy was to send it to another
+workspace. With `do { no-focus }` the window is managed and placed and focus stays
+where it was. That includes the program's own activation a moment after it appears —
+a freshly launched program has the right to the foreground and takes it, and for a
+second and a half after the arrival that is put back rather than followed. A click on
+the window is followed at once, whenever it comes; Alt+Tab to it within that time
+bounces once. Like `ignore` and `manage`, it acts on the `manage` trigger only.
+
 Every `rules { }` block in the file counts, in file order, so a block appended at the
 end is simply more rules. That is what lets a tool add one for you:
 
@@ -521,7 +532,7 @@ shubbak restore            # bring it back
 
 **Workspaces & stashing** — `tag` `sticky` `scratchpad`
 
-**Management** — `ignore` `manage` `toggle-managed`
+**Management** — `ignore` `manage` `no-focus` `toggle-managed`
 
 **Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`)
 
