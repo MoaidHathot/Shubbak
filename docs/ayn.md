@@ -134,4 +134,5 @@ else, as do `shubbak ayn-exit` on its own and `shubbak stop` from outside. Only 
 watcher runs per account. It sleeps on registry notifications, Core Audio callbacks
 and power notifications and holds no timer between changes — a microphone unplugged
 or a speaker swapped is noticed the same way — so an idle watcher costs nothing.
-Sources the file does not name are never opened.
+Sources the file does not name are never opened, and a device the file starts naming
+after a reload is opened then, without a restart.

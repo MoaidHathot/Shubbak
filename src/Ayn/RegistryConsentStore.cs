@@ -33,7 +33,7 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
     private const string StorePath =
         @"SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\";
 
-    private readonly Watched[] _watched;
+    private readonly List<Watched> _watched = [];
 
     /// <summary>The leaf under the store for each device.</summary>
     /// <remarks>
@@ -59,13 +59,31 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
     {
         ArgumentNullException.ThrowIfNull(devices);
 
-        List<Watched> watched = [];
+        foreach (DeviceKind device in devices) Watch(device);
+    }
+
+    /// <summary>
+    /// Starts watching a device's keys, under both hives. Watching a device already
+    /// watched is nothing; a device whose keys are not there is logged and skipped.
+    /// </summary>
+    /// <remarks>
+    /// Callable after construction, so a reload that names a device the file did not
+    /// name at startup - <c>screen { captured "sharing" }</c> added to a running
+    /// watcher - takes effect without a restart. The host re-reads
+    /// <see cref="Changed"/> after every reload for the same reason.
+    /// </remarks>
+    /// <returns>Whether at least one key for the device is now watched.</returns>
+    public bool Watch(DeviceKind device)
+    {
+        if (_watched.Exists(w => w.Device == device)) return true;
+
+        bool any = false;
 
         foreach ((RegistryKey hive, string hiveName) in new[] { (Registry.CurrentUser, "HKCU"), (Registry.LocalMachine, "HKLM") })
         {
-            foreach ((DeviceKind device, string leaf) in Leaves)
+            foreach ((DeviceKind leafDevice, string leaf) in Leaves)
             {
-                if (!devices.Contains(device)) continue;
+                if (leafDevice != device) continue;
 
                 RegistryKey? key = Open(hive, StorePath + leaf);
 
@@ -83,21 +101,27 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
                     continue;
                 }
 
-                watched.Add(new Watched(device, key, $"{hiveName}\\...\\{leaf}"));
+                var watched = new Watched(device, key, $"{hiveName}\\...\\{leaf}");
+                _watched.Add(watched);
+                Arm(watched);
+                any = true;
             }
         }
 
-        _watched = [.. watched];
+        return any;
     }
 
     /// <summary>The devices with at least one key under watch.</summary>
     public IReadOnlyList<DeviceKind> Devices => [.. _watched.Select(w => w.Device).Distinct()];
 
-    /// <summary>One event per watched key, signalled when anything under it changes.</summary>
+    /// <summary>
+    /// One event per watched key, signalled when anything under it changes. Taken
+    /// again after a <see cref="Watch"/>, since a new device adds events.
+    /// </summary>
     public IReadOnlyList<WaitHandle> Changed => [.. _watched.Select(w => w.Event)];
 
     /// <summary>How many keys are actually being watched.</summary>
-    public int Count => _watched.Length;
+    public int Count => _watched.Count;
 
     /// <summary>Arms every watch. Called once before the first read and after every wake.</summary>
     public void Arm()
@@ -108,7 +132,7 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
     /// <summary>Re-arms the watch whose event fired.</summary>
     public void Arm(int index)
     {
-        if (index >= 0 && index < _watched.Length) Arm(_watched[index]);
+        if (index >= 0 && index < _watched.Count) Arm(_watched[index]);
     }
 
     public IReadOnlyList<ConsentEntry> Read(DeviceKind device)

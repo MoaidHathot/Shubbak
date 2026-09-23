@@ -498,6 +498,12 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **The watcher takes on a device named by a reload.** The consent store was built
+  once for the devices the file named at startup, and a reload that added
+  `screen { captured "..." }` was told to restart the watcher. The store now opens
+  and arms a new device's keys on the spot and the loop takes up its events, so the
+  reload is the whole change. Verified live: the screen appeared in the watch list
+  four seconds after the save, and left with the revert.
 - **The pipe server was not listening the moment `Start` returned.** Its listener
   pipes were created inside the accept loops' tasks, so a client connecting in the
   next few milliseconds - a script that starts the daemon and talks to it, a test -

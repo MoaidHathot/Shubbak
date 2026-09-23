@@ -177,12 +177,17 @@ internal static class Program
         // index that is set, and exit-all raises both within a moment of each other -
         // the notice, then the pipe closing behind it - so the order decides whether
         // the watcher leaves or reconnects to nothing.
-        WaitHandle[] handles =
+        // Rebuilt after a reload, since a reload may start watching a device and a
+        // device is one event per hive. The fixed handles keep their indices; the
+        // registry's events are whatever the store has now.
+        WaitHandle[] Handles() =>
         [
             stop, connection.Dismissed, connection.Lost, connection.Reloaded, connection.Signalled,
             AudioEndpoint.Changed, sources.Power.Changed, sources.Theme.Changed,
             .. store.Changed,
         ];
+
+        WaitHandle[] handles = Handles();
 
         store.Arm();
         provider.Observe(sources.Read(), Environment.TickCount64);
@@ -223,7 +228,7 @@ internal static class Program
                     break;
 
                 case ReloadedIndex:
-                    Reconfigure(provider, connection, sources);
+                    if (Reconfigure(provider, connection, sources)) handles = Handles();
                     provider.Observe(sources.Read(), now);
                     break;
 
@@ -355,7 +360,8 @@ internal static class Program
     /// it whatever the file says about the mute <em>fact</em>. The reading that follows
     /// in the caller is what turns a newly opened endpoint into a reported fact.
     /// </remarks>
-    private static void Reconfigure(Provider provider, WmConnection connection, Sources sources)
+    /// <returns>Whether the store watches a device it did not before, so the loop re-reads its handles.</returns>
+    private static bool Reconfigure(Provider provider, WmConnection connection, Sources sources)
     {
         AynConfig config = LoadConfig();
 
@@ -384,17 +390,27 @@ internal static class Program
         if (config.NeedsPower && !sources.Power.IsOpen) sources.Power.Open();
         if (config.NeedsTheme && !sources.Theme.IsOpen) sources.Theme.Open();
 
-        // A device newly watched needs its key; the store is built for the devices the
-        // file named at startup, and a reload that adds one is told to restart.
+        // A device newly watched gets its keys opened and armed now; the store used
+        // to be built once for the devices the file named at startup, and a reload
+        // that added one was told to restart.
+        bool devicesAdded = false;
+
         foreach (DeviceKind device in DeviceKinds.All)
         {
-            if (config.Watches(device) && !sources.Store.Devices.Contains(device))
-                Log.Warn(LogCategory.Config, $"the file now watches the {device.Word()}, which needs a restart of ayn to take effect");
+            if (!config.Watches(device) || sources.Store.Devices.Contains(device)) continue;
+
+            if (sources.Store.Watch(device))
+            {
+                devicesAdded = true;
+                Log.Info(LogCategory.Config, $"now watching the {device.Word()}");
+            }
         }
 
         // The holds under any new names follow from the next flush, which the caller
         // runs at the top of the loop.
         Log.Info(LogCategory.Config, $"reloaded; watching {Describe(config)}");
+
+        return devicesAdded;
     }
 
     private static AynConfig LoadConfig()

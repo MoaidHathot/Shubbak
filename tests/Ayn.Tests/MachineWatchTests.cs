@@ -59,6 +59,30 @@ public sealed class MachineWatchTests
     }
 
     [Fact]
+    public void ADeviceCanBeWatchedAfterTheStoreWasBuilt()
+    {
+        // A reload that names a device the file did not name at startup used to be
+        // told to restart the watcher. The store now opens the device's keys on the
+        // spot, and the events it exposes grow with it, so the loop can wait on them.
+        using var store = new RegistryConsentStore([DeviceKind.Camera]);
+
+        int before = store.Changed.Count;
+
+        Assert.True(store.Watch(DeviceKind.Screen));
+        Assert.Contains(DeviceKind.Screen, store.Devices);
+        Assert.True(store.Changed.Count > before, "a watched device adds at least one event");
+
+        // Again is nothing: no second set of keys, no duplicate events.
+        int after = store.Changed.Count;
+        Assert.True(store.Watch(DeviceKind.Screen));
+        Assert.Equal(after, store.Changed.Count);
+
+        // The devices watched at construction keep their places, so an event index the
+        // loop already holds still names the same key.
+        Assert.Equal(DeviceKind.Camera, store.Devices[0]);
+    }
+
+    [Fact]
     public void TheDescriptionNamesTheRules()
     {
         string described = Program.Describe(new AynConfig(
