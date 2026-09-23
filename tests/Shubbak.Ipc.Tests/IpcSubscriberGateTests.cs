@@ -1,6 +1,6 @@
 using Shubbak.Ipc;
 
-namespace Shubbak.Wm.Tests;
+namespace Shubbak.Ipc.Tests;
 
 /// <summary>
 /// Whether an event is worth building before anyone can receive it.

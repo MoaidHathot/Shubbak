@@ -41,6 +41,7 @@
     <ProjectReference Include="..\Shubbak.Ui.Gdi\Shubbak.Ui.Gdi.csproj" />
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
+    <ProjectReference Include="..\Shubbak.Companion\Shubbak.Companion.csproj" />
 
     <!--
       For ConsoleHost. A GUI-subsystem binary has no console, so the version and help

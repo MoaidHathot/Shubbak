@@ -556,6 +556,45 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **The three companions share one host.** The bar, the palette and the watcher each
+  carried their own copy of the same plumbing - the help-and-version preamble, the
+  single-instance lock, the log file named after the program, the DPI opt-in, a
+  window class with a window procedure that must never throw, a message loop that
+  waits rather than polls, and a subscription that reconnects for as long as the
+  process lives - and no two copies agreed: three connect timeouts, one pre-check for
+  the pipe, one that treated a refused subscription as a lost connection, one that
+  logged a pipe closing quietly and two that did not. `Shubbak.Companion` is the one
+  copy: `CompanionBootstrap` (the start, in the order the lock-before-log bug taught),
+  `CompanionWindow` (the class, the procedure, `EndPaint`-safe painting, pointer
+  tracking, the session ending, `WM_DPICHANGED` and the accent broadcast),
+  `MessageLoop`, `EventPump` (subscribe, then snapshot, then read; refused is not
+  lost; the pipe looked for before it is connected to; a give-up clock for the bar)
+  and `SignalPayload`. Taj's host went from 2,900 lines to 2,000, Dalil's and Ayn's
+  in proportion, and each program's CsWin32 manifest now names only what is its
+  own. Behaviour-identical by intent and verified live: bar reserved on both
+  displays, palette opened by signal and put away on blur, watcher re-holding after
+  a restart.
+- **The hosts have tests.** `Shubbak.Companion.Tests` drives the pump against a real
+  pipe - the event published during the snapshot arrives, the server going is a
+  `Closed` and the next one is found, a refusal is a `Refused` and not a loss, giving
+  up ends the pump - and the loop on a thread of its own. `Shubbak.Ipc.Tests` is
+  where the protocol's twenty-one tests now live, out of `Shubbak.Wm.Tests`, where
+  they had made the one project that owns the pipe the one with no tests of its own.
+  `Taj.Tests` covers the bar's geometry and the keyboard-layout stepping; the
+  snapshot projection - which monitor's layout, which workspaces, what order, what a
+  JSON null becomes - moved to `Taj.Core` as `SnapshotProjection` and is tested
+  there. `Ayn.Tests` drives the watcher's two connections through lose, reconnect
+  and re-hold. Forty-nine new tests in four new projects; the total is checked by
+  CI as before.
+- **CI collects coverage.** One Cobertura file per test project, summarised per
+  assembly in the log by `tools/summarise-coverage.ps1` and uploaded as an artefact.
+  Not gated, on purpose: the figure exists to be looked at when deciding where the
+  next test belongs. The first run says what the review said - the libraries at 84
+  to 96 percent, the executables at 2 to 21.
+- **`IpcClient.PipeName`, `IpcServer.PipeName` and `IsServerRunning(pipe)` are
+  public**, so a client outside the assembly can be pointed at an isolated pipe. The
+  pump takes one for the same reason.
+
 - **The message-loop timing tests run the test host the way the daemon runs itself.**
   `MessageLoopTests.AShortTimeoutStillRunsWithoutBeingWoken` failed on a Windows
   Server 2025 runner - once in seventy-four runs - with exactly 20 passes in 300 ms

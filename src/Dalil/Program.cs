@@ -1,15 +1,12 @@
-using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using Dalil.Core;
+using Shubbak.Companion;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
 using Shubbak.Native;
 using Windows.Win32;
-using Windows.Win32.Foundation;
-using Windows.Win32.UI.HiDpi;
-using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Dalil;
 
@@ -30,15 +27,11 @@ namespace Dalil;
 /// </remarks>
 internal static class Program
 {
-    private static readonly ConcurrentQueue<Action> s_inbox = new();
-
     private static PaletteWindow? s_palette;
     private static WmConnection? s_connection;
     private static DalilConfig s_config = new();
     private static PaletteSources s_sources = PaletteSources.Empty;
     private static CompletionSources s_completions = CompletionSources.None;
-    private static uint s_threadId;
-    private static bool s_running = true;
     private static string? s_configPath;
 
     /// <summary>
@@ -76,76 +69,21 @@ internal static class Program
     /// <summary>The diagnostics themselves, for the frame that lists them.</summary>
     private static IReadOnlyList<Diagnostic> s_diagnostics = [];
 
+    private static readonly CompanionIdentity Identity = new(
+        Name: "dalil",
+        Noun: "a palette",
+        Usage: UsageText,
+        HasWindow: true);
+
+    /// <summary>The loop that owns the window; see <see cref="Shubbak.Companion.MessageLoop"/>.</summary>
+    private static readonly Shubbak.Companion.MessageLoop s_loop = new();
+
     [STAThread]
-    private static int Main(string[] args)
+    private static int Main(string[] args) => CompanionBootstrap.Run(args, Identity, Start);
+
+    private static int Start(CompanionContext context)
     {
-        // Dalil is a GUI-subsystem binary, so it has no console until one is asked
-        // for. It had no --help at all before this; the palette was the only thing it
-        // could be told to do.
-        if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
-        {
-            ConsoleHost.Ensure();
-            PrintUsage();
-            return 0;
-        }
-
-        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
-        {
-            ConsoleHost.Ensure();
-            Console.WriteLine(ShubbakVersion.Banner);
-            return 0;
-        }
-
-        // Before any window is created: without it Windows reports virtualised
-        // coordinates on scaled displays and the palette lands in the wrong place.
-        // The cast is how the context handles are spelled - they are sentinel values,
-        // not an enum CsWin32 can name.
-        PInvoke.SetProcessDpiAwarenessContext((DPI_AWARENESS_CONTEXT)(nint)(-4));
-
-        s_threadId = PInvoke.GetCurrentThreadId();
-        s_configPath = PathFrom(args);
-
-        // Before the config is read, so a theme colour written `accent` is this
-        // machine's rather than the stock blue.
-        SystemColours.Adopt();
-
-        // One palette per account, for the same reason there is one window manager.
-        //
-        // Dalil is opened by a signal rather than by being started, so two of them are
-        // both subscribed and both answer: one keypress raises two windows, stacked and
-        // both topmost, with the keyboard going to whichever won the race and Escape
-        // dismissing one of them to reveal the other underneath.
-        //
-        // Nothing strange has to happen to end up with two. The palette survives the
-        // window manager restarting - deliberately, it reconnects - and the restarted
-        // window manager then runs its startup commands, one of which starts a palette.
-        //
-        // Claimed before the log file is opened. Opening the file truncates it, and the
-        // palette that is already running is writing to it: a second copy that said
-        // "already running" and left used to take the first copy's log with it, on
-        // every restart of the window manager.
-        using SingleInstanceLock instance = SingleInstanceLock.Claim(
-            IpcProtocol.InstanceMutexNameFor("dalil"));
-
-        // An uncertain answer starts anyway. Two palettes are confusing and can be
-        // undone; no palette, because a mutex could not be opened, removes the only way
-        // into half of what Shubbak can do.
-        if (!instance.Held && instance.Certain)
-        {
-            // Said to the terminal this was typed into, if it was typed. The usual
-            // second copy is started by the window manager, which has no console, and
-            // allocating one to print a line nobody will read flashes a window.
-            if (ConsoleHost.TryAttach())
-            {
-                Console.Error.WriteLine("dalil: a palette is already running.");
-                Console.Error.WriteLine("hint: `shubbak dalil-exit` stops it.");
-            }
-
-            return 1;
-        }
-
-        ConfigureLogging(args);
-
+        s_configPath = context.ConfigPath;
         s_config = LoadConfig().Config;
 
         s_palette = new PaletteWindow(s_config);
@@ -259,7 +197,7 @@ internal static class Program
         // wants it back; the same repairs a failed open gets.
         s_palette.ForegroundLost += () => ScheduleForegroundRepair(s_palette!);
 
-        PaletteWindow.RequestShutdown += () => s_running = false;
+        CompanionWindow.RequestShutdown += s_loop.Stop;
 
         s_connection = new WmConnection();
         s_connection.Signalled += OnSignal;
@@ -511,36 +449,17 @@ internal static class Program
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
-            s_running = false;
+            s_loop.Stop();
         };
 
-        while (s_running)
-        {
-            while (PInvoke.PeekMessage(out MSG msg, default, 0, 0, PEEK_MESSAGE_REMOVE_TYPE.PM_REMOVE))
+        s_loop.Run(
+            () =>
             {
-                if (msg.message == PInvoke.WM_QUIT)
-                {
-                    s_running = false;
-                    break;
-                }
-
-                PInvoke.TranslateMessage(in msg);
-                PInvoke.DispatchMessage(in msg);
-            }
-
-            Drain();
-            RescueStrandedPalette();
-
-            if (!s_running) break;
-
-            PInvoke.MsgWaitForMultipleObjectsEx(
-                [],
-                250,
-                QUEUE_STATUS_FLAGS.QS_ALLINPUT,
-                MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
-        }
+                RescueStrandedPalette();
+                return s_loop.Running;
+            },
+            () => 250);
     }
-
     /// <summary>
     /// Puts away a palette that is on screen and cannot be reached.
     /// </summary>
@@ -626,29 +545,7 @@ internal static class Program
     private static long s_lastRescueTicks;
 
     /// <summary>Queues work for the message loop and wakes it.</summary>
-    private static void Post(Action work)
-    {
-        s_inbox.Enqueue(work);
-        PInvoke.PostThreadMessage(s_threadId, PaletteWindow.WakeMessage, default, default);
-    }
-
-    private static void Drain()
-    {
-        while (s_inbox.TryDequeue(out Action? work))
-        {
-            try
-            {
-                work();
-            }
-            catch (Exception ex)
-            {
-                // One failed update must not take the process down. A palette that
-                // vanishes is worse than one that is briefly out of date.
-                Log.Warn(LogCategory.Wm, $"deferred work failed: {ex.Message}");
-            }
-        }
-    }
-
+    private static void Post(Action work) => s_loop.Post(work);
     /// <summary>
     /// The window manager raised a signal.
     /// </summary>
@@ -947,7 +844,7 @@ internal static class Program
     {
         if (everything)
         {
-            s_running = false;
+            s_loop.Stop();
             return;
         }
 
@@ -1029,83 +926,7 @@ internal static class Program
         }
     }
 
-    private static string? PathFrom(string[] args)
-    {
-        for (int i = 0; i < args.Length - 1; i++)
-            if (args[i] is "--config" or "-c")
-                return args[i + 1];
-
-        return null;
-    }
-
-    /// <summary>
-    /// Opens a log file beside the window manager's.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Not optional, and its absence was found the hard way. Dalil is started
-    /// detached from the window manager's <c>startup-command</c>, so it has no
-    /// console and anything written to standard error goes nowhere at all. The first
-    /// time the palette failed to appear there was simply nothing to read - the
-    /// window manager's log showed the signal being published and then the trail
-    /// stopped.
-    /// </para>
-    /// <para>
-    /// Beside the window manager's log rather than into it. Two processes cannot
-    /// share one file: the second to open it truncates the first, which is worse than
-    /// not logging at all. Taj does the same thing for the same reason.
-    /// </para>
-    /// </remarks>
-    private static void ConfigureLogging(string[] args)
-    {
-        string file = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Shubbak",
-            "dalil.log");
-
-        try
-        {
-            if (ConfigPathResolver.Resolve(s_configPath).Path is { } path && File.Exists(path))
-            {
-                ShubbakConfig shared = ConfigLoader.LoadFile(path).Config;
-                Log.Level = shared.LogLevel;
-
-                if (shared.LogFile is { Length: > 0 } configured)
-                    file = Path.Combine(Path.GetDirectoryName(configured) ?? string.Empty, "dalil.log");
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A palette that cannot read the config still has defaults to draw.
-        }
-
-        // The command line wins, so a one-off investigation needs no config edit.
-        if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
-            Log.Level = parsed;
-
-        // Off unless output genuinely leads somewhere. Dalil is resident and started
-        // without a console, so this was formatting entries and discarding them.
-        Log.ToConsole = ConsoleHost.HasOutput
-            && !args.Contains("--quiet", StringComparer.Ordinal);
-
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            Log.OpenFile(file);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Losing the log is not worth losing the palette over.
-        }
-    }
-
-    private static string? Value(string[] args, string name)
-    {
-        int index = Array.IndexOf(args, name);
-        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
-    }
-
-    private static void PrintUsage() => Console.WriteLine("""
+    private const string UsageText = """
         Dalil - the command palette for Shubbak
 
         USAGE
@@ -1129,5 +950,5 @@ internal static class Program
         NOTES
           Shubbak does not launch Dalil and does not know it exists. Bind a key to
           show it in your config, the same way you would any other command.
-        """);
+        """;
 }

@@ -1,6 +1,6 @@
 using Shubbak.Ipc;
 
-namespace Shubbak.Wm.Tests;
+namespace Shubbak.Ipc.Tests;
 
 /// <summary>
 /// What the server does with a request it cannot answer properly.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Dalil.Core;
+using Shubbak.Companion;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
 using Shubbak.Ui.Layout;
@@ -44,7 +45,7 @@ public sealed class WmConnection : IAsyncDisposable
         IpcProtocol.ShutdownTopic + "," + IpcProtocol.ResyncTopic;
 
     private readonly CancellationTokenSource _stopping = new();
-    private Task? _pump;
+    private EventPump? _pump;
 
     /// <summary>Raised on a background thread when the window manager signals.</summary>
     public event Action<SignalRaised>? Signalled;
@@ -77,7 +78,11 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>Raised on a background thread when the configuration was reloaded.</summary>
     public event Action? Reloaded;
 
-    public void Start() => _pump = Task.Run(() => PumpAsync(_stopping.Token));
+    public void Start()
+    {
+        _pump = BuildPump();
+        _pump.Start();
+    }
 
     /// <summary>Asks the window manager to run a command.</summary>
     public async Task SendAsync(string command)
@@ -515,110 +520,38 @@ public sealed class WmConnection : IAsyncDisposable
     }
 
     /// <summary>
-    /// Reads the event stream, reconnecting for as long as the process runs.
+    /// The event stream, reconnecting for as long as the process runs; see
+    /// <see cref="EventPump"/>. A palette that stops working because the window
+    /// manager was restarted is a palette that has to be restarted too, and nobody
+    /// will know to.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// A palette that stops working because the window manager was restarted is a
-    /// palette that has to be restarted too, and nobody will know to.
-    /// </para>
-    /// <para>
-    /// Two failures that look alike and are not. Failing to connect is transient - the
-    /// daemon is starting, or restarting - and is worth retrying quietly and often. A
-    /// refused <em>subscription</em> is not: the server rejects topics it does not
-    /// know, so this means a version mismatch, it will not fix itself, and retrying
-    /// every second produces a line a second in the log and nothing else. So the
-    /// reason is said out loud once and the retry backs off.
-    /// </para>
-    /// </remarks>
-    private async Task PumpAsync(CancellationToken token)
+    private EventPump BuildPump() => new(Topics)
     {
-        TimeSpan wait = TimeSpan.FromSeconds(1);
-        string? lastComplaint = null;
+        ProgramName = "dalil",
+        ConnectTimeout = TimeSpan.FromSeconds(5),
 
-        while (!token.IsCancellationRequested)
+        // The subscription is in place, which is all a read needs - and the read
+        // happening after the subscription rather than before it means nothing that
+        // happens between the two is missed.
+        Subscribed = (_, _) =>
         {
-            try
-            {
-                await using IpcClient client = new();
-                await client.ConnectAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+            Connected?.Invoke();
+            return Task.CompletedTask;
+        },
 
-                // The pipe is open, which is all a read needs. Said before the
-                // subscription rather than after its first event, because the first
-                // event is very often the signal that opens the palette - and a read
-                // that starts then is the read this exists to get ahead of.
-                Connected?.Invoke();
-
-                IAsyncEnumerator<IpcEvent> events =
-                    client.SubscribeAsync(Topics, token).GetAsyncEnumerator(token);
-
-                // Announced only once the subscription has been accepted. Saying
-                // "connected" before asking would report success for a connection
-                // that is about to be refused, which is exactly what it did.
-                bool announced = false;
-
-                try
-                {
-                    while (await events.MoveNextAsync().ConfigureAwait(false))
-                    {
-                        if (!announced)
-                        {
-                            Log.Info(LogCategory.Ipc, "connected; listening for signals");
-                            announced = true;
-                            wait = TimeSpan.FromSeconds(1);
-                            lastComplaint = null;
-                        }
-
-                        Dispatch(events.Current);
-                    }
-                }
-                finally
-                {
-                    await events.DisposeAsync().ConfigureAwait(false);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (InvalidOperationException ex)
-            {
-                // The subscription was refused. Almost always a daemon older than
-                // this build, which does not publish the topics being asked for.
-                if (lastComplaint != ex.Message)
-                {
-                    Log.Warn(LogCategory.Ipc,
-                        $"the window manager refused the subscription: {ex.Message}. " +
-                        "This usually means shubbak-wm is older than dalil; restart it.");
-
-                    lastComplaint = ex.Message;
-                }
-
-                wait = TimeSpan.FromSeconds(30);
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(LogCategory.Ipc, $"connection lost: {ex.Message}");
-                wait = TimeSpan.FromSeconds(1);
-            }
-
-            try
-            {
-                await Task.Delay(wait, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
-    }
+        Event = (_, raised, _) =>
+        {
+            Dispatch(raised);
+            return Task.CompletedTask;
+        },
+    };
 
     private void Dispatch(IpcEvent raised)
     {
         switch (raised.Topic)
         {
             case IpcProtocol.SignalTopic:
-                if (Parse(raised.Data) is { } signal) Signalled?.Invoke(signal);
+                if (SignalPayload.Parse(raised.Data) is { } signal) Signalled?.Invoke(new SignalRaised(signal.Name, signal.Arguments));
                 break;
 
             case IpcProtocol.ShutdownTopic:
@@ -649,49 +582,11 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    /// <summary>Reads a signal payload without a reflection-based deserialiser.</summary>
-    /// <remarks>
-    /// Hand-parsed because the payload is two fields and adding a DTO to the protocol
-    /// for it would make every client that does not care about signals carry it.
-    /// </remarks>
-    private static SignalRaised? Parse(string json)
-    {
-        try
-        {
-            using JsonDocument document = JsonDocument.Parse(json);
-
-            if (!document.RootElement.TryGetProperty("name", out JsonElement name)) return null;
-
-            List<string> arguments = [];
-
-            if (document.RootElement.TryGetProperty("arguments", out JsonElement list))
-                foreach (JsonElement argument in list.EnumerateArray())
-                    if (argument.GetString() is { } value)
-                        arguments.Add(value);
-
-            return new SignalRaised(name.GetString() ?? string.Empty, arguments);
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
     public async ValueTask DisposeAsync()
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
 
-        if (_pump is { } pump)
-        {
-            try
-            {
-                await pump.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected: cancellation is how the pump is asked to stop.
-            }
-        }
+        if (_pump is { } pump) await pump.DisposeAsync().ConfigureAwait(false);
 
         _stopping.Dispose();
     }

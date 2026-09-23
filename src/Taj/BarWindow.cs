@@ -1,5 +1,4 @@
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
+using Shubbak.Companion;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
@@ -10,7 +9,6 @@ using Shubbak.Ui.Gdi;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.Graphics.Dwm;
-using Windows.Win32.UI.Input.KeyboardAndMouse;
 using Windows.Win32.UI.Shell;
 using Windows.Win32.UI.WindowsAndMessaging;
 using Windows.Win32.Graphics.Gdi;
@@ -32,13 +30,10 @@ namespace Taj;
 /// burns battery for nothing; one that repaints on every event flickers.
 /// </para>
 /// </remarks>
-public sealed class BarWindow : IDisposable
+public sealed class BarWindow : CompanionWindow
 {
     private const string WindowClass = "TajBarWindow";
     private const uint AppbarCallbackMessage = PInvoke.WM_APP + 1;
-
-    private static readonly Dictionary<nint, BarWindow> s_windows = [];
-    private static bool s_classRegistered;
 
     /// <summary>
     /// Broadcast to every top-level window when Explorer restarts.
@@ -50,24 +45,13 @@ public sealed class BarWindow : IDisposable
     private static uint s_taskbarCreated;
 
     /// <summary>
-    /// Raised when a bar window is asked to close, meaning the process should stop.
-    /// </summary>
-    /// <remarks>
-    /// Static because the window procedure has to be - it is an
-    /// <c>UnmanagedCallersOnly</c> entry point, so it cannot close over an instance.
-    /// There is one message loop behind however many bars, so any window closing is
-    /// the process closing.
-    /// </remarks>
-    public static event Action? RequestShutdown;
-
-    /// <summary>
     /// Raised when the shell says a full-screen application has opened or closed.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Static for the same reason as <see cref="RequestShutdown"/>, and because the
-    /// answer is about the desktop rather than about one bar: a game on one monitor
-    /// covers that bar, and the loop that drives all of them is one loop.
+    /// Static because the answer is about the desktop rather than about one bar: a
+    /// game on one monitor covers that bar, and the loop that drives all of them is
+    /// one loop.
     /// </para>
     /// <para>
     /// True when one opens, false when one closes. Deliberately treated as a hint
@@ -75,17 +59,6 @@ public sealed class BarWindow : IDisposable
     /// </para>
     /// </remarks>
     public static event Action<bool>? FullScreenAppChanged;
-
-    /// <summary>
-    /// Raised when Windows says the accent colour has changed.
-    /// </summary>
-    /// <remarks>
-    /// Static for the same reason as the others: the answer is about the machine, not
-    /// about one bar. A config that writes <c>accent</c> resolved it when it was read,
-    /// so following the change means reading the file again - which the loop already
-    /// knows how to do, and does for this the way it does for a saved file.
-    /// </remarks>
-    public static event Action? SystemColoursChanged;
 
     private readonly BarModel _model;
 
@@ -101,10 +74,12 @@ public sealed class BarWindow : IDisposable
     /// </remarks>
     private readonly string _label;
 
-    private HWND _handle;
     private CompositedGdiRenderer? _renderer;
     private FlexLayout? _layout;
     private VisualNode? _tree;
+
+    /// <summary>The window as the bar's own manifest spells it; see <see cref="CompanionWindow.Handle"/>.</summary>
+    private HWND Hwnd => new(Handle);
 
     /// <summary>The display the bar is on, as last told.</summary>
     private Rect _monitor;
@@ -127,8 +102,6 @@ public sealed class BarWindow : IDisposable
     private bool _appbarRegistered;
     private bool _refusalReported;
     private VisualNode? _hovered;
-    private bool _mouseTracked;
-    private bool _disposed;
 
     /// <summary>Raised when a widget is clicked, with the command to run.</summary>
     public event Action<string>? CommandRequested;
@@ -136,6 +109,7 @@ public sealed class BarWindow : IDisposable
     /// <param name="model">The bar model to draw.</param>
     /// <param name="deviceId">The GDI device name of the display this bar is for.</param>
     public BarWindow(BarModel model, string deviceId)
+        : base(new WindowClassOptions(WindowClass))
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         ArgumentException.ThrowIfNullOrEmpty(deviceId);
@@ -143,47 +117,36 @@ public sealed class BarWindow : IDisposable
         _label = deviceId.LastIndexOf('\\') is var slash && slash >= 0 ? deviceId[(slash + 1)..] : deviceId;
     }
 
-    public unsafe nint Handle => (nint)_handle.Value;
-
     /// <summary>The display this bar sits on, as the log names it.</summary>
     public string Label => _label;
 
     /// <summary>Creates the window on the given monitor work area.</summary>
-    public unsafe bool Create(Rect monitorBounds)
+    public bool Create(Rect monitorBounds)
     {
-        EnsureClassRegistered();
-
         BarProfile profile = _model.Profile;
 
         _monitor = monitorBounds;
         (_strip, _bounds) = Geometry(monitorBounds, profile);
 
-        _handle = PInvoke.CreateWindowEx(
-            WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE,
-            WindowClass,
-            "Taj",
-            WINDOW_STYLE.WS_POPUP,
-            _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
-            HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
-
-        if (_handle.IsNull)
+        if (!CreateWindow(
+                (uint)(WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE),
+                (uint)WINDOW_STYLE.WS_POPUP,
+                "Taj",
+                _bounds))
         {
-            Log.Error(LogCategory.Wm, $"could not create bar window: {Marshal.GetLastWin32Error()}");
             return false;
         }
 
-        s_windows[(nint)_handle.Value] = this;
-
         AllowShellRestartBroadcast();
 
-        _renderer = new CompositedGdiRenderer((nint)_handle.Value);
+        _renderer = new CompositedGdiRenderer(Handle);
         _layout = new FlexLayout(_renderer);
 
         RegisterAppbar();
         HonourAlpha();
         ApplyLook(profile);
 
-        PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
+        ShowWithoutActivating();
 
         return true;
     }
@@ -191,7 +154,7 @@ public sealed class BarWindow : IDisposable
     /// <summary>Rebuilds and repaints if the model has changed.</summary>
     public void Update()
     {
-        if (_handle.IsNull || _renderer is null || _layout is null) return;
+        if (!Exists || _renderer is null || _layout is null) return;
 
         if (!_model.IsDirty && _tree is not null) return;
 
@@ -223,8 +186,7 @@ public sealed class BarWindow : IDisposable
                     .Select(n => $"{n.Id}@{n.Rect.Left}..{n.Rect.Right}")));
         }
 
-        PInvoke.InvalidateRect(_handle, (RECT?)null, false);
-        PInvoke.UpdateWindow(_handle);
+        Repaint();
     }
 
     /// <summary>
@@ -237,7 +199,7 @@ public sealed class BarWindow : IDisposable
     /// on the inner side, so the room above the bar and the room below it match
     /// without the window manager's gaps having to know about either.
     /// </remarks>
-    private static (Rect Strip, Rect Window) Geometry(Rect monitor, BarProfile profile)
+    internal static (Rect Strip, Rect Window) Geometry(Rect monitor, BarProfile profile)
     {
         int margin = Math.Max(0, profile.Margin);
         int depth = profile.Height + (2 * margin);
@@ -262,7 +224,7 @@ public sealed class BarWindow : IDisposable
         _bounds = bounds;
 
         PInvoke.SetWindowPos(
-            _handle, HWND.Null, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
+            Hwnd, HWND.Null, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
 
         RegisterAppbar();
@@ -289,7 +251,7 @@ public sealed class BarWindow : IDisposable
     /// <returns>Whether anything moved.</returns>
     public bool Relocate(Rect monitorBounds)
     {
-        if (_handle.IsNull) return false;
+        if (!Exists) return false;
 
         _monitor = monitorBounds;
 
@@ -306,7 +268,7 @@ public sealed class BarWindow : IDisposable
         return true;
     }
 
-    private void Paint()
+    protected override void OnPaint()
     {
         if (_renderer is null || _tree is null) return;
 
@@ -323,10 +285,8 @@ public sealed class BarWindow : IDisposable
     /// what it says, and rebuilding on pointer movement would mean rebuilding many
     /// times a second for no change in content.
     /// </remarks>
-    private void OnMouseMove(int x, int y)
+    protected override void OnMouseMove(int x, int y)
     {
-        if (!_mouseTracked) StartTrackingMouse();
-
         VisualNode? hovered = Interactive(_tree?.HitTest(x, y));
 
         if (ReferenceEquals(hovered, _hovered)) return;
@@ -340,19 +300,20 @@ public sealed class BarWindow : IDisposable
         // pointer at rest over a pill a hand and at rest beside one an arrow.
         PInvoke.SetCursor(PInvoke.LoadCursor(HINSTANCE.Null, hovered is not null ? PInvoke.IDC_HAND : PInvoke.IDC_ARROW));
 
-        PInvoke.InvalidateRect(_handle, (RECT?)null, false);
+        PInvoke.InvalidateRect(Hwnd, (RECT?)null, false);
     }
 
-    private void OnMouseLeave()
+    protected override void OnMouseLeave()
     {
-        _mouseTracked = false;
-
         if (_hovered is null) return;
 
         _hovered = null;
 
-        PInvoke.InvalidateRect(_handle, (RECT?)null, false);
+        PInvoke.InvalidateRect(Hwnd, (RECT?)null, false);
     }
+
+    /// <summary>The hand over anything that can be clicked; see <see cref="CompanionWindow"/>.</summary>
+    protected override bool ShowsHandCursor => _hovered is not null;
 
     /// <summary>The nearest ancestor that reacts to the pointer, if any.</summary>
     private VisualNode? Interactive(VisualNode? node)
@@ -365,22 +326,10 @@ public sealed class BarWindow : IDisposable
         return null;
     }
 
-    private void StartTrackingMouse()
-    {
-        // Without this there is no WM_MOUSELEAVE, and the highlight would stay behind
-        // after the pointer had gone.
-        var track = new TRACKMOUSEEVENT
-        {
-            cbSize = (uint)Marshal.SizeOf<TRACKMOUSEEVENT>(),
-            dwFlags = TRACKMOUSEEVENT_FLAGS.TME_LEAVE,
-            hwndTrack = _handle,
-        };
 
-        _mouseTracked = PInvoke.TrackMouseEvent(ref track);
-    }
-
-    private void OnClick(int x, int y)
+    protected override void OnMouseDown(MouseButton button, int x, int y)
     {
+        if (button != MouseButton.Left) return;
         if (_tree?.HitTest(x, y) is not { } node) return;
 
         // Walk up: the click usually lands on a text node inside the element that
@@ -427,7 +376,7 @@ public sealed class BarWindow : IDisposable
         var data = new APPBARDATA
         {
             cbSize = (uint)sizeof(APPBARDATA),
-            hWnd = _handle,
+            hWnd = Hwnd,
             uCallbackMessage = AppbarCallbackMessage,
             uEdge = _model.Profile.Edge == BarEdge.Top ? 1u : 3u,   // ABE_TOP : ABE_BOTTOM
             rc = new RECT
@@ -485,7 +434,7 @@ public sealed class BarWindow : IDisposable
     /// </remarks>
     public void EnsureReserved()
     {
-        if (_appbarRegistered || _handle.IsNull) return;
+        if (_appbarRegistered || !Exists) return;
 
         RegisterAppbar();
     }
@@ -524,7 +473,7 @@ public sealed class BarWindow : IDisposable
         var data = new APPBARDATA
         {
             cbSize = (uint)sizeof(APPBARDATA),
-            hWnd = _handle,
+            hWnd = Hwnd,
         };
 
         const uint AbmWindowPosChanged = 0x00000009;
@@ -558,7 +507,7 @@ public sealed class BarWindow : IDisposable
         var data = new APPBARDATA
         {
             cbSize = (uint)sizeof(APPBARDATA),
-            hWnd = _handle,
+            hWnd = Hwnd,
             lParam = new LPARAM(active ? 1 : 0),
         };
 
@@ -573,7 +522,7 @@ public sealed class BarWindow : IDisposable
         var data = new APPBARDATA
         {
             cbSize = (uint)sizeof(APPBARDATA),
-            hWnd = _handle,
+            hWnd = Hwnd,
         };
 
         const uint AbmRemove = 0x00000001;
@@ -680,7 +629,7 @@ public sealed class BarWindow : IDisposable
         }
 
         PInvoke.ChangeWindowMessageFilterEx(
-            _handle, s_taskbarCreated, WINDOW_MESSAGE_FILTER_ACTION.MSGFLT_ALLOW, null);
+            Hwnd, s_taskbarCreated, WINDOW_MESSAGE_FILTER_ACTION.MSGFLT_ALLOW, null);
     }
 
     /// <summary>
@@ -706,7 +655,7 @@ public sealed class BarWindow : IDisposable
         var band = new HWND(opening ? 1 : 0);
 
         PInvoke.SetWindowPos(
-            _handle, band, 0, 0, 0, 0,
+            Hwnd, band, 0, 0, 0, 0,
             SET_WINDOW_POS_FLAGS.SWP_NOMOVE |
             SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE);
@@ -750,7 +699,7 @@ public sealed class BarWindow : IDisposable
 
         // Failure is ignored: without composition there is no transparency to have,
         // and the bar draws opaque over its own background as it always did.
-        _ = PInvoke.DwmEnableBlurBehindWindow(_handle, in blur);
+        _ = PInvoke.DwmEnableBlurBehindWindow(Hwnd, in blur);
 
         if (!empty.IsNull) PInvoke.DeleteObject(empty);
     }
@@ -810,9 +759,10 @@ public sealed class BarWindow : IDisposable
         int corners = look.Corners;
         int backdrop = (int)look.Backdrop;
 
-        _ = PInvoke.DwmSetWindowAttribute(_handle, UseImmersiveDarkMode, &dark, sizeof(int));
-        _ = PInvoke.DwmSetWindowAttribute(_handle, CornerPreference, &corners, sizeof(int));
-        _ = PInvoke.DwmSetWindowAttribute(_handle, SystemBackdropType, &backdrop, sizeof(int));
+        HWND hwnd = Hwnd;
+        _ = PInvoke.DwmSetWindowAttribute(hwnd, UseImmersiveDarkMode, &dark, sizeof(int));
+        _ = PInvoke.DwmSetWindowAttribute(hwnd, CornerPreference, &corners, sizeof(int));
+        _ = PInvoke.DwmSetWindowAttribute(hwnd, SystemBackdropType, &backdrop, sizeof(int));
     }
 
     /// <summary>Whether a colour reads as dark: relative luminance under a half.</summary>
@@ -821,203 +771,75 @@ public sealed class BarWindow : IDisposable
 
     // ---- window plumbing ---------------------------------------------------
 
-    private static unsafe void EnsureClassRegistered()
+    /// <summary>
+    /// The messages the bar answers itself: the shell's appbar callback, the
+    /// Explorer-restart broadcast, and the two the shell must be told about.
+    /// Everything else - painting, the pointer, closing, the session ending, the
+    /// accent changing - is the base class's.
+    /// </summary>
+    protected override bool OnMessage(uint message, nuint wParam, nint lParam, out nint result)
     {
-        if (s_classRegistered) return;
+        result = 0;
 
-        fixed (char* className = WindowClass)
+        // Ahead of the switch because its value is allocated at run time by
+        // RegisterWindowMessage, and a case label has to be a constant.
+        if (s_taskbarCreated != 0 && message == s_taskbarCreated)
         {
-            var wc = new WNDCLASSEXW
-            {
-                cbSize = (uint)sizeof(WNDCLASSEXW),
-                lpfnWndProc = &WindowProc,
-                hInstance = HINSTANCE.Null,
-                lpszClassName = className,
-
-                // No background brush: every pixel is painted from the off-screen
-                // buffer, and letting Windows erase first causes a visible flash.
-                hbrBackground = Windows.Win32.Graphics.Gdi.HBRUSH.Null,
-
-                // A class with no cursor leaves whatever the pointer was last given,
-                // which over a bar that never sets one is usually the busy cursor
-                // inherited from the application it just left. The bar is never busy.
-                hCursor = PInvoke.LoadCursor(HINSTANCE.Null, PInvoke.IDC_ARROW),
-            };
-
-            if (PInvoke.RegisterClassEx(in wc) == 0 && Marshal.GetLastWin32Error() != 1410)
-                throw new InvalidOperationException(
-                    $"RegisterClassEx failed: {Marshal.GetLastWin32Error()}");
+            OnShellRestarted();
+            return true;
         }
 
-        s_classRegistered = true;
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static unsafe LRESULT WindowProc(HWND hwnd, uint message, WPARAM wParam, LPARAM lParam)
-    {
-        try
+        switch (message)
         {
-            if (s_windows.TryGetValue((nint)hwnd.Value, out BarWindow? window))
-            {
-                // Ahead of the switch because its value is allocated at run time by
-                // RegisterWindowMessage, and a case label has to be a constant.
-                if (s_taskbarCreated != 0 && message == s_taskbarCreated)
+            case AppbarCallbackMessage:
+                switch (wParam)
                 {
-                    window.OnShellRestarted();
-                    return new LRESULT(0);
-                }
-
-                switch (message)
-                {
-                    case PInvoke.WM_PAINT:
-                    {
-                        // EndPaint whatever Paint does. Without it a throw skipped the
-                        // call that validates the update region, so Windows posted the
-                        // WM_PAINT again at once, for ever: a core spent on a bar that
-                        // never painted, with nothing in the log to say so.
-                        PInvoke.BeginPaint(hwnd, out PAINTSTRUCT ps);
-
-                        try
-                        {
-                            window.Paint();
-                        }
-                        finally
-                        {
-                            PInvoke.EndPaint(hwnd, in ps);
-                        }
-
-                        return new LRESULT(0);
-                    }
-
-                    case PInvoke.WM_LBUTTONDOWN:
-                    {
-                        int x = (short)(lParam.Value & 0xFFFF);
-                        int y = (short)((lParam.Value >> 16) & 0xFFFF);
-                        window.OnClick(x, y);
-                        return new LRESULT(0);
-                    }
-
-                    case PInvoke.WM_MOUSEMOVE:
-                    {
-                        int x = (short)(lParam.Value & 0xFFFF);
-                        int y = (short)((lParam.Value >> 16) & 0xFFFF);
-                        window.OnMouseMove(x, y);
-                        return new LRESULT(0);
-                    }
-
-                    case PInvoke.WM_MOUSELEAVE:
-                        window.OnMouseLeave();
-                        return new LRESULT(0);
-
-                    // The hand over anything that can be clicked, the arrow over
-                    // everything else. The class cursor is the arrow; saying so here
-                    // for the rest stops the hand lingering after the pointer has left
-                    // a control for a readout beside it.
-                    case PInvoke.WM_SETCURSOR:
-                        PInvoke.SetCursor(PInvoke.LoadCursor(
-                            HINSTANCE.Null, window._hovered is not null ? PInvoke.IDC_HAND : PInvoke.IDC_ARROW));
-                        return new LRESULT(1);
-
-                    case AppbarCallbackMessage:
-                        switch ((nuint)wParam.Value)
-                        {
-                            case AppbarNotification.PositionChanged:
-                                window.OnAppbarPositionChanged();
-                                break;
-
-                            case AppbarNotification.FullScreenApp:
-                                window.OnFullScreenApp(lParam.Value != 0);
-                                break;
-
-                            default:
-                                break;
-                        }
-
-                        return new LRESULT(0);
-
-                    // Both of these are told to the shell and then handed on rather
-                    // than answered. Returning zero from WM_WINDOWPOSCHANGED without
-                    // reaching DefWindowProc suppresses the WM_SIZE and WM_MOVE it is
-                    // responsible for synthesising, so a handler that swallows it has
-                    // quietly broken every message that comes after.
-                    case PInvoke.WM_WINDOWPOSCHANGED:
-                        window.NotifyAppbarMoved();
+                    case AppbarNotification.PositionChanged:
+                        OnAppbarPositionChanged();
                         break;
 
-                    case PInvoke.WM_ACTIVATE:
-                    {
-                        // The state is the low word. The high word says whether the
-                        // window was minimised, which this one never is.
-                        uint state = (uint)wParam.Value & 0xFFFF;
-                        window.NotifyAppbarActivated(state != PInvoke.WA_INACTIVE);
+                    case AppbarNotification.FullScreenApp:
+                        OnFullScreenApp(lParam != 0);
                         break;
-                    }
-
-                    // Broadcast to every top-level window when the accent changes, in
-                    // Settings or by the wallpaper. Said once to the loop rather than
-                    // acted on per bar: one accent, one reload, however many displays.
-                    case PInvoke.WM_DWMCOLORIZATIONCOLORCHANGED:
-                        SystemColoursChanged?.Invoke();
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_CLOSE:
-                        // Closing any bar closes the bar. There is one message loop
-                        // behind however many monitors, so a window going is the
-                        // process going - and without this, closing the window left
-                        // Taj running with nothing to show, which is how `taj-exit`
-                        // and Task Manager's "End task" both used to do nothing.
-                        RequestShutdown?.Invoke();
-                        return new LRESULT(0);
-
-                    // The session is ending, or an installer is replacing the files
-                    // under this process and has asked it to leave (Restart Manager,
-                    // which is what a silent `winget upgrade` runs). The first is a
-                    // question, answered yes; the second is the moment to go, and a
-                    // bar that goes when asked is one the installer does not have to
-                    // kill. Nothing here needs saving; the appbar reservation is
-                    // given back on the way out of the loop when there is time.
-                    case PInvoke.WM_QUERYENDSESSION:
-                        return new LRESULT(1);
-
-                    case PInvoke.WM_ENDSESSION:
-                        if (wParam.Value != 0) RequestShutdown?.Invoke();
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_DESTROY:
-                        s_windows.Remove((nint)hwnd.Value);
-                        return new LRESULT(0);
 
                     default:
                         break;
                 }
-            }
-        }
-        catch (Exception ex)
-        {
-            // An exception escaping an UnmanagedCallersOnly callback tears down the
-            // process, and a crashed bar is worse than a missed repaint. Said out loud,
-            // though: a bar whose every click and paint failed silently was a bar that
-            // looked broken for no reason anyone could find in the log.
-            Log.Error(LogCategory.Ui, $"the bar's window procedure failed handling message 0x{message:X4}", ex);
-        }
 
-        return PInvoke.DefWindowProc(hwnd, message, wParam, lParam);
+                return true;
+
+            // Both of these are told to the shell and then handed on rather than
+            // answered. Returning zero from WM_WINDOWPOSCHANGED without reaching
+            // DefWindowProc suppresses the WM_SIZE and WM_MOVE it is responsible for
+            // synthesising, so a handler that swallows it has quietly broken every
+            // message that comes after.
+            case PInvoke.WM_WINDOWPOSCHANGED:
+                NotifyAppbarMoved();
+                return false;
+
+            case PInvoke.WM_ACTIVATE:
+            {
+                // The state is the low word. The high word says whether the window
+                // was minimised, which this one never is.
+                uint state = (uint)wParam & 0xFFFF;
+                NotifyAppbarActivated(state != PInvoke.WA_INACTIVE);
+                return false;
+            }
+
+            default:
+                return false;
+        }
     }
 
-    public unsafe void Dispose()
+    public override void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (!Exists) return;
 
         UnregisterAppbar();
 
         _renderer?.Dispose();
+        _renderer = null;
 
-        if (!_handle.IsNull)
-        {
-            s_windows.Remove((nint)_handle.Value);
-            PInvoke.DestroyWindow(_handle);
-            _handle = HWND.Null;
-        }
+        base.Dispose();
     }
 }

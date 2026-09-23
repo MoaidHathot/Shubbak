@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using Shubbak.Ipc;
 
-namespace Shubbak.Wm.Tests;
+namespace Shubbak.Ipc.Tests;
 
 /// <summary>
 /// One connection used by two threads at once.

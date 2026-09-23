@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Shubbak.Wm.Tests" />
+    <InternalsVisibleTo Include="Shubbak.Ipc.Tests" />
   </ItemGroup>
 
 </Project>

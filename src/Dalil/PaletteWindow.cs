@@ -1,7 +1,6 @@
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using Dalil.Core;
+using Shubbak.Companion;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
@@ -35,15 +34,11 @@ namespace Dalil;
 /// must never steal focus; this window exists to.
 /// </para>
 /// </remarks>
-public sealed class PaletteWindow : IDisposable
+public sealed class PaletteWindow : CompanionWindow
 {
     private const string WindowClass = "DalilPaletteWindow";
 
     /// <summary>Posted by the IPC reader thread to wake the message loop.</summary>
-    internal const uint WakeMessage = PInvoke.WM_APP + 1;
-
-    private static readonly Dictionary<nint, PaletteWindow> s_windows = [];
-    private static bool s_classRegistered;
 
     private readonly PaletteModel _model = new();
     private DalilConfig _config;
@@ -63,11 +58,9 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>The scale factor of the monitor the palette is on: 1.0 at 96 DPI.</summary>
     private double _scale = 1.0;
 
-    private HWND _handle;
     private GdiRenderer? _renderer;
     private Rect _bounds;
     private bool _open;
-    private bool _disposed;
 
     /// <summary>How many rows the window is currently tall enough for.</summary>
     private int _rowsShown;
@@ -156,7 +149,6 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>Where the pointer was last seen, so a resting cursor is ignored.</summary>
     private (int X, int Y) _lastMouse = (int.MinValue, int.MinValue);
 
-    private bool _trackingMouse;
 
     /// <summary>Raised with a command string when a row is chosen.</summary>
     public event Action<string>? CommandRequested;
@@ -208,10 +200,8 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>Raised when a row asks for its rule to be taken out of the configuration file.</summary>
     public event Action<RuleToRemove, string>? RemoveRuleRequested;
 
-    /// <summary>Raised when the process should stop.</summary>
-    public static event Action? RequestShutdown;
-
     public PaletteWindow(DalilConfig config)
+        : base(new WindowClassOptions(WindowClass, DropShadow: true))
     {
         _config = config;
         _scaled = config;
@@ -230,25 +220,22 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     public PaletteMode Mode => _model.Mode;
 
-    public unsafe nint Handle => (nint)_handle.Value;
+    /// <summary>The window as the palette's own manifest spells it; see <see cref="CompanionWindow.Handle"/>.</summary>
+    private HWND Hwnd => new(Handle);
 
     /// <summary>Creates the window, hidden.</summary>
-    public unsafe bool Create()
+    public bool Create()
     {
-        EnsureClassRegistered();
+        if (!CreateWindow(
+                (uint)(WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_TOPMOST),
+                (uint)WINDOW_STYLE.WS_POPUP,
+                "Dalil",
+                new Rect(0, 0, _config.Width, HeightFor(_config.VisibleRows))))
+        {
+            return false;
+        }
 
-        _handle = PInvoke.CreateWindowEx(
-            WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_TOPMOST,
-            WindowClass,
-            "Dalil",
-            WINDOW_STYLE.WS_POPUP,
-            0, 0, _config.Width, HeightFor(_config.VisibleRows),
-            HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
-
-        if (_handle.IsNull) return false;
-
-        s_windows[(nint)_handle.Value] = this;
-        _renderer = new GdiRenderer((nint)_handle.Value);
+        _renderer = new GdiRenderer(Handle);
 
         RoundTheCorners();
         return true;
@@ -345,7 +332,7 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     public bool Open(PaletteMode mode = PaletteMode.Windows)
     {
-        if (_handle.IsNull) return false;
+        if (!Exists) return false;
 
         bool wasOpen = _open;
 
@@ -370,7 +357,7 @@ public sealed class PaletteWindow : IDisposable
             _hadForeground = false;
             _obstacle = null;
 
-            PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOW);
+            Show();
         }
 
         _open = true;
@@ -406,11 +393,11 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     public bool EnsureForeground()
     {
-        if (_handle.IsNull || !_open) return false;
+        if (!Exists || !_open) return false;
 
         _foregroundAttempts++;
 
-        ForegroundAttempt attempt = Foreground.Take(_handle);
+        ForegroundAttempt attempt = Foreground.Take(Hwnd);
 
         if (attempt.InFront)
         {
@@ -453,7 +440,7 @@ public sealed class PaletteWindow : IDisposable
     /// puts it away rather than leaving a window nobody can reach.
     /// </remarks>
     public unsafe bool IsStranded =>
-        _open && !_handle.IsNull && PInvoke.GetForegroundWindow() != _handle;
+        _open && Exists && PInvoke.GetForegroundWindow() != Hwnd;
 
     /// <summary>How long the palette has been on screen this time; zero when it is not.</summary>
     /// <remarks>
@@ -487,7 +474,7 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>Hides the palette.</summary>
     public void Close()
     {
-        if (!_open || _handle.IsNull) return;
+        if (!_open || !Exists) return;
 
         // Forgotten on the way out, so the next open starts from the list rather than
         // from whatever was showing when it was dismissed.
@@ -498,7 +485,7 @@ public sealed class PaletteWindow : IDisposable
         _closing = true;
         _open = false;
 
-        PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_HIDE);
+        Hide();
 
         Closed?.Invoke();
     }
@@ -1112,12 +1099,10 @@ public sealed class PaletteWindow : IDisposable
     /// selection away from the keyboard the moment the palette appears - which is the
     /// one thing it must never do, since it opened to receive typing.
     /// </remarks>
-    private void OnMouseMove(int x, int y)
+    protected override void OnMouseMove(int x, int y)
     {
         if (x == _lastMouse.X && y == _lastMouse.Y) return;
         _lastMouse = (x, y);
-
-        TrackMouseLeaving();
 
         (int first, int count) = _model.VisibleWindow(_rowsShown);
         int slot = Layout().SlotAt(x, y);
@@ -1129,8 +1114,10 @@ public sealed class PaletteWindow : IDisposable
         Repaint();
     }
 
-    private void OnClick(int x, int y)
+    protected override void OnMouseDown(MouseButton button, int x, int y)
     {
+        if (button != MouseButton.Left) return;
+
         (int first, int count) = _model.VisibleWindow(_rowsShown);
         int slot = Layout().SlotAt(x, y);
 
@@ -1150,22 +1137,8 @@ public sealed class PaletteWindow : IDisposable
     /// separate scroll offset - the visible window is computed from the selection, so
     /// the two can never disagree.
     /// </remarks>
-    private void OnWheel(int delta) => Move(delta > 0 ? -3 : 3);
+    protected override void OnWheel(int delta) => Move(delta > 0 ? -3 : 3);
 
-    /// <summary>Asks to be told when the pointer leaves, once.</summary>
-    private unsafe void TrackMouseLeaving()
-    {
-        if (_trackingMouse || _handle.IsNull) return;
-
-        var track = new TRACKMOUSEEVENT
-        {
-            cbSize = (uint)sizeof(TRACKMOUSEEVENT),
-            dwFlags = TRACKMOUSEEVENT_FLAGS.TME_LEAVE,
-            hwndTrack = _handle,
-        };
-
-        _trackingMouse = PInvoke.TrackMouseEvent(ref track);
-    }
 
     /// <summary>
     /// Acts on the selected row.
@@ -1336,7 +1309,7 @@ public sealed class PaletteWindow : IDisposable
     /// </remarks>
     private void Refreshed()
     {
-        if (_open && _config.ShrinkToFit && !_handle.IsNull)
+        if (_open && _config.ShrinkToFit && Exists)
         {
             int rows = _model.RowsToShow(_scaled.VisibleRows);
 
@@ -1348,7 +1321,7 @@ public sealed class PaletteWindow : IDisposable
                 _bounds = new Rect(_bounds.X, _bounds.Y, _bounds.Width, height);
 
                 PInvoke.SetWindowPos(
-                    _handle, HWND.Null, 0, 0, _bounds.Width, height,
+                    Hwnd, HWND.Null, 0, 0, _bounds.Width, height,
                     SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
                     SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
                     SET_WINDOW_POS_FLAGS.SWP_NOMOVE);
@@ -1399,10 +1372,10 @@ public sealed class PaletteWindow : IDisposable
 
         // Onto the monitor first, so the DPI read below is that monitor's.
         PInvoke.SetWindowPos(
-            _handle, HWND.Null, work.left + 32, work.top + 32, _scaled.Width, HeightFor(_rowsShown),
+            Hwnd, HWND.Null, work.left + 32, work.top + 32, _scaled.Width, HeightFor(_rowsShown),
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
 
-        uint dpi = PInvoke.GetDpiForWindow(_handle);
+        uint dpi = Dpi;
         _scale = dpi == 0 ? 1.0 : dpi / 96.0;
 
         _scaled = _config with
@@ -1429,7 +1402,7 @@ public sealed class PaletteWindow : IDisposable
         _bounds = new Rect(x, y, width, height);
 
         PInvoke.SetWindowPos(
-            _handle, HWND.Null, x, y, width, height,
+            Hwnd, HWND.Null, x, y, width, height,
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
     }
 
@@ -1442,7 +1415,7 @@ public sealed class PaletteWindow : IDisposable
             case PalettePlacement.CursorMonitor:
                 return PInvoke.GetCursorPos(out System.Drawing.Point point)
                     ? PInvoke.MonitorFromPoint(point, Nearest)
-                    : PInvoke.MonitorFromWindow(_handle, Nearest);
+                    : PInvoke.MonitorFromWindow(Hwnd, Nearest);
 
             case PalettePlacement.Primary:
                 return PInvoke.MonitorFromPoint(default, MONITOR_FROM_FLAGS.MONITOR_DEFAULTTOPRIMARY);
@@ -1454,7 +1427,7 @@ public sealed class PaletteWindow : IDisposable
                 HWND foreground = PInvoke.GetForegroundWindow();
 
                 return foreground.IsNull
-                    ? PInvoke.MonitorFromWindow(_handle, Nearest)
+                    ? PInvoke.MonitorFromWindow(Hwnd, Nearest)
                     : PInvoke.MonitorFromWindow(foreground, Nearest);
         }
     }
@@ -1472,20 +1445,12 @@ public sealed class PaletteWindow : IDisposable
         const int Round = 2;
 
         int value = Round;
-        PInvoke.DwmSetWindowAttribute(_handle, CornerPreference, &value, sizeof(int));
+        PInvoke.DwmSetWindowAttribute(Hwnd, CornerPreference, &value, sizeof(int));
     }
 
     // ---- drawing ---------------------------------------------------------------
 
-    private void Repaint()
-    {
-        if (_handle.IsNull) return;
-
-        PInvoke.InvalidateRect(_handle, (RECT?)null, false);
-        PInvoke.UpdateWindow(_handle);
-    }
-
-    private void Paint()
+    protected override void OnPaint()
     {
         if (_renderer is null || _bounds.Width == 0) return;
 
@@ -1521,202 +1486,98 @@ public sealed class PaletteWindow : IDisposable
 
     private static bool IsDown(VIRTUAL_KEY key) => (PInvoke.GetKeyState((int)key) & 0x8000) != 0;
 
-    private static unsafe void EnsureClassRegistered()
+    /// <summary>
+    /// The messages the palette answers itself: the keyboard, and the activation
+    /// message that says whether it still has it. Painting, the pointer, closing and
+    /// the session ending are the base class's.
+    /// </summary>
+    protected override unsafe bool OnMessage(uint message, nuint wParam, nint lParam, out nint result)
     {
-        if (s_classRegistered) return;
+        result = 0;
 
-        fixed (char* className = WindowClass)
+        switch (message)
         {
-            var wc = new WNDCLASSEXW
+            case PInvoke.WM_CHAR:
+                OnCharacter((char)wParam);
+                return true;
+
+            case PInvoke.WM_KEYDOWN:
+            case PInvoke.WM_SYSKEYDOWN:
+                return OnKey((VIRTUAL_KEY)(ushort)wParam);
+
+            case PInvoke.WM_ACTIVATE:
             {
-                cbSize = (uint)sizeof(WNDCLASSEXW),
-                lpfnWndProc = &WindowProc,
-                hInstance = HINSTANCE.Null,
-                lpszClassName = className,
-
-                // A shadow, which is most of what separates a window that floats
-                // above the desktop from one painted onto it. The compositor draws
-                // it, so it costs this process nothing at all - no layered window, no
-                // second surface, no per-frame work.
-                style = WNDCLASS_STYLES.CS_DROPSHADOW,
-
-                // Every pixel comes from the off-screen buffer. Letting Windows erase
-                // first is a visible flash on a window that opens and closes as often
-                // as this one.
-                hbrBackground = HBRUSH.Null,
-                hCursor = PInvoke.LoadCursor(HINSTANCE.Null, PInvoke.IDC_ARROW),
-            };
-
-            if (PInvoke.RegisterClassEx(in wc) == 0 && Marshal.GetLastWin32Error() != 1410)
-                throw new InvalidOperationException($"RegisterClassEx failed: {Marshal.GetLastWin32Error()}");
-        }
-
-        s_classRegistered = true;
-    }
-
-    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static unsafe LRESULT WindowProc(HWND hwnd, uint message, WPARAM wParam, LPARAM lParam)
-    {
-        try
-        {
-            if (s_windows.TryGetValue((nint)hwnd.Value, out PaletteWindow? window))
-            {
-                switch (message)
+                // WA_ACTIVE or WA_CLICKACTIVE. Remembered as having been in front
+                // only when the system agrees: this thread's own SetActiveWindow
+                // produces the same message whether or not the foreground moved,
+                // and a palette that was never in front must not be mistaken for
+                // one that was and then left.
+                if ((wParam & 0xFFFF) != 0)
                 {
-                    case PInvoke.WM_PAINT:
-                    {
-                        // EndPaint whatever Paint does, or a throw leaves the update
-                        // region unvalidated and Windows posts the message again at
-                        // once, for ever.
-                        PInvoke.BeginPaint(hwnd, out PAINTSTRUCT ps);
-
-                        try
-                        {
-                            window.Paint();
-                        }
-                        finally
-                        {
-                            PInvoke.EndPaint(hwnd, in ps);
-                        }
-
-                        return new LRESULT(0);
-                    }
-
-                    case PInvoke.WM_MOUSEMOVE:
-                        window.OnMouseMove((short)(lParam.Value & 0xFFFF), (short)((lParam.Value >> 16) & 0xFFFF));
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_LBUTTONDOWN:
-                        window.OnClick((short)(lParam.Value & 0xFFFF), (short)((lParam.Value >> 16) & 0xFFFF));
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_MOUSEWHEEL:
-                        window.OnWheel((short)((wParam.Value >> 16) & 0xFFFF));
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_MOUSELEAVE:
-                        window._trackingMouse = false;
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_CHAR:
-                        window.OnCharacter((char)wParam.Value);
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_KEYDOWN:
-                    case PInvoke.WM_SYSKEYDOWN:
-                        if (window.OnKey((VIRTUAL_KEY)(ushort)wParam.Value)) return new LRESULT(0);
-                        break;
-
-                    case PInvoke.WM_ACTIVATE:
-                    {
-                        // WA_ACTIVE or WA_CLICKACTIVE. Remembered as having been in front
-                        // only when the system agrees: this thread's own SetActiveWindow
-                        // produces the same message whether or not the foreground moved,
-                        // and a palette that was never in front must not be mistaken for
-                        // one that was and then left.
-                        if ((wParam.Value & 0xFFFF) != 0)
-                        {
-                            if (PInvoke.GetForegroundWindow() == hwnd) window._hadForeground = true;
-                            return new LRESULT(0);
-                        }
-
-                        // WA_INACTIVE. Not when the palette is giving focus away itself,
-                        // which produces the identical message.
-                        if (window._closing) return new LRESULT(0);
-
-                        // Who has it now. The message names the window being activated
-                        // only when it is on this thread; across threads - every case
-                        // that matters here - the handle is null and the answer is read
-                        // from the system instead.
-                        nint taker = lParam.Value != 0 ? lParam.Value : (nint)PInvoke.GetForegroundWindow().Value;
-                        string holder = Foreground.Describe(taker);
-
-                        // In the first moments after opening, whatever close-on-blur says.
-                        // Nobody clicks away from a palette they asked for a quarter of a
-                        // second ago; a deactivation that early is the previous window's
-                        // thread finishing an activation the system had already queued,
-                        // or a window manager pass putting focus where it thinks it goes,
-                        // and the palette is the thing the user wanted. It stays, says so,
-                        // and asks the host to take the foreground back.
-                        if (PaletteInput.IsSettlingIn(window.TimeSinceShown))
-                        {
-                            window._obstacle = $"the foreground went to {holder}";
-
-                            Log.Info(LogCategory.Wm,
-                                $"the palette lost the foreground to {holder} " +
-                                $"{window.TimeSinceShown.TotalMilliseconds:F0} ms after opening; taking it back");
-
-                            window.ForegroundLost?.Invoke();
-                            return new LRESULT(0);
-                        }
-
-                        // The user clicked elsewhere, or something else took the
-                        // foreground - either way the palette has been left, and
-                        // close-on-blur says whether that dismisses it. Said at the
-                        // default level and naming the taker: one line per dismissal,
-                        // and the only evidence there is when the palette is reported
-                        // to have closed by itself.
-                        if (window._config.CloseOnBlur)
-                        {
-                            Log.Info(LogCategory.Wm,
-                                $"put away: the foreground went to {holder} " +
-                                $"{window.TimeSinceShown.TotalMilliseconds:F0} ms after opening");
-
-                            window.Close();
-                        }
-
-                        return new LRESULT(0);
-                    }
-
-                    case PInvoke.WM_CLOSE:
-                        RequestShutdown?.Invoke();
-                        return new LRESULT(0);
-
-                    // The session is ending, or an installer is replacing the files
-                    // under this process and has asked it to leave (Restart Manager,
-                    // which is what a silent `winget upgrade` runs). Answer the
-                    // question yes, and go when told: the palette holds nothing that
-                    // needs saving, and the window manager starts it again.
-                    case PInvoke.WM_QUERYENDSESSION:
-                        return new LRESULT(1);
-
-                    case PInvoke.WM_ENDSESSION:
-                        if (wParam.Value != 0) RequestShutdown?.Invoke();
-                        return new LRESULT(0);
-
-                    case PInvoke.WM_DESTROY:
-                        s_windows.Remove((nint)hwnd.Value);
-                        return new LRESULT(0);
-
-                    default:
-                        break;
+                    if (PInvoke.GetForegroundWindow() == Hwnd) _hadForeground = true;
+                    return true;
                 }
-            }
-        }
-        catch (Exception ex)
-        {
-            // An exception escaping an UnmanagedCallersOnly callback tears the process
-            // down. A missed keystroke is better than a palette that vanishes - but not
-            // a silent one: every key, click and paint that failed used to fail with no
-            // line in the log, which made "Enter does nothing" impossible to diagnose.
-            Log.Error(LogCategory.Ui, $"the palette's window procedure failed handling message 0x{message:X4}", ex);
-        }
 
-        return PInvoke.DefWindowProc(hwnd, message, wParam, lParam);
+                // WA_INACTIVE. Not when the palette is giving focus away itself,
+                // which produces the identical message.
+                if (_closing) return true;
+
+                // Who has it now. The message names the window being activated
+                // only when it is on this thread; across threads - every case
+                // that matters here - the handle is null and the answer is read
+                // from the system instead.
+                nint taker = lParam != 0 ? lParam : (nint)PInvoke.GetForegroundWindow().Value;
+                string holder = Foreground.Describe(taker);
+
+                // In the first moments after opening, whatever close-on-blur says.
+                // Nobody clicks away from a palette they asked for a quarter of a
+                // second ago; a deactivation that early is the previous window's
+                // thread finishing an activation the system had already queued,
+                // or a window manager pass putting focus where it thinks it goes,
+                // and the palette is the thing the user wanted. It stays, says so,
+                // and asks the host to take the foreground back.
+                if (PaletteInput.IsSettlingIn(TimeSinceShown))
+                {
+                    _obstacle = $"the foreground went to {holder}";
+
+                    Log.Info(LogCategory.Wm,
+                        $"the palette lost the foreground to {holder} " +
+                        $"{TimeSinceShown.TotalMilliseconds:F0} ms after opening; taking it back");
+
+                    ForegroundLost?.Invoke();
+                    return true;
+                }
+
+                // The user clicked elsewhere, or something else took the
+                // foreground - either way the palette has been left, and
+                // close-on-blur says whether that dismisses it. Said at the
+                // default level and naming the taker: one line per dismissal,
+                // and the only evidence there is when the palette is reported
+                // to have closed by itself.
+                if (_config.CloseOnBlur)
+                {
+                    Log.Info(LogCategory.Wm,
+                        $"put away: the foreground went to {holder} " +
+                        $"{TimeSinceShown.TotalMilliseconds:F0} ms after opening");
+
+                    Close();
+                }
+
+                return true;
+            }
+
+            default:
+                return false;
+        }
     }
 
-    public unsafe void Dispose()
+    public override void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (!Exists) return;
 
         _renderer?.Dispose();
+        _renderer = null;
 
-        if (!_handle.IsNull)
-        {
-            s_windows.Remove((nint)_handle.Value);
-            PInvoke.DestroyWindow(_handle);
-            _handle = HWND.Null;
-        }
+        base.Dispose();
     }
 }

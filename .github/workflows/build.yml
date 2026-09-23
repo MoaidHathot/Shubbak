@@ -77,8 +77,30 @@ jobs:
       # assertion, not the exception, not the line. A test that failed one run in ten
       # on the ARM64 runner was undiagnosable from its own log for exactly that reason.
       # Minimal prints the failures in full and stays silent about the passes.
+      # With coverage, collected by coverlet into one Cobertura file per test project
+      # and uploaded as an artefact. Not gated: the figure exists to be looked at when
+      # deciding where the next test belongs, and a threshold that fails the build
+      # over a refactor's percentage point teaches people to write tests that hit
+      # lines rather than tests that hold behaviour to account. The companions' hosts
+      # had no tests at all for their first year, and nothing said so.
       - name: Test
-        run: dotnet test --no-build --configuration Release --verbosity quiet --logger "console;verbosity=minimal"
+        run: >
+          dotnet test --no-build --configuration Release --verbosity quiet
+          --logger "console;verbosity=minimal"
+          --collect:"XPlat Code Coverage"
+          --results-directory artifacts/coverage
+
+      - name: Summarise coverage
+        shell: pwsh
+        run: ./tools/summarise-coverage.ps1 -Root artifacts/coverage
+
+      - name: Upload the coverage reports
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ github.sha }}
+          path: artifacts/coverage/**/coverage.cobertura.xml
+          retention-days: 14
+          if-no-files-found: warn
 
       # Cheap check that the shipped example stays loadable, since it is what
       # everyone starts from.

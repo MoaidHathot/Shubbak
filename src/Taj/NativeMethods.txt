@@ -1,56 +1,18 @@
 // CsWin32 manifest for the Taj bar.
 //
-// Window, message loop, monitors, DPI and the appbar reservation. The drawing
-// imports live in Shubbak.Ui.Gdi with the renderer they belong to, so the bar owns
-// the window and Shubbak.Ui.Gdi owns the pixels. BeginPaint and EndPaint stay here:
-// they bracket WM_PAINT, which is the window's business, not the renderer's.
+// What is the bar's alone: the window's placement, monitors, the appbar reservation
+// and the compositor. The window class, the window procedure, painting brackets and
+// the message loop live in Shubbak.Companion with the base class every companion
+// window derives from; the drawing imports live in Shubbak.Ui.Gdi with the renderer.
 
 // --- window -------------------------------------------------------------------
-RegisterClassEx
-WNDCLASSEXW
-CreateWindowEx
-DestroyWindow
-DefWindowProc
-ShowWindow
-SHOW_WINDOW_CMD
 SetWindowPos
 SET_WINDOW_POS_FLAGS
 WINDOW_STYLE
 WINDOW_EX_STYLE
-GetClientRect
 InvalidateRect
-UpdateWindow
-GetModuleHandle
-PostQuitMessage
-DestroyIcon
 
-// --- message loop --------------------------------------------------------------
-GetMessage
-PeekMessage
-PEEK_MESSAGE_REMOVE_TYPE
-TranslateMessage
-DispatchMessage
-PostThreadMessage
-GetCurrentThreadId
-
-// The loop waits rather than sleeping. Woken by a message, or by the model's own
-// handle when a source publishes something the bar displays.
-MsgWaitForMultipleObjectsEx
-QUEUE_STATUS_FLAGS
-MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS
-WM_QUIT
-WM_PAINT
-WM_DESTROY
-WM_CLOSE
-WM_QUERYENDSESSION
-WM_ENDSESSION
-WM_LBUTTONDOWN
-WM_RBUTTONDOWN
-WM_MOUSEWHEEL
-WM_MOUSEMOVE
-WM_MOUSELEAVE
-WM_DISPLAYCHANGE
-WM_DPICHANGED
+// --- messages the bar answers itself ----------------------------------------------
 WM_APP
 
 // The shell has to be told when a registered appbar moves or is activated, or it
@@ -62,23 +24,12 @@ WM_ACTIVATE
 WA_INACTIVE
 
 // The accent changed; a config written `accent` is re-read to follow it.
-WM_DWMCOLORIZATIONCOLORCHANGED
 
-TrackMouseEvent
-TRACKMOUSEEVENT
-TRACKMOUSEEVENT_FLAGS
-
-// --- painting ------------------------------------------------------------------
-BeginPaint
-EndPaint
-PAINTSTRUCT
 
 // --- monitors and DPI -----------------------------------------------------------
 EnumDisplayMonitors
 GetMonitorInfo
 MONITORINFOEXW
-SetProcessDpiAwarenessContext
-DPI_AWARENESS_CONTEXT
 GetDpiForWindow
 
 // --- appbar reservation ----------------------------------------------------------
@@ -110,7 +61,6 @@ LoadCursor
 SetCursor
 IDC_ARROW
 IDC_HAND
-WM_SETCURSOR
 
 // Reading the input language of the window in front, and asking it to change.
 GetKeyboardLayout

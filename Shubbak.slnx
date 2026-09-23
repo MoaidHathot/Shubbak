@@ -8,6 +8,7 @@
     <Project Path="src/Ayn.Core/Ayn.Core.csproj" />
     <Project Path="src/Ayn/Ayn.csproj" />
     <Project Path="src/Shubbak.Cli/Shubbak.Cli.csproj" />
+    <Project Path="src/Shubbak.Companion/Shubbak.Companion.csproj" />
     <Project Path="src/Shubbak.Config/Shubbak.Config.csproj" />
     <Project Path="src/Shubbak.Core/Shubbak.Core.csproj" />
     <Project Path="src/Shubbak.Ipc/Shubbak.Ipc.csproj" />
@@ -22,12 +23,16 @@
     <Project Path="tests/Dalil.Core.Tests/Dalil.Core.Tests.csproj" />
     <Project Path="tests/Dalil.Tests/Dalil.Tests.csproj" />
     <Project Path="tests/Ayn.Core.Tests/Ayn.Core.Tests.csproj" />
+    <Project Path="tests/Ayn.Tests/Ayn.Tests.csproj" />
     <Project Path="tests/Shubbak.Cli.Tests/Shubbak.Cli.Tests.csproj" />
+    <Project Path="tests/Shubbak.Companion.Tests/Shubbak.Companion.Tests.csproj" />
     <Project Path="tests/Shubbak.Config.Tests/Shubbak.Config.Tests.csproj" />
     <Project Path="tests/Shubbak.Core.Tests/Shubbak.Core.Tests.csproj" />
+    <Project Path="tests/Shubbak.Ipc.Tests/Shubbak.Ipc.Tests.csproj" />
     <Project Path="tests/Shubbak.Native.Tests/Shubbak.Native.Tests.csproj" />
     <Project Path="tests/Shubbak.Ui.Tests/Shubbak.Ui.Tests.csproj" />
     <Project Path="tests/Shubbak.Wm.Tests/Shubbak.Wm.Tests.csproj" />
     <Project Path="tests/Taj.Core.Tests/Taj.Core.Tests.csproj" />
+    <Project Path="tests/Taj.Tests/Taj.Tests.csproj" />
   </Folder>
 </Solution>

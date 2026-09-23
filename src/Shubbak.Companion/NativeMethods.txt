@@ -1,0 +1,63 @@
+// CsWin32 manifest for Shubbak.Companion.
+//
+// The window class, the window procedure, the message loop and the DPI opt-in a
+// companion program needs to sit on the desktop as a client of the window manager.
+// Nothing here is about what any one companion draws or does; the bar's appbar calls
+// and the palette's keyboard calls stay in their own manifests.
+
+// --- window -------------------------------------------------------------------
+RegisterClassEx
+WNDCLASSEXW
+WNDCLASS_STYLES
+CreateWindowEx
+DestroyWindow
+DefWindowProc
+ShowWindow
+SHOW_WINDOW_CMD
+WINDOW_STYLE
+WINDOW_EX_STYLE
+InvalidateRect
+UpdateWindow
+LoadCursor
+SetCursor
+IDC_ARROW
+IDC_HAND
+GetDpiForWindow
+
+// --- message loop ---------------------------------------------------------------
+PeekMessage
+PEEK_MESSAGE_REMOVE_TYPE
+TranslateMessage
+DispatchMessage
+MsgWaitForMultipleObjectsEx
+QUEUE_STATUS_FLAGS
+MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS
+WM_QUIT
+
+// --- the messages the base class answers ----------------------------------------
+WM_PAINT
+WM_DESTROY
+WM_CLOSE
+WM_QUERYENDSESSION
+WM_ENDSESSION
+WM_MOUSEMOVE
+WM_MOUSELEAVE
+WM_LBUTTONDOWN
+WM_RBUTTONDOWN
+WM_MBUTTONDOWN
+WM_MOUSEWHEEL
+WM_SETCURSOR
+WM_DPICHANGED
+WM_DWMCOLORIZATIONCOLORCHANGED
+TrackMouseEvent
+TRACKMOUSEEVENT
+TRACKMOUSEEVENT_FLAGS
+
+// --- painting brackets -------------------------------------------------------------
+BeginPaint
+EndPaint
+PAINTSTRUCT
+
+// --- process ------------------------------------------------------------------------
+SetProcessDpiAwarenessContext
+DPI_AWARENESS_CONTEXT

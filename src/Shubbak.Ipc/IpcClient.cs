@@ -56,7 +56,7 @@ public sealed class IpcClient : IAsyncDisposable
     private bool _streaming;
 
     /// <inheritdoc cref="IpcServer.PipeName"/>
-    internal string PipeName { get; init; } = IpcProtocol.PipeName;
+    public string PipeName { get; init; } = IpcProtocol.PipeName;
 
     /// <summary>Whether a window manager is listening.</summary>
     /// <remarks>
@@ -69,7 +69,7 @@ public sealed class IpcClient : IAsyncDisposable
     public static bool IsServerRunning() => IsServerRunning(IpcProtocol.PipeName);
 
     /// <inheritdoc cref="IsServerRunning()"/>
-    internal static bool IsServerRunning(string pipeName)
+    public static bool IsServerRunning(string pipeName)
     {
         try
         {

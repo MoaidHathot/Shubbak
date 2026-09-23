@@ -2,7 +2,7 @@ using System.Runtime.CompilerServices;
 using Shubbak.Core.Wm;
 using Shubbak.Ipc;
 
-namespace Shubbak.Wm.Tests;
+namespace Shubbak.Ipc.Tests;
 
 /// <summary>
 /// The parts of the wire protocol both ends have to agree on.

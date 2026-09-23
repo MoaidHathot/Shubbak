@@ -1,8 +1,8 @@
 using Ayn.Core;
+using Shubbak.Companion;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
 using System.Collections.Concurrent;
-using System.Text.Json;
 
 namespace Ayn;
 
@@ -16,8 +16,8 @@ namespace Ayn;
 /// context with a lease has to stay open for as long as the pin should hold, since
 /// the lease is the connection. So the commands go over one client that is opened on
 /// first use and kept, and the events - a reload of the file, the window manager
-/// leaving - arrive over a second that reconnects for as long as this process runs,
-/// exactly as the palette's does.
+/// leaving - arrive over the shared <see cref="EventPump"/>, which reconnects for as
+/// long as this process runs.
 /// </para>
 /// <para>
 /// Used from one thread. The watcher has no message loop and no reason for
@@ -36,9 +36,37 @@ internal sealed class WmConnection : IAsyncDisposable
     public const string SignalName = "ayn";
 
     private readonly CancellationTokenSource _stopping = new();
+    private readonly EventPump _pump;
+    private readonly string _pipeName;
     private IpcClient? _commands;
-    private Task? _pump;
     private string? _lastRefusal;
+
+    /// <param name="pipeName">The window manager's pipe, unless a test says otherwise.</param>
+    public WmConnection(string? pipeName = null)
+    {
+        _pipeName = pipeName ?? IpcProtocol.PipeName;
+
+        _pump = new EventPump(Topics)
+        {
+            ProgramName = "ayn",
+            PipeName = _pipeName,
+            ConnectTimeout = ConnectTimeout,
+            Event = (_, raised, _) =>
+            {
+                OnEvent(raised);
+                return Task.CompletedTask;
+            },
+            Disconnected = reason =>
+            {
+                // The stream ending is the signal. Whatever leases the commands
+                // connection held died with the window manager that granted them, and
+                // the loop needs to know so it can hold them again on the next one. A
+                // refusal is not that: the window manager is there and disagrees, and
+                // the leases on the other connection are fine.
+                if (reason != DisconnectReason.Refused) Lost.Set();
+            },
+        };
+    }
 
     /// <summary>The events connection ended, which means the window manager is gone or restarting.</summary>
     public AutoResetEvent Lost { get; } = new(false);
@@ -71,10 +99,7 @@ internal sealed class WmConnection : IAsyncDisposable
     /// </remarks>
     public ConcurrentQueue<SignalRequest> Requests { get; } = new();
 
-    /// <summary>Whether a commands connection is currently open.</summary>
-    public bool IsConnected => _commands is not null;
-
-    public void Start() => _pump = Task.Run(() => PumpAsync(_stopping.Token));
+    public void Start() => _pump.Start();
 
     /// <summary>
     /// Sends one command over the held connection, opening it first if need be.
@@ -89,11 +114,11 @@ internal sealed class WmConnection : IAsyncDisposable
     {
         if (_commands is null)
         {
-            if (!IpcClient.IsServerRunning()) return SendOutcome.Unreachable;
+            if (!IpcClient.IsServerRunning(_pipeName)) return SendOutcome.Unreachable;
 
             try
             {
-                var client = new IpcClient();
+                var client = new IpcClient { PipeName = _pipeName };
                 client.ConnectAsync(ConnectTimeout, _stopping.Token).GetAwaiter().GetResult();
                 _commands = client;
                 Log.Info(LogCategory.Ipc, "connected to the window manager");
@@ -150,188 +175,52 @@ internal sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    private async Task PumpAsync(CancellationToken token)
+    private void OnEvent(IpcEvent raised)
     {
-        TimeSpan wait = TimeSpan.FromSeconds(1);
-        string? lastComplaint = null;
-
-        while (!token.IsCancellationRequested)
+        switch (raised.Topic)
         {
-            // Whether the pipe opened this time round, and whether the subscription was
-            // then refused. A pipe that opened and then ended for any other reason is a
-            // window manager gone; a refusal is a window manager that is there and
-            // disagrees, which is a different thing entirely.
-            bool connected = false;
-            bool refused = false;
+            case "config.reloaded":
+                Reloaded.Set();
+                break;
 
-            try
-            {
-                if (!IpcClient.IsServerRunning())
+            case IpcProtocol.SignalTopic:
+                OnSignal(raised.Data);
+                break;
+
+            case IpcProtocol.ShutdownTopic:
+                if (ShutdownNotice.IsForEveryone(raised.Data))
                 {
-                    await Task.Delay(wait, token).ConfigureAwait(false);
-                    continue;
+                    Log.Info(LogCategory.Ipc, "the window manager is shutting down and asked everything to go with it; the watcher leaves");
+                    Dismissed.Set();
                 }
-
-                await using IpcClient client = new();
-                await client.ConnectAsync(ConnectTimeout, token).ConfigureAwait(false);
-                connected = true;
-
-                IAsyncEnumerator<IpcEvent> events =
-                    client.SubscribeAsync(Topics, token).GetAsyncEnumerator(token);
-
-                // The first MoveNextAsync performs the handshake, and a refusal is the
-                // exception it raises; once it has answered at all, the subscription
-                // was accepted.
-                bool subscribed = false;
-
-                try
+                else
                 {
-                    while (true)
-                    {
-                        bool more = await events.MoveNextAsync().ConfigureAwait(false);
-
-                        if (!subscribed)
-                        {
-                            subscribed = true;
-                            wait = TimeSpan.FromSeconds(1);
-                            lastComplaint = null;
-                        }
-
-                        if (!more) break;
-
-                        switch (events.Current.Topic)
-                        {
-                            case "config.reloaded":
-                                Reloaded.Set();
-                                break;
-
-                            case IpcProtocol.SignalTopic:
-                                OnSignal(events.Current.Data);
-                                break;
-
-                            case IpcProtocol.ShutdownTopic:
-                                if (ShutdownNotice.IsForEveryone(events.Current.Data))
-                                {
-                                    Log.Info(LogCategory.Ipc, "the window manager is shutting down and asked everything to go with it; the watcher leaves");
-                                    Dismissed.Set();
-                                }
-                                else
-                                {
-                                    Log.Info(LogCategory.Ipc, "the window manager is shutting down; the watcher stays and reconnects when it returns");
-                                }
-                                break;
-                        }
-                    }
-
-                    // A read that meets the closed end of a pipe reports the end of the
-                    // stream, not an error; said here or the gap would have no line.
-                    Log.Info(LogCategory.Ipc, "the window manager closed the events connection");
+                    Log.Info(LogCategory.Ipc, "the window manager is shutting down; the watcher stays and reconnects when it returns");
                 }
-                catch (InvalidOperationException ex) when (!subscribed)
-                {
-                    // The subscription was refused, which is a window manager that does
-                    // not publish a topic this build asks for - older than this watcher,
-                    // nearly always. Not a connection lost: the leases on the other
-                    // connection are fine, and dropping them every second would be the
-                    // worse bug. Said once, and asked again slowly.
-                    refused = true;
-
-                    if (!string.Equals(lastComplaint, ex.Message, StringComparison.Ordinal))
-                    {
-                        Log.Warn(LogCategory.Ipc,
-                            $"the window manager refused the subscription: {ex.Message}. " +
-                            "This usually means shubbak-wm is older than ayn; restart it.");
-
-                        lastComplaint = ex.Message;
-                    }
-
-                    wait = TimeSpan.FromSeconds(30);
-                }
-                finally
-                {
-                    await events.DisposeAsync().ConfigureAwait(false);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                Log.Debug(LogCategory.Ipc, $"events connection ended: {ex.Message}");
-            }
-
-            // The stream ending is the signal. Whatever leases the commands connection
-            // held died with the window manager that granted them, and the loop needs
-            // to know so it can hold them again on the next one.
-            if (connected && !refused) Lost.Set();
-
-            try
-            {
-                await Task.Delay(wait, token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
+                break;
         }
     }
 
     /// <summary>Reads a signal payload; ours are queued, everyone else's are ignored.</summary>
-    /// <remarks>
-    /// Hand-parsed, as the palette parses the same payload: two fields, and a DTO in
-    /// the protocol for them would make every client that does not care carry it.
-    /// </remarks>
     private void OnSignal(string json)
     {
-        try
+        if (SignalPayload.Parse(json) is not { } signal || !signal.IsFor(SignalName)) return;
+
+        if (SignalRequest.Parse(signal.Arguments, out string? refusal) is { } request)
         {
-            using JsonDocument document = JsonDocument.Parse(json);
-
-            if (!document.RootElement.TryGetProperty("name", out JsonElement name) ||
-                !string.Equals(name.GetString(), SignalName, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            List<string> arguments = [];
-
-            if (document.RootElement.TryGetProperty("arguments", out JsonElement list))
-                foreach (JsonElement argument in list.EnumerateArray())
-                    if (argument.GetString() is { } value)
-                        arguments.Add(value);
-
-            if (SignalRequest.Parse(arguments, out string? refusal) is { } request)
-            {
-                Requests.Enqueue(request);
-                Signalled.Set();
-            }
-            else
-            {
-                Log.Warn(LogCategory.Ipc, $"signal \"{SignalName}\" {string.Join(" ", arguments)}: {refusal}");
-            }
+            Requests.Enqueue(request);
+            Signalled.Set();
         }
-        catch (JsonException ex)
+        else
         {
-            Log.Debug(LogCategory.Ipc, $"malformed signal payload: {ex.Message}");
+            Log.Warn(LogCategory.Ipc, $"signal \"{SignalName}\" {string.Join(" ", signal.Arguments)}: {refusal}");
         }
     }
 
     public async ValueTask DisposeAsync()
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
-
-        if (_pump is { } pump)
-        {
-            try
-            {
-                await pump.ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected: cancellation is how the pump is asked to stop.
-            }
-        }
+        await _pump.DisposeAsync().ConfigureAwait(false);
 
         // Closing the commands connection is what releases the leases. Nothing needs
         // to be sent for it; that is the point of a lease.

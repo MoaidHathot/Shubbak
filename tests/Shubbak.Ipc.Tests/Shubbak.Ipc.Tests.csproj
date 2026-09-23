@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The pipe, held to account on its own.
+
+    These lived in Shubbak.Wm.Tests for want of a home, which made the project that
+    owns the protocol the one project with no tests of its own. They drive a real
+    IpcServer and real IpcClients over a named pipe with an isolated name, so they run
+    on a desktop that is using Shubbak at the time.
+
+    Shubbak.Core is referenced for one test that walks every WmEvent to check the
+    protocol names each of them; the pipe itself depends on nothing.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+    <ProjectReference Include="..\..\src\Shubbak.Core\Shubbak.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

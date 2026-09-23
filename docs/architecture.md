@@ -13,6 +13,14 @@ a release is cut, see [RELEASING.md](../RELEASING.md).
 | `dalil` | The command palette. Opened by a signal, so the window manager does not know it exists. |
 | `ayn` | The watcher. The window manager's eyes on the rest of the machine: facts that are not about windows, supplied as contexts over a held connection. Today, the camera and the microphone. |
 
+The three companions are clients of the window manager and share what that takes.
+`Shubbak.Companion` holds the start of each program (help, version, the single-instance
+lock, the log file, the DPI opt-in - in that order, because the lock has to come before
+the log or a duplicate truncates the running copy's file), the window class and window
+procedure every companion window derives from, the message loop that waits rather than
+polls, and the subscription that reconnects for as long as the process lives. Each used
+to carry its own copy of all four, and no two copies agreed.
+
 Everything talks over one named pipe, `shubbak-v2-<SID>`, newline-delimited JSON,
 with the protocol version in the name so a new client and an old daemon fail to find
 each other rather than misunderstand each other. See [Scripting](scripting.md).
@@ -25,6 +33,7 @@ src/
   Shubbak.Native/   Win32: hooks, window control, monitors, tray, DPI
   Shubbak.Config/   KDL parser, schema, diagnostics
   Shubbak.Ipc/      protocol, named-pipe server and client
+  Shubbak.Companion/ bootstrap, window base, message loop, reconnecting pump — shared by taj, dalil, ayn
   Shubbak.Ui/       visual tree, flex layout, IRenderer            — no drawing code
   Shubbak.Ui.Gdi/   the GDI renderer
   Shubbak.Wm/       the daemon
@@ -35,7 +44,7 @@ src/
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the watcher: the rest of the machine, as contexts
-tests/              2120 test methods across 10 projects
+tests/              2166 test methods across 14 projects
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests: one package, the MSI and the portable zip
@@ -50,7 +59,7 @@ replaced behind the `Shubbak.Native` boundary without touching any of the logic.
 
 ## Tests
 
-**2120 test methods**, around 700 ms to run. Everything except the platform layer and
+**2166 test methods**, around a second to run. Everything except the platform layer and
 the renderer runs headless, so the entire behavioural surface — tree, layout, focus,
 animation, tags, sessions, the state machine, the config diagnostics, the palette's
 matching, the bar's model — is testable in milliseconds with no window manager

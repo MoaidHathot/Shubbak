@@ -45,9 +45,16 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Ayn.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Ayn.Core\Ayn.Core.csproj" />
     <ProjectReference Include="..\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\Shubbak.Config\Shubbak.Config.csproj" />
+
+    <!-- The start of every companion, the reconnecting pump, and the signal payload. -->
+    <ProjectReference Include="..\Shubbak.Companion\Shubbak.Companion.csproj" />
 
     <!-- For ConsoleHost and SingleInstanceLock, the same two the palette borrows. -->
     <ProjectReference Include="..\Shubbak.Native\Shubbak.Native.csproj" />

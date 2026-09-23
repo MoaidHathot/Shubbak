@@ -1,15 +1,10 @@
-using System.Runtime.InteropServices;
+using Shubbak.Companion;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Ipc;
 using Shubbak.Native;
 using Taj.Core;
-using Windows.Win32;
-using Windows.Win32.Foundation;
-using Windows.Win32.Graphics.Gdi;
-using Windows.Win32.UI.HiDpi;
-using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Taj;
 
@@ -109,8 +104,6 @@ internal static class Program
     /// </remarks>
     private static volatile IReadOnlyList<MonitorInfoDto>? s_pendingMonitors;
 
-    private static volatile bool s_running = true;
-
     /// <summary>
     /// Whether the window manager has released its hooks.
     /// </summary>
@@ -135,80 +128,24 @@ internal static class Program
     /// <summary>Whether the bar is currently stood down.</summary>
     private static bool s_stoodDown;
 
-    private static int Main(string[] args)
+    private static readonly CompanionIdentity Identity = new(
+        Name: "taj",
+        Noun: "a bar",
+        Usage: UsageText,
+        HasWindow: true);
+
+    /// <summary>The loop behind every bar window; see <see cref="Shubbak.Companion.MessageLoop"/>.</summary>
+    private static readonly Shubbak.Companion.MessageLoop s_loop = new();
+
+    private static int Main(string[] args) => CompanionBootstrap.Run(args, Identity, Start);
+
+    private static int Start(CompanionContext context)
     {
-        // Taj is a GUI-subsystem binary, so it starts with no console and every write
-        // to one is discarded. Both of these printed nothing at all before ConsoleHost
-        // was here to ask for one.
-        if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
-        {
-            ConsoleHost.Ensure();
-            PrintUsage();
-            return 0;
-        }
-
-        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
-        {
-            ConsoleHost.Ensure();
-            Console.WriteLine(ShubbakVersion.Banner);
-            return 0;
-        }
-
-        s_args = args;
-
-        // One bar per account, for the same reason there is one window manager.
-        //
-        // Two of these is not merely untidy. Each bar reserves its strip of screen
-        // through the shell's appbar API, so a second set takes the work area a second
-        // time and every tiled window is laid out into a desktop shorter than it
-        // should be - which reads as a gaps setting gone wrong rather than as two bars.
-        // They then draw on top of each other, and `shubbak taj-exit` closes all of
-        // them at once because it goes by window class.
-        //
-        // The pairing happens without anybody doing anything strange: a bar survives
-        // the window manager restarting - that is deliberate, it reconnects inside
-        // window-manager-timeout - and the restarted window manager then runs its
-        // startup commands, one of which starts a bar.
-        //
-        // Claimed before the log file is opened. Opening the file truncates it, and the
-        // bar that is already running is writing to it: a second copy that said
-        // "already running" and left used to take the first copy's log with it, on
-        // every restart of the window manager.
-        using SingleInstanceLock instance = SingleInstanceLock.Claim(
-            IpcProtocol.InstanceMutexNameFor("taj"));
-
-        // An uncertain answer starts anyway, which is the opposite of what the window
-        // manager does with the same uncertainty. Two bars are visibly wrong and easily
-        // undone; no bar at all, because a mutex could not be opened, is a worse
-        // outcome than the thing being guarded against.
-        if (!instance.Held && instance.Certain)
-        {
-            // Said to the terminal this was typed into, if it was typed. The usual
-            // second copy is started by the window manager, which has no console, and
-            // allocating one to print a line nobody will read flashes a window.
-            if (ConsoleHost.TryAttach())
-            {
-                Console.Error.WriteLine("taj: a bar is already running.");
-                Console.Error.WriteLine("hint: `shubbak taj-exit` stops it.");
-            }
-
-            return 1;
-        }
-
-        ConfigureLogging(args);
-
-        // Before any window is created: without it Windows reports virtualised
-        // coordinates on scaled displays and the bar lands in the wrong place.
-        PInvoke.SetProcessDpiAwarenessContext((DPI_AWARENESS_CONTEXT)(nint)(-4));
-
-        // Before the config is read, so a colour written `accent` is this machine's.
-        // Re-read on every reload, which is how the bar follows a change of accent -
-        // see BarWindow.SystemColoursChanged.
-        SystemColours.Adopt();
+        s_args = context.Args;
 
         try
         {
-            (TajConfig config, _) = LoadConfig(args, out DiagnosticCounts problems);
+            (TajConfig config, _) = LoadConfig(context.Args, out DiagnosticCounts problems);
 
             // Kept, because bars are created after startup too - a monitor plugged in
             // later gets one - and each new bar is built from whatever is in force.
@@ -234,7 +171,6 @@ internal static class Program
         finally
         {
             Shutdown();
-            Log.CloseFile();
         }
     }
 
@@ -399,11 +335,7 @@ internal static class Program
         // The window manager going away takes the bar with it. Signalled rather
         // than acted on, for the same reason a reload is: this runs on the
         // connection's pump thread, and the windows belong to the message loop.
-        connection.WindowManagerStopped += () =>
-        {
-            s_running = false;
-            Wake();
-        };
+        connection.WindowManagerStopped += s_loop.Stop;
 
         // A level rather than an edge, and set rather than or-ed, because every
         // connection talks to the same daemon and so reports the same answer.
@@ -654,16 +586,6 @@ internal static class Program
         counts.Any ? $"config: {counts.Describe()}" : string.Empty;
 
     /// <summary>
-    /// Signalled when any bar's model goes dirty, so the loop stops waiting.
-    /// </summary>
-    /// <remarks>
-    /// Auto-reset: a signal raised while the loop is already awake and working is
-    /// remembered rather than lost, so a source publishing during a redraw cannot
-    /// leave its value unpainted until something else happens.
-    /// </remarks>
-    private static readonly AutoResetEvent s_wake = new(false);
-
-    /// <summary>
     /// Pumps messages and updates the bars.
     /// </summary>
     /// <remarks>
@@ -691,115 +613,81 @@ internal static class Program
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
-            s_running = false;
-            s_wake.Set();
+            s_loop.Stop();
         };
 
         // Closing any bar window closes the bar. Reaches here from `shubbak taj-exit`,
         // from Task Manager's "End task", and from anything else that politely asks a
         // window to go.
-        BarWindow.RequestShutdown += () =>
-        {
-            s_running = false;
-            s_wake.Set();
-        };
+        CompanionWindow.RequestShutdown += s_loop.Stop;
 
         BarWindow.FullScreenAppChanged += up =>
         {
             s_fullScreenApp = up;
-            s_wake.Set();
+            Wake();
         };
 
         // The accent changed. Colours written `accent` were resolved when the file was
         // read, so it is read again - the same path a saved file takes, coalesced the
         // same way, since Windows says this once per display.
-        BarWindow.SystemColoursChanged += () =>
+        CompanionWindow.SystemColoursChanged += () =>
         {
             s_reloadRequested = true;
-            s_wake.Set();
+            Wake();
         };
 
         // Every model wakes the loop when it changes; CreateBar wires that as each bar
         // is made, at startup and later alike, so there is nothing to do here.
 
-        while (s_running)
+        s_loop.Run(Pass, () => s_stoodDown ? StoodDownCeilingMs : ActiveCeilingMs);
+    }
+
+    /// <summary>One turn of the loop, after the queue has been pumped.</summary>
+    private static bool Pass()
+    {
+        if (s_reloadRequested)
         {
-            while (PInvoke.PeekMessage(out MSG msg, default, 0, 0, PEEK_MESSAGE_REMOVE_TYPE.PM_REMOVE))
+            s_reloadRequested = false;
+
+            // One reload per event, not one per bar. Every bar's connection hears
+            // the same config.reloaded and each wakes the loop, so without this the
+            // file was re-read and every source rebuilt once per display - which for
+            // a command source means its process killed and started again, twice.
+            // A quarter of a second is far longer than the reports are apart and far
+            // shorter than a person can save a file twice.
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(s_lastReloadTicks, now) > ReloadCoalesceWindow)
             {
-                if (msg.message == PInvoke.WM_QUIT)
-                {
-                    s_running = false;
-                    break;
-                }
-
-                PInvoke.TranslateMessage(in msg);
-                PInvoke.DispatchMessage(in msg);
+                s_lastReloadTicks = now;
+                ReloadConfig();
             }
-
-            if (s_reloadRequested)
-            {
-                s_reloadRequested = false;
-
-                // One reload per event, not one per bar. Every bar's connection hears
-                // the same config.reloaded and each wakes the loop, so without this the
-                // file was re-read and every source rebuilt once per display - which for
-                // a command source means its process killed and started again, twice.
-                // A quarter of a second is far longer than the reports are apart and far
-                // shorter than a person can save a file twice.
-                long now = System.Diagnostics.Stopwatch.GetTimestamp();
-
-                if (System.Diagnostics.Stopwatch.GetElapsedTime(s_lastReloadTicks, now) > ReloadCoalesceWindow)
-                {
-                    s_lastReloadTicks = now;
-                    ReloadConfig();
-                }
-            }
-
-            // Taken and cleared in one step, so a report arriving while this pass is
-            // reconciling is kept for the next one rather than lost.
-            if (Interlocked.Exchange(ref s_pendingMonitors, null) is { } monitors)
-                ReconcileBars(monitors);
-
-            // After the reload, so a standing reported during it is judged against the
-            // selector the reload installed rather than the one it replaced.
-            SelectDirtyProfiles();
-
-            ApplyStandDown();
-
-            // Ahead of the stand-down test, and deliberately. A bar standing down still
-            // holds its strip - covering the screen is the full-screen application's job,
-            // not something the bar does by giving its space back - so a reservation the
-            // shell has refused still has to be retried while one is up.
-            foreach (Bar bar in s_bars) bar.Window.EnsureReserved();
-
-            if (!s_stoodDown) foreach (Bar bar in s_bars) bar.Window.Update();
-
-            if (!s_running) break;
-
-            Wait(s_stoodDown ? StoodDownCeilingMs : ActiveCeilingMs);
         }
+
+        // Taken and cleared in one step, so a report arriving while this pass is
+        // reconciling is kept for the next one rather than lost.
+        if (Interlocked.Exchange(ref s_pendingMonitors, null) is { } monitors)
+            ReconcileBars(monitors);
+
+        // After the reload, so a standing reported during it is judged against the
+        // selector the reload installed rather than the one it replaced.
+        SelectDirtyProfiles();
+
+        ApplyStandDown();
+
+        // Ahead of the stand-down test, and deliberately. A bar standing down still
+        // holds its strip - covering the screen is the full-screen application's job,
+        // not something the bar does by giving its space back - so a reservation the
+        // shell has refused still has to be retried while one is up.
+        foreach (Bar bar in s_bars) bar.Window.EnsureReserved();
+
+        if (!s_stoodDown) foreach (Bar bar in s_bars) bar.Window.Update();
+
+        return s_loop.Running;
     }
 
     /// <summary>Wakes the loop. Handed to every model and to anything else that changes state.</summary>
-    private static void Wake() => s_wake.Set();
-
-    /// <summary>
-    /// Waits for a message, a signal, or the ceiling, whichever comes first.
-    /// </summary>
-    /// <remarks>
-    /// <c>QS_ALLINPUT</c> so that paints, clicks and the appbar's own notifications
-    /// end the wait as promptly as a source publishing does, and
-    /// <c>MWMO_INPUTAVAILABLE</c> so a message that arrived between the peek loop
-    /// above and this call is not slept through.
-    /// </remarks>
-    private static void Wait(uint milliseconds)
-    {
-        PInvoke.MsgWaitForMultipleObjectsEx(
-            [(HANDLE)s_wake.SafeWaitHandle.DangerousGetHandle()],
-            milliseconds,
-            QUEUE_STATUS_FLAGS.QS_ALLINPUT,
-            MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
-    }
+    private static void Wake() => s_loop.Wake();
 
     /// <summary>
     /// The longest the loop will wait when the bar is visible, absent any signal.
@@ -891,91 +779,6 @@ internal static class Program
     }
 
     /// <summary>
-    /// Sets up logging from the shared config, then from the command line.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Taj reads the <c>logging</c> section of the same file the window manager does,
-    /// so turning logging on is one edit rather than two - and, more to the point,
-    /// so it is on at all. Taj is normally launched by a startup command with no
-    /// arguments, which meant it had no logging whatsoever: a question about why the
-    /// bar looked wrong could not be answered, because the bar had never written
-    /// anything down.
-    /// </para>
-    /// <para>
-    /// It writes to <c>taj.log</c> rather than the window manager's file. Two
-    /// processes cannot share one, and the window manager rotates its own on start.
-    /// </para>
-    /// </remarks>
-    private static void ConfigureLogging(string[] args)
-    {
-        // Beside the window manager's, unless the config or the command line says
-        // otherwise. Not optional, and its absence was found the hard way: this used to
-        // open a file only when `logging { file }` named one, so a config that could
-        // not be parsed - which yields defaults, and a default with no log path - left
-        // Taj with nowhere at all to say why. That is the one case where being able to
-        // say anything matters, and it was the one case that had no log. Dalil has
-        // always defaulted this way; the asymmetry was not a decision.
-        string configuredFile = DefaultTajLogPath;
-
-        if (ConfigPathResolver.Resolve(Value(args, "--config")).Path is { } configPath &&
-            File.Exists(configPath))
-        {
-            try
-            {
-                ShubbakConfig shared = ConfigLoader.LoadFile(configPath).Config;
-
-                Log.Level = shared.LogLevel;
-
-                // Taj writes beside the window manager's log, never into it. The
-                // config resolves an empty path to the window manager's own file, and
-                // two processes cannot share one - the second to open it truncates
-                // the first's, which is worse than not logging at all.
-                if (shared.LogFile is { Length: > 0 } file)
-                    configuredFile = Path.Combine(
-                        Path.GetDirectoryName(file) ?? string.Empty, "taj.log");
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // A bar that cannot read the config still has a default to draw.
-            }
-        }
-
-        // The command line wins, so a one-off investigation does not need a config edit.
-        if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
-            Log.Level = parsed;
-
-        // Off unless output genuinely leads somewhere - a console, or a redirect. Taj
-        // is normally started from the window manager's startup-command, where these
-        // entries were formatted and then discarded on every single one.
-        Log.ToConsole = ConsoleHost.HasOutput
-            && !args.Contains("--quiet", StringComparer.Ordinal);
-
-        int index = Array.IndexOf(args, "--log-file");
-
-        if (index >= 0)
-        {
-            configuredFile = index + 1 < args.Length && !args[index + 1].StartsWith("--", StringComparison.Ordinal)
-                ? args[index + 1]
-                : DefaultTajLogPath;
-        }
-
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(configuredFile)!);
-            Log.OpenFile(configuredFile);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            Console.Error.WriteLine($"taj: could not open log file: {ex.Message}");
-        }
-    }
-
-    private static string DefaultTajLogPath =>
-        Path.Combine(Path.GetDirectoryName(Log.DefaultLogPath)!, "taj.log");
-
-
-    /// <summary>
     /// Finds the config file.
     /// </summary>
     /// <remarks>
@@ -984,17 +787,9 @@ internal static class Program
     /// displaying.
     /// </remarks>
     private static string? ResolveConfigPath(string[] args) =>
-        ConfigPathResolver.Resolve(Value(args, "--config")).Path;
+        ConfigPathResolver.Resolve(Arguments.Value(args, "--config")).Path;
 
-    private static string? Value(string[] args, string flag)
-    {
-        for (int i = 0; i < args.Length - 1; i++)
-            if (string.Equals(args[i], flag, StringComparison.Ordinal)) return args[i + 1];
-
-        return null;
-    }
-
-    private static void PrintUsage() => Console.WriteLine("""
+    private const string UsageText = """
         Taj - the status bar for Shubbak
 
         USAGE
@@ -1018,5 +813,5 @@ internal static class Program
 
           Taj retries until the window manager appears, so it can be launched from
           Shubbak's own startup-command without a race.
-        """);
+        """;
 }

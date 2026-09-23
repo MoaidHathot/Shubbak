@@ -132,7 +132,7 @@ internal static class KeyboardLanguage
     /// literally in the list. Not found at all starts from the beginning, so the click
     /// still does something.
     /// </remarks>
-    private static HKL Step(HKL[] installed, HKL current, int direction)
+    internal static HKL Step(HKL[] installed, HKL current, int direction)
     {
         int index = Array.FindIndex(installed, l => Id(l) == Id(current));
 
@@ -174,7 +174,7 @@ internal static class KeyboardLanguage
     /// </summary>
     private static int LanguageId(HKL layout) => (int)(Id(layout) & 0xFFFF);
 
-    private static string Code(HKL layout)
+    internal static string Code(HKL layout)
     {
         int languageId = LanguageId(layout);
 

@@ -1,7 +1,7 @@
 using System.IO.Pipes;
 using Shubbak.Ipc;
 
-namespace Shubbak.Wm.Tests;
+namespace Shubbak.Ipc.Tests;
 
 /// <summary>
 /// Disposing a client does not throw, whatever state the connection is in.

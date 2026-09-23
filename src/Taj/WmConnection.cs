@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Shubbak.Companion;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
 using Taj.Core;
@@ -40,7 +41,6 @@ public sealed class WmConnection : IAsyncDisposable
     /// said.
     /// </remarks>
     private bool _suspended;
-    private readonly CancellationTokenSource _shutdown = new();
 
     /// <summary>
     /// The GDI device name of the display this bar is on, <c>\\.\DISPLAY2</c>.
@@ -61,7 +61,7 @@ public sealed class WmConnection : IAsyncDisposable
     private IReadOnlyList<MonitorInfoDto>? _lastMonitors;
 
     private IpcClient? _client;
-    private Task? _pump;
+    private EventPump? _pump;
 
     /// <summary>
     /// The window in front as last reported, so an icon that arrives after focus has
@@ -221,8 +221,6 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>True while connected to a window manager.</summary>
     public bool IsConnected { get; private set; }
 
-    private bool _everConnected;
-
     /// <summary>
     /// How long to keep waiting for a window manager that has gone, or null to wait
     /// for ever.
@@ -248,7 +246,11 @@ public sealed class WmConnection : IAsyncDisposable
     /// Retrying rather than failing matters because the bar is usually launched by
     /// the window manager's own startup command, and can therefore win the race.
     /// </remarks>
-    public void Start() => _pump = Task.Run(PumpAsync);
+    public void Start()
+    {
+        _pump = BuildPump();
+        _pump.Start();
+    }
 
     /// <summary>Sends a command, for widget clicks.</summary>
     /// <remarks>
@@ -286,119 +288,46 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    private async Task PumpAsync()
+    /// <summary>
+    /// The subscription, reconnecting for as long as the bar lives. What is the bar's
+    /// about it: two connections, so the commands channel stays free to respond while
+    /// events stream; a snapshot read once the subscription is in place; and a
+    /// give-up clock against a window manager that has gone, which closes the bar.
+    /// </summary>
+    private EventPump BuildPump() => new(Subscribed)
     {
-        // Zero until the first successful connection, and reset by every one after,
-        // so the clock only ever runs against a window manager that was really there.
-        long lostAtTicks = 0;
+        ProgramName = "taj",
+        ConnectTimeout = TimeSpan.FromSeconds(2),
+        OpensCommandsConnection = true,
 
-        while (!_shutdown.IsCancellationRequested)
+        Subscribed = (connection, _) =>
         {
-            try
-            {
-                if (!IpcClient.IsServerRunning())
-                {
-                    if (ReconnectPolicy.ShouldGiveUp(
-                            _everConnected, lostAtTicks, Stopwatch.GetTimestamp(), WindowManagerTimeout))
-                    {
-                        Log.Info(LogCategory.Ipc,
-                            $"no window manager for {WindowManagerTimeout!.Value.TotalSeconds:F0}s; closing the bar");
+            _client = connection.Commands;
+            IsConnected = true;
+            return RefreshAsync(connection.Commands!);
+        },
 
-                        WindowManagerStopped?.Invoke();
-                        return;
-                    }
+        Event = (connection, notification, _) => HandleEventAsync(connection.Commands!, notification),
 
-                    await Task.Delay(1000, _shutdown.Token).ConfigureAwait(false);
-                    continue;
-                }
+        Disconnected = _ =>
+        {
+            _client = null;
+            IsConnected = false;
+        },
 
-                await using var client = new IpcClient();
-                await client.ConnectAsync(TimeSpan.FromSeconds(2), _shutdown.Token).ConfigureAwait(false);
+        GiveUp = (everConnected, lostAtTicks) =>
+        {
+            if (!ReconnectPolicy.ShouldGiveUp(everConnected, lostAtTicks, Stopwatch.GetTimestamp(), WindowManagerTimeout))
+                return false;
 
-                _client = client;
-                IsConnected = true;
+            Log.Info(LogCategory.Ipc,
+                $"no window manager for {WindowManagerTimeout!.Value.TotalSeconds:F0}s; closing the bar");
 
-                // Reset on every connection, not only the first: a window manager that
-                // comes back inside the window is not a window manager that has gone.
-                _everConnected = true;
-                lostAtTicks = 0;
+            return true;
+        },
 
-                Log.Info(LogCategory.Ipc, "connected to the window manager");
-
-                // A separate client for the subscription, because the command
-                // channel must stay free to respond while events are streaming.
-                //
-                // Subscribed before the snapshot is read, not after. In the other order
-                // there was a gap between the two in which a focus change or a
-                // workspace switch was in neither, and the bar showed the wrong
-                // workspace until something unrelated happened. Every event that lands
-                // between the handshake and the snapshot is queued for this connection
-                // and applied on top of the snapshot, which is idempotent for all of
-                // them.
-                await using var events = new IpcClient();
-                await events.ConnectAsync(TimeSpan.FromSeconds(2), _shutdown.Token).ConfigureAwait(false);
-                await events.BeginSubscriptionAsync(Subscribed, _shutdown.Token).ConfigureAwait(false);
-
-                await RefreshAsync(client).ConfigureAwait(false);
-
-                await foreach (IpcEvent notification in
-                    events.ReadEventsAsync(_shutdown.Token).ConfigureAwait(false))
-                {
-                    await HandleEventAsync(client, notification).ConfigureAwait(false);
-                }
-
-                // The stream ending without an exception is the pipe closing under the
-                // subscription: the window manager went without saying so, or said so
-                // and the notice was lost - it does not flush its outboxes on the way
-                // out. Said here because nothing else says it. A read that meets the end
-                // of the pipe reports the end of the stream, not an error, so this loop
-                // ended, went round and reconnected without a line in the log to explain
-                // the gap. The clean case announces itself from the shutdown event.
-                if (!_shutdown.IsCancellationRequested)
-                    Log.Info(LogCategory.Ipc, "the window manager closed the connection");
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                // Everything, not the two that were expected.
-                //
-                // This loop is the bar's only source of workspaces, layout and title,
-                // and it was started with a bare Task.Run - nothing awaits it, so a
-                // fault nobody caught was a fault nobody saw. An unexpected exception
-                // left the task dead, _client null for good, and the bar drawing a
-                // workspace list frozen at whatever it last read, while the clock and
-                // the keyboard language carried on because they are local timers that
-                // never touch this pipe. Every later click was a silent no-op, and
-                // nothing was written to the log to say why.
-                //
-                // Measured against the alternative: a bar that reconnects a second
-                // later having logged what happened is strictly better than one that
-                // looks alive and is not.
-                Log.Warn(LogCategory.Ipc, $"disconnected: {ex.GetType().Name}: {ex.Message}");
-            }
-            finally
-            {
-                _client = null;
-                IsConnected = false;
-
-                // Stamped where the connection ended rather than where it was noticed,
-                // so the wait is measured from the loss itself.
-                if (lostAtTicks == 0) lostAtTicks = Stopwatch.GetTimestamp();
-            }
-
-            try
-            {
-                await Task.Delay(1000, _shutdown.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-        }
-    }
+        Stopped = () => WindowManagerStopped?.Invoke(),
+    };
 
     private async Task HandleEventAsync(IpcClient client, IpcEvent notification)
     {
@@ -461,7 +390,7 @@ public sealed class WmConnection : IAsyncDisposable
                 break;
 
             case "binding_mode.changed":
-                _model.SetValue("binding_mode", Unquote(notification.Data));
+                _model.SetValue("binding_mode", SnapshotProjection.Unquote(notification.Data));
                 break;
 
             // Both change what Shubbak is doing without changing anything on screen,
@@ -689,57 +618,17 @@ public sealed class WmConnection : IAsyncDisposable
 
             if (state is null) return;
 
-            // The position this display holds in the window manager's list, for bar
-            // rules written as monitor=N, and the names its configuration gives it, for
-            // rules written as monitor="name". Read off the snapshot every time rather
-            // than remembered, because a monitor coming or going moves the one and a
-            // reload can change the other.
-            int monitorIndex = IndexOfThisMonitor(state);
-            IReadOnlyList<string> monitorNames = monitorIndex >= 0
-                ? state.Monitors[monitorIndex].Names ?? []
-                : [];
+            // Everything the snapshot says about this display, decided in Taj.Core
+            // where it is tested; see SnapshotProjection.
+            BarReading reading = SnapshotProjection.Read(state, _deviceId, OwnMonitorOnly);
 
-            List<WorkspaceInfo> visible = [];
-            string active = string.Empty;
-
-            foreach (WorkspaceInfo workspace in state.Workspaces)
-            {
-                // The scratchpad is a workspace internally so the tree works on it
-                // unchanged, but it is not something the user switches to.
-                if (workspace.Name.StartsWith("__", StringComparison.Ordinal)) continue;
-
-                bool onThisMonitor = string.Equals(workspace.Monitor, _deviceId, StringComparison.OrdinalIgnoreCase);
-
-                // The active workspace of this monitor is what selects the bar
-                // profile, so it is noted before any filtering.
-                if (workspace.Active && onThisMonitor && active.Length == 0)
-                    active = workspace.Name;
-
-                if (OwnMonitorOnly && !onThisMonitor) continue;
-
-                visible.Add(workspace);
-            }
-
-            // Declared order, not creation order and not whichever monitor a
-            // workspace currently sits on. alt+1 is first because the user wrote it
-            // first, and that has to hold however the workspaces move around.
-            visible.Sort(static (a, b) => a.SortIndex != b.SortIndex
-                ? a.SortIndex.CompareTo(b.SortIndex)
-                : string.CompareOrdinal(a.Name, b.Name));
-
-            List<WorkspacesWidget.WorkspaceEntry> entries =
-            [
-                .. visible.Select(w => new WorkspacesWidget.WorkspaceEntry(
-                    w.Name, w.DisplayName, w.Active, w.HasWindows, w.Focused)),
-            ];
-
-            _model.SetValue("workspaces", WorkspacesWidget.Encode(entries));
+            _model.SetValue("workspaces", reading.Workspaces);
             _model.SetValue(FocusedWindow.TitleKey, state.FocusedWindow?.Title ?? string.Empty);
             _model.SetValue(
                 FocusedWindow.ProcessKey, state.FocusedWindow?.ProcessName ?? string.Empty);
             _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
             _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
-            _model.SetValue("layout", FindActiveLayout(state));
+            _model.SetValue("layout", reading.Layout);
 
             // The icon too, from the snapshot as well as from the events, or a bar
             // started with a window already in front would show its title alone until
@@ -771,9 +660,10 @@ public sealed class WmConnection : IAsyncDisposable
                 ContextsChanged?.Invoke(contexts);
             }
 
-            if (active.Length > 0) ActiveWorkspaceChanged?.Invoke(active, monitorIndex, monitorNames);
+            if (reading.ActiveWorkspace.Length > 0)
+                ActiveWorkspaceChanged?.Invoke(reading.ActiveWorkspace, reading.MonitorIndex, reading.MonitorNames);
 
-            if (MonitorsDiffer(_lastMonitors, state.Monitors))
+            if (SnapshotProjection.MonitorsDiffer(_lastMonitors, state.Monitors))
             {
                 _lastMonitors = state.Monitors;
                 MonitorsChanged?.Invoke(state.Monitors);
@@ -792,93 +682,8 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    /// <summary>Where this display sits in the window manager's list, or -1.</summary>
-    private int IndexOfThisMonitor(StateSnapshot state)
-    {
-        for (int index = 0; index < state.Monitors.Count; index++)
-        {
-            if (string.Equals(state.Monitors[index].DeviceId, _deviceId, StringComparison.OrdinalIgnoreCase))
-                return index;
-        }
-
-        return -1;
-    }
-
-    /// <summary>
-    /// Whether two descriptions of the displays disagree about which are attached or
-    /// where any of them is.
-    /// </summary>
-    /// <remarks>
-    /// Identity and rectangle only. DPI, the friendly name and the active workspace
-    /// change without anything about the bar windows needing to, and this decides
-    /// whether the loop is asked to look at them.
-    /// </remarks>
-    private static bool MonitorsDiffer(IReadOnlyList<MonitorInfoDto>? before, IReadOnlyList<MonitorInfoDto> after)
-    {
-        if (before is null || before.Count != after.Count) return true;
-
-        for (int i = 0; i < after.Count; i++)
-        {
-            MonitorInfoDto a = before[i];
-            MonitorInfoDto b = after[i];
-
-            if (!string.Equals(a.DeviceId, b.DeviceId, StringComparison.OrdinalIgnoreCase)) return true;
-            if (a.X != b.X || a.Y != b.Y || a.Width != b.Width || a.Height != b.Height) return true;
-        }
-
-        return false;
-    }
-
-    /// <summary>The layout of the workspace displayed on this bar's monitor.</summary>
-    /// <remarks>
-    /// Filtered by monitor. Taking the first active workspace in the snapshot meant
-    /// every bar on every monitor showed the first monitor's layout, so the indicator
-    /// was wrong on all but one display and changed when the user was not looking.
-    /// </remarks>
-    private string FindActiveLayout(StateSnapshot state)
-    {
-        foreach (WorkspaceInfo workspace in state.Workspaces)
-        {
-            if (!workspace.Active) continue;
-            if (!string.Equals(workspace.Monitor, _deviceId, StringComparison.OrdinalIgnoreCase)) continue;
-
-            return workspace.Layout;
-        }
-
-        return string.Empty;
-    }
-
-    /// <summary>Reads a JSON string payload as plain text.</summary>
-    /// <remarks>
-    /// A JSON <c>null</c> becomes an empty string, not the four letters spelling it.
-    /// Clearing the binding mode sends exactly that, so leaving the default set put
-    /// the word "null" on the bar where the mode had been - and it stayed there,
-    /// because an empty value is what hides the widget.
-    /// </remarks>
-    private static string Unquote(string json)
-    {
-        if (json is null) return string.Empty;
-
-        string trimmed = json.Trim();
-
-        if (trimmed.Length == 0 || string.Equals(trimmed, "null", StringComparison.Ordinal))
-            return string.Empty;
-
-        return trimmed.Length >= 2 && trimmed[0] == '"' && trimmed[^1] == '"'
-            ? trimmed[1..^1]
-            : trimmed;
-    }
-
     public async ValueTask DisposeAsync()
     {
-        await _shutdown.CancelAsync().ConfigureAwait(false);
-
-        if (_pump is not null)
-        {
-            try { await _pump.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
-        }
-
-        _shutdown.Dispose();
+        if (_pump is { } pump) await pump.DisposeAsync().ConfigureAwait(false);
     }
 }

@@ -1,4 +1,5 @@
 using Ayn.Core;
+using Shubbak.Companion;
 using Shubbak.Config;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Ipc;
@@ -26,66 +27,40 @@ namespace Ayn;
 /// </remarks>
 internal static class Program
 {
+    private static readonly CompanionIdentity Identity = new(
+        Name: "ayn",
+        Noun: "a watcher",
+        Usage: UsageText,
+        HasWindow: false);
+
     private static string? s_configPath;
 
-    private static int Main(string[] args)
+    private static int Main(string[] args) =>
+        CompanionBootstrap.Run(args, Identity, Start, preflight: Preflight);
+
+    /// <summary>
+    /// <c>--report</c>: what Windows says right now, and nothing else. For a person
+    /// wondering why a meeting was or was not noticed: this is the same reading the
+    /// watcher acts on.
+    /// </summary>
+    /// <remarks>
+    /// Before the single-instance lock, because it runs beside a watcher that is
+    /// already running - and with no log file, because opening the file would truncate
+    /// the one that watcher is writing to.
+    /// </remarks>
+    private static int? Preflight(CompanionContext context)
     {
-        if (args.Length > 0 && args[0] is "--help" or "-h" or "help")
-        {
-            ConsoleHost.Ensure();
-            PrintUsage();
-            return 0;
-        }
+        if (!Arguments.Has(context.Args, "--report")) return null;
 
-        if (Array.Exists(args, a => a is "--version" or "-v" or "version"))
-        {
-            ConsoleHost.Ensure();
-            Console.WriteLine(ShubbakVersion.Banner);
-            return 0;
-        }
+        s_configPath = context.ConfigPath;
+        CompanionBootstrap.ConfigureLogging(context, Identity, toFile: false);
+        ConsoleHost.Ensure();
+        return Report();
+    }
 
-        s_configPath = Value(args, "--config") ?? Value(args, "-c");
-
-        // A report opens no log file. It runs beside a watcher that has the file open,
-        // and opening it again rotates the live log out from under that watcher.
-        bool report = args.Contains("--report", StringComparer.Ordinal);
-
-        // What Windows says right now, and nothing else. For a person wondering why a
-        // meeting was or was not noticed: this is the same reading the watcher acts on.
-        if (report)
-        {
-            ConfigureLogging(args, toFile: false);
-            ConsoleHost.Ensure();
-            return Report();
-        }
-
-        // One watcher per account. Two would hold the same pins twice, which is
-        // harmless, and both write the log, which is not. Nothing strange has to
-        // happen to end up with two: the watcher survives the window manager
-        // restarting, and the restarted window manager runs its startup commands.
-        //
-        // Claimed before the log file is opened, for the same reason a report opens no
-        // log: opening the file truncates it, and the watcher that is already running
-        // is writing to it. A second copy that said "already running" and left used to
-        // take the first copy's log with it, on every restart of the window manager.
-        using SingleInstanceLock instance = SingleInstanceLock.Claim(
-            IpcProtocol.InstanceMutexNameFor("ayn"));
-
-        if (!instance.Held && instance.Certain)
-        {
-            // Said to the terminal this was typed into, if it was typed. The usual
-            // second copy is started by the window manager, which has no console, and
-            // allocating one to print a line nobody will read flashes a window.
-            if (ConsoleHost.TryAttach())
-            {
-                Console.Error.WriteLine("ayn: a watcher is already running.");
-                Console.Error.WriteLine("hint: `shubbak ayn-exit` stops it.");
-            }
-
-            return 1;
-        }
-
-        ConfigureLogging(args, toFile: true);
+    private static int Start(CompanionContext context)
+    {
+        s_configPath = context.ConfigPath;
 
         AynConfig config = LoadConfig();
 
@@ -106,7 +81,7 @@ internal static class Program
         };
 
         // Each source is opened only if a fact needs it: a file that says
-        // `microphone { muted #false }` never touches Core Audio.
+        // `microphone { muted #false }` never touches Core Audio until a signal asks.
         using var store = new RegistryConsentStore();
 
         if (config.NeedsConsentStore && store.Count == 0)
@@ -137,7 +112,6 @@ internal static class Program
         {
             connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
             Log.Info(LogCategory.Wm, "ayn stopped");
-            Log.CloseFile();
         }
 
         return 0;
@@ -432,7 +406,7 @@ internal static class Program
         return 0;
     }
 
-    private static string Describe(AynConfig config)
+    internal static string Describe(AynConfig config)
     {
         List<string> parts = [];
 
@@ -446,7 +420,7 @@ internal static class Program
     }
 
     /// <summary>A FILETIME from the consent store as a local date and time, or "never".</summary>
-    private static string Describe(long fileTime)
+    internal static string Describe(long fileTime)
     {
         if (fileTime <= 0) return "never";
 
@@ -460,74 +434,30 @@ internal static class Program
         }
     }
 
-    private static void ConfigureLogging(string[] args, bool toFile)
-    {
-        string file = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "Shubbak",
-            "ayn.log");
+    private const string UsageText = """
+        Ayn - the watcher for Shubbak
 
-        try
-        {
-            if (ConfigPathResolver.Resolve(s_configPath).Path is { } path && File.Exists(path))
-            {
-                ShubbakConfig shared = ConfigLoader.LoadFile(path).Config;
-                Log.Level = shared.LogLevel;
+        Ayn watches the camera and the microphone and holds a context on the
+        window manager for each fact while it is true: camera-in-use,
+        microphone-in-use, microphone-muted.
 
-                if (shared.LogFile is { Length: > 0 } configured)
-                    file = Path.Combine(Path.GetDirectoryName(configured) ?? string.Empty, "ayn.log");
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // A watcher that cannot read the config still has defaults to run on.
-        }
+        It also answers `signal "ayn" "microphone" "mute" | "unmute" | "toggle-mute"`
+        from a keybinding, the bar or the palette, by flipping the system mute.
 
-        if (Value(args, "--log-level") is { } level && Log.TryParseLevel(level, out LogLevel parsed))
-            Log.Level = parsed;
+        USAGE
+          ayn [options]
 
-        Log.ToConsole = ConsoleHost.HasOutput && !args.Contains("--quiet", StringComparer.Ordinal);
+        OPTIONS
+          --config <path>      Config file. Ayn reads the `ayn` section of the same
+                               file Shubbak uses and resolves it the same way,
+                               including $XDG_CONFIG_HOME.
+          --log-level <level>  trace | debug | info | warn | error | none
+          --log-file [path]    Write the log to a file of your choosing.
+          --quiet              Do not write to the console.
+          --report             Print what Windows says about each device now, and exit.
+          --version            Print the version and exit.
+          --help               Show this message.
 
-        if (!toFile) return;
-
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(file)!);
-            Log.OpenFile(file);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Losing the log is not worth losing the watcher over.
-        }
-    }
-
-    private static string? Value(string[] args, string name)
-    {
-        int index = Array.IndexOf(args, name);
-        return index >= 0 && index + 1 < args.Length ? args[index + 1] : null;
-    }
-
-    private static void PrintUsage()
-    {
-        Console.WriteLine(ShubbakVersion.Banner);
-        Console.WriteLine();
-        Console.WriteLine("Ayn watches the camera and the microphone and holds a context on the");
-        Console.WriteLine("window manager for each fact while it is true: camera-in-use,");
-        Console.WriteLine("microphone-in-use, microphone-muted.");
-        Console.WriteLine();
-        Console.WriteLine("It also answers `signal \"ayn\" \"microphone\" \"mute\" | \"unmute\" | \"toggle-mute\"`");
-        Console.WriteLine("from a keybinding, the bar or the palette, by flipping the system mute.");
-        Console.WriteLine();
-        Console.WriteLine("usage: ayn [options]");
-        Console.WriteLine();
-        Console.WriteLine("options:");
-        Console.WriteLine("  --config <path>     the shubbak.kdl to read the ayn section from");
-        Console.WriteLine("  --log-level <level> trace, debug, info, warn, error");
-        Console.WriteLine("  --quiet             do not echo the log to the console");
-        Console.WriteLine("  --report            print what Windows says about each device now, and exit");
-        Console.WriteLine("  --version           print the version");
-        Console.WriteLine("  --help              this");
-        Console.WriteLine();
-        Console.WriteLine("`shubbak ayn-exit` stops a running watcher.");
-    }
+        `shubbak ayn-exit` stops a running watcher.
+        """;
 }
