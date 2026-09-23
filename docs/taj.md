@@ -136,7 +136,10 @@ bar {
 
 `icon` draws the focused window's icon — the one its taskbar button shows — beside
 whatever you put next to it, and hides when nothing is focused, so the title does not
-gain a gap. `size` is the square it is drawn in; `background` and `radius` put a pill
+gain a gap. `size` is the square it is drawn in, and four pixels of room around that
+square is the pill it shows on hover; in a bar shorter than the two together the icon
+is still centred and the room is what the edges clip, so `size=20` in a `height 23`
+bar draws the whole picture in the middle. `background` and `radius` put a pill
 behind it; `on-click` makes it a control like any text widget. The picture comes over
 the pipe like the title does: the bar asks the window manager, which asks the window
 (then its class, then its executable) and answers with pixels — see

@@ -309,19 +309,39 @@ public sealed class FlexLayout
             _ => (0, 0),
         };
 
+    /// <summary>
+    /// Where a child sits across the row, and how tall it is there.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The offset may be negative. A child taller than the row is placed where its
+    /// alignment says and the row's edges clip it: centred means the overflow is
+    /// split, end means the far edge stays on the far edge. The offset used to be
+    /// clamped at zero, which turned every overflowing child into a top-aligned one -
+    /// and the bar's icon is a picture in four pixels of padding, so <c>icon size=20</c>
+    /// in a bar of <c>height 23</c> overflowed by five, all of it at the bottom: the
+    /// picture sat six pixels down and a pixel over the edge, off-centre and cropped
+    /// at once. Split, the overflow is the icon's own transparent padding and the
+    /// picture is whole.
+    /// </para>
+    /// <para>
+    /// Hit testing follows the rectangle wherever it is, so the visible part of an
+    /// overflowing child is still the part that is clicked.
+    /// </para>
+    /// </remarks>
     private static (int Offset, int Size) AlignChild(
         AlignItems align, int available, int natural, bool hasExplicitCrossSize)
     {
         // An explicit cross size is honoured whatever the alignment says; otherwise
         // "stretch" would silently override it.
         if (hasExplicitCrossSize)
-            return (Math.Max(0, (available - natural) / 2), natural);
+            return ((available - natural) / 2, natural);
 
         return align switch
         {
             AlignItems.Stretch => (0, available),
-            AlignItems.Center => (Math.Max(0, (available - natural) / 2), natural),
-            AlignItems.End => (Math.Max(0, available - natural), natural),
+            AlignItems.Center => ((available - natural) / 2, natural),
+            AlignItems.End => (available - natural, natural),
             _ => (0, natural),
         };
     }

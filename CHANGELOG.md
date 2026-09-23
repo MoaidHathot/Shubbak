@@ -513,6 +513,16 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **The bar's icon was off-centre and cropped in a short bar.** An icon is its picture
+  in four pixels of padding - the pill it shows on hover - so `icon size=20` is a node
+  of 28, five too tall for a `height 23` bar. The layout clamped the centring offset at
+  zero, which put the whole overflow at the bottom: at 150 percent the 30-pixel
+  picture sat six pixels from the top and one over the bottom edge, so a Windows
+  Terminal icon lost its "PRE" badge and a round Firefox icon touched the edge. An
+  overflowing child is now placed where its alignment says and clipped by the row's
+  edges - centred means the overflow is split, end means the far edge stays put - so
+  the clipped part is the icon's own transparent padding and the picture is whole.
+  Measured on the bar: the picture moved from rows 6-35 to rows 3-33 of 35.
 - **The watcher takes on a device named by a reload.** The consent store was built
   once for the devices the file named at startup, and a reload that added
   `screen { captured "..." }` was told to restart the watcher. The store now opens
