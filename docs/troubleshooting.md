@@ -241,6 +241,10 @@ and slow down the thing being diagnosed.
 A crash writes `%LOCALAPPDATA%\Shubbak\crash-<timestamp>.md` containing the same
 report, including the log entries leading up to it. Attach that.
 
+Each program's log is beside it - `shubbak.log`, `taj.log`, `dalil.log`, `ayn.log` -
+and the three sessions before the current one are kept as `.1` (the most recent)
+to `.3`, so a start that had the answer is not lost to the restart that followed it.
+
 ## The bar
 
 Taj logs separately:

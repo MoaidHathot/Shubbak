@@ -131,19 +131,7 @@ public static class Log
 
             // Rotate rather than grow without bound: a Trace-level session can
             // produce tens of megabytes in minutes.
-            if (!append && File.Exists(path))
-            {
-                try
-                {
-                    string previous = path + ".1";
-                    File.Delete(previous);
-                    File.Move(path, previous);
-                }
-                catch (IOException)
-                {
-                    // A locked previous log is not worth failing startup over.
-                }
-            }
+            if (!append && File.Exists(path)) Rotate(path);
 
             s_file = new StreamWriter(
                 new FileStream(path, append ? FileMode.Append : FileMode.Create,
@@ -160,6 +148,46 @@ public static class Log
 
             s_file.WriteLine($"# Shubbak log opened {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             s_file.WriteLine($"# level={s_level}");
+        }
+    }
+
+    /// <summary>
+    /// How many earlier sessions are kept beside the current log, as <c>.1</c>
+    /// (the most recent) to <c>.3</c>.
+    /// </summary>
+    /// <remarks>
+    /// One generation was kept, and it was not enough. A window went missing during
+    /// a session of tests that restarted the window manager eight times; by the time
+    /// the question was asked, the start that had the answer was seven rotations
+    /// gone. A start is the cheapest thing to do to this program - a deploy, a config
+    /// experiment, a crash and its recovery - and the log worth reading is often two
+    /// starts back. Three is enough for that and small enough not to notice: a
+    /// session at the default level is a few tens of kilobytes.
+    /// </remarks>
+    public const int Generations = 3;
+
+    /// <summary>Shifts <c>path</c> to <c>path.1</c>, <c>path.1</c> to <c>path.2</c>, and so on; the oldest goes.</summary>
+    private static void Rotate(string path)
+    {
+        try
+        {
+            File.Delete($"{path}.{Generations}");
+
+            for (int generation = Generations - 1; generation >= 1; generation--)
+            {
+                string older = $"{path}.{generation}";
+                if (File.Exists(older)) File.Move(older, $"{path}.{generation + 1}");
+            }
+
+            File.Move(path, $"{path}.1");
+        }
+        catch (IOException)
+        {
+            // A locked previous log is not worth failing startup over.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Nor is one the account may not touch.
         }
     }
 

@@ -205,6 +205,39 @@ public sealed class LogTests : IDisposable
     }
 
     [Fact]
+    public void ThreeEarlierSessionsAreKeptAndTheOldestGoes()
+    {
+        // The start that has the answer is often two starts back: a deploy, then a
+        // config experiment, then the question. One generation lost it every time.
+        string path = Path.Combine(Path.GetTempPath(), $"shubbak-generations-{Guid.NewGuid():N}.log");
+
+        try
+        {
+            Log.Level = LogLevel.Information;
+
+            for (int session = 1; session <= 5; session++)
+            {
+                Log.OpenFile(path);
+                Log.Info(LogCategory.Wm, $"session {session}");
+                Log.CloseFile();
+            }
+
+            Assert.Contains("session 5", File.ReadAllText(path), StringComparison.Ordinal);
+            Assert.Contains("session 4", File.ReadAllText(path + ".1"), StringComparison.Ordinal);
+            Assert.Contains("session 3", File.ReadAllText(path + ".2"), StringComparison.Ordinal);
+            Assert.Contains("session 2", File.ReadAllText(path + ".3"), StringComparison.Ordinal);
+            Assert.False(File.Exists(path + ".4"), "the oldest session is not kept");
+            Assert.Equal(3, Log.Generations);
+        }
+        finally
+        {
+            Log.CloseFile();
+            for (int generation = 0; generation <= 4; generation++)
+                File.Delete(generation == 0 ? path : $"{path}.{generation}");
+        }
+    }
+
+    [Fact]
     public void AppendingDoesNotRotate()
     {
         string path = Path.Combine(Path.GetTempPath(), $"shubbak-append-{Guid.NewGuid():N}.log");

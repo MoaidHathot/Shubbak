@@ -498,6 +498,11 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **The log kept one earlier session; it keeps three.** A window went missing during
+  a run of tests that restarted the window manager eight times, and by the time the
+  question was asked the start that had the answer was seven rotations gone. Each
+  program now keeps `.1` to `.3` beside its log - a start is the cheapest thing to
+  do to these programs, and the log worth reading is often two starts back.
 - **A resize pulled the two windows apart while it animated.** Frames are posted to
   each window's own thread rather than sent - the measured choice that keeps a busy
   application from stalling the daemon - so the window whose application was
