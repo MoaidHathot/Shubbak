@@ -262,6 +262,19 @@ internal static class PaletteRenderer
 
         int at = x - shift;
 
+        // Ctrl+A. The selection is the whole term or nothing, and is drawn as the
+        // same pill the selected row has - the one colour the theme already has for
+        // "this is what the next key acts on".
+        if (model.AllSelected)
+        {
+            int textWidth = wholeWidth - caretWidth;
+
+            renderer.FillRectangle(
+                new Rect(at - 2, y, Math.Min(textWidth + 4, available + 4), height),
+                config.SelectionBackground,
+                cornerRadius: 3);
+        }
+
         if (before.Length > 0)
         {
             renderer.DrawText(
@@ -431,7 +444,15 @@ internal static class PaletteRenderer
     {
         if (text.Length == 0 || x >= limit) return x;
 
-        if (positions.Count == 0)
+        // Text that runs right to left, or mixes directions, is drawn whole and
+        // unhighlighted. The pieces below are laid out in logical order from the left,
+        // which for Arabic and Hebrew puts the words back to front and breaks the
+        // letters apart at every colour change - an Arabic letter takes its shape from
+        // its neighbours, and a word cut into three runs was three words with the wrong
+        // joins. Placing a colour at a logical index inside shaped, reordered text
+        // needs the shaper's own glyph positions, which this renderer does not expose;
+        // a title read correctly with no underline beats one underlined and unreadable.
+        if (positions.Count == 0 || ContainsRightToLeft(text))
         {
             Size whole = renderer.Measure(text, font);
             renderer.DrawText(text, new Rect(x, y, Math.Max(0, limit - x), whole.Height + 4), colour, font);
@@ -469,6 +490,24 @@ internal static class PaletteRenderer
         }
 
         return Math.Min(x, limit);
+    }
+
+    /// <summary>
+    /// Whether any character in the text is written right to left: Hebrew, Arabic and
+    /// the scripts beside them, their presentation forms, or an explicit right-to-left
+    /// mark.
+    /// </summary>
+    internal static bool ContainsRightToLeft(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        foreach (char ch in text)
+        {
+            if (ch is (>= '\u0590' and <= '\u08FF') or (>= '\uFB1D' and <= '\uFDFF') or (>= '\uFE70' and <= '\uFEFF') or '\u200F')
+                return true;
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -558,18 +597,9 @@ internal static class PaletteRenderer
         IRenderer renderer, PaletteModel model, DalilConfig config, PaletteLayout layout,
         Rect canvas, FontStyle font, FontStyle small, int y)
     {
-        bool searched = model.Term.Length > 0;
         bool offline = !model.Status.Connected;
 
-        string headline = offline
-            ? "Can't reach the window manager"
-            : searched ? "No matches" : "Nothing to show";
-
-        string hint = offline
-            ? "Is shubbak-wm running? `shubbak status` will say."
-            : searched
-                ? "Backspace to widen the search, or Tab to look somewhere else"
-                : "The window manager may still be starting up";
+        (string headline, string hint) = EmptyStateText.For(model.Mode, model.Term.Length > 0, !offline);
 
         int x = canvas.X + layout.TextInset + layout[4];
 

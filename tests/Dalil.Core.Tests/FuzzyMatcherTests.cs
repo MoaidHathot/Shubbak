@@ -214,4 +214,156 @@ public sealed class FuzzyMatcherTests
         // from no match, and would vanish from the list.
         Assert.True(Score("t", new string('x', 200) + "t") > 0);
     }
+    // ---- the best alignment, not the first -----------------------------------
+
+    [Fact]
+    public void TheWordStartIsPreferredToTheSameLettersScatteredEarlier()
+    {
+        // The case the walk got wrong: it took the s of Visual and the t of Studio,
+        // two letters that happen to be in order, when the St that starts a word was
+        // there to be had - and highlighted the scatter, which is how anyone noticed.
+        Span<int> positions = stackalloc int[8];
+        MatchResult result = FuzzyMatcher.Match("st", "Visual Studio", positions);
+
+        Assert.Equal([7, 8], positions[..result.Matched].ToArray());
+    }
+
+    [Fact]
+    public void TheHighlightFollowsTheBestAlignment()
+    {
+        Span<int> positions = stackalloc int[8];
+        MatchResult result = FuzzyMatcher.Match("code", "Visual Studio Code - Decoder", positions);
+
+        // "Code" the word, not C-o-d-e picked from wherever they first occur.
+        Assert.Equal([14, 15, 16, 17], positions[..result.Matched].ToArray());
+    }
+
+    [Fact]
+    public void AnAbbreviationIsNotChargedForTheWordsItSkips()
+    {
+        // "st" for Studio should not lose to "st" inside a shorter word near the
+        // front. The letters an abbreviation leaves out are the point of it.
+        Assert.True(Score("st", "Visual Studio") > Score("st", "Fastest"));
+    }
+
+    [Fact]
+    public void ALongCandidateStillMatchesByTheWalk()
+    {
+        string title = new string('x', FuzzyMatcher.MaxAlignedLength + 10) + " Studio";
+
+        Span<int> positions = stackalloc int[8];
+        MatchResult result = FuzzyMatcher.Match("st", title, positions);
+
+        Assert.True(result.IsMatch);
+        Assert.Equal(2, result.Matched);
+        Assert.Equal(FuzzyMatcher.MaxAlignedLength + 11, positions[0]);
+    }
+
+    // ---- folding ------------------------------------------------------------
+
+    [Theory]
+    [InlineData("cafe", "Café")]
+    [InlineData("uber", "Über")]
+    [InlineData("resume", "Résumé - Word")]
+    [InlineData("naive", "naïve")]
+    public void AccentsDoNotStandInTheWay(string query, string candidate) =>
+        Assert.True(Matches(query, candidate));
+
+    [Fact]
+    public void AnAccentTypedStillMatchesThePlainLetter()
+    {
+        // Folding is both ways: somebody with the accent on their keyboard should not
+        // be worse off than somebody without.
+        Assert.True(Matches("café", "cafe"));
+    }
+
+    [Theory]
+    [InlineData("احمد", "أحمد")]       // hamza above
+    [InlineData("اسلام", "إسلام")]     // hamza below
+    [InlineData("امال", "آمال")]       // madda
+    [InlineData("مكتبه", "مكتبة")]     // ta marbuta as ha
+    [InlineData("علي", "على")]         // alif maqsura as ya
+    [InlineData("كتاب", "کتاب")]       // Persian kaf
+    [InlineData("ايران", "ایران")]     // Persian yeh
+    public void TheArabicSpellingsOfOneSoundFindEachOther(string query, string candidate) =>
+        Assert.True(Matches(query, candidate));
+
+    [Fact]
+    public void VowelMarksInTheCandidateAreSteppedOver()
+    {
+        // مُحَمَّد with its marks is found by محمد without them, and the letters across
+        // a mark still count as adjacent - a prefix, not a scatter.
+        const string Marked = "\u0645\u064F\u062D\u064E\u0645\u0651\u064E\u062F";
+
+        Assert.True(Matches("\u0645\u062D\u0645\u062F", Marked));
+        Assert.True(Score("\u0645\u062D\u0645\u062F", Marked) > Score("\u0645\u062D\u0645\u062F", "\u0645 \u062D \u0645 \u062F"));
+    }
+
+    [Fact]
+    public void VowelMarksInTheQueryAreSteppedOverToo()
+    {
+        Assert.True(Matches("\u0645\u064F\u062D\u0645\u062F", "\u0645\u062D\u0645\u062F"));
+    }
+
+    [Fact]
+    public void FoldingIsWhatTheMatcherSaysItIs()
+    {
+        Assert.Equal('e', FuzzyMatcher.Fold('É'));
+        Assert.Equal('a', FuzzyMatcher.Fold('A'));
+        Assert.Equal('\u0627', FuzzyMatcher.Fold('\u0623'));
+        Assert.Equal('\u0647', FuzzyMatcher.Fold('\u0629'));
+
+        // Letters with no decomposition are themselves: ø is not o, ß is not s.
+        Assert.Equal('ø', FuzzyMatcher.Fold('Ø'));
+        Assert.Equal('ß', FuzzyMatcher.Fold('ß'));
+    }
+
+    // ---- several words ------------------------------------------------------
+
+    [Fact]
+    public void EveryWordMustMatchInAnyOrder()
+    {
+        Assert.True(Matches("code proj", "My Project - Visual Studio Code"));
+        Assert.True(Matches("proj code", "My Project - Visual Studio Code"));
+        Assert.False(Matches("code xyz", "My Project - Visual Studio Code"));
+    }
+
+    [Fact]
+    public void TheWordsPositionsAreMergedInOrder()
+    {
+        Span<int> positions = stackalloc int[16];
+        MatchResult result = FuzzyMatcher.Match("code proj", "My Project - Visual Studio Code", positions);
+
+        Assert.Equal(8, result.Matched);
+
+        int[] found = positions[..result.Matched].ToArray();
+
+        Assert.Equal([3, 4, 5, 6, 27, 28, 29, 30], found);
+    }
+
+    [Fact]
+    public void TwoWordsLightingTheSameLetterCountItOnce()
+    {
+        Span<int> positions = stackalloc int[16];
+        MatchResult result = FuzzyMatcher.Match("co co", "Code", positions);
+
+        Assert.True(result.IsMatch);
+        Assert.Equal([0, 1], positions[..Math.Min(result.Matched, 2)].ToArray());
+    }
+
+    [Fact]
+    public void ATrailingSpaceIsTheNextWordNotYetTyped()
+    {
+        // Somebody who has typed "code " is about to type another word. Requiring a
+        // literal space emptied the list at exactly that moment.
+        Assert.True(Matches("code ", "Code"));
+        Assert.True(Matches("  code  ", "Code"));
+        Assert.Equal(1, FuzzyMatcher.Match("   ", "anything").Score);
+    }
+
+    [Fact]
+    public void TwoWordsBeatOneWhenBothLand()
+    {
+        Assert.True(Score("vis code", "Visual Studio Code") > Score("vis code", "Visual Basic Code Cleaner Edition"));
+    }
 }

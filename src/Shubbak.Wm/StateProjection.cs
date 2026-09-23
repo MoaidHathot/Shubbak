@@ -180,6 +180,12 @@ internal static class StateProjection
                 $"\"mode\":{(e.Mode is null ? "null" : JsonString(e.Mode))}," +
                 $"\"commands\":[{string.Join(',', e.Commands.Select(JsonString))}]}}",
             LayoutChanged e => $"{{\"layout\":{JsonString(e.Layout)}}}",
+            GapsChanged e =>
+                $"{{\"inner\":{e.Inner.ToString(CultureInfo.InvariantCulture)}," +
+                $"\"outer\":{{\"left\":{e.Outer.Left.ToString(CultureInfo.InvariantCulture)}," +
+                $"\"top\":{e.Outer.Top.ToString(CultureInfo.InvariantCulture)}," +
+                $"\"right\":{e.Outer.Right.ToString(CultureInfo.InvariantCulture)}," +
+                $"\"bottom\":{e.Outer.Bottom.ToString(CultureInfo.InvariantCulture)}}}}}",
             ContainerResized e => $"{{\"id\":{e.Container.Id.Value}}}",
             CommandRejected e =>
                 $"{{\"command\":{JsonString(e.Command)}," +

@@ -45,7 +45,7 @@ public sealed class DalilValidationTests
                 confirm-destructive #true
                 placement "cursor-monitor"
                 background "#16161C"
-                prefixes { layouts "l" }
+                prefixes { layouts "^" }
                 action "Tidy" { equalise }
             }
             """));
@@ -165,6 +165,21 @@ public sealed class DalilValidationTests
     public void GivingUpAPrefixIsNotAMistake()
     {
         Assert.Empty(Check("""dalil { prefixes { monitors "" } }"""));
+    }
+
+    [Fact]
+    public void ALetterAsAPrefixEatsTheFirstKeystrokeOfEverySearchAndIsSaidSo()
+    {
+        // Honoured - it was asked for - but with layouts "l", typing "l" into an empty
+        // palette changes mode instead of looking for Lightroom. The docs used to give
+        // exactly this as the example.
+        Diagnostic wrong = Single("""dalil { prefixes { layouts "l" } }""", "DAL0018");
+
+        Assert.Equal(DiagnosticSeverity.Warning, wrong.Severity);
+        Assert.Contains("letter or digit", wrong.Message, StringComparison.Ordinal);
+
+        Assert.Contains(Check("""dalil { prefixes { layouts "7" } }"""), d => d.Code == "DAL0018");
+        Assert.DoesNotContain(Check("""dalil { prefixes { layouts "^" } }"""), d => d.Code == "DAL0018");
     }
 
     [Fact]

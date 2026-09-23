@@ -41,10 +41,46 @@ until you press something else:
 | `%` | `Ctrl+7` | Monitors | Size, DPI, and what each is showing |
 | `?` | `Ctrl+8` | Help | The palette's keys — **and your own keybindings** |
 
-Prefixes are yours to move: `dalil { prefixes { layouts "l" } }`.
+Prefixes are yours to move: `dalil { prefixes { layouts "^" } }`. Keep them to
+punctuation - a letter or a digit as a prefix would turn the first keystroke of every
+search into a change of mode, and the palette says so (`DAL0018`) if you try.
 
 Inside the palette: type to filter, up/down or Ctrl+N/Ctrl+P to move, Tab to change
-mode, Enter to act, Escape to dismiss. The mouse works too.
+mode, Enter to act, Escape or Alt+F4 to dismiss. The mouse works too. The search box
+is a text field with the manners of one: Left/Right and Home/End move the caret by
+whole characters - an emoji or a letter with its mark is one step and one Backspace -
+**Ctrl+V** or **Shift+Insert** pastes (a copied line with its newline becomes one
+line), and **Ctrl+A** selects what you typed so the next key replaces it. `?` lists
+every key.
+
+## Searching
+
+The matcher is a subsequence matcher with opinions: every letter you type must appear
+in order, and the score comes from *where* it lands. Letters at the start of a word,
+after a separator or at a camel-case boundary are worth far more than letters in the
+middle of one - that is what an abbreviation is made of - and an unbroken run is worth
+more than the same letters scattered, so a prefix beats a coincidence and `dsc` finds
+Discord. Of every way the letters could be placed, the best one is taken: `st` lights
+the **St** of *Visual Studio*, not the *s* of Visual and the *t* of Studio.
+
+Letters are compared folded. Case does not matter; nor do accents, so `cafe` finds
+*Café*; nor do the Arabic spellings of one sound - the alifs with and without hamza,
+`ة` and `ه`, `ى` and `ي`, the Persian kaf and yeh and the Arabic ones - so `احمد` finds
+*أحمد*, and vowel marks are stepped over on both sides, so `محمد` finds *مُحَمَّد*. A
+title that reads right to left is drawn whole rather than highlighted, because placing
+a colour inside shaped, reordered text needs the shaper's own positions and a title
+read correctly beats one underlined and unreadable.
+
+A space separates words that must all match, in any order: `code proj` finds *My
+Project - Visual Studio Code*. The space you have just typed before your next word
+is not yet a word and does not empty the list.
+
+**The command list learns.** What you run from it is remembered - a count per verb or
+action that halves every fortnight - and before you type, the list is in that order:
+the command you run every day is at the top, the hundred you never touch are
+alphabetical below it. Once you type, the match decides and the history only settles
+ties. The record is `%LOCALAPPDATA%\Shubbak\dalil-frecency.tsv`, one line per command,
+and deleting it forgets everything.
 
 ## What it does well
 
@@ -184,8 +220,16 @@ The `dalil` section, all optional: `open-on-signal` (the signal that opens it),
 `close-on-blur`, `show-unmanaged`, `confirm-destructive`, `show-icons`,
 `shrink-to-fit`, `placement` (`focused-monitor`, `cursor-monitor` or `primary`),
 `prefixes`, and the `action` blocks above. Sizes and the font are written at 96 DPI
-and scaled to whichever monitor the palette opens on. `shubbak check-config` reports a
-misspelt setting here with a line, a column and a caret, like everywhere else.
+and scaled to whichever monitor the palette opens on - and stay scaled through a
+reload of the file. `shubbak check-config` reports a misspelt setting here with a
+line, a column and a caret, like everywhere else, and a prefix that is a letter or a
+digit with `DAL0018`.
+
+An empty list says why it is empty in the words of the mode it is in: an empty
+scratchpad says nothing is stashed and how to stash something, an empty inspect list
+says every window is managed, and only a list the window manager fills - layouts,
+displays, commands - says it is still waiting for an answer. A window manager that
+cannot be reached says that, whatever the mode.
 
 ## When the window manager goes away
 

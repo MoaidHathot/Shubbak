@@ -153,4 +153,42 @@ public sealed class ClockSourceTests
 
         Assert.Equal(1, Volatile.Read(ref changes));
     }
+    private static readonly string[] GermanDays =
+        ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"];
+
+    [Fact]
+    public void ACultureDecidesTheNames()
+    {
+        // The invariant culture is English, and was the only choice: a bar in Berlin
+        // said "Wednesday" whatever its owner spoke. The format is the day name alone,
+        // so the value is one word in the named language.
+        using var german = new ClockSource("clock", "dddd", TimeSpan.FromSeconds(1), culture: "de-DE");
+
+        string? value = WaitForValue(german, TimeSpan.FromSeconds(2));
+
+        Assert.NotNull(value);
+        Assert.Contains(value, GermanDays);
+        Assert.Equal("de-DE", german.Culture.Name);
+    }
+
+    [Fact]
+    public void NoCultureIsTheInvariantOne()
+    {
+        // Not the machine's. A format like "HH:mm" comes out the same on every desk,
+        // and a config that worked at home keeps working on a machine set to a locale
+        // with a different separator.
+        using var clock = new ClockSource("clock", "HH:mm", TimeSpan.FromSeconds(1));
+
+        Assert.Equal(System.Globalization.CultureInfo.InvariantCulture, clock.Culture);
+    }
+
+    [Fact]
+    public void AnUnknownCultureFallsBackToTheInvariantOne()
+    {
+        using var clock = new ClockSource("clock", "dddd", TimeSpan.FromSeconds(1), culture: "klingon-KL");
+
+        Assert.Equal(System.Globalization.CultureInfo.InvariantCulture, clock.Culture);
+        Assert.False(ClockSource.IsKnownCulture("klingon-KL"));
+        Assert.True(ClockSource.IsKnownCulture("en-GB"));
+    }
 }

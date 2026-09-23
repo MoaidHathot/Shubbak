@@ -209,6 +209,11 @@ public sealed class WmEventGeometryTests
 
         Assert.Equal(AnimationKind.LayoutChange, new LayoutChanged(container, "grid").LayoutAnimationKind());
         Assert.Equal(AnimationKind.LayoutChange, new ContainerResized(container).LayoutAnimationKind());
+
+        // Changing the gaps moves every window at once: geometric, and shown as a
+        // layout change rather than as a hundred separate moves.
+        Assert.True(new GapsChanged(4, default).AffectsGeometry());
+        Assert.Equal(AnimationKind.LayoutChange, new GapsChanged(4, default).LayoutAnimationKind());
     }
 
     [Fact]
@@ -261,6 +266,7 @@ public sealed class WmEventGeometryTests
                 nameof(ContainerResized),
                 nameof(ContextChanged),
                 nameof(EnvironmentChanged),
+                nameof(GapsChanged),
                 nameof(LayoutChanged),
                 nameof(MonitorAdded),
                 nameof(MonitorChanged),

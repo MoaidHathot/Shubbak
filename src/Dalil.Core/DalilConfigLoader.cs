@@ -214,8 +214,8 @@ public static class DalilConfigLoader
     /// </para>
     /// <code>
     /// prefixes {
-    ///     layouts "l"
-    ///     monitors "m"
+    ///     layouts "^"
+    ///     monitors "@"
     /// }
     /// </code>
     /// <para>
@@ -268,6 +268,20 @@ public static class DalilConfigLoader
                 table[mode] = '\0';
                 where[mode] = span;
                 continue;
+            }
+
+            // A letter or a digit is a prefix that eats the first keystroke of every
+            // search. With layouts "l", typing "l" into an empty palette does not
+            // start looking for a window called Lightroom; it changes mode, and the
+            // window list is one key further away for as long as the setting stands.
+            // Honoured, because it was asked for, but said.
+            if (spelling.Length == 1 && char.IsLetterOrDigit(spelling[0]))
+            {
+                diagnostics?.Add(Diagnostic.Warning(
+                    "DAL0018",
+                    $"The prefix for '{child.Name}' is \"{spelling}\", a letter or digit; typing it into an empty palette will change mode instead of searching.",
+                    span,
+                    "Prefixes are usually punctuation - ^ ~ @ ; - so every letter is still a search."));
             }
 
             table[mode] = spelling.Length == 1 ? spelling[0] : '\0';

@@ -76,6 +76,7 @@ public interface ISource : IDisposable
 /// <summary>Shared plumbing for sources.</summary>
 public abstract class SourceBase : ISource
 {
+    private readonly Lock _publishGate = new();
     private string? _value;
     private bool _disposed;
 
@@ -111,9 +112,16 @@ public abstract class SourceBase : ISource
     /// </remarks>
     protected void Publish(string? value)
     {
-        if (string.Equals(_value, value, StringComparison.Ordinal)) return;
+        // Compared and set under a lock: two timer callbacks overlapping - a slow
+        // producer on a short interval - could otherwise both see the old value and
+        // both publish, or lose an edge between them. Raised outside it, since a
+        // subscriber may take locks of its own.
+        lock (_publishGate)
+        {
+            if (string.Equals(_value, value, StringComparison.Ordinal)) return;
+            _value = value;
+        }
 
-        _value = value;
         Changed?.Invoke(this);
     }
 
@@ -206,6 +214,7 @@ public sealed class ClockSource : SourceBase
     private readonly string _format;
     private readonly TimeZoneInfo? _timeZone;
     private readonly TimeSpan _interval;
+    private readonly System.Globalization.CultureInfo _culture;
 
     private Timer? _timer;
 
@@ -218,12 +227,82 @@ public sealed class ClockSource : SourceBase
     /// "America/Los_Angeles" failing on Windows while "Pacific Standard Time" works
     /// is an unhelpful distinction to impose.
     /// </param>
-    public ClockSource(string name, string format, TimeSpan interval, string? timeZoneId = null)
+    /// <param name="culture">
+    /// A BCP 47 name such as <c>de-DE</c> or <c>ar-SA</c> that decides how day and
+    /// month names come out, or null for the invariant culture - which is English,
+    /// and was the only choice: a bar in Berlin said "Wednesday" whatever its owner
+    /// spoke, and a format with <c>dddd</c> in it had no way to say otherwise.
+    /// </param>
+    public ClockSource(
+        string name, string format, TimeSpan interval, string? timeZoneId = null, string? culture = null)
         : base(name)
     {
         _format = string.IsNullOrWhiteSpace(format) ? "HH:mm" : format;
         _interval = interval < TimeSpan.FromMilliseconds(100) ? TimeSpan.FromMilliseconds(100) : interval;
         _timeZone = ResolveTimeZone(timeZoneId, name);
+        _culture = ResolveCulture(culture, name);
+    }
+
+    /// <summary>The culture the clock speaks; invariant unless one was named and known.</summary>
+    public System.Globalization.CultureInfo Culture => _culture;
+
+    /// <summary>
+    /// Whether the name is a culture this machine knows, for the loader to say so
+    /// where the file can be pointed at rather than in the log after the fact.
+    /// </summary>
+    /// <remarks>
+    /// A process built without globalization data - the command-line tool is one, so
+    /// <c>check-config</c> runs as one - knows no culture but the invariant, and would
+    /// call every real name unknown. There the answer is whether the name is shaped
+    /// like a BCP 47 tag, which still catches <c>culture="German"</c>; the bar itself
+    /// has the data and says the rest in its log.
+    /// </remarks>
+    public static bool IsKnownCulture(string name)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+
+        if (AppContext.TryGetSwitch("System.Globalization.Invariant", out bool invariant) && invariant)
+            return IsWellFormedCultureName(name);
+
+        try
+        {
+            _ = System.Globalization.CultureInfo.GetCultureInfo(name, predefinedOnly: true);
+            return true;
+        }
+        catch (System.Globalization.CultureNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Two to eight letters, then dash-separated alphanumeric subtags: <c>de</c>, <c>en-GB</c>, <c>zh-Hant-TW</c>.</summary>
+    private static bool IsWellFormedCultureName(string name)
+    {
+        string[] parts = name.Split('-');
+
+        if (parts[0].Length is < 2 or > 8 || !parts[0].All(char.IsAsciiLetter)) return false;
+
+        return parts.Skip(1).All(part => part.Length is >= 1 and <= 8 && part.All(char.IsAsciiLetterOrDigit));
+    }
+
+    private static System.Globalization.CultureInfo ResolveCulture(string? name, string sourceName)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return System.Globalization.CultureInfo.InvariantCulture;
+
+        try
+        {
+            // Predefined only. Without it .NET manufactures a culture for any
+            // well-formed name, so `culture="klingon-KL"` produced English with no
+            // word about why.
+            return System.Globalization.CultureInfo.GetCultureInfo(name, predefinedOnly: true);
+        }
+        catch (System.Globalization.CultureNotFoundException)
+        {
+            Log.Warn(LogCategory.Config,
+                $"clock '{sourceName}': unknown culture '{name}'; using the invariant culture");
+
+            return System.Globalization.CultureInfo.InvariantCulture;
+        }
     }
 
     public override void Start()
@@ -250,7 +329,7 @@ public sealed class ClockSource : SourceBase
                 ? DateTimeOffset.Now
                 : TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, _timeZone);
 
-            Publish(now.ToString(_format, System.Globalization.CultureInfo.InvariantCulture));
+            Publish(now.ToString(_format, _culture));
         }
         catch (FormatException ex)
         {
@@ -335,8 +414,26 @@ public sealed class ProcessSource : SourceBase
     private readonly string _fileName;
     private readonly string _arguments;
     private readonly TimeSpan _restartDelay;
+    private readonly TimeSpan? _interval;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Lock _gate = new();
+
+    /// <summary>Released by <see cref="StandUp"/>, for a poll waiting out a stand-down.</summary>
+    private readonly SemaphoreSlim _standUp = new(0);
+    private volatile bool _stoodDown;
+
+    /// <summary>
+    /// How long to wait before the next start after an exit nobody asked for, doubling
+    /// each time to a minute and reset by a run that produced something.
+    /// </summary>
+    /// <remarks>
+    /// A program that exits at once - a mistyped path, a script with a syntax error -
+    /// used to be started every five seconds for ever, with a warning each time:
+    /// seventeen thousand lines a day in the log for one typo. The first exit is said;
+    /// after that only a delay that has grown is, so the log records the shape of the
+    /// failure rather than every instance of it.
+    /// </remarks>
+    private TimeSpan _backoff;
 
     private Task? _reader;
 
@@ -360,23 +457,59 @@ public sealed class ProcessSource : SourceBase
     /// </remarks>
     private System.Diagnostics.Process? _process;
 
-    public ProcessSource(string name, string commandLine, TimeSpan? restartDelay = null)
+    /// <param name="name">The value's name.</param>
+    /// <param name="commandLine">The program and its arguments.</param>
+    /// <param name="restartDelay">How long to wait after a resident program exits before starting it again.</param>
+    /// <param name="interval">
+    /// When given, the program is expected to print and exit, and is run again this
+    /// long after it exits - the i3blocks shape, where a script is a function of the
+    /// moment it runs. Without it the program is expected to stay and keep printing.
+    /// </param>
+    public ProcessSource(string name, string commandLine, TimeSpan? restartDelay = null, TimeSpan? interval = null)
         : base(name)
     {
         ArgumentException.ThrowIfNullOrEmpty(commandLine);
 
         (_fileName, _arguments) = Split(commandLine);
         _restartDelay = restartDelay ?? TimeSpan.FromSeconds(5);
+        _interval = interval is { } every && every > TimeSpan.Zero ? every : null;
+        _backoff = _restartDelay;
     }
 
+    /// <summary>Whether the program is run on a schedule rather than kept running.</summary>
+    public bool Polls => _interval is not null;
+
     public override void Start() => _reader = Task.Run(RunAsync);
+
+    /// <summary>
+    /// Stops starting the program while nothing shows its value. A program already
+    /// running is left to finish; a resident one is left alone, since it is the
+    /// program's own schedule.
+    /// </summary>
+    public override void StandDown() => _stoodDown = true;
+
+    /// <summary>Lets a waiting poll run at once, so the value is fresh when the bar returns.</summary>
+    public override void StandUp()
+    {
+        if (!_stoodDown) return;
+
+        _stoodDown = false;
+        _standUp.Release();
+    }
 
     private async Task RunAsync()
     {
         while (!_shutdown.IsCancellationRequested)
         {
+            bool produced = false;
+
             try
             {
+                // A poll waits out a stand-down before it starts; there is nobody to
+                // show the answer to. Woken by StandUp so the value is fresh at once.
+                while (Polls && _stoodDown && !_shutdown.IsCancellationRequested)
+                    await _standUp.WaitAsync(_shutdown.Token).ConfigureAwait(false);
+
                 using var process = new System.Diagnostics.Process();
 
                 process.StartInfo = new System.Diagnostics.ProcessStartInfo(_fileName, _arguments)
@@ -405,7 +538,13 @@ public sealed class ProcessSource : SourceBase
 
                         if (line is null) break;
 
-                        Publish(line.TrimEnd());
+                        // A poll's value is the last line it prints, so a script that
+                        // prints a heading and then the answer shows the answer.
+                        if (line.Trim().Length > 0 || !Polls)
+                        {
+                            Publish(line.TrimEnd());
+                            produced = true;
+                        }
                     }
                 }
                 finally
@@ -427,7 +566,17 @@ public sealed class ProcessSource : SourceBase
 
                 if (_shutdown.IsCancellationRequested) return;
 
-                Log.Warn(LogCategory.Wm, $"source '{Name}' exited; restarting in {_restartDelay.TotalSeconds:F0}s");
+                if (Polls)
+                {
+                    // Exiting is what a polled program does. Nothing to say, unless it
+                    // said nothing: an empty run is worth one line, since the widget it
+                    // feeds will be showing whatever the last run said.
+                    if (!produced) Log.Warn(LogCategory.Wm, $"source '{Name}' printed nothing this run");
+                }
+                else
+                {
+                    Log.Warn(LogCategory.Wm, $"source '{Name}' exited; restarting in {NextBackoff(produced).TotalSeconds:F0}s");
+                }
             }
             catch (OperationCanceledException)
             {
@@ -435,19 +584,40 @@ public sealed class ProcessSource : SourceBase
             }
             catch (Exception ex)
             {
-                Log.Error(LogCategory.Wm, $"source '{Name}' failed", ex);
+                // Once per failure that is new, or that has grown; see _backoff. A
+                // program that cannot start fails identically every time.
+                TimeSpan wait = NextBackoff(produced);
+
+                if (wait == _restartDelay || wait != _lastReportedBackoff)
+                {
+                    _lastReportedBackoff = wait;
+                    Log.Error(LogCategory.Wm, $"source '{Name}' failed; trying again in {wait.TotalSeconds:F0}s", ex);
+                }
+
                 Publish("!");
             }
 
             try
             {
-                await Task.Delay(_restartDelay, _shutdown.Token).ConfigureAwait(false);
+                await Task.Delay(Polls ? _interval!.Value : _backoff, _shutdown.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 return;
             }
         }
+    }
+
+    private TimeSpan _lastReportedBackoff;
+
+    /// <summary>The next wait after an exit nobody asked for, and the new backoff.</summary>
+    private TimeSpan NextBackoff(bool produced)
+    {
+        _backoff = produced
+            ? _restartDelay
+            : TimeSpan.FromTicks(Math.Min(_backoff.Ticks * 2, TimeSpan.FromMinutes(1).Ticks));
+
+        return _backoff;
     }
 
     private static (string File, string Arguments) Split(string commandLine)
@@ -516,6 +686,7 @@ public sealed class ProcessSource : SourceBase
             catch (AggregateException) { }
 
             _shutdown.Dispose();
+            _standUp.Dispose();
         }
 
         base.Dispose(disposing);

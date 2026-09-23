@@ -5,7 +5,8 @@ using System.Runtime.InteropServices;
 namespace Ayn;
 
 /// <summary>
-/// The default microphone's mute switch, and a way to be woken when it flips.
+/// The default microphone's mute switch - and the default speaker's, when asked - and a
+/// way to be woken when either flips.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -53,6 +54,7 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
     /// <summary>Our own event context, so our own changes can be told from the user's in the log.</summary>
     private static readonly Guid OurContext = new(0x6179616E, 0x2d65, 0x7965, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01);
 
+    private const int ERender = 0;
     private const int ECapture = 1;
     private const int ECommunications = 2;
     private const int EConsole = 0;
@@ -89,12 +91,23 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
     private nint _enumerator;
     private nint _volume;
+    private nint _speakerVolume;
     private void* _volumeCallback;
     private void* _deviceCallback;
     private string? _lastComplaint;
 
-    /// <summary>Whether there is an endpoint to ask.</summary>
+    /// <summary>Whether there is a microphone to ask.</summary>
     public bool HasDevice => _volume != 0;
+
+    /// <summary>Whether there is a speaker to ask.</summary>
+    public bool HasSpeaker => _speakerVolume != 0;
+
+    /// <summary>
+    /// Whether the default speaker is followed as well as the default microphone. Off
+    /// unless the file reports the speaker's mute; set before <see cref="Open"/>, or
+    /// followed by <see cref="Resolve"/>.
+    /// </summary>
+    public bool WatchSpeaker { get; set; }
 
     /// <summary>Whether Core Audio has been opened; see <see cref="Open"/>.</summary>
     public bool IsOpen => _enumerator != 0;
@@ -135,16 +148,28 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
     /// </summary>
     public void Resolve()
     {
-        ReleaseVolume();
+        ReleaseVolume(ref _volume);
+        ReleaseVolume(ref _speakerVolume);
 
-        nint device = DefaultCaptureDevice(ECommunications) is var communications && communications != 0
+        _volume = ResolveEndpoint(ECapture, "microphone");
+
+        if (WatchSpeaker) _speakerVolume = ResolveEndpoint(ERender, "speaker");
+    }
+
+    /// <summary>
+    /// The default device of one flow - the communications one, falling back to the
+    /// console one - with its endpoint volume activated and our callback registered.
+    /// </summary>
+    private nint ResolveEndpoint(int flow, string what)
+    {
+        nint device = DefaultDevice(flow, ECommunications, what) is var communications && communications != 0
             ? communications
-            : DefaultCaptureDevice(EConsole);
+            : DefaultDevice(flow, EConsole, what);
 
         if (device == 0)
         {
-            Log.Info(LogCategory.Wm, "no microphone: nothing to report about mute until one appears");
-            return;
+            Log.Info(LogCategory.Wm, $"no {what}: nothing to report about its mute until one appears");
+            return 0;
         }
 
         try
@@ -157,16 +182,17 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
             if (hr < 0 || volume == 0)
             {
-                Fail("activating the endpoint volume", hr);
-                return;
+                Fail($"activating the {what}'s endpoint volume", hr);
+                return 0;
             }
 
-            _volume = volume;
             if (_volumeCallback is null) _volumeCallback = MakeObject(VolumeVtable());
 
-            var register = (delegate* unmanaged[Stdcall]<nint, void*, int>)(*(void***)_volume)[RegisterControlChangeNotifySlot];
-            hr = register(_volume, _volumeCallback);
-            if (hr < 0) Log.Warn(LogCategory.Wm, $"could not register for mute changes (hr 0x{hr:X8}); the microphone's mute will be read only on other wake-ups");
+            var register = (delegate* unmanaged[Stdcall]<nint, void*, int>)(*(void***)volume)[RegisterControlChangeNotifySlot];
+            hr = register(volume, _volumeCallback);
+            if (hr < 0) Log.Warn(LogCategory.Wm, $"could not register for the {what}'s mute changes (hr 0x{hr:X8}); it will be read only on other wake-ups");
+
+            return volume;
         }
         finally
         {
@@ -175,39 +201,49 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
     }
 
     /// <summary>
-    /// The mute state now, or null when there is no microphone.
+    /// The microphone's mute state now, or null when there is no microphone.
     /// </summary>
     /// <remarks>
     /// Read on every wake rather than remembered from the last callback, because a
     /// read is one call and a remembered value is a second copy of the truth.
     /// </remarks>
-    public bool? IsMuted()
+    public bool? IsMuted() => ReadMute(_volume, "microphone");
+
+    /// <summary>The speaker's mute state now, or null when there is no speaker or it is not followed.</summary>
+    public bool? IsSpeakerMuted() => ReadMute(_speakerVolume, "speaker");
+
+    private bool? ReadMute(nint volume, string what)
     {
-        if (_volume == 0) return null;
+        if (volume == 0) return null;
 
         int muted = 0;
-        var getMute = (delegate* unmanaged[Stdcall]<nint, int*, int>)(*(void***)_volume)[GetMuteSlot];
-        int hr = getMute(_volume, &muted);
+        var getMute = (delegate* unmanaged[Stdcall]<nint, int*, int>)(*(void***)volume)[GetMuteSlot];
+        int hr = getMute(volume, &muted);
 
         if (hr < 0)
         {
-            Fail("reading the mute", hr);
+            Fail($"reading the {what}'s mute", hr);
             return null;
         }
 
         return muted != 0;
     }
 
-    /// <summary>Sets the mute. False when there is no microphone or the call failed.</summary>
-    public bool SetMuted(bool muted)
+    /// <summary>Sets the microphone's mute. False when there is no microphone or the call failed.</summary>
+    public bool SetMuted(bool muted) => WriteMute(_volume, muted, "microphone");
+
+    /// <summary>Sets the speaker's mute. False when there is no speaker or the call failed.</summary>
+    public bool SetSpeakerMuted(bool muted) => WriteMute(_speakerVolume, muted, "speaker");
+
+    private bool WriteMute(nint volume, bool muted, string what)
     {
-        if (_volume == 0) return false;
+        if (volume == 0) return false;
 
         Guid context = OurContext;
-        var setMute = (delegate* unmanaged[Stdcall]<nint, int, Guid*, int>)(*(void***)_volume)[SetMuteSlot];
-        int hr = setMute(_volume, muted ? 1 : 0, &context);
+        var setMute = (delegate* unmanaged[Stdcall]<nint, int, Guid*, int>)(*(void***)volume)[SetMuteSlot];
+        int hr = setMute(volume, muted ? 1 : 0, &context);
 
-        return hr >= 0 || Fail("setting the mute", hr);
+        return hr >= 0 || Fail($"setting the {what}'s mute", hr);
     }
 
     /// <summary>
@@ -218,7 +254,8 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
     public void Dispose()
     {
-        ReleaseVolume();
+        ReleaseVolume(ref _volume);
+        ReleaseVolume(ref _speakerVolume);
 
         if (_enumerator != 0)
         {
@@ -237,34 +274,34 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
         if (_volumeCallback is not null) { NativeMemory.Free(_volumeCallback); _volumeCallback = null; }
     }
 
-    private nint DefaultCaptureDevice(int role)
+    private nint DefaultDevice(int flow, int role, string what)
     {
         nint device = 0;
         var get = (delegate* unmanaged[Stdcall]<nint, int, int, nint*, int>)(*(void***)_enumerator)[GetDefaultAudioEndpointSlot];
-        int hr = get(_enumerator, ECapture, role, &device);
+        int hr = get(_enumerator, flow, role, &device);
 
         if (hr == ENotFound) return 0;
         if (hr < 0 || device == 0)
         {
-            Fail("finding the default microphone", hr);
+            Fail($"finding the default {what}", hr);
             return 0;
         }
 
         return device;
     }
 
-    private void ReleaseVolume()
+    private void ReleaseVolume(ref nint volume)
     {
-        if (_volume == 0) return;
+        if (volume == 0) return;
 
         if (_volumeCallback is not null)
         {
-            var unregister = (delegate* unmanaged[Stdcall]<nint, void*, int>)(*(void***)_volume)[UnregisterControlChangeNotifySlot];
-            unregister(_volume, _volumeCallback);
+            var unregister = (delegate* unmanaged[Stdcall]<nint, void*, int>)(*(void***)volume)[UnregisterControlChangeNotifySlot];
+            unregister(volume, _volumeCallback);
         }
 
-        Release(_volume);
-        _volume = 0;
+        Release(volume);
+        volume = 0;
     }
 
     /// <summary>
@@ -275,7 +312,7 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
     /// </summary>
     private bool Fail(string what, int hr)
     {
-        string complaint = $"Core Audio: {what} failed (hr 0x{hr:X8}); the microphone's mute will not be reported";
+        string complaint = $"Core Audio: {what} failed (hr 0x{hr:X8}); its mute will not be reported";
 
         if (!string.Equals(complaint, _lastComplaint, StringComparison.Ordinal))
         {
@@ -379,17 +416,33 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
         return SOk;
     }
 
+    /// <summary>
+    /// A device was enabled, disabled, unplugged or plugged in. Treated as the default
+    /// changing, because it may well have: the only microphone unplugged leaves no
+    /// default, and reading the mute off the endpoint we still hold answered the last
+    /// thing it said for ever - a context held for a microphone that was in a drawer.
+    /// </summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static int OnDeviceStateChanged(void* self, ushort* id, uint state) => SOk;
+    private static int OnDeviceStateChanged(void* self, ushort* id, uint state)
+    {
+        Interlocked.Exchange(ref s_defaultDeviceChanged, 1);
+        Changed.Set();
+        return SOk;
+    }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static int OnDeviceAddedOrRemoved(void* self, ushort* id) => SOk;
+    private static int OnDeviceAddedOrRemoved(void* self, ushort* id)
+    {
+        Interlocked.Exchange(ref s_defaultDeviceChanged, 1);
+        Changed.Set();
+        return SOk;
+    }
 
-    /// <summary>A new default microphone: the loop re-resolves and re-reads.</summary>
+    /// <summary>A new default microphone or speaker: the loop re-resolves and re-reads.</summary>
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static int OnDefaultDeviceChanged(void* self, int flow, int role, ushort* id)
     {
-        if (flow == ECapture && role is ECommunications or EConsole)
+        if (flow is ECapture or ERender && role is ECommunications or EConsole)
         {
             Interlocked.Exchange(ref s_defaultDeviceChanged, 1);
             Changed.Set();

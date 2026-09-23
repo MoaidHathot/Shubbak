@@ -112,6 +112,57 @@ public static class Clipboard
         }
     }
 
+    /// <summary>
+    /// Reads the text on the clipboard, or null when there is none.
+    /// </summary>
+    /// <remarks>
+    /// <c>CF_UNICODETEXT</c> only. The system synthesises it from <c>CF_TEXT</c> and
+    /// <c>CF_OEMTEXT</c> on request, so plain text put there by anything is readable
+    /// through this one format; rich text, files and pictures are not text and read
+    /// as null. The block is copied out under the lock and the clipboard closed at
+    /// once, since holding it open is what makes other programs' pastes fail.
+    /// </remarks>
+    /// <param name="owner">The window asking, or zero.</param>
+    /// <returns>The text, up to its terminator; null when the clipboard holds no text or could not be read.</returns>
+    public static unsafe string? GetText(nint owner = 0)
+    {
+        if (!PInvoke.IsClipboardFormatAvailable((uint)CLIPBOARD_FORMAT.CF_UNICODETEXT)) return null;
+
+        if (!Open(owner)) return null;
+
+        try
+        {
+            HANDLE handle = PInvoke.GetClipboardData((uint)CLIPBOARD_FORMAT.CF_UNICODETEXT);
+
+            if (handle == 0) return null;
+
+            var block = (HGLOBAL)(nint)handle.Value;
+            void* source = PInvoke.GlobalLock(block);
+
+            if (source is null) return null;
+
+            try
+            {
+                // Bounded by the block, not by the terminator alone: a block with no
+                // terminator - which a careless writer can produce - must not be read
+                // past its end.
+                nuint bytes = PInvoke.GlobalSize(block);
+                var span = new ReadOnlySpan<char>(source, (int)Math.Min(bytes / sizeof(char), int.MaxValue));
+                int terminator = span.IndexOf('\0');
+
+                return new string(terminator < 0 ? span : span[..terminator]);
+            }
+            finally
+            {
+                _ = PInvoke.GlobalUnlock(block);
+            }
+        }
+        finally
+        {
+            _ = PInvoke.CloseClipboard();
+        }
+    }
+
     /// <summary>Takes the clipboard, waiting briefly for whoever else has it.</summary>
     private static bool Open(nint owner)
     {

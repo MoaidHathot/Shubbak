@@ -90,6 +90,94 @@ public sealed class ProcessSourceTests
         Assert.True(twice.Wait(TimeSpan.FromSeconds(30)), $"the program was started {changes} time(s); expected a restart");
     }
 
+    [Fact]
+    public void APolledProgramIsRunAgainAfterTheInterval()
+    {
+        // The i3blocks shape: the script prints and exits, and is run again later.
+        // Its exit is not a failure and not a restart - nothing is logged for it -
+        // and each run's output is a fresh value.
+        int changes = 0;
+        using var twice = new ManualResetEventSlim();
+
+        using var source = new ProcessSource("probe", "cmd.exe /c echo %TIME%", interval: TimeSpan.FromMilliseconds(100));
+        source.Changed += _ =>
+        {
+            if (Interlocked.Increment(ref changes) >= 2) twice.Set();
+        };
+
+        Assert.True(source.Polls);
+        source.Start();
+
+        Assert.True(twice.Wait(TimeSpan.FromSeconds(30)), $"the program was run {changes} time(s); expected a second run");
+    }
+
+    [Fact]
+    public void APolledProgramsValueIsItsLastLine()
+    {
+        // A script that prints a heading and then the answer shows the answer, not
+        // the heading; and a trailing blank line - the commonest thing for a shell
+        // to add - does not blank the widget.
+        using var answered = new ManualResetEventSlim();
+        string? value = null;
+
+        using var source = new ProcessSource(
+            "probe", "cmd.exe /c \"echo heading & echo answer & echo.\"", interval: TimeSpan.FromMinutes(10));
+
+        source.Changed += s =>
+        {
+            value = s.Value;
+            if (value == "answer") answered.Set();
+        };
+
+        source.Start();
+
+        Assert.True(answered.Wait(TimeSpan.FromSeconds(30)), $"last value was '{value}'");
+    }
+
+    [Fact]
+    public void APollWaitsOutAStandDownAndRunsAtOnceWhenStoodUp()
+    {
+        using var ran = new ManualResetEventSlim();
+        int runs = 0;
+
+        using var source = new ProcessSource("probe", "cmd.exe /c echo %TIME%", interval: TimeSpan.FromMinutes(10));
+        source.Changed += _ =>
+        {
+            Interlocked.Increment(ref runs);
+            ran.Set();
+        };
+
+        // Stood down before it starts: the first run must not happen while nothing
+        // would show it.
+        source.StandDown();
+        source.Start();
+
+        Assert.False(ran.Wait(TimeSpan.FromSeconds(2)), "the program ran while the bar was stood down");
+
+        source.StandUp();
+
+        Assert.True(ran.Wait(TimeSpan.FromSeconds(30)), "the program did not run once the bar stood up");
+        Assert.Equal(1, runs);
+    }
+
+    [Fact]
+    public void AResidentProgramIsNotPolled()
+    {
+        using var source = new ProcessSource("probe", "cmd.exe /c echo x");
+
+        Assert.False(source.Polls);
+    }
+
+    [Fact]
+    public void AnIntervalOfNothingMeansResident()
+    {
+        using var zero = new ProcessSource("probe", "cmd.exe /c echo x", interval: TimeSpan.Zero);
+        using var none = new ProcessSource("probe", "cmd.exe /c echo x", interval: null);
+
+        Assert.False(zero.Polls);
+        Assert.False(none.Polls);
+    }
+
     private static string WaitUntilGoneTimeout() => "10 s";
 
     private static bool IsRunning(int pid)

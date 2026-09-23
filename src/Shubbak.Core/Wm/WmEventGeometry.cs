@@ -128,7 +128,8 @@ public static class WmEventGeometry
     public static AnimationKind? LayoutAnimationKind(this WmEvent wmEvent) => wmEvent switch
     {
         WorkspaceActivated => AnimationKind.WorkspaceSwitch,
-        LayoutChanged or ContainerResized => AnimationKind.LayoutChange,
+        // The gaps moving every window at once is a layout change in all but name.
+        LayoutChanged or ContainerResized or GapsChanged => AnimationKind.LayoutChange,
         _ => null,
     };
 

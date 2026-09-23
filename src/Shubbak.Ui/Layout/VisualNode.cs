@@ -113,7 +113,8 @@ public sealed class VisualNode
     /// <summary>Text to draw, for <see cref="VisualKind.Text"/>.</summary>
     public string Text { get; set; } = string.Empty;
 
-    public BoxStyle Box { get; init; } = BoxStyle.Default;
+    /// <summary>Sizing and spacing, in the units the tree was built in; see <see cref="VisualScaling"/>.</summary>
+    public BoxStyle Box { get; set; } = BoxStyle.Default;
 
     public FlexDirection Direction { get; init; } = FlexDirection.Row;
 
@@ -122,7 +123,7 @@ public sealed class VisualNode
     public AlignItems Align { get; init; } = AlignItems.Center;
 
     /// <summary>Space between children.</summary>
-    public int Gap { get; init; }
+    public int Gap { get; set; }
 
     /// <summary>Visual styling, interpreted by the renderer.</summary>
     public VisualStyle Style { get; set; } = VisualStyle.Default;
@@ -160,6 +161,17 @@ public sealed class VisualNode
 
     /// <summary>The command for a scroll-down, if any.</summary>
     public string? OnScrollDown { get; set; }
+
+    /// <summary>The command for a right click, if any.</summary>
+    public string? OnRightClick { get; set; }
+
+    /// <summary>The command for a middle click, if any.</summary>
+    public string? OnMiddleClick { get; set; }
+
+    /// <summary>Whether the pointer can do anything at all here.</summary>
+    public bool IsInteractive =>
+        OnClick is { Length: > 0 } || OnRightClick is { Length: > 0 } || OnMiddleClick is { Length: > 0 } ||
+        OnScrollUp is { Length: > 0 } || OnScrollDown is { Length: > 0 };
 
     /// <summary>Computed position, filled in by <see cref="FlexLayout"/>.</summary>
     public Rect Rect { get; internal set; }

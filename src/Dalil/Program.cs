@@ -86,6 +86,7 @@ internal static class Program
         s_configPath = context.ConfigPath;
         s_config = LoadConfig().Config;
 
+        s_frecency = FrecencyStore.Open();
         s_palette = new PaletteWindow(s_config);
 
         if (!s_palette.Create())
@@ -95,6 +96,11 @@ internal static class Program
         }
 
         s_palette.CommandRequested += OnCommand;
+
+        // What gets run is remembered, so the command list learns; see Frecency. The
+        // list on screen is not reordered under the hand that just pressed Enter -
+        // the next read applies it.
+        s_palette.CommandRun += s_frecency.Ran;
 
         // Typed commands become a row of their own, parsed by the same parser the
         // config file uses. Without this, every verb that takes an argument was a
@@ -737,36 +743,83 @@ internal static class Program
     /// </remarks>
     private static void Refresh(PaletteWindow palette)
     {
+        // One read in flight at a time. A burst of events - a workspace switch moves
+        // several windows and reports each - asked for a read per event, all of them
+        // racing down the pipe, and whichever finished last was installed whether or
+        // not it was the one that started last. While one is out, a request is a note
+        // to go again when it lands; the reads that would have been in between are the
+        // ones whose answers were about to be superseded anyway.
+        if (Interlocked.Exchange(ref s_refreshInFlight, 1) == 1)
+        {
+            s_refreshWanted = true;
+            return;
+        }
+
+        int sequence = Interlocked.Increment(ref s_refreshSequence);
+
         _ = Task.Run(async () =>
         {
-            PaletteSources read = await s_connection!
-                .ReadAsync(
-                    s_config.ShowUnmanaged,
-                    s_config.Macros,
-                    s_foreground,
-                    s_problems.Errors + s_problems.Warnings,
-                    s_everyWindow)
-                .ConfigureAwait(false);
-
-            if (s_config.ShowIcons && read.WindowHandles is { Count: > 0 } handles)
-                await WindowIcons.PrimeAsync(s_connection, handles).ConfigureAwait(false);
-
-            Post(() =>
+            try
             {
-                s_sources = read;
-                s_completions = read.Completions;
+                PaletteSources read = await s_connection!
+                    .ReadAsync(
+                        s_config.ShowUnmanaged,
+                        s_config.Macros,
+                        s_foreground,
+                        s_problems.Errors + s_problems.Warnings,
+                        s_everyWindow,
+                        PalettePrefixes.With(s_config.Prefixes))
+                    .ConfigureAwait(false);
 
-                palette.SetStatus(read.Status);
-                palette.SetContext(read.FocusedWorkspace, read.WorkspaceNames ?? []);
+                if (s_config.ShowIcons && read.WindowHandles is { Count: > 0 } handles)
+                    await WindowIcons.PrimeAsync(s_connection, handles).ConfigureAwait(false);
 
-                // The mode is read here rather than captured, because the user may
-                // have changed it while the query was in flight. Capturing it would
-                // replace the list they are now looking at with the one they were
-                // looking at when the request went out.
-                if (palette.IsOpen) palette.SetEntries(read.For(palette.Mode));
-            });
+                Post(() =>
+                {
+                    // Only the newest read is installed; see s_refreshSequence.
+                    if (sequence != Volatile.Read(ref s_refreshSequence)) return;
+
+                    s_sources = read with { Commands = s_frecency.Record.Applied(read.Commands, DateTimeOffset.UtcNow) };
+                    s_completions = read.Completions;
+
+                    palette.SetStatus(read.Status);
+                    palette.SetContext(read.FocusedWorkspace, read.WorkspaceNames ?? []);
+
+                    // The mode is read here rather than captured, because the user may
+                    // have changed it while the query was in flight. Capturing it would
+                    // replace the list they are now looking at with the one they were
+                    // looking at when the request went out.
+                    if (palette.IsOpen) palette.SetEntries(read.For(palette.Mode));
+                });
+            }
+            finally
+            {
+                Volatile.Write(ref s_refreshInFlight, 0);
+
+                // The note left while this one was out.
+                if (s_refreshWanted)
+                {
+                    s_refreshWanted = false;
+                    Post(() => Refresh(palette));
+                }
+            }
         });
     }
+
+    /// <summary>What has been run from the command list, on disk; see <see cref="Frecency"/>. Opened once the log is.</summary>
+    private static FrecencyStore s_frecency = null!;
+
+    /// <summary>Whether a read is out; see <see cref="Refresh"/>.</summary>
+    private static int s_refreshInFlight;
+
+    /// <summary>Whether a read was asked for while one was out.</summary>
+    private static volatile bool s_refreshWanted;
+
+    /// <summary>
+    /// Numbers each read, so a slow one that lands after a faster later one is
+    /// dropped rather than installed over it.
+    /// </summary>
+    private static int s_refreshSequence;
 
     /// <summary>
     /// Tries again for the keyboard, a few times over the opening grace, and leaves

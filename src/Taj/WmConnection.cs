@@ -221,6 +221,9 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>True while connected to a window manager.</summary>
     public bool IsConnected { get; private set; }
 
+    /// <summary>Whether a window manager has ever been reached, for the connection pill.</summary>
+    private bool _everConnected;
+
     /// <summary>
     /// How long to keep waiting for a window manager that has gone, or null to wait
     /// for ever.
@@ -304,6 +307,8 @@ public sealed class WmConnection : IAsyncDisposable
         {
             _client = connection.Commands;
             IsConnected = true;
+            _everConnected = true;
+            _model.SetValue(WindowManagerStatus.ConnectionKey, WindowManagerStatus.ConnectionLabel(connected: true, _everConnected));
             return RefreshAsync(connection.Commands!);
         },
 
@@ -313,6 +318,11 @@ public sealed class WmConnection : IAsyncDisposable
         {
             _client = null;
             IsConnected = false;
+
+            // Said on the bar as well as in the log. A window manager that has gone
+            // looks, from the bar, exactly like one that is fine and idle; the pill is
+            // the one thing that tells them apart without pressing a key.
+            _model.SetValue(WindowManagerStatus.ConnectionKey, WindowManagerStatus.ConnectionLabel(connected: false, _everConnected));
         },
 
         GiveUp = (everConnected, lostAtTicks) =>
@@ -623,6 +633,11 @@ public sealed class WmConnection : IAsyncDisposable
             BarReading reading = SnapshotProjection.Read(state, _deviceId, OwnMonitorOnly);
 
             _model.SetValue("workspaces", reading.Workspaces);
+
+            // The one this display is showing, on its own, for a bar that wants its
+            // name as text rather than the list. Documented from the start; published
+            // from now.
+            _model.SetValue("workspace", reading.ActiveWorkspace);
             _model.SetValue(FocusedWindow.TitleKey, state.FocusedWindow?.Title ?? string.Empty);
             _model.SetValue(
                 FocusedWindow.ProcessKey, state.FocusedWindow?.ProcessName ?? string.Empty);

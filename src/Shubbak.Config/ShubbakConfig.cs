@@ -15,11 +15,20 @@ public readonly record struct KeyBinding(int Modifiers, ushort VirtualKey, strin
 }
 
 /// <summary>A binding and the commands it runs.</summary>
+/// <param name="Key">The key.</param>
+/// <param name="Commands">What it runs.</param>
+/// <param name="Span">Where it was written.</param>
+/// <param name="Repeat">Whether holding the key runs it again, or null to let the commands decide.</param>
+/// <param name="Release">
+/// Whether it runs when the key comes up rather than when it goes down. The press is
+/// still swallowed, so the key reaches no application either way.
+/// </param>
 public sealed record Keybinding(
     KeyBinding Key,
     IReadOnlyList<WmCommand> Commands,
     TextSpan Span,
-    bool? Repeat = null)
+    bool? Repeat = null,
+    bool Release = false)
 {
     /// <summary>Whether holding the key should keep running this binding.</summary>
     /// <remarks>
@@ -27,7 +36,7 @@ public sealed record Keybinding(
     /// binding that runs several repeats only if all of them are safe to - the
     /// dangerous one in the list is the one that matters.
     /// </remarks>
-    public bool RepeatsOnHold => Repeat ?? Commands.All(command => command.RepeatsOnHold);
+    public bool RepeatsOnHold => !Release && (Repeat ?? Commands.All(command => command.RepeatsOnHold));
 }
 
 /// <summary>

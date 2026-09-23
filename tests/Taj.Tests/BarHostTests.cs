@@ -77,6 +77,46 @@ public sealed class BarGeometryTests
         Assert.Equal(new Rect(1920, -200, 2560, 46), strip);
         Assert.Equal(new Rect(1926, -194, 2548, 34), window);
     }
+
+    /// <summary>
+    /// The profile's sizes are device-independent; the strip is in the display's pixels.
+    /// </summary>
+    /// <remarks>
+    /// A 34-pixel bar with a 6-pixel margin on a display at 150 percent is 51 pixels
+    /// tall with a 9-pixel margin, and reserves 69. Without this the same config gave
+    /// a bar half the height on a 4K display beside a 1080p one, with nothing the
+    /// config could say to make them match.
+    /// </remarks>
+    [Fact]
+    public void TheStripScalesWithTheDisplay()
+    {
+        var fourK = new Rect(0, 0, 3840, 2160);
+
+        (Rect strip, Rect window) = BarWindow.Geometry(fourK, Profile(BarEdge.Top, 34, margin: 6), scale: 1.5);
+
+        Assert.Equal(new Rect(0, 0, 3840, 69), strip);
+        Assert.Equal(new Rect(9, 9, 3822, 51), window);
+    }
+
+    [Fact]
+    public void AScaleOfOneIsThePixelsAsWritten()
+    {
+        (Rect unscaled, _) = BarWindow.Geometry(Monitor, Profile(BarEdge.Top, 30, margin: 8));
+        (Rect explicitOne, _) = BarWindow.Geometry(Monitor, Profile(BarEdge.Top, 30, margin: 8), scale: 1.0);
+
+        Assert.Equal(unscaled, explicitOne);
+    }
+
+    [Fact]
+    public void ABottomBarScalesFromTheBottom()
+    {
+        (Rect strip, Rect window) = BarWindow.Geometry(Monitor, Profile(BarEdge.Bottom, 30), scale: 1.25);
+
+        // 30 at 125 percent is 37.5, which rounds up to 38.
+        Assert.Equal(new Rect(0, 1080 - 38, 1920, 38), strip);
+        Assert.Equal(strip, window);
+        Assert.Equal(Monitor.Bottom, window.Bottom);
+    }
 }
 
 /// <summary>Which keyboard layout is next.</summary>

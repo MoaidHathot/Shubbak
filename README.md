@@ -71,7 +71,7 @@ I liked about them and changes what kept getting in my way:
   go the moment it does not.
 - **Monitors by what they are**, not by the number Windows gave them today. A
   workspace bound to a display leaves when it is unplugged and comes back with it.
-- **Scriptable.** One named pipe, JSON, 28 event topics, and a `signal` verb the window
+- **Scriptable.** One named pipe, JSON, 30 event topics, and a `signal` verb the window
   manager carries without reading. The bar and the palette are ordinary clients of it,
   and so can anything you write.
 
@@ -198,9 +198,10 @@ config to read and borrow from.
 | [Configuration](docs/configuration.md) | The file: sections, rules, layouts, monitors, contexts, commands |
 | [Taj](docs/taj.md) | The bar: sources, templates, profiles |
 | [Dalil](docs/dalil.md) | The palette: modes, actions, questions |
-| [Ayn](docs/ayn.md) | The watcher: the rest of the machine as contexts, the camera and the microphone first |
+| [Ayn](docs/ayn.md) | The watcher: the rest of the machine as contexts - camera, microphone, screen, speaker, power, theme |
 | [Scripting](docs/scripting.md) | The pipe, the events, signals, security |
 | [Troubleshooting](docs/troubleshooting.md) | Organised by symptom |
+| [Diagnostics](docs/diagnostics.md) | Every SHB, TAJ, DAL and AYN code `check-config` can print, and what each means |
 | [FAQ](docs/faq.md) | The questions that come up first |
 | [Architecture](docs/architecture.md) | How it is built, why .NET, the layout of the repo |
 

@@ -104,6 +104,10 @@ internal sealed class RuleEngine
     public bool ShouldForceManage(WindowAttributes attributes) =>
         HasAdoptionRule<ManageCommand>(attributes);
 
+    /// <summary>Whether a rule asks that the window not take focus when it arrives.</summary>
+    public bool SaysNoFocus(WindowAttributes attributes) =>
+        HasAdoptionRule<NoFocusCommand>(attributes);
+
     /// <summary>
     /// Whether any matching rule carries a command of the given kind.
     /// </summary>

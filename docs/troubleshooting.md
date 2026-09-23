@@ -89,7 +89,8 @@ shubbak check-config
 ```
 
 Reports unknown commands with a suggestion, unknown keys, and — the one that catches
-people out — **duplicate bindings**, naming the line that shadows yours.
+people out — **duplicate bindings**, naming the line that shadows yours. Every code it
+prints is in the [diagnostics catalogue](diagnostics.md).
 
 If the config is clean, watch the binding fire:
 

@@ -5,6 +5,38 @@ public enum DeviceKind
 {
     Camera,
     Microphone,
+
+    /// <summary>
+    /// The screen, as recorded under <c>graphicsCaptureProgrammatic</c>: a program that
+    /// is capturing a display or a window through the graphics-capture pipeline, which
+    /// is what screen sharing and screen recording use.
+    /// </summary>
+    Screen,
+}
+
+/// <summary>The facts a device's use gives rise to, and its name in the file.</summary>
+public static class DeviceKinds
+{
+    /// <summary>The block in the file: <c>camera</c>, <c>microphone</c>, <c>screen</c>.</summary>
+    public static string Word(this DeviceKind device) => device switch
+    {
+        DeviceKind.Camera => "camera",
+        DeviceKind.Microphone => "microphone",
+        DeviceKind.Screen => "screen",
+        _ => device.ToString().ToLowerInvariant(),
+    };
+
+    /// <summary>The fact that is true while any program has the device.</summary>
+    public static Fact InUseFact(this DeviceKind device) => device switch
+    {
+        DeviceKind.Camera => Fact.CameraInUse,
+        DeviceKind.Microphone => Fact.MicrophoneInUse,
+        DeviceKind.Screen => Fact.ScreenCaptured,
+        _ => throw new ArgumentOutOfRangeException(nameof(device), device, "Not a device with a consent record."),
+    };
+
+    /// <summary>Every device, in a stable order.</summary>
+    public static IReadOnlyList<DeviceKind> All { get; } = [DeviceKind.Camera, DeviceKind.Microphone, DeviceKind.Screen];
 }
 
 /// <summary>
@@ -66,7 +98,24 @@ public interface IConsentStore
     IReadOnlyList<ConsentEntry> Read(DeviceKind device);
 }
 
-/// <summary>What the desk said about both devices at one moment.</summary>
+/// <summary>
+/// What the machine's power says at one moment.
+/// </summary>
+/// <param name="OnBattery">Running from the battery rather than the mains.</param>
+/// <param name="BatteryPercent">How much is left, or null when there is no battery.</param>
+/// <param name="LidClosed">The lid of a laptop is shut.</param>
+/// <param name="UserAway">Windows judges nobody to be at the keyboard.</param>
+public sealed record PowerReading(
+    bool OnBattery = false,
+    int? BatteryPercent = null,
+    bool LidClosed = false,
+    bool UserAway = false)
+{
+    /// <summary>On the mains, lid open, somebody there.</summary>
+    public static PowerReading Mains { get; } = new();
+}
+
+/// <summary>What the desk said at one moment.</summary>
 /// <param name="CameraApps">Programs with the camera open.</param>
 /// <param name="MicrophoneApps">Programs with the microphone open.</param>
 /// <param name="MicrophoneMuted">
@@ -74,20 +123,35 @@ public interface IConsentStore
 /// no microphone to ask - which counts as not muted, so a context held for it is let
 /// go rather than left hanging on a device that was unplugged.
 /// </param>
+/// <param name="ScreenApps">Programs capturing the screen.</param>
+/// <param name="SpeakerMuted">Whether the default speaker is muted, or null when there is none.</param>
+/// <param name="Power">The machine's power, or null when it was not asked.</param>
+/// <param name="DarkTheme">Whether apps are set to the dark theme, or null when it was not asked.</param>
 public sealed record Reading(
     IReadOnlyList<string> CameraApps,
     IReadOnlyList<string> MicrophoneApps,
-    bool? MicrophoneMuted = null)
+    bool? MicrophoneMuted = null,
+    IReadOnlyList<string>? ScreenApps = null,
+    bool? SpeakerMuted = null,
+    PowerReading? Power = null,
+    bool? DarkTheme = null)
 {
     /// <summary>Nothing open anywhere, nothing muted.</summary>
     public static Reading Idle { get; } = new([], []);
+
+    /// <summary>Programs capturing the screen; empty when not asked.</summary>
+    public IReadOnlyList<string> ScreenApps { get; init; } = ScreenApps ?? [];
 
     /// <summary>Takes a reading from a store. The mute state comes from elsewhere; see the host.</summary>
     public static Reading From(IConsentStore store, bool? microphoneMuted = null)
     {
         ArgumentNullException.ThrowIfNull(store);
 
-        return new Reading(InUse(store.Read(DeviceKind.Camera)), InUse(store.Read(DeviceKind.Microphone)), microphoneMuted);
+        return new Reading(
+            InUse(store.Read(DeviceKind.Camera)),
+            InUse(store.Read(DeviceKind.Microphone)),
+            microphoneMuted,
+            InUse(store.Read(DeviceKind.Screen)));
     }
 
     /// <summary>Whether a fact holds in this reading.</summary>
@@ -96,6 +160,15 @@ public sealed record Reading(
         Fact.CameraInUse => CameraApps.Count > 0,
         Fact.MicrophoneInUse => MicrophoneApps.Count > 0,
         Fact.MicrophoneMuted => MicrophoneMuted == true,
+        Fact.ScreenCaptured => ScreenApps.Count > 0,
+        Fact.SpeakerMuted => SpeakerMuted == true,
+        Fact.OnBattery => Power?.OnBattery == true,
+        Fact.LidClosed => Power?.LidClosed == true,
+        Fact.UserAway => Power?.UserAway == true,
+        Fact.DarkTheme => DarkTheme == true,
+
+        // Low needs a threshold, which is the config's; see Provider.
+        Fact.BatteryLow => false,
         _ => false,
     };
 
@@ -104,6 +177,7 @@ public sealed record Reading(
     {
         DeviceKind.Camera => CameraApps,
         DeviceKind.Microphone => MicrophoneApps,
+        DeviceKind.Screen => ScreenApps,
         _ => [],
     };
 

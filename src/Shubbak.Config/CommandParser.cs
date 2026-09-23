@@ -228,6 +228,29 @@ public static class CommandParser
                 command = new ToggleMinimisedCommand();
                 return true;
 
+            case "toggle-maximized" or "toggle-maximised":
+                command = new ToggleMaximisedCommand();
+                return true;
+
+            case "swap":
+            {
+                if (TryDirection(rest, "--direction", out Direction swapWith))
+                {
+                    command = new SwapDirectionCommand(swapWith);
+                    return true;
+                }
+
+                diagnostic = Diagnostic.Error(
+                    "SHB0323",
+                    $"'{text}' does not say which way to swap.",
+                    span,
+                    "Write swap --direction left, right, up or down.");
+                return false;
+            }
+
+            case "gaps":
+                return ParseGaps(rest, text, span, out command, out diagnostic);
+
             case "split":
             {
                 string layout =
@@ -244,12 +267,30 @@ public static class CommandParser
                 if (Flag(rest, "--cycle")) { command = new CycleLayoutCommand(true); return true; }
                 if (Flag(rest, "--cycle-back")) { command = new CycleLayoutCommand(false); return true; }
 
+                // --masters +1, --masters -1 or --masters 2: how many windows a
+                // master-stack layout keeps in the master area.
+                if (Value(rest, "--masters") is { } masters)
+                {
+                    if (!TryParseCount(masters, out int count, out bool relative))
+                    {
+                        diagnostic = Diagnostic.Error(
+                            "SHB0324",
+                            $"'{masters}' is not a master count.",
+                            span,
+                            "Write layout --masters 2, or a change such as layout --masters +1.");
+                        return false;
+                    }
+
+                    command = new SetMasterCountCommand(count, Absolute: !relative);
+                    return true;
+                }
+
                 string? layout = Value(rest, "--set") ?? Positional(rest);
                 if (layout is null)
                 {
                     diagnostic = Diagnostic.Error(
                         "SHB0302", $"'{text}' does not say which layout to use.", span,
-                        $"Write layout --set <name>, or layout --cycle. Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}.");
+                        $"Write layout --set <name>, layout --cycle, or layout --masters +1. Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}.");
                     return false;
                 }
 
@@ -271,6 +312,10 @@ public static class CommandParser
 
             case "manage":
                 command = new ManageCommand();
+                return true;
+
+            case "no-focus":
+                command = new NoFocusCommand();
                 return true;
 
             case "toggle-managed":
@@ -432,11 +477,20 @@ public static class CommandParser
         if (Flag(rest, "--next")) { command = new CycleFocusCommand(true); return true; }
         if (Flag(rest, "--prev") || Flag(rest, "--previous")) { command = new CycleFocusCommand(false); return true; }
 
+        // --monitor takes a direction or a name: focus --monitor right, focus --monitor laptop.
+        if (Value(rest, "--monitor") is { } monitor)
+        {
+            command = TryDirectionWord(monitor, out Direction way)
+                ? new FocusMonitorCommand(Direction: way)
+                : new FocusMonitorCommand(Monitor: monitor);
+            return true;
+        }
+
         diagnostic = Diagnostic.Error(
             "SHB0306",
             $"'{text}' does not say what to focus.",
             span,
-            "Use focus --direction left, focus --workspace 3, focus --recent-workspace, or focus --next.");
+            "Use focus --direction left, focus --workspace 3, focus --monitor right, focus --recent-workspace, or focus --next.");
 
         return false;
     }
@@ -476,13 +530,113 @@ public static class CommandParser
             return true;
         }
 
+        // --monitor takes a direction or a name, like focus --monitor, and --focus
+        // means what it means for --workspace: go with it.
+        if (Value(rest, "--monitor") is { } monitor)
+        {
+            command = TryDirectionWord(monitor, out Direction way)
+                ? new MoveToMonitorCommand(Direction: way, Focus: Flag(rest, "--focus"))
+                : new MoveToMonitorCommand(Monitor: monitor, Focus: Flag(rest, "--focus"));
+            return true;
+        }
+
         diagnostic = Diagnostic.Error(
             "SHB0307",
             $"'{text}' does not say where to move.",
             span,
-            "Use move --direction right or move --workspace 3.");
+            "Use move --direction right, move --workspace 3, or move --monitor right.");
 
         return false;
+    }
+
+    /// <summary>
+    /// <c>gaps --inner +4</c>, <c>gaps --outer -2</c>, <c>gaps --inner 0 --outer 0</c>,
+    /// <c>gaps --inner =8</c>: a signed number is a change, an unsigned or <c>=</c>-led
+    /// one is the value.
+    /// </summary>
+    private static bool ParseGaps(
+        ReadOnlySpan<string> rest, string text, TextSpan span,
+        out WmCommand? command, out Diagnostic? diagnostic)
+    {
+        command = null;
+        diagnostic = null;
+
+        if (UnknownFlag(rest, "--inner", "--outer") is { } unknown)
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0325", $"'{text}' has an option gaps does not take: {unknown}.", span,
+                "gaps takes --inner and --outer, each with a signed change or a value.");
+            return false;
+        }
+
+        int? inner = null, outer = null;
+        bool? absolute = null;
+
+        foreach (string flag in new[] { "--inner", "--outer" })
+        {
+            if (Value(rest, flag) is not { } amount) continue;
+
+            if (!TryParseCount(amount, out int value, out bool relative))
+            {
+                diagnostic = Diagnostic.Error(
+                    "SHB0325", $"'{amount}' is not a gap.", span,
+                    $"Write {flag} +4 or {flag} -4 to change the gap, or {flag} 8 to set it.");
+                return false;
+            }
+
+            // Both flags have to agree on whether they change or set, or "gaps --inner
+            // +4 --outer 8" would be two commands in one word.
+            if (absolute is { } was && was == relative)
+            {
+                diagnostic = Diagnostic.Error(
+                    "SHB0325", $"'{text}' mixes a change and a value.", span,
+                    "Write both as changes (+4 -2) or both as values (8 4).");
+                return false;
+            }
+
+            absolute = !relative;
+
+            if (flag == "--inner") inner = value;
+            else outer = value;
+        }
+
+        if (inner is null && outer is null)
+        {
+            diagnostic = Diagnostic.Error(
+                "SHB0325", $"'{text}' does not say which gap to change.", span,
+                "Write gaps --inner +4, gaps --outer -4, or gaps --inner 0 --outer 0.");
+            return false;
+        }
+
+        command = new GapsCommand(inner, outer, absolute ?? false);
+        return true;
+    }
+
+    /// <summary>
+    /// A count or a change to one: <c>+1</c> and <c>-1</c> are relative, <c>2</c> and
+    /// <c>=2</c> absolute.
+    /// </summary>
+    private static bool TryParseCount(string amount, out int value, out bool relative)
+    {
+        value = 0;
+        relative = amount.StartsWith('+') || amount.StartsWith('-');
+
+        string digits = amount.StartsWith('=') ? amount[1..] : amount;
+
+        return int.TryParse(digits, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out value);
+    }
+
+    /// <summary>Whether a word is one of the four directions.</summary>
+    private static bool TryDirectionWord(string word, out Direction direction)
+    {
+        switch (word.ToLowerInvariant())
+        {
+            case "left": direction = Direction.Left; return true;
+            case "right": direction = Direction.Right; return true;
+            case "up": direction = Direction.Up; return true;
+            case "down": direction = Direction.Down; return true;
+            default: direction = default; return false;
+        }
     }
 
     private static bool ParseResize(

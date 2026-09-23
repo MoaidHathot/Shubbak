@@ -1586,6 +1586,9 @@ public static class PaletteEntries
         ("Delete", "delete the character after the caret"),
         ("Ctrl+Backspace", "delete a word"),
         ("Ctrl+U", "clear what you typed, keeping the mode"),
+        ("Ctrl+A", "select what you typed, so the next key replaces it"),
+        ("Ctrl+V / Shift+Insert", "paste"),
+        ("Alt+F4", "dismiss the palette"),
     ];
 
     /// <summary>

@@ -10,7 +10,8 @@ write.
 ```
 shubbak query state          # the whole window manager, as JSON
 shubbak query windows        # or: all-windows, workspaces, monitors, focused,
-                             #     layouts, commands, bindings, contexts, arrangements
+                             #     layouts, commands, bindings, contexts, arrangements, rules
+shubbak query tree           # the tree as text: monitors, workspaces, containers, windows
 ```
 
 One more thing can be asked over the pipe that the CLI has no subcommand for, because
@@ -46,6 +47,15 @@ shubbak context --set meeting --ttl 10s
 
 The [commands](configuration.md#commands) page lists the verbs.
 
+Over the pipe itself, a request is one JSON line with a `method` and a `payload`.
+The CLI covers `command`, `query`, `inspect` (a window handle; the report `shubbak
+inspect` prints), `window-icon`, `add-rule` and `remove-rule` (what the palette's
+"Add it to the config" sends; refused unless `allow-config-edits-over-ipc` holds),
+`diagnose` (the report `shubbak diagnose` prints), `log-level` (`trace` to `none`,
+for the life of the process) and `ping`, which answers `pong` and is the cheapest way
+to ask whether the window manager is there. `subscribe` opens the event stream
+described below and is the one method whose connection is expected to stay open.
+
 ## Listening
 
 ```
@@ -53,13 +63,13 @@ shubbak sub                  # tail every event
 shubbak sub window.focused,workspace.activated
 ```
 
-**28 event topics** you can subscribe to:
+**30 event topics** you can subscribe to:
 
 ```
 window.managed       window.unmanaged      window.focused      window.title_changed
 window.state_changed window.tags_changed   window.moved        window.native_fullscreen
 workspace.activated  workspace.created     workspace.destroyed workspace.moved
-layout.changed       container.resized
+layout.changed       container.resized     gaps.changed
 monitor.added        monitor.removed       monitor.changed
 binding_mode.changed binding.fired         command.rejected    config.reloaded
 wm.paused            wm.suspended          wm.environment      wm.shutdown         wm.resync

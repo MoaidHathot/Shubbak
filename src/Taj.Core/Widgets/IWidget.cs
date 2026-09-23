@@ -1,3 +1,4 @@
+using System.Text;
 using Shubbak.Config;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
@@ -99,8 +100,15 @@ public sealed class TemplateWidget : IWidget
 
     public BoxStyle Box { get; set; }
 
-    /// <summary>Command sent to the window manager when clicked.</summary>
-    public string? OnClick { get; set; }
+    /// <summary>Command sent to the window manager when clicked. Shorthand for <see cref="Actions"/>.</summary>
+    public string? OnClick
+    {
+        get => Actions.Click;
+        set => Actions = Actions with { Click = value };
+    }
+
+    /// <summary>What the pointer does here: a command per gesture, or nothing.</summary>
+    public PointerActions Actions { get; set; } = PointerActions.None;
 
     /// <summary>
     /// Whether an empty result hides the widget entirely.
@@ -153,7 +161,7 @@ public sealed class TemplateWidget : IWidget
         string text = Template.Render(_template, values);
         VisualStyle style = StyleFor(text, values);
 
-        return new VisualNode
+        var node = new VisualNode
         {
             Id = Id,
             Kind = VisualKind.Text,
@@ -161,9 +169,11 @@ public sealed class TemplateWidget : IWidget
             Style = style,
             Box = Box,
             Visible = !HideWhenEmpty || text.Length > 0,
-            OnClick = OnClick,
-            HoverStyle = OnClick is { Length: > 0 } ? Hovered(style) : null,
+            HoverStyle = Actions.Any ? Hovered(style) : null,
         };
+
+        Actions.ApplyTo(node);
+        return node;
     }
 
     /// <summary>
@@ -277,6 +287,12 @@ public sealed class WorkspacesWidget : IWidget
 
     public int Gap { get; set; } = 2;
 
+    /// <summary>
+    /// Whether the wheel over the list steps to the previous or next workspace. On by
+    /// default; <c>scroll=#false</c> turns it off.
+    /// </summary>
+    public bool Scrolls { get; set; } = true;
+
     public VisualNode Build(IReadOnlyDictionary<string, string?> values)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -292,7 +308,19 @@ public sealed class WorkspacesWidget : IWidget
 
         values.TryGetValue("workspaces", out string? encoded);
 
-        foreach (WorkspaceEntry entry in Decode(encoded))
+        // Every workspace the bar knows, hidden ones included: the wheel steps through
+        // all of them, since an empty workspace is exactly where somebody scrolling
+        // may want to go. The active one on this display is where the step starts.
+        WorkspaceEntry[] all = [.. Decode(encoded)];
+        int active = Array.FindIndex(all, e => e.Active);
+
+        if (Scrolls && all.Length > 1 && active >= 0)
+        {
+            container.OnScrollUp = $"focus --workspace {CommandParser.Quote(all[(active - 1 + all.Length) % all.Length].Name)}";
+            container.OnScrollDown = $"focus --workspace {CommandParser.Quote(all[(active + 1) % all.Length].Name)}";
+        }
+
+        foreach (WorkspaceEntry entry in all)
         {
             if (HideEmpty && !entry.Active && !entry.HasWindows) continue;
 
@@ -360,9 +388,11 @@ public sealed class WorkspacesWidget : IWidget
     {
         if (string.IsNullOrEmpty(encoded)) yield break;
 
-        foreach (string record in encoded.Split('\t', StringSplitOptions.RemoveEmptyEntries))
+        foreach (string record in SplitUnescaped(encoded, '\t'))
         {
-            string[] fields = record.Split('|');
+            if (record.Length == 0) continue;
+
+            string[] fields = [.. SplitUnescaped(record, '|').Select(Unescape)];
             if (fields.Length < 4) continue;
 
             yield return new WorkspaceEntry(
@@ -376,14 +406,88 @@ public sealed class WorkspacesWidget : IWidget
         }
     }
 
-    /// <summary>Encodes workspaces for the source.</summary>
+    /// <summary>
+    /// Encodes workspaces for the source.
+    /// </summary>
+    /// <remarks>
+    /// Names and labels are escaped, since the separators are ordinary characters: a
+    /// workspace called <c>web | mail</c> used to split into two half-records that were
+    /// each too short to decode, and the widget showed nothing for it - and, because
+    /// every record after it shifted by a field, nothing right for the rest either.
+    /// </remarks>
     public static string Encode(IEnumerable<WorkspaceEntry> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
         return string.Join('\t', entries.Select(e =>
-            $"{e.Name}|{e.Label}|{(e.Active ? '1' : '0')}|" +
+            $"{Escape(e.Name)}|{Escape(e.Label)}|{(e.Active ? '1' : '0')}|" +
             $"{(e.HasWindows ? '1' : '0')}|{(e.Focused ? '1' : '0')}"));
+    }
+
+    /// <summary>Backslash-escapes the two separators and the backslash itself.</summary>
+    private static string Escape(string text)
+    {
+        if (text.AsSpan().IndexOfAny('\\', '|', '\t') < 0) return text;
+
+        var sb = new StringBuilder(text.Length + 4);
+
+        foreach (char ch in text)
+        {
+            switch (ch)
+            {
+                case '\\': sb.Append(@"\\"); break;
+                case '|': sb.Append(@"\|"); break;
+                case '\t': sb.Append(@"\t"); break;
+                default: sb.Append(ch); break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static string Unescape(string text)
+    {
+        if (!text.Contains('\\')) return text;
+
+        var sb = new StringBuilder(text.Length);
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\\' && i + 1 < text.Length)
+            {
+                i++;
+                sb.Append(text[i] == 't' ? '\t' : text[i]);
+                continue;
+            }
+
+            sb.Append(text[i]);
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Splits at every separator not preceded by an odd run of backslashes, keeping the escapes.</summary>
+    private static IEnumerable<string> SplitUnescaped(string text, char separator)
+    {
+        int start = 0;
+
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] == '\\')
+            {
+                // The escape and whatever it escapes stay together, whichever it is.
+                i++;
+                continue;
+            }
+
+            if (text[i] == separator)
+            {
+                yield return text[start..i];
+                start = i + 1;
+            }
+        }
+
+        yield return text[start..];
     }
 }
 

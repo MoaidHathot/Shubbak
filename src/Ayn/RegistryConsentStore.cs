@@ -35,14 +35,38 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
 
     private readonly Watched[] _watched;
 
-    public RegistryConsentStore()
+    /// <summary>The leaf under the store for each device.</summary>
+    /// <remarks>
+    /// <c>graphicsCaptureProgrammatic</c> is the capability behind Windows.Graphics.Capture,
+    /// which is what screen sharing and recording go through; the shell's own
+    /// "sharing your screen" indicator reads the same key.
+    /// </remarks>
+    private static readonly (DeviceKind Device, string Leaf)[] Leaves =
+    [
+        (DeviceKind.Camera, "webcam"),
+        (DeviceKind.Microphone, "microphone"),
+        (DeviceKind.Screen, "graphicsCaptureProgrammatic"),
+    ];
+
+    /// <summary>Watches every device.</summary>
+    public RegistryConsentStore() : this(DeviceKinds.All) { }
+
+    /// <summary>
+    /// Watches the devices named, so a file that reports nothing about the screen does
+    /// not hold its key open or wake for every share somebody else starts.
+    /// </summary>
+    public RegistryConsentStore(IReadOnlyList<DeviceKind> devices)
     {
+        ArgumentNullException.ThrowIfNull(devices);
+
         List<Watched> watched = [];
 
         foreach ((RegistryKey hive, string hiveName) in new[] { (Registry.CurrentUser, "HKCU"), (Registry.LocalMachine, "HKLM") })
         {
-            foreach ((DeviceKind device, string leaf) in new[] { (DeviceKind.Camera, "webcam"), (DeviceKind.Microphone, "microphone") })
+            foreach ((DeviceKind device, string leaf) in Leaves)
             {
+                if (!devices.Contains(device)) continue;
+
                 RegistryKey? key = Open(hive, StorePath + leaf);
 
                 if (key is null)
@@ -52,7 +76,7 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
                     // deserves a warning; the machine's hive carries a few services and
                     // is often not there at all.
                     if (ReferenceEquals(hive, Registry.CurrentUser))
-                        Log.Warn(LogCategory.Wm, $"{hiveName}\\...\\{leaf} is not there or cannot be watched; programs running as this user will not be noticed using the {device.ToString().ToLowerInvariant()}");
+                        Log.Warn(LogCategory.Wm, $"{hiveName}\\...\\{leaf} is not there or cannot be watched; programs running as this user will not be noticed using the {device.Word()}");
                     else
                         Log.Debug(LogCategory.Wm, $"{hiveName}\\...\\{leaf} is not there or cannot be watched; skipping it");
 
@@ -65,6 +89,9 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
 
         _watched = [.. watched];
     }
+
+    /// <summary>The devices with at least one key under watch.</summary>
+    public IReadOnlyList<DeviceKind> Devices => [.. _watched.Select(w => w.Device).Distinct()];
 
     /// <summary>One event per watched key, signalled when anything under it changes.</summary>
     public IReadOnlyList<WaitHandle> Changed => [.. _watched.Select(w => w.Event)];

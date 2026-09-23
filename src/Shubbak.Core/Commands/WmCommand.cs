@@ -83,6 +83,7 @@ public abstract record WmCommand
         ToggleTilingDirectionCommand or
         ToggleFloatingCommand or
         ToggleFullscreenCommand or
+        ToggleMaximisedCommand or
         ToggleMinimisedCommand or
         ToggleManagedCommand or
         TogglePauseCommand or
@@ -122,8 +123,11 @@ public abstract record WmCommand
         TagCommand or
         ClearTagsCommand or
 
-        // Two monitors makes this a toggle in all but name.
+        // Two monitors makes this a toggle in all but name, and a swap is one by nature.
         MoveWorkspaceToMonitorCommand or
+        MoveToMonitorCommand or
+        FocusMonitorCommand or
+        SwapDirectionCommand or
 
         // Entering or leaving a mode repeatedly leaves which one is active a matter
         // of when the key happened to be released.
@@ -203,6 +207,50 @@ public sealed record MoveDirectionCommand(Direction Direction) : WmCommand
     public override string Name => "move";
 
     public override bool TargetsFocusedWindow => true;
+}
+
+/// <summary>Moves the focused window to another monitor's active workspace.</summary>
+/// <param name="Direction">The monitor that way from the window's, or null to use <paramref name="Monitor"/>.</param>
+/// <param name="Monitor">A name from the configuration, a position from zero, or a device name.</param>
+/// <param name="Focus">Whether the view follows the window there.</param>
+public sealed record MoveToMonitorCommand(Direction? Direction = null, string? Monitor = null, bool Focus = false) : WmCommand
+{
+    public override string Name => "move-to-monitor";
+
+    public override bool TargetsFocusedWindow => true;
+}
+
+/// <summary>Focuses another monitor: whatever its active workspace was last looking at.</summary>
+/// <param name="Direction">The monitor that way from the focused one, or null to use <paramref name="Monitor"/>.</param>
+/// <param name="Monitor">A name from the configuration, a position from zero, or a device name.</param>
+public sealed record FocusMonitorCommand(Direction? Direction = null, string? Monitor = null) : WmCommand
+{
+    public override string Name => "focus-monitor";
+}
+
+/// <summary>Exchanges the focused window with its neighbour in a direction, leaving the tree's shape alone.</summary>
+public sealed record SwapDirectionCommand(Direction Direction) : WmCommand
+{
+    public override string Name => "swap";
+
+    public override bool TargetsFocusedWindow => true;
+}
+
+/// <summary>Changes the gaps at runtime; see <c>gaps</c>.</summary>
+/// <param name="Inner">The change to the gap between windows, or null to leave it.</param>
+/// <param name="Outer">The change to the gap around the edge, or null to leave it.</param>
+/// <param name="Absolute">Whether the amounts replace the gaps rather than add to them.</param>
+public sealed record GapsCommand(int? Inner, int? Outer, bool Absolute = false) : WmCommand
+{
+    public override string Name => "gaps";
+}
+
+/// <summary>Changes how many windows a master-stack layout keeps in its master area.</summary>
+/// <param name="Delta">The change, or the count itself when <paramref name="Absolute"/>.</param>
+/// <param name="Absolute">Whether <paramref name="Delta"/> is the count rather than a change.</param>
+public sealed record SetMasterCountCommand(int Delta, bool Absolute = false) : WmCommand
+{
+    public override string Name => "layout-masters";
 }
 
 /// <summary><c>move --workspace 3</c> / <c>move --workspace 3 --focus</c></summary>
@@ -374,6 +422,20 @@ public sealed record ToggleFullscreenCommand(bool WholeMonitor = false) : WmComm
     public override string Name => "toggle-fullscreen";
 
     public override bool TargetsFocusedWindow => true;
+}
+
+/// <summary>Toggles the focused window between maximised - the work area, with its own frame - and what it was.</summary>
+public sealed record ToggleMaximisedCommand : WmCommand
+{
+    public override string Name => "toggle-maximised";
+
+    public override bool TargetsFocusedWindow => true;
+}
+
+/// <summary>Marks a rule so the window it matched is not given focus on arrival; see the rule engine.</summary>
+public sealed record NoFocusCommand : WmCommand
+{
+    public override string Name => "no-focus";
 }
 
 /// <summary><c>toggle-minimised</c></summary>

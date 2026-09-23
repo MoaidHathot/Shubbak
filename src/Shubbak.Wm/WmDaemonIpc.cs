@@ -457,12 +457,17 @@ internal sealed partial class WmDaemonIpc
                 "rules" => JsonSerializer.Serialize(
                     _daemon.DescribeRules(), IpcJsonContext.Default.IReadOnlyListRuleInfo),
 
+                // Plain text rather than JSON: the same rendering shubbak diagnose puts
+                // in its report, for reading the tree as it is rather than reconstructing
+                // it from the windows list.
+                "tree" => Core.Diagnostics.TreeRenderer.Render(wm.Root, wm.FocusedWindow),
+
                 _ => string.Empty,
             };
 
             return json.Length == 0
                 ? new IpcResponse(request.Id, false, null,
-                    $"unknown query '{what}'. Try: state, windows, all-windows, every-window, workspaces, " +
+                    $"unknown query '{what}'. Try: state, tree, windows, all-windows, every-window, workspaces, " +
                     "monitors, focused, layouts, commands, bindings, contexts, arrangements, rules")
                 : new IpcResponse(request.Id, true, json);
         });

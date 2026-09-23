@@ -165,6 +165,12 @@ public sealed class PaletteWindow : CompanionWindow
     public event Action<PaletteMode>? ModeChanged;
 
     /// <summary>
+    /// A row of the command list was run, named by its primary text - the verb, or the
+    /// macro's name - so the host can remember what gets used; see <see cref="Frecency"/>.
+    /// </summary>
+    public event Action<string>? CommandRun;
+
+    /// <summary>
     /// Raised with a window handle and a title when a row asks for an explanation.
     /// </summary>
     /// <remarks>
@@ -296,11 +302,19 @@ public sealed class PaletteWindow : CompanionWindow
         Refreshed();
     }
 
-    /// <summary>Applies a reloaded configuration.</summary>
+    /// <summary>
+    /// Applies a reloaded configuration.
+    /// </summary>
+    /// <remarks>
+    /// Scaled to the display the palette is on, as the original was. The reload used
+    /// to install the file's numbers raw, so a palette on a 150 percent display that
+    /// had its config saved shrank to two thirds until it was closed and opened again
+    /// - and stayed that way for a palette that was open at the time.
+    /// </remarks>
     public void Reconfigure(DalilConfig config)
     {
         _config = config;
-        _scaled = config;
+        _scaled = Scaled(config, _scale);
         _model.Prefixes = PalettePrefixes.With(config.Prefixes);
 
         if (!config.ShowIcons) WindowIcons.Clear();
@@ -522,7 +536,28 @@ public sealed class PaletteWindow : CompanionWindow
         if (char.IsControl(value)) return;
         if (IsDown(VIRTUAL_KEY.VK_CONTROL) && !IsDown(VIRTUAL_KEY.VK_MENU)) return;
 
+        // A character outside the basic plane - an emoji from the Win+. panel - arrives
+        // as two WM_CHARs. Held until both halves are here, so the query never holds
+        // half a character and the list is filtered once for it rather than twice.
+        if (char.IsHighSurrogate(value))
+        {
+            _pendingHighSurrogate = value;
+            return;
+        }
+
         PaletteMode before = _model.Mode;
+
+        if (_pendingHighSurrogate is { } high)
+        {
+            _pendingHighSurrogate = null;
+
+            if (char.IsLowSurrogate(value))
+            {
+                _model.Insert(new string([high, value]));
+                Announce(before);
+                return;
+            }
+        }
 
         // Not simply appended: a prefix typed while there is nothing to search replaces
         // the mode rather than being searched for. See PaletteModel.AfterTyping.
@@ -530,6 +565,9 @@ public sealed class PaletteWindow : CompanionWindow
 
         Announce(before);
     }
+
+    /// <summary>The first half of a surrogate pair, waiting for the second; see <see cref="OnCharacter"/>.</summary>
+    private char? _pendingHighSurrogate;
 
     /// <summary>
     /// Tells the host when a mode change fell out of an edit.
@@ -591,6 +629,30 @@ public sealed class PaletteWindow : CompanionWindow
 
             case VIRTUAL_KEY.VK_C when control:
                 Copy(everything: shift);
+                return true;
+
+            // Both spellings of paste. Ctrl+V's character is a control character and
+            // used to be dropped on the floor, so a command copied from the docs had to
+            // be retyped into the one text field on the machine that would not take it.
+            case VIRTUAL_KEY.VK_V when control && !shift && !alt:
+            case VIRTUAL_KEY.VK_INSERT when shift && !control && !alt:
+                Paste();
+                return true;
+
+            // Plain Ctrl+A selects the term, so the next key starts over. Ctrl+Shift+A
+            // is an action chord and falls through to TryChord below.
+            case VIRTUAL_KEY.VK_A when control && !shift && !alt:
+                _model.SelectAll();
+                Repaint();
+                return true;
+
+            // Alt+F4 closes the popup, not the program. Left to DefWindowProc it
+            // became WM_CLOSE and the palette process left, taking the keybinding that
+            // opens it with it until the window manager was restarted.
+            case VIRTUAL_KEY.VK_F4 when alt:
+                if (_overlays.Count > 0) Pop();
+                else Close();
+
                 return true;
 
             case VIRTUAL_KEY.VK_BACK:
@@ -989,6 +1051,16 @@ public sealed class PaletteWindow : CompanionWindow
     /// guaranteed to be the wrong thing to match on.
     /// </para>
     /// </remarks>
+    /// <summary>Inserts the clipboard's text at the caret, as one line.</summary>
+    private void Paste()
+    {
+        string? text = Clipboard.GetText(Handle);
+
+        if (string.IsNullOrEmpty(text)) return;
+
+        Edit(() => _model.Insert(text));
+    }
+
     private void Copy(bool everything)
     {
         string? text = everything
@@ -1202,7 +1274,10 @@ public sealed class PaletteWindow : CompanionWindow
                 return;
 
             case PaletteChoice.Complete:
-                _model.SetQuery(">" + entry.Primary + " ");
+                // The configured prefix, not the stock one. With commands moved to
+                // another character, completing a verb wrote a literal > and the
+                // palette went looking for a window called >focus.
+                _model.SetQuery(PrefixFor(PaletteMode.Commands) + entry.Primary + " ");
                 Refreshed();
                 return;
 
@@ -1211,6 +1286,11 @@ public sealed class PaletteWindow : CompanionWindow
                 return;
 
             case PaletteChoice.Run:
+                // Noted before it is sent, and only from the command list, where the
+                // rows are verbs and macros that will be here next time. A window row
+                // is a window, and windows come and go.
+                if (_model.Mode == PaletteMode.Commands && !inside) CommandRun?.Invoke(entry.Primary);
+
                 Send(entry.Command);
                 return;
 
@@ -1377,13 +1457,7 @@ public sealed class PaletteWindow : CompanionWindow
 
         uint dpi = Dpi;
         _scale = dpi == 0 ? 1.0 : dpi / 96.0;
-
-        _scaled = _config with
-        {
-            Width = (int)Math.Round(_config.Width * _scale),
-            RowHeight = (int)Math.Round(_config.RowHeight * _scale),
-            FontSize = (int)Math.Round(_config.FontSize * _scale),
-        };
+        _scaled = Scaled(_config, _scale);
 
         // The full height, whatever is about to be shown in it. The list is filled in
         // straight afterwards and will shrink the window if it needs to; starting from
@@ -1405,6 +1479,14 @@ public sealed class PaletteWindow : CompanionWindow
             Hwnd, HWND.Null, x, y, width, height,
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
     }
+
+    /// <summary>The configuration's sizes in a display's pixels.</summary>
+    internal static DalilConfig Scaled(DalilConfig config, double scale) => scale == 1.0 ? config : config with
+    {
+        Width = (int)Math.Round(config.Width * scale),
+        RowHeight = (int)Math.Round(config.RowHeight * scale),
+        FontSize = (int)Math.Round(config.FontSize * scale),
+    };
 
     private HMONITOR TargetMonitor()
     {

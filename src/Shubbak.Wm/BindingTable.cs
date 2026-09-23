@@ -206,14 +206,13 @@ public sealed class BindingTable
     /// Whether a keystroke is bound. Called from the hook callback.
     /// </summary>
     /// <remarks>
-    /// Only key-down is claimed. Key-up for the same combination is swallowed too
-    /// by the hook, because letting it through leaves applications believing a
-    /// modifier is still held.
+    /// Key-down is claimed for every binding. Key-up for the same combination is
+    /// swallowed too by the hook, because letting it through leaves applications
+    /// believing a modifier is still held - and is claimed here, as an event worth
+    /// delivering, only for a binding that runs on release.
     /// </remarks>
     public bool IsBound(ushort virtualKey, KeyModifiers modifiers, bool isKeyDown)
     {
-        if (!isKeyDown) return false;
-
         int key = Pack((int)modifiers, virtualKey);
 
         // Read once. Re-reading would reintroduce exactly what the snapshot removes:
@@ -221,6 +220,15 @@ public sealed class BindingTable
         // the old table and half with the new.
         Snapshot state = _state;
         ModeTable? mode = state.ActiveMode;
+
+        if (!isKeyDown)
+        {
+            Keybinding? bound = mode is not null
+                ? mode.Bindings.GetValueOrDefault(key)
+                : state.Default.GetValueOrDefault(key);
+
+            return bound?.Release == true;
+        }
 
         if (mode is not null)
         {

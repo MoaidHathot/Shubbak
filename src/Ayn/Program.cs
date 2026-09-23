@@ -81,8 +81,9 @@ internal static class Program
         };
 
         // Each source is opened only if a fact needs it: a file that says
-        // `microphone { muted #false }` never touches Core Audio until a signal asks.
-        using var store = new RegistryConsentStore();
+        // `microphone { muted #false }` never touches Core Audio until a signal asks,
+        // and one that says nothing about the screen never opens its key.
+        using var store = new RegistryConsentStore([.. DeviceKinds.All.Where(config.Watches)]);
 
         if (config.NeedsConsentStore && store.Count == 0)
         {
@@ -92,21 +93,28 @@ internal static class Program
             return 1;
         }
 
-        using var endpoint = new AudioEndpoint();
+        using var endpoint = new AudioEndpoint { WatchSpeaker = config.NeedsSpeakerEndpoint };
 
-        if (config.NeedsAudioEndpoint && !endpoint.Open())
-            Log.Warn(LogCategory.Wm, "Core Audio is not available; the microphone's mute will not be reported");
+        if ((config.NeedsAudioEndpoint || config.NeedsSpeakerEndpoint) && !endpoint.Open())
+            Log.Warn(LogCategory.Wm, "Core Audio is not available; no mute will be reported");
+
+        using var power = new PowerWatch();
+        if (config.NeedsPower) power.Open();
+
+        using var theme = new ThemeWatch();
+        if (config.NeedsTheme) theme.Open();
 
         var connection = new WmConnection();
         connection.Start();
 
         Log.Info(LogCategory.Wm,
             $"ayn is watching {Describe(config)}; " +
-            $"a change of use is believed after {config.EffectiveSettle.TotalMilliseconds:F0} ms, a mute at once");
+            $"a change of use is believed after {config.EffectiveSettle.TotalMilliseconds:F0} ms, everything else at once" +
+            (config.Renew is { } renew ? $"; holds renewed every {renew.TotalSeconds:F0} s" : string.Empty));
 
         try
         {
-            Run(config, store, endpoint, connection, stop);
+            Run(config, new Sources(store, endpoint, power, theme), connection, stop);
         }
         finally
         {
@@ -137,10 +145,23 @@ internal static class Program
     /// precisely a settle time expiring.
     /// </para>
     /// </remarks>
-    private static void Run(
-        AynConfig config, RegistryConsentStore store, AudioEndpoint endpoint, WmConnection connection, WaitHandle stop)
+    /// <summary>Everything the desk is read from, so a reading is one call wherever it is taken.</summary>
+    private sealed record Sources(RegistryConsentStore Store, AudioEndpoint Endpoint, PowerWatch Power, ThemeWatch Theme)
+    {
+        /// <summary>What the desk says now, from every source that is open.</summary>
+        public Reading Read() => Reading.From(Store, Endpoint.IsMuted()) with
+        {
+            SpeakerMuted = Endpoint.IsSpeakerMuted(),
+            Power = Power.IsOpen ? Power.Read() : null,
+            DarkTheme = Theme.IsOpen ? Theme.IsDark() : null,
+        };
+    }
+
+    private static void Run(AynConfig config, Sources sources, WmConnection connection, WaitHandle stop)
     {
         var provider = new Provider(config);
+        RegistryConsentStore store = sources.Store;
+        AudioEndpoint endpoint = sources.Endpoint;
 
         const int StopIndex = 0;
         const int DismissedIndex = 1;
@@ -148,17 +169,23 @@ internal static class Program
         const int ReloadedIndex = 3;
         const int SignalledIndex = 4;
         const int AudioIndex = 5;
-        const int FirstRegistryIndex = 6;
+        const int PowerIndex = 6;
+        const int ThemeIndex = 7;
+        const int FirstRegistryIndex = 8;
 
         // Dismissed sits before Lost on purpose. WaitAny answers with the lowest
         // index that is set, and exit-all raises both within a moment of each other -
         // the notice, then the pipe closing behind it - so the order decides whether
         // the watcher leaves or reconnects to nothing.
         WaitHandle[] handles =
-            [stop, connection.Dismissed, connection.Lost, connection.Reloaded, connection.Signalled, AudioEndpoint.Changed, .. store.Changed];
+        [
+            stop, connection.Dismissed, connection.Lost, connection.Reloaded, connection.Signalled,
+            AudioEndpoint.Changed, sources.Power.Changed, sources.Theme.Changed,
+            .. store.Changed,
+        ];
 
         store.Arm();
-        provider.Observe(Reading.From(store, endpoint.IsMuted()), Environment.TickCount64);
+        provider.Observe(sources.Read(), Environment.TickCount64);
 
         // While the window manager cannot be reached and there is something to tell it,
         // try again about once a second; otherwise sleep until the registry speaks.
@@ -196,8 +223,8 @@ internal static class Program
                     break;
 
                 case ReloadedIndex:
-                    Reconfigure(provider, connection, endpoint);
-                    provider.Observe(Reading.From(store, endpoint.IsMuted()), now);
+                    Reconfigure(provider, connection, sources);
+                    provider.Observe(sources.Read(), now);
                     break;
 
                 case SignalledIndex:
@@ -213,11 +240,20 @@ internal static class Program
                 case AudioIndex:
                     if (AudioEndpoint.TakeDefaultDeviceChanged())
                     {
-                        Log.Info(LogCategory.Wm, "the default microphone changed; asking the new one");
+                        Log.Info(LogCategory.Wm, "the audio devices changed; asking the defaults again");
                         endpoint.Resolve();
                     }
 
-                    provider.Observe(Reading.From(store, endpoint.IsMuted()), now);
+                    provider.Observe(sources.Read(), now);
+                    break;
+
+                case PowerIndex:
+                    provider.Observe(sources.Read(), now);
+                    break;
+
+                case ThemeIndex:
+                    sources.Theme.Arm();
+                    provider.Observe(sources.Read(), now);
                     break;
 
                 case WaitHandle.WaitTimeout:
@@ -225,35 +261,44 @@ internal static class Program
 
                 default:
                     store.Arm(woke - FirstRegistryIndex);
-                    provider.Observe(Reading.From(store, endpoint.IsMuted()), now);
+                    provider.Observe(sources.Read(), now);
                     break;
             }
         }
     }
 
-    /// <summary>Does what a signal asked: mutes, unmutes or flips the microphone.</summary>
+    /// <summary>Does what a signal asked: mutes, unmutes or flips the microphone or the speaker.</summary>
     /// <remarks>
     /// Core Audio is opened here if the file never asked for the mute to be reported.
     /// The fact and the action are two different things: <c>microphone { muted #false }</c>
     /// says the bar does not want a muted pill, not that the bar's mute button should
     /// stop working, and a person who pressed it has asked for the one thing that
-    /// justifies touching Core Audio in a file that said not to.
+    /// justifies touching Core Audio in a file that said not to. The speaker is
+    /// followed from the first signal about it, for the same reason.
     /// </remarks>
     private static void Act(SignalRequest request, AudioEndpoint endpoint)
     {
+        bool speaker = request.Subject == "speaker";
+
+        if (speaker && !endpoint.WatchSpeaker)
+        {
+            endpoint.WatchSpeaker = true;
+            if (endpoint.IsOpen) endpoint.Resolve();
+        }
+
         if (!endpoint.IsOpen && !endpoint.Open())
         {
             Log.Warn(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: Core Audio is not available");
             return;
         }
 
-        if (!endpoint.HasDevice)
+        if (speaker ? !endpoint.HasSpeaker : !endpoint.HasDevice)
         {
-            Log.Warn(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: there is no microphone to act on");
+            Log.Warn(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: there is no {request.Subject} to act on");
             return;
         }
 
-        bool? muted = endpoint.IsMuted();
+        bool? muted = speaker ? endpoint.IsSpeakerMuted() : endpoint.IsMuted();
 
         bool wanted = request.Verb switch
         {
@@ -268,8 +313,8 @@ internal static class Program
             return;
         }
 
-        if (endpoint.SetMuted(wanted))
-            Log.Info(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: microphone {(wanted ? "muted" : "unmuted")}");
+        if (speaker ? endpoint.SetSpeakerMuted(wanted) : endpoint.SetMuted(wanted))
+            Log.Info(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: {request.Subject} {(wanted ? "muted" : "unmuted")}");
     }
 
     /// <summary>Sends everything due. True if something could not be sent and should be retried.</summary>
@@ -310,7 +355,7 @@ internal static class Program
     /// it whatever the file says about the mute <em>fact</em>. The reading that follows
     /// in the caller is what turns a newly opened endpoint into a reported fact.
     /// </remarks>
-    private static void Reconfigure(Provider provider, WmConnection connection, AudioEndpoint endpoint)
+    private static void Reconfigure(Provider provider, WmConnection connection, Sources sources)
     {
         AynConfig config = LoadConfig();
 
@@ -323,8 +368,29 @@ internal static class Program
                 Log.Info(LogCategory.Wm, $"{release.Because}: {release.Command}");
         }
 
-        if (config.NeedsAudioEndpoint && !endpoint.IsOpen && !endpoint.Open())
-            Log.Warn(LogCategory.Wm, "Core Audio is not available; the microphone's mute will not be reported");
+        AudioEndpoint endpoint = sources.Endpoint;
+
+        if (config.NeedsSpeakerEndpoint && !endpoint.WatchSpeaker)
+        {
+            endpoint.WatchSpeaker = true;
+            if (endpoint.IsOpen) endpoint.Resolve();
+        }
+
+        if ((config.NeedsAudioEndpoint || config.NeedsSpeakerEndpoint) && !endpoint.IsOpen && !endpoint.Open())
+            Log.Warn(LogCategory.Wm, "Core Audio is not available; no mute will be reported");
+
+        // Opened when newly asked for and left open otherwise, like Core Audio: a
+        // registration that nobody reads costs nothing.
+        if (config.NeedsPower && !sources.Power.IsOpen) sources.Power.Open();
+        if (config.NeedsTheme && !sources.Theme.IsOpen) sources.Theme.Open();
+
+        // A device newly watched needs its key; the store is built for the devices the
+        // file named at startup, and a reload that adds one is told to restart.
+        foreach (DeviceKind device in DeviceKinds.All)
+        {
+            if (config.Watches(device) && !sources.Store.Devices.Contains(device))
+                Log.Warn(LogCategory.Config, $"the file now watches the {device.Word()}, which needs a restart of ayn to take effect");
+        }
 
         // The holds under any new names follow from the next flush, which the caller
         // runs at the top of the loop.
@@ -366,14 +432,14 @@ internal static class Program
             return 1;
         }
 
-        foreach (DeviceKind device in new[] { DeviceKind.Camera, DeviceKind.Microphone })
+        foreach (DeviceKind device in DeviceKinds.All)
         {
             IReadOnlyList<ConsentEntry> entries = store.Read(device);
             string[] inUse = [.. entries.Where(e => e.InUse).Select(e => e.App).Distinct(StringComparer.OrdinalIgnoreCase)];
 
             Console.WriteLine(inUse.Length > 0
-                ? $"{device.ToString().ToLowerInvariant()}: in use by {string.Join(", ", inUse)}"
-                : $"{device.ToString().ToLowerInvariant()}: not in use ({entries.Count} program(s) have used it)");
+                ? $"{device.Word()}: in use by {string.Join(", ", inUse)}"
+                : $"{device.Word()}: not in use ({entries.Count} program(s) have used it)");
 
             // The two times behind each verdict, for the one question a report is
             // usually asked: why does the watcher think this program still has the
@@ -388,20 +454,53 @@ internal static class Program
             }
         }
 
-        using var endpoint = new AudioEndpoint();
+        using var endpoint = new AudioEndpoint { WatchSpeaker = true };
 
         if (!endpoint.Open())
         {
             Console.WriteLine("microphone mute: Core Audio is not available");
-            return 0;
+        }
+        else
+        {
+            Console.WriteLine(endpoint.IsMuted() switch
+            {
+                true => "microphone mute: muted",
+                false => "microphone mute: not muted",
+                null => "microphone mute: no microphone",
+            });
+
+            Console.WriteLine(endpoint.IsSpeakerMuted() switch
+            {
+                true => "speaker mute: muted",
+                false => "speaker mute: not muted",
+                null => "speaker mute: no speaker",
+            });
         }
 
-        Console.WriteLine(endpoint.IsMuted() switch
+        using var power = new PowerWatch();
+
+        if (power.Open())
         {
-            true => "microphone mute: muted",
-            false => "microphone mute: not muted",
-            null => "microphone mute: no microphone",
-        });
+            // The registration answers with the current values a moment later; give
+            // them that moment so the report says what the watcher would.
+            power.Changed.WaitOne(TimeSpan.FromMilliseconds(250));
+            PowerReading reading = power.Read();
+
+            Console.WriteLine(
+                $"power: {(reading.OnBattery ? "on battery" : "on the mains")}, " +
+                $"battery {(reading.BatteryPercent is { } percent ? $"{percent}%" : "none")}, " +
+                $"lid {(reading.LidClosed ? "closed" : "open")}, user {(reading.UserAway ? "away" : "present")}");
+        }
+        else
+        {
+            Console.WriteLine("power: no notifications could be registered");
+        }
+
+        using var theme = new ThemeWatch();
+
+        Console.WriteLine(theme.Open()
+            ? theme.IsDark() switch { true => "theme: dark", false => "theme: light", null => "theme: not set" }
+            : "theme: the Personalize key could not be opened");
 
         return 0;
     }
@@ -415,6 +514,9 @@ internal static class Program
             if (config.ContextFor(fact) is { } context)
                 parts.Add(string.Equals(context, fact.Wire(), StringComparison.Ordinal) ? context : $"{fact.Wire()} as \"{context}\"");
         }
+
+        foreach (AppRule rule in config.AppRules)
+            parts.Add($"{rule.Device.Word()} by {rule.App} as \"{rule.Context}\"");
 
         return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
     }
@@ -437,12 +539,15 @@ internal static class Program
     private const string UsageText = """
         Ayn - the watcher for Shubbak
 
-        Ayn watches the camera and the microphone and holds a context on the
-        window manager for each fact while it is true: camera-in-use,
-        microphone-in-use, microphone-muted.
+        Ayn watches the desk and holds a context on the window manager for each
+        fact while it is true: camera-in-use, microphone-in-use, microphone-muted
+        by default, and when the file names them screen-captured, speaker-muted,
+        on-battery, battery-low, lid-closed, user-away and dark-theme - or a
+        context of its own for one program's use of a device.
 
         It also answers `signal "ayn" "microphone" "mute" | "unmute" | "toggle-mute"`
-        from a keybinding, the bar or the palette, by flipping the system mute.
+        - and the same for "speaker" - from a keybinding, the bar or the palette,
+        by flipping the system mute.
 
         USAGE
           ayn [options]

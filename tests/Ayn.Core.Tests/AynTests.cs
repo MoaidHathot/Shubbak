@@ -279,9 +279,30 @@ public sealed class ProviderTests
         Assert.Equal("microphone-in-use", Fact.MicrophoneInUse.Wire());
         Assert.Equal("microphone-muted", Fact.MicrophoneMuted.Wire());
 
-        // The defaults are the names, so a file that says nothing gets them.
+        // The defaults are the names for the three facts the watcher started with, so
+        // a file that says nothing gets them. Every fact added since is off until the
+        // file names it: a file that never mentioned the watcher must not wake up one
+        // day holding contexts it never declared, which the window manager would
+        // refuse on every change.
         var config = new AynConfig();
-        Assert.All(FactNames.All, fact => Assert.Equal(fact.Wire(), config.ContextFor(fact)));
+
+        Assert.Equal("camera-in-use", config.ContextFor(Fact.CameraInUse));
+        Assert.Equal("microphone-in-use", config.ContextFor(Fact.MicrophoneInUse));
+        Assert.Equal("microphone-muted", config.ContextFor(Fact.MicrophoneMuted));
+
+        foreach (Fact fact in FactNames.All.Except([Fact.CameraInUse, Fact.MicrophoneInUse, Fact.MicrophoneMuted]))
+        {
+            Assert.Null(config.ContextFor(fact));
+            Assert.Matches("^[a-z]+(-[a-z]+)+$", fact.Wire());
+        }
+
+        Assert.Equal("screen-captured", Fact.ScreenCaptured.Wire());
+        Assert.Equal("speaker-muted", Fact.SpeakerMuted.Wire());
+        Assert.Equal("on-battery", Fact.OnBattery.Wire());
+        Assert.Equal("battery-low", Fact.BatteryLow.Wire());
+        Assert.Equal("lid-closed", Fact.LidClosed.Wire());
+        Assert.Equal("user-away", Fact.UserAway.Wire());
+        Assert.Equal("dark-theme", Fact.DarkTheme.Wire());
     }
 
     [Fact]

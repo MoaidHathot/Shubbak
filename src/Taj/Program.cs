@@ -67,6 +67,35 @@ internal static class Program
 
     private static readonly List<Bar> s_bars = [];
 
+    /// <summary>The sources, once, feeding every bar; see <see cref="SourceHub"/>.</summary>
+    private static readonly SourceHub s_sources = new();
+
+    /// <summary>The file, watched for saves, so a bar with no window manager still reloads.</summary>
+    private static ConfigWatcher? s_watcher;
+
+    /// <summary>What the file looked like when it was last read; see <see cref="RequestReloadIfSaved"/>.</summary>
+    private static ConfigStamp s_loadedStamp;
+
+    /// <summary>
+    /// Asks for a reload if the file has changed since it was read.
+    /// </summary>
+    /// <remarks>
+    /// One save reaches the bar twice: once from its own watcher and once as the window
+    /// manager's <c>config.reloaded</c>, which arrives whenever the window manager's
+    /// watcher settles and the window manager has finished re-reading - anything from
+    /// a few milliseconds to well past the coalescing window, on a busy desk. The
+    /// second arrival finds the file as it was when the first was acted on and does
+    /// nothing. The accent changing takes the other door, since it wants the file
+    /// re-read precisely when nothing about it has changed.
+    /// </remarks>
+    private static void RequestReloadIfSaved()
+    {
+        if (ResolveConfigPath(s_args) is { } path && ConfigStamp.Of(path) == s_loadedStamp) return;
+
+        s_reloadRequested = true;
+        Wake();
+    }
+
     /// <summary>The configuration in force, for bars created after startup.</summary>
     private static TajConfig s_config = TajConfigLoader.CreateDefault();
 
@@ -152,6 +181,20 @@ internal static class Program
             s_config = config;
             s_problems = problems;
 
+            s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
+
+            // The bar watches the file itself, as the window manager does. The window
+            // manager announces its own reloads and the bar follows those; this is for
+            // the case where there is no window manager to announce anything - a bar
+            // being tuned on its own is still a bar whose file is being saved. Both
+            // routes go through RequestReloadIfSaved, which is what keeps a save the
+            // window manager also announces to one reload rather than two.
+            if (ResolveConfigPath(context.Args) is { } watched &&
+                Directory.Exists(Path.GetDirectoryName(Path.GetFullPath(watched))))
+            {
+                s_watcher = new ConfigWatcher(watched, TimeSpan.FromMilliseconds(250), RequestReloadIfSaved);
+            }
+
             if (!CreateBars())
             {
                 Log.Error(LogCategory.Wm, "no bars could be created");
@@ -199,6 +242,10 @@ internal static class Program
         problems = default;
 
         string? path = ResolveConfigPath(args);
+
+        // Stamped before it is read, never after - see ConfigStamp for the race. A file
+        // that is not there stamps as nothing, so its arriving later reads as a save.
+        s_loadedStamp = path is null ? default : ConfigStamp.Of(path);
 
         if (path is null || !File.Exists(path))
         {
@@ -260,7 +307,7 @@ internal static class Program
         // through the appbar API, and using the work area would make it shrink away
         // from itself every time it re-registered.
         foreach (MonitorInfo monitor in monitors)
-            CreateBar(monitor.DeviceId, monitor.Bounds);
+            CreateBar(monitor.DeviceId, monitor.Bounds, monitor.Dpi);
 
         return s_bars.Count > 0;
     }
@@ -277,17 +324,15 @@ internal static class Program
     /// model's dirty flag exists for.
     /// </remarks>
     /// <returns>The bar, or null if its window could not be created.</returns>
-    private static Bar? CreateBar(string deviceId, Rect bounds)
+    private static Bar? CreateBar(string deviceId, Rect bounds, uint dpi)
     {
         TajConfig config = s_config;
 
         var model = new BarModel(config.Default);
         var selector = new BarProfileSelector(config.Profiles, config.Rules, config.Default);
 
-        foreach (Core.Sources.ISource source in TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current))
-            model.AddSource(source);
 
-        var window = new BarWindow(model, deviceId);
+        var window = new BarWindow(model, deviceId, config.DpiScaling);
         var connection = new WmConnection(model, deviceId);
 
         var bar = new Bar
@@ -326,11 +371,7 @@ internal static class Program
             Wake();
         };
 
-        connection.ConfigReloaded += () =>
-        {
-            s_reloadRequested = true;
-            Wake();
-        };
+        connection.ConfigReloaded += RequestReloadIfSaved;
 
         // The window manager going away takes the bar with it. Signalled rather
         // than acted on, for the same reason a reload is: this runs on the
@@ -364,7 +405,7 @@ internal static class Program
             _ = connection.SendCommandAsync(command);
         };
 
-        if (!window.Create(bounds))
+        if (!window.Create(bounds, dpi))
         {
             window.Dispose();
             model.Dispose();
@@ -377,9 +418,9 @@ internal static class Program
 
         model.Dirtied += Wake;
 
-        // A bar created while the rest are stood down joins them, or it alone would
-        // go on ticking behind the full-screen application.
-        if (s_stoodDown) model.StandDown();
+        // Fed by the shared sources from here on, and given every value they have
+        // so far, so a bar for a display plugged in later shows the clock at once.
+        s_sources.Attach(model);
 
         connection.Start();
 
@@ -402,6 +443,7 @@ internal static class Program
         bar.Connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
 
         bar.Window.Dispose();
+        s_sources.Detach(bar.Model);
         bar.Model.Dispose();
     }
 
@@ -450,11 +492,11 @@ internal static class Program
                     $"display {monitor.DeviceId} has arrived" +
                     $"{(monitor.FriendlyName is { } name ? $" (\"{name}\")" : "")}; opening a bar on it");
 
-                CreateBar(monitor.DeviceId, bounds);
+                CreateBar(monitor.DeviceId, bounds, monitor.Dpi);
                 continue;
             }
 
-            existing.Window.Relocate(bounds);
+            existing.Window.Relocate(bounds, monitor.Dpi);
         }
     }
 
@@ -550,15 +592,16 @@ internal static class Program
         s_config = config;
         s_problems = problems;
 
+        // Once, for every bar. Sources hold timers and processes, so the old set is
+        // disposed rather than dropped; this used to happen per bar, which for a
+        // command source meant its script killed and restarted once per display.
+        s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
+
         foreach (Bar bar in s_bars)
         {
             BarModel model = bar.Model;
 
             bar.Selector = new BarProfileSelector(config.Profiles, config.Rules, config.Default);
-
-            // Sources hold timers, so the old set has to be disposed rather than
-            // dropped, or a reloaded bar accumulates a clock per reload.
-            model.ReplaceSources(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
 
             // Forced through, rather than going via SelectProfile: the profile object
             // is new after a reload even when it is the same profile by name, and the
@@ -747,11 +790,8 @@ internal static class Program
 
         s_stoodDown = wanted;
 
-        foreach (Bar bar in s_bars)
-        {
-            if (wanted) bar.Model.StandDown();
-            else bar.Model.StandUp();
-        }
+        if (wanted) s_sources.StandDown();
+        else s_sources.StandUp();
 
         if (wanted)
         {
@@ -768,6 +808,8 @@ internal static class Program
 
     private static void Shutdown()
     {
+        s_watcher?.Dispose();
+
         // Connections first, so no pump can report on a bar that is being torn down.
         foreach (Bar bar in s_bars)
             bar.Connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -776,6 +818,7 @@ internal static class Program
         foreach (Bar bar in s_bars) bar.Model.Dispose();
 
         s_bars.Clear();
+        s_sources.Dispose();
     }
 
     /// <summary>

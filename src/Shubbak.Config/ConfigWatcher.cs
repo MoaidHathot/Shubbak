@@ -1,4 +1,4 @@
-namespace Shubbak.Wm;
+namespace Shubbak.Config;
 
 /// <summary>
 /// What a file looked like at a moment: enough to tell a save the daemon has already
@@ -11,7 +11,7 @@ namespace Shubbak.Wm;
 /// catch. Taken before, the same race produces one reload too many, which costs a
 /// log line.
 /// </remarks>
-internal readonly record struct ConfigStamp(long Length, long LastWriteUtcTicks)
+public readonly record struct ConfigStamp(long Length, long LastWriteUtcTicks)
 {
     /// <summary>The file as it stands, or the empty stamp when it cannot be read.</summary>
     public static ConfigStamp Of(string path)
@@ -53,7 +53,7 @@ internal readonly record struct ConfigStamp(long Length, long LastWriteUtcTicks)
 /// loop, which is where the running configuration lives.
 /// </para>
 /// </remarks>
-internal sealed class ConfigWatcher : IDisposable
+public sealed class ConfigWatcher : IDisposable
 {
     private readonly FileSystemWatcher _watcher;
     private readonly string _fileName;

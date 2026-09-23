@@ -1116,6 +1116,7 @@ public sealed class ConfigLoader
         }
 
         bool? repeat = null;
+        bool release = false;
 
         // Properties on a bind node were read by nothing at all, so the natural thing
         // to write - bind "alt+q" repeat=#false { close } - parsed cleanly, produced no
@@ -1137,14 +1138,32 @@ public sealed class ConfigLoader
                 continue;
             }
 
+            // release=#true runs the commands when the key comes up rather than when
+            // it goes down: the shape of a push-to-talk, or of a mode that lasts as
+            // long as a key is held.
+            if (string.Equals(name, "release", StringComparison.OrdinalIgnoreCase))
+            {
+                if (value.TryAsBool(out bool onRelease)) release = onRelease;
+                else
+                {
+                    Report(Diagnostic.Warning(
+                        "SHB0432",
+                        $"'release' on binding '{keyText}' must be #true or #false.",
+                        value.Span,
+                        "Write release=#true to run the binding when the key is let go."));
+                }
+
+                continue;
+            }
+
             Report(Diagnostic.Warning(
                 "SHB0433",
                 $"Unknown property '{name}' on binding '{keyText}'; it will be ignored.",
                 value.Span,
-                "The only property a binding takes is repeat=#true or repeat=#false."));
+                "A binding takes repeat=#true or #false, and release=#true or #false."));
         }
 
-        return new Keybinding(key, commands, node.Span, repeat);
+        return new Keybinding(key, commands, node.Span, repeat, release);
     }
 
     /// <summary>
@@ -2314,7 +2333,7 @@ public sealed class ConfigLoader
         {
             foreach (WmCommand command in commands)
             {
-                if (command is not (IgnoreCommand or ManageCommand)) continue;
+                if (command is not (IgnoreCommand or ManageCommand or NoFocusCommand)) continue;
 
                 Report(Diagnostic.Warning(
                     "SHB0452",

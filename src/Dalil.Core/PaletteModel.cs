@@ -645,6 +645,7 @@ public sealed class PaletteModel
     /// </remarks>
     public void SetQuery(string query)
     {
+        _allSelected = false;
         _query = query ?? string.Empty;
         _caret = _query.Length;
 
@@ -738,15 +739,111 @@ public sealed class PaletteModel
         return (query[..at] + typed + query[at..], at + 1);
     }
 
-    /// <summary>Inserts a character at the caret.</summary>
+    /// <summary>Inserts a character at the caret, replacing the term if it is all selected.</summary>
     public void Insert(char typed)
     {
+        if (_allSelected) ReplaceSelection();
+
         (string query, int caret) = AfterTyping(Prefixes, _query, _caret, typed);
 
         _query = query;
         Refilter(keep: null);
 
         _caret = Math.Clamp(caret, 0, _query.Length);
+    }
+
+    /// <summary>
+    /// Inserts text at the caret, as a paste does.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Character by character through <see cref="AfterTyping"/>, so pasting <c>&gt;</c>
+    /// alone into an empty palette changes mode as typing it would, and the term is
+    /// searched once at the end rather than once per character. Line breaks and tabs
+    /// become spaces and other control characters go, since a query is one line and a
+    /// copied command with a trailing newline is the commonest thing to paste.
+    /// </para>
+    /// <para>
+    /// The palette had no paste at all: Ctrl+V's character is a control character and
+    /// was dropped on the floor, so a command copied from the docs had to be retyped.
+    /// </para>
+    /// </remarks>
+    public void Insert(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (_allSelected) ReplaceSelection();
+
+        string query = _query;
+        int caret = _caret;
+
+        foreach (char ch in Sanitised(text))
+            (query, caret) = AfterTyping(Prefixes, query, caret, ch);
+
+        if (query == _query) return;
+
+        _query = query;
+        Refilter(keep: null);
+
+        _caret = Math.Clamp(caret, 0, _query.Length);
+    }
+
+    /// <summary>One line: breaks and tabs become spaces, other control characters vanish.</summary>
+    public static string Sanitised(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        if (!text.Any(char.IsControl)) return text;
+
+        var sb = new System.Text.StringBuilder(text.Length);
+
+        foreach (char ch in text)
+        {
+            if (ch is '\r' or '\n' or '\t')
+            {
+                // One space for a whole break, so a pasted "focus\r\n" is "focus ".
+                if (sb.Length == 0 || sb[^1] != ' ') sb.Append(' ');
+            }
+            else if (!char.IsControl(ch))
+            {
+                sb.Append(ch);
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    // ---- select all ---------------------------------------------------------------
+
+    private bool _allSelected;
+
+    /// <summary>
+    /// Whether the whole term is selected, so the next character replaces it and the
+    /// next delete removes it.
+    /// </summary>
+    /// <remarks>
+    /// The one selection the palette has. A search box does not need ranges; it needs
+    /// the thing every text field on the machine does when Ctrl+A is pressed, which
+    /// is to make the next keystroke start over. The prefix is not part of it, for the
+    /// same reason Ctrl+U keeps it: selecting the text is not changing the mode.
+    /// </remarks>
+    public bool AllSelected => _allSelected && Term.Length > 0;
+
+    /// <summary>Selects the whole term. Nothing to select is nothing selected.</summary>
+    public void SelectAll() => _allSelected = Term.Length > 0;
+
+    /// <summary>Drops the selection, leaving the text and the caret alone.</summary>
+    public void Deselect() => _allSelected = false;
+
+    /// <summary>Removes the selected term, leaving the caret where the term begins.</summary>
+    private void ReplaceSelection()
+    {
+        _allSelected = false;
+
+        int floor = Prefixes.PrefixLengthOf(_query);
+
+        _query = _query[..floor];
+        _caret = floor;
     }
 
     /// <summary>
@@ -769,6 +866,13 @@ public sealed class PaletteModel
     /// </remarks>
     public void DeleteBack(bool wholeWord)
     {
+        if (_allSelected)
+        {
+            ReplaceSelection();
+            Refilter(keep: null);
+            return;
+        }
+
         int floor = Prefixes.PrefixLengthOf(_query);
 
         if (_caret <= floor)
@@ -786,7 +890,7 @@ public sealed class PaletteModel
             return;
         }
 
-        int from = wholeWord ? WordStart(_query, _caret, floor) : _caret - 1;
+        int from = wholeWord ? WordStart(_query, _caret, floor) : ElementStart(_query, _caret, floor);
 
         _query = _query[..from] + _query[_caret..];
         Refilter(keep: null);
@@ -797,11 +901,18 @@ public sealed class PaletteModel
     /// <summary>Deletes the character after the caret.</summary>
     public void DeleteForward()
     {
+        if (_allSelected)
+        {
+            ReplaceSelection();
+            Refilter(keep: null);
+            return;
+        }
+
         if (_caret >= _query.Length) return;
 
         int caret = _caret;
 
-        _query = _query[..caret] + _query[(caret + 1)..];
+        _query = _query[..caret] + _query[ElementEnd(_query, caret)..];
         Refilter(keep: null);
 
         _caret = Math.Clamp(caret, 0, _query.Length);
@@ -818,6 +929,7 @@ public sealed class PaletteModel
     /// </remarks>
     public void ClearTerm()
     {
+        _allSelected = false;
         char prefix = Prefixes.PrefixFor(Mode);
 
         _query = prefix == '\0' ? string.Empty : prefix.ToString();
@@ -826,16 +938,56 @@ public sealed class PaletteModel
         _caret = _query.Length;
     }
 
-    /// <summary>Moves the caret, clamped to the text and never onto the prefix.</summary>
+    /// <summary>
+    /// Moves the caret by whole characters, clamped to the text and never onto the prefix.
+    /// </summary>
+    /// <remarks>
+    /// A character here is a text element - an emoji with its skin tone, a letter with
+    /// its combining mark, a surrogate pair - and not a UTF-16 unit. Stepping by units
+    /// put the caret inside a pair, where the renderer had half a character on each
+    /// side to measure and Backspace removed the other half and left a lone surrogate
+    /// in the query. Moving the caret drops the selection, as it does everywhere.
+    /// </remarks>
     public void MoveCaret(int delta)
     {
+        _allSelected = false;
+
         int floor = Prefixes.PrefixLengthOf(_query);
-        _caret = Math.Clamp(_caret + delta, floor, _query.Length);
+        int at = _caret;
+
+        for (; delta > 0 && at < _query.Length; delta--) at = ElementEnd(_query, at);
+        for (; delta < 0 && at > floor; delta++) at = ElementStart(_query, at, floor);
+
+        _caret = Math.Clamp(at, floor, _query.Length);
     }
 
     /// <summary>Puts the caret at the start or the end of what was typed.</summary>
-    public void CaretToEdge(bool end) =>
+    public void CaretToEdge(bool end)
+    {
+        _allSelected = false;
         _caret = end ? _query.Length : Prefixes.PrefixLengthOf(_query);
+    }
+
+    /// <summary>Where the text element that ends at <paramref name="caret"/> begins.</summary>
+    private static int ElementStart(string text, int caret, int floor)
+    {
+        // Walked forward from the floor rather than backward from the caret, because
+        // text elements have no end marker to walk back over. A query is a line long.
+        int at = floor;
+
+        while (at < caret)
+        {
+            int next = at + Math.Max(1, System.Globalization.StringInfo.GetNextTextElementLength(text.AsSpan(at)));
+            if (next >= caret) return at;
+            at = next;
+        }
+
+        return Math.Max(floor, caret - 1);
+    }
+
+    /// <summary>Where the text element that begins at <paramref name="caret"/> ends.</summary>
+    private static int ElementEnd(string text, int caret) =>
+        Math.Min(text.Length, caret + Math.Max(1, System.Globalization.StringInfo.GetNextTextElementLength(text.AsSpan(caret))));
 
     /// <summary>Where the word before <paramref name="caret"/> begins.</summary>
     /// <remarks>

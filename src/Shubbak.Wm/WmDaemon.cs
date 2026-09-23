@@ -1196,9 +1196,23 @@ public sealed class WmDaemon : IDisposable
         for (int i = 0; i < count; i++)
         {
             KeyEvent key = _keyScratch[i];
-            if (!key.IsKeyDown) continue;
 
             Keybinding? binding = _bindings.Resolve(key.VirtualKey, key.Modifiers);
+
+            // A binding that runs on release is fired by the key coming up and not by
+            // it going down; every other binding the other way round. The hook only
+            // delivers a release for a binding that asked for one, so a release here
+            // with no binding, or with a press binding, is a change of table between
+            // the two edges and is left alone.
+            if (binding is not null && key.IsKeyDown == binding.Release)
+            {
+                if (key.IsKeyDown && Log.IsEnabled(LogLevel.Trace))
+                    Log.Trace(LogCategory.Hook, $"{binding.Key.Display} pressed; runs on release");
+
+                continue;
+            }
+
+            if (!key.IsKeyDown && binding is null) continue;
 
             if (binding is null)
             {
@@ -1684,6 +1698,9 @@ public sealed class WmDaemon : IDisposable
         // was there with the configured default.
         WindowState detected = window.State;
 
+        // Who had focus before the window arrived, for a rule that says no-focus.
+        WindowNode? focusedBefore = _wm.FocusedWindow;
+
         WmResult adoption = _wm.ManageWindow(window, workspace, detected);
 
         if (!adoption.Succeeded)
@@ -1709,6 +1726,20 @@ public sealed class WmDaemon : IDisposable
             $"-> workspace {window.Workspace?.Name ?? "?"}");
 
         ApplyRules(window, attributes, RuleTrigger.OnManage);
+
+        // A rule that says no-focus: the window is managed and placed, and focus goes
+        // back to where it was. Managing gives the new window focus, since that is what
+        // a window somebody opened wants; a window that arrives on its own - a
+        // notification, a chat that pops when a message lands, a background updater -
+        // wants the opposite, and the only remedy was a rule that moved it to another
+        // workspace. The window manager's foreground pass then puts the keyboard back
+        // where the tree says, so the arrival does not steal it either.
+        if (_rules.SaysNoFocus(attributes) && focusedBefore is not null && focusedBefore.Workspace is not null &&
+            !ReferenceEquals(focusedBefore, window))
+        {
+            Publish(_wm.FocusWindow(focusedBefore));
+            Log.Debug(LogCategory.Window, $"no-focus: focus stays with 0x{focusedBefore.Handle:X} after 0x{handle:X} arrived");
+        }
 
         _layoutDirty = true;
     }
@@ -2481,7 +2512,7 @@ public sealed class WmDaemon : IDisposable
             WindowNode? previous = _wm.FocusedWindow;
 
             Publish(_wm.FocusWindow(window));
-            Execute(rule.Commands.Where(c => c is not IgnoreCommand and not ManageCommand));
+            Execute(rule.Commands.Where(c => c is not IgnoreCommand and not ManageCommand and not NoFocusCommand));
 
             if (previous is not null && !ReferenceEquals(previous, window) && previous.Workspace is not null)
                 Publish(_wm.FocusWindow(previous));

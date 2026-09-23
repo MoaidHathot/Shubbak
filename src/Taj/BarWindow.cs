@@ -84,6 +84,17 @@ public sealed class BarWindow : CompanionWindow
     /// <summary>The display the bar is on, as last told.</summary>
     private Rect _monitor;
 
+    /// <summary>
+    /// Pixels per device-independent pixel on this display: 1 at 96 DPI, 1.5 at 144.
+    /// Every size the profile gives is in device-independent pixels and is multiplied
+    /// by this on the way to the screen; see <see cref="VisualScaling"/>. Exactly 1
+    /// when the configuration turns scaling off.
+    /// </summary>
+    private double _scale = 1.0;
+
+    /// <summary>Whether sizes are scaled to the display at all; <c>bar { dpi-scaling }</c>.</summary>
+    private readonly bool _scalesToDpi;
+
     /// <summary>The window's rectangle: the bar as drawn.</summary>
     private Rect _bounds;
 
@@ -95,6 +106,14 @@ public sealed class BarWindow : CompanionWindow
     /// on both sides of itself as well, so it sits in the middle of the gap it makes.
     /// </remarks>
     private Rect _strip;
+
+    /// <summary>
+    /// The strip the profile asked for, before the shell had its say. Compared against
+    /// what the profile asks for on every pass; <see cref="_strip"/> is what the shell
+    /// granted, which may differ and must not be compared, or a bar the shell moved
+    /// would be moved back and forth on every turn of the loop.
+    /// </summary>
+    private Rect _requestedStrip;
 
     /// <summary>What the compositor was last asked for, so it is asked once per change.</summary>
     private Look? _look;
@@ -108,11 +127,13 @@ public sealed class BarWindow : CompanionWindow
 
     /// <param name="model">The bar model to draw.</param>
     /// <param name="deviceId">The GDI device name of the display this bar is for.</param>
-    public BarWindow(BarModel model, string deviceId)
+    /// <param name="scalesToDpi">Whether sizes are device-independent pixels scaled to the display, or raw pixels.</param>
+    public BarWindow(BarModel model, string deviceId, bool scalesToDpi = true)
         : base(new WindowClassOptions(WindowClass))
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         ArgumentException.ThrowIfNullOrEmpty(deviceId);
+        _scalesToDpi = scalesToDpi;
 
         _label = deviceId.LastIndexOf('\\') is var slash && slash >= 0 ? deviceId[(slash + 1)..] : deviceId;
     }
@@ -120,13 +141,17 @@ public sealed class BarWindow : CompanionWindow
     /// <summary>The display this bar sits on, as the log names it.</summary>
     public string Label => _label;
 
-    /// <summary>Creates the window on the given monitor work area.</summary>
-    public bool Create(Rect monitorBounds)
+    /// <summary>Creates the window on the given monitor.</summary>
+    /// <param name="monitorBounds">The display's rectangle, in screen pixels.</param>
+    /// <param name="dpi">The display's DPI, which decides how large a device-independent pixel is here.</param>
+    public bool Create(Rect monitorBounds, uint dpi)
     {
         BarProfile profile = _model.Profile;
 
         _monitor = monitorBounds;
-        (_strip, _bounds) = Geometry(monitorBounds, profile);
+        _scale = ScaleFor(dpi);
+        (_strip, _bounds) = Geometry(monitorBounds, profile, _scale);
+        _requestedStrip = _strip;
 
         if (!CreateWindow(
                 (uint)(WINDOW_EX_STYLE.WS_EX_TOOLWINDOW | WINDOW_EX_STYLE.WS_EX_NOACTIVATE),
@@ -162,12 +187,15 @@ public sealed class BarWindow : CompanionWindow
 
         // The shape can change when the profile does, e.g. a presentation profile
         // with a slimmer bar, or one that floats where the default is docked.
-        (Rect strip, Rect bounds) = Geometry(_monitor, profile);
-        if (strip != _strip || bounds != _bounds) Place(strip, bounds);
+        (Rect strip, Rect bounds) = Geometry(_monitor, profile, _scale);
+        if (strip != _requestedStrip) Place(strip, bounds);
 
         ApplyLook(profile);
 
+        // Built in device-independent pixels, scaled to this display, then laid out -
+        // so the text is measured in the font it is drawn in.
         _tree = _model.Build();
+        VisualScaling.Scale(_tree, _scale);
         _layout.Arrange(_tree, _bounds with { X = 0, Y = 0 });
 
         // The hovered node belongs to the tree that was just thrown away. Found again
@@ -199,10 +227,14 @@ public sealed class BarWindow : CompanionWindow
     /// on the inner side, so the room above the bar and the room below it match
     /// without the window manager's gaps having to know about either.
     /// </remarks>
-    internal static (Rect Strip, Rect Window) Geometry(Rect monitor, BarProfile profile)
+    /// <param name="monitor">The display's rectangle, in screen pixels.</param>
+    /// <param name="profile">The profile, whose sizes are in device-independent pixels.</param>
+    /// <param name="scale">Pixels per device-independent pixel on this display.</param>
+    internal static (Rect Strip, Rect Window) Geometry(Rect monitor, BarProfile profile, double scale = 1.0)
     {
-        int margin = Math.Max(0, profile.Margin);
-        int depth = profile.Height + (2 * margin);
+        int margin = VisualScaling.Scale(Math.Max(0, profile.Margin), scale);
+        int height = VisualScaling.Scale(profile.Height, scale);
+        int depth = height + (2 * margin);
 
         Rect strip = profile.Edge == BarEdge.Top
             ? new Rect(monitor.X, monitor.Y, monitor.Width, depth)
@@ -212,14 +244,18 @@ public sealed class BarWindow : CompanionWindow
             strip.X + margin,
             strip.Y + margin,
             Math.Max(0, strip.Width - (2 * margin)),
-            profile.Height);
+            height);
 
         return (strip, window);
     }
 
+    /// <summary>The scale for a display, or exactly 1 when the configuration says sizes are raw pixels.</summary>
+    private double ScaleFor(uint dpi) => _scalesToDpi ? VisualScaling.FactorFor(dpi) : 1.0;
+
     /// <summary>Moves the window and re-reserves its strip.</summary>
     private void Place(Rect strip, Rect bounds)
     {
+        _requestedStrip = strip;
         _strip = strip;
         _bounds = bounds;
 
@@ -248,25 +284,40 @@ public sealed class BarWindow : CompanionWindow
     /// rather than a second reservation.
     /// </para>
     /// </remarks>
+    /// <param name="monitorBounds">The display's rectangle, in screen pixels.</param>
+    /// <param name="dpi">The display's DPI now, which a scaling change alters without the rectangle moving.</param>
     /// <returns>Whether anything moved.</returns>
-    public bool Relocate(Rect monitorBounds)
+    public bool Relocate(Rect monitorBounds, uint dpi)
     {
         if (!Exists) return false;
 
         _monitor = monitorBounds;
 
-        (Rect strip, Rect bounds) = Geometry(monitorBounds, _model.Profile);
+        double scale = ScaleFor(dpi);
+        bool rescaled = Math.Abs(scale - _scale) > 0.0005;
+        _scale = scale;
 
-        if (strip == _strip && bounds == _bounds) return false;
+        (Rect strip, Rect bounds) = Geometry(monitorBounds, _model.Profile, _scale);
 
-        Place(strip, bounds);
+        if (strip == _requestedStrip && !rescaled) return false;
 
-        // The tree was laid out for the old width. Dropping it makes the next Update
-        // rebuild, whether or not the model has changed.
+        if (strip != _requestedStrip) Place(strip, bounds);
+
+        // The tree was laid out for the old width, or the old scale. Dropping it makes
+        // the next Update rebuild, whether or not the model has changed.
         _tree = null;
+
+        if (rescaled) Log.Info(LogCategory.Wm, $"bar {_label} now draws at {_scale:F2}x ({dpi} dpi)");
 
         return true;
     }
+
+    /// <summary>
+    /// Windows says this window's display changed DPI - a scaling change in Settings,
+    /// or the display being replaced by one of a different density under the same
+    /// name. The bar is re-sized and re-drawn at the new scale.
+    /// </summary>
+    protected override void OnDpiChanged(uint dpi, Rect suggested) => Relocate(_monitor, dpi);
 
     protected override void OnPaint()
     {
@@ -287,6 +338,8 @@ public sealed class BarWindow : CompanionWindow
     /// </remarks>
     protected override void OnMouseMove(int x, int y)
     {
+        _lastMouse = (x, y);
+
         VisualNode? hovered = Interactive(_tree?.HitTest(x, y));
 
         if (ReferenceEquals(hovered, _hovered)) return;
@@ -305,6 +358,8 @@ public sealed class BarWindow : CompanionWindow
 
     protected override void OnMouseLeave()
     {
+        _lastMouse = (-1, -1);
+
         if (_hovered is null) return;
 
         _hovered = null;
@@ -326,19 +381,44 @@ public sealed class BarWindow : CompanionWindow
         return null;
     }
 
+    /// <summary>Where the pointer last was, for the wheel, which Windows reports in screen coordinates.</summary>
+    private (int X, int Y) _lastMouse = (-1, -1);
 
-    protected override void OnMouseDown(MouseButton button, int x, int y)
+    protected override void OnMouseDown(MouseButton button, int x, int y) =>
+        Perform(x, y, button switch
+        {
+            MouseButton.Left => static n => n.OnClick,
+            MouseButton.Right => static n => n.OnRightClick,
+            MouseButton.Middle => static n => n.OnMiddleClick,
+            _ => static _ => null,
+        });
+
+    /// <summary>
+    /// The wheel over a widget. The gesture lands where the pointer last moved, since
+    /// the wheel message carries screen coordinates and the pointer has to be over the
+    /// bar for the bar to receive it at all.
+    /// </summary>
+    protected override void OnWheel(int delta)
     {
-        if (button != MouseButton.Left) return;
-        if (_tree?.HitTest(x, y) is not { } node) return;
+        if (delta == 0) return;
 
-        // Walk up: the click usually lands on a text node inside the element that
-        // carries the command.
+        Perform(_lastMouse.X, _lastMouse.Y, delta > 0 ? static n => n.OnScrollUp : static n => n.OnScrollDown);
+    }
+
+    /// <summary>
+    /// Runs the command a gesture names on the widget under the pointer, or on the
+    /// nearest ancestor that names one - a click usually lands on a text node inside
+    /// the element that carries the command.
+    /// </summary>
+    private void Perform(int x, int y, Func<VisualNode, string?> command)
+    {
+        if (x < 0 || _tree?.HitTest(x, y) is not { } node) return;
+
         for (VisualNode? current = node; current is not null; current = FindParent(_tree, current))
         {
-            if (current.OnClick is { Length: > 0 } command)
+            if (command(current) is { Length: > 0 } run)
             {
-                CommandRequested?.Invoke(command);
+                CommandRequested?.Invoke(run);
                 return;
             }
         }
@@ -419,7 +499,52 @@ public sealed class BarWindow : CompanionWindow
             _appbarRegistered = true;
         }
 
+        // The documented handshake: propose the rectangle with ABM_QUERYPOS, which the
+        // shell adjusts if another appbar - a taskbar docked to the same edge - is
+        // already there; then reserve what came back with ABM_SETPOS, which the shell
+        // may adjust once more; then put the window where the reservation actually is.
+        // Asking for a strip and drawing the bar in it regardless of the answer had the
+        // bar sitting under a top-docked taskbar, with its own strip reserved below
+        // the taskbar's where nothing was drawn.
+        const uint AbmQueryPos = 0x00000002;
+
+        PInvoke.SHAppBarMessage(AbmQueryPos, ref data);
         PInvoke.SHAppBarMessage(AbmSetPos, ref data);
+
+        Rect granted = Rect.FromEdges(data.rc.left, data.rc.top, data.rc.right, data.rc.bottom);
+
+        if (granted != _strip && !granted.IsEmpty)
+            FollowTheShell(granted);
+    }
+
+    /// <summary>
+    /// Moves the window into the strip the shell granted, when it is not the one that
+    /// was asked for.
+    /// </summary>
+    /// <remarks>
+    /// The window keeps its height and its margin; only where the strip is changes. The
+    /// requested strip is left as it was, so the next pass does not read the difference
+    /// as the profile asking to move.
+    /// </remarks>
+    private void FollowTheShell(Rect granted)
+    {
+        int margin = VisualScaling.Scale(Math.Max(0, _model.Profile.Margin), _scale);
+
+        _strip = granted;
+        _bounds = new Rect(
+            granted.X + margin,
+            granted.Y + margin,
+            Math.Max(0, granted.Width - (2 * margin)),
+            _bounds.Height);
+
+        PInvoke.SetWindowPos(
+            Hwnd, HWND.Null, _bounds.X, _bounds.Y, _bounds.Width, _bounds.Height,
+            SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE | SET_WINDOW_POS_FLAGS.SWP_NOZORDER);
+
+        // The tree was laid out for the old rectangle.
+        _tree = null;
+
+        Log.Info(LogCategory.Wm, $"bar {_label}: the shell granted {_strip} rather than {_requestedStrip}; following it");
     }
 
     /// <summary>

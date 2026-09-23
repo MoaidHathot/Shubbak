@@ -155,11 +155,40 @@ public sealed class BarModel : IDisposable
     private readonly Lock _gate = new();
 
     private BarProfile _profile;
+    private HashSet<string> _dependencies;
     private bool _dirty = true;
     private bool _disposed;
 
-    public BarModel(BarProfile profile) =>
+    public BarModel(BarProfile profile)
+    {
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
+        _dependencies = DependenciesOf(profile);
+    }
+
+    /// <summary>
+    /// Every value some widget of a profile reads, so a value nobody displays does not
+    /// cost a rebuild.
+    /// </summary>
+    /// <remarks>
+    /// The documentation has said since the beginning that widgets re-render only when
+    /// a source they use changes; every widget computed its dependencies for that, and
+    /// the model read none of them. A clock ticking twice a second rebuilt a bar that
+    /// showed no clock.
+    /// </remarks>
+    private static HashSet<string> DependenciesOf(BarProfile profile)
+    {
+        HashSet<string> keys = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (BarZone zone in profile.Zones)
+            foreach (IWidget widget in zone.Widgets)
+                foreach (string key in widget.Dependencies)
+                    keys.Add(key);
+
+        return keys;
+    }
+
+    /// <summary>Whether a change to a value is worth a rebuild: some widget reads it.</summary>
+    private bool Depends(string key) => _dependencies.Contains(key);
 
     /// <summary>The profile currently in effect.</summary>
     public BarProfile Profile
@@ -175,6 +204,7 @@ public sealed class BarModel : IDisposable
             {
                 if (ReferenceEquals(_profile, value)) return;
                 _profile = value;
+                _dependencies = DependenciesOf(value);
                 woke = MarkDirty();
             }
 
@@ -320,7 +350,7 @@ public sealed class BarModel : IDisposable
             }
 
             _values[name] = value;
-            woke = MarkDirty();
+            woke = Depends(name) && MarkDirty();
         }
 
         if (woke) Dirtied?.Invoke();
@@ -343,7 +373,7 @@ public sealed class BarModel : IDisposable
             // Rebuild only if some widget actually depends on this source. A source
             // nothing displays - left over after a profile switch, say - must not
             // cost a redraw.
-            woke = MarkDirty();
+            woke = Depends(source.Name) && MarkDirty();
         }
 
         if (woke) Dirtied?.Invoke();

@@ -199,6 +199,12 @@ public sealed class CommandExecutor
             FloatCommand => new(_wm.SetFocusedWindowState(Tree.WindowState.Floating)),
             TileCommand => new(_wm.SetFocusedWindowState(Tree.WindowState.Tiling)),
             ToggleFullscreenCommand c => new(_wm.ToggleFullscreen(c.WholeMonitor)),
+            ToggleMaximisedCommand => new(_wm.ToggleMaximised()),
+            FocusMonitorCommand c => new(_wm.FocusMonitor(c.Direction, c.Monitor)),
+            MoveToMonitorCommand c => new(_wm.MoveToMonitor(c.Direction, c.Monitor, c.Focus)),
+            SwapDirectionCommand c => new(_wm.SwapDirection(c.Direction)),
+            GapsCommand c => new(_wm.AdjustGaps(c.Inner, c.Outer, c.Absolute)),
+            SetMasterCountCommand c => new(_wm.SetMasterCount(c.Delta, c.Absolute)),
             ToggleMinimisedCommand => new(_wm.ToggleMinimised()),
 
             EnableBindingModeCommand c => new(_wm.SetBindingMode(c.Mode)),
@@ -233,6 +239,7 @@ public sealed class CommandExecutor
             ManageCommand => Rejected(
                 command,
                 "'manage' is only valid in a window rule; use toggle-managed for a key."),
+            NoFocusCommand => Rejected(command, "'no-focus' is only valid in a window rule."),
 
             ToggleManagedCommand => Host(HostAction.ToggleManaged),
 

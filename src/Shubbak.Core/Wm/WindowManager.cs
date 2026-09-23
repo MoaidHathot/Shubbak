@@ -1949,6 +1949,228 @@ public sealed class WindowManager
     }
 
     /// <summary>
+    /// Toggles the focused window between maximised and the state it was in.
+    /// </summary>
+    /// <remarks>
+    /// Maximised is fullscreen with the window's own frame: it fills the work area,
+    /// covers its siblings, and keeps its title bar and the bar above it, which is what
+    /// somebody who presses the maximise button in a tiling window manager was asking
+    /// for. Owned by the tree rather than by Windows: the window is placed at the work
+    /// area like a fullscreen one, so the committer's rule that a natively maximised
+    /// window is drift still holds and Win+Up still tiles the window back.
+    /// </remarks>
+    public WmResult ToggleMaximised()
+    {
+        if (FocusedWindow is not { } window)
+            return Reject("toggle-maximised", "No focused window.");
+
+        return window.State == WindowState.Maximised
+            ? RestoreFromAway(window)
+            : SetWindowState(window, WindowState.Maximised);
+    }
+
+    /// <summary>
+    /// Focuses another monitor: whatever its active workspace was last looking at.
+    /// </summary>
+    /// <param name="direction">The monitor that way from the focused one, or null to use the reference.</param>
+    /// <param name="reference">A name from the configuration, a position from zero, or a device name.</param>
+    /// <remarks>
+    /// <c>focus --direction right</c> crosses to the next monitor only when nothing
+    /// within the workspace is to the right, which from the left half of a screen is
+    /// two presses and from a monocle workspace is never. This is the one that says
+    /// the monitor and means it.
+    /// </remarks>
+    public WmResult FocusMonitor(Direction? direction, string? reference)
+    {
+        (MonitorNode? target, WmResult? refusal) = ResolveMonitor("focus", direction, reference);
+        if (target is null) return refusal!.Value;
+
+        if (target.ActiveWorkspace is not { } workspace)
+            return Reject("focus", $"{target.DeviceId} is showing no workspace.");
+
+        FocusedMonitor = target;
+        SetFocus(FocusPolicy.OnWorkspaceActivated(workspace));
+
+        return Complete();
+    }
+
+    /// <summary>Moves the focused window to another monitor's active workspace.</summary>
+    /// <param name="direction">The monitor that way from the window's, or null to use the reference.</param>
+    /// <param name="reference">A name from the configuration, a position from zero, or a device name.</param>
+    /// <param name="focus">Whether the view follows the window there.</param>
+    public WmResult MoveToMonitor(Direction? direction, string? reference, bool focus = false)
+    {
+        if (FocusedWindow is not { } window)
+            return Reject("move", "No focused window.");
+
+        (MonitorNode? target, WmResult? refusal) = ResolveMonitor("move", direction, reference, window.Monitor);
+        if (target is null) return refusal!.Value;
+
+        if (target.ActiveWorkspace is not { } destination)
+            return Reject("move", $"{target.DeviceId} is showing no workspace.");
+
+        if (ReferenceEquals(window.Workspace, destination))
+            return Reject("move", $"The window is already on {target.DeviceId}.");
+
+        return MoveWindowToWorkspace(window, destination, focus: focus);
+    }
+
+    /// <summary>The monitor a direction or a reference names, or why there is none.</summary>
+    private (MonitorNode? Monitor, WmResult? Refusal) ResolveMonitor(
+        string verb, Direction? direction, string? reference, MonitorNode? from = null)
+    {
+        if (direction is { } way)
+        {
+            MonitorNode? origin = from ?? FocusedMonitor ?? Root.PrimaryMonitor;
+
+            if (origin is null) return (null, Reject(verb, "No monitor is attached."));
+
+            return Root.MonitorInDirection(origin, way) is { } neighbour
+                ? (neighbour, null)
+                : (null, Reject(verb, $"No monitor to the {way.ToString().ToLowerInvariant()}."));
+        }
+
+        if (reference is { Length: > 0 })
+        {
+            if (FindMonitor(reference) is { } named) return (named, null);
+
+            List<string> known = [];
+
+            for (int index = 0; index < Root.Monitors.Count; index++)
+            {
+                MonitorNode attached = Root.Monitors[index];
+                string names = attached.Names.Count > 0 ? $" ({string.Join(", ", attached.Names)})" : "";
+                known.Add($"{index} = {attached.DeviceId}{names}");
+            }
+
+            return (null, Reject(verb, $"No monitor called '{reference}'. Attached: {(known.Count > 0 ? string.Join("; ", known) : "none")}."));
+        }
+
+        return (null, Reject(verb, "No monitor was named."));
+    }
+
+    /// <summary>
+    /// Exchanges the focused window with its neighbour in a direction, wherever in the
+    /// tree that neighbour is.
+    /// </summary>
+    /// <remarks>
+    /// <c>move</c> among siblings is a swap already, but a move into a neighbouring
+    /// container joins it, and a move past the workspace edge changes monitor. Swap
+    /// never changes the shape of the tree: two windows trade places and everything
+    /// else stays where it was, which is the gesture for "these two are the wrong way
+    /// round" in a layout that took a while to arrange.
+    /// </remarks>
+    public WmResult SwapDirection(Direction direction)
+    {
+        if (FocusedWindow is not { } window)
+            return Reject("swap", "No focused window.");
+
+        if (!window.IsTiled)
+            return Reject("swap", "Only a tiled window has a place to swap.");
+
+        if (FocusNavigator.Navigate(window, direction) is not { } other)
+            return Reject("swap", $"Nothing to the {direction.ToString().ToLowerInvariant()} to swap with.");
+
+        if (!other.IsTiled)
+            return Reject("swap", "The window that way is not tiled.");
+
+        TreeOps.Swap(window, other);
+
+        Emit(new WindowMoved(window, window.Workspace, window.Workspace!));
+        Emit(new WindowMoved(other, other.Workspace, other.Workspace!));
+
+        return Complete();
+    }
+
+    /// <summary>
+    /// Changes the gaps at runtime, by a signed amount or to an absolute one.
+    /// </summary>
+    /// <param name="inner">The change to the gap between windows, or null to leave it.</param>
+    /// <param name="outer">The change to the gap around the edge, applied to all four sides, or null.</param>
+    /// <param name="absolute">Whether the amounts replace the gaps rather than add to them.</param>
+    /// <remarks>
+    /// The gaps are the configuration's until the file is reloaded, which resets them:
+    /// this is for the key that closes the gaps up for a screen-share and opens them
+    /// again after, not for a second place to write the setting. Never below zero,
+    /// and never so large that nothing is left to tile; the layout's own minimum
+    /// extent already refuses that, but a gap of a thousand is a mistake worth
+    /// catching at the command.
+    /// </remarks>
+    public WmResult AdjustGaps(int? inner, int? outer, bool absolute = false)
+    {
+        if (inner is null && outer is null)
+            return Reject("gaps", "Nothing to change; give --inner or --outer.");
+
+        // Below zero is read as zero - "close the gaps up" is the whole point of a
+        // negative change - but past the ceiling is refused rather than clamped: a
+        // gap of several hundred pixels is a typo, and a typo that lands on the
+        // ceiling is a screen with no room to tile anything.
+        const int Most = 200;
+
+        int newInner = inner is { } i ? Math.Max(0, absolute ? i : Options.InnerGap + i) : Options.InnerGap;
+
+        Gaps current = Options.OuterGap;
+        Gaps newOuter = outer is { } o
+            ? new Gaps(
+                Math.Max(0, absolute ? o : current.Left + o),
+                Math.Max(0, absolute ? o : current.Top + o),
+                Math.Max(0, absolute ? o : current.Right + o),
+                Math.Max(0, absolute ? o : current.Bottom + o))
+            : current;
+
+        if (newInner > Most || newOuter.Left > Most || newOuter.Top > Most || newOuter.Right > Most || newOuter.Bottom > Most)
+            return Reject("gaps", $"A gap of more than {Most} pixels leaves nothing to tile.");
+
+        if (newInner == Options.InnerGap && newOuter == current)
+            return Reject("gaps", "The gaps are already there.");
+
+        Options = Options with { InnerGap = newInner, OuterGap = newOuter };
+
+        Emit(new GapsChanged(newInner, newOuter));
+
+        return Complete();
+    }
+
+    /// <summary>
+    /// Changes how many windows a master-stack layout keeps in its master area, for the
+    /// focused window's container.
+    /// </summary>
+    /// <param name="delta">The change, or the count itself when <paramref name="absolute"/>.</param>
+    /// <param name="absolute">Whether <paramref name="delta"/> is the count rather than a change.</param>
+    /// <remarks>
+    /// The master-stack layouts have carried a master count since they were written,
+    /// with no way to set it from a key. One master is a main window and a stack; two
+    /// is a pair side by side with the rest below, which is the shape for a call and its
+    /// notes. Refused for a container in any other layout, since the count means
+    /// nothing there and silently switching layouts would be a surprise.
+    /// </remarks>
+    public WmResult SetMasterCount(int delta, bool absolute = false)
+    {
+        if (FocusedWindow?.ParentContainer is not { } container)
+            return Reject("layout", "No focused window.");
+
+        // The nearest container in a master layout, since the focused window may sit
+        // inside a split nested in one.
+        ContainerNode? target = container;
+
+        while (target is not null && target.Layout is not MasterStackLayout)
+            target = target.ParentContainer;
+
+        if (target?.Layout is not MasterStackLayout master)
+            return Reject("layout", "The focused window is not in a master-stack layout; --masters applies to master-left, master-right, master-top and master-bottom.");
+
+        int count = Math.Clamp(absolute ? delta : master.MasterCount + delta, 1, 8);
+
+        if (count == master.MasterCount)
+            return Reject("layout", $"The master count is already {count}.");
+
+        target.Layout = master.WithMasterCount(count);
+
+        Emit(new LayoutChanged(target, target.Layout.Name));
+
+        return Complete();
+    }
+    /// <summary>
     /// Puts the focused window away, or brings back the one put away last.
     /// </summary>
     /// <remarks>
@@ -2045,7 +2267,21 @@ public sealed class WindowManager
 
     private void SetFocus(WindowNode? window)
     {
-        if (ReferenceEquals(FocusedWindow, window)) return;
+        if (ReferenceEquals(FocusedWindow, window))
+        {
+            // The same window, but perhaps not the same place: a focused window moved
+            // to another monitor and followed there is still the focused window, and
+            // the focused monitor has to move with it or the next monitor-relative
+            // command works from the screen it left. No event; nothing changed that
+            // anybody listening would call a focus change.
+            if (window?.Workspace is { } here)
+            {
+                here.LastFocused = window;
+                if (here.Monitor is { } monitor) FocusedMonitor = monitor;
+            }
+
+            return;
+        }
 
         WindowNode? previous = FocusedWindow;
         FocusedWindow = window;

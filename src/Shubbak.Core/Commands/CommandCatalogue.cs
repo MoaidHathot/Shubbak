@@ -140,11 +140,13 @@ public static class CommandCatalogue
         Spec("focus-window", "Focus a window by handle, wherever it is", [CommandArgument.WindowHandle]),
         Spec("focus-recent-window", "Return to the window focused before this one"),
         Spec("move", "Move the focused window", [CommandArgument.Direction]),
+        Spec("swap", "Exchange the focused window with its neighbour in a direction", [CommandArgument.Direction]),
         Spec("move-workspace", "Move this workspace to another monitor, by direction or by name",
             [CommandArgument.Direction]),
 
         Spec("resize", "Grow or shrink the focused window", [CommandArgument.Axis, CommandArgument.Amount]),
         Spec("equalise", "Give siblings an equal share", aliases: ["equalize"]),
+        Spec("gaps", "Change the gaps between and around windows, by a signed amount or to a value", [CommandArgument.Amount]),
 
         Spec("split", "Split the container", [CommandArgument.LayoutName]),
         Spec("layout", "Set or cycle the container's layout", [CommandArgument.LayoutName]),
@@ -155,6 +157,8 @@ public static class CommandCatalogue
         Spec("toggle-floating", "Toggle the focused window between tiled and floating",
             aliases: ["toggle-tiling"]),
         Spec("toggle-fullscreen", "Toggle fullscreen for the focused window"),
+        Spec("toggle-maximized", "Fill the work area with the focused window, keeping its frame, or put it back",
+            aliases: ["toggle-maximised"]),
         Spec("toggle-minimized", "Minimise the focused window, or restore it",
             aliases: ["toggle-minimised"]),
         Spec("close", "Ask the focused window to close"),
@@ -167,6 +171,7 @@ public static class CommandCatalogue
 
         Spec("ignore", "Never manage this window (window rules only)"),
         Spec("manage", "Manage this window even if the filter would not (window rules only)"),
+        Spec("no-focus", "Leave focus where it was when this window arrives (window rules only)"),
         Spec("toggle-managed", "Take on the foreground window, or release it"),
 
         Spec("signal", "Announce a named gesture to connected clients", [CommandArgument.SignalName]),

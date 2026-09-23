@@ -219,6 +219,40 @@ public sealed class LayoutEngine
     }
 
     /// <summary>
+    /// A floating rectangle brought back onto its workspace's display when none of it
+    /// is there any more.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A floating window's position is the user's, and is left alone while any of it
+    /// is on the display its workspace lives on - a dialog straddling two screens is a
+    /// choice. It stops being a choice when the display it was on is unplugged, or
+    /// rearranged in Settings, or its workspace is moved to a smaller one: the saved
+    /// rectangle then describes a place that no longer exists, and the window was
+    /// placed there anyway, off every screen, with the tree saying it was visible.
+    /// </para>
+    /// <para>
+    /// Only a rectangle wholly outside the work area is moved, and it is moved rather
+    /// than recentred - slid in by the least that puts it on screen, then shrunk if it
+    /// is larger than the area - so a window that was at the top left of the old
+    /// display is at the top left of the new one, which is where its owner will look.
+    /// </para>
+    /// </remarks>
+    public static Rect ReHomed(Rect floating, Rect workArea)
+    {
+        if (floating.IsEmpty || workArea.IsEmpty) return floating;
+        if (floating.IntersectsWith(workArea)) return floating;
+
+        int width = Math.Min(floating.Width, workArea.Width);
+        int height = Math.Min(floating.Height, workArea.Height);
+
+        int x = Math.Clamp(floating.X, workArea.X, workArea.Right - width);
+        int y = Math.Clamp(floating.Y, workArea.Y, workArea.Bottom - height);
+
+        return new Rect(x, y, width, height);
+    }
+
+    /// <summary>
     /// Emits placements for the windows the tiling recursion skipped.
     /// </summary>
     /// <param name="workspace">The workspace being arranged.</param>
@@ -263,7 +297,10 @@ public sealed class LayoutEngine
                     // exactly where the user had put it.
                     Rect floating = window.IsNativeFullscreen
                         ? monitorBounds
-                        : window.FloatingRect ?? window.Rect;
+                        : ReHomed(window.FloatingRect ?? window.Rect, workArea);
+
+                    if (!window.IsNativeFullscreen && window.FloatingRect is { } remembered && remembered != floating)
+                        window.FloatingRect = floating;
 
                     window.Rect = floating;
                     _placements.Add(new Placement(

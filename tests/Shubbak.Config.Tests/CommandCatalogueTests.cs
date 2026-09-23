@@ -152,7 +152,8 @@ public sealed class CommandCatalogueTests
         // ignores the extras is fine.
         string text = verb switch
         {
-            "focus" or "move" or "move-workspace" => $"{verb} --direction left",
+            "focus" or "move" or "move-workspace" or "swap" => $"{verb} --direction left",
+            "gaps" => "gaps --inner +2",
             "resize" => "resize --width 10",
             "split" or "layout" => $"{verb} horizontal",
             "tag" => "tag 3",

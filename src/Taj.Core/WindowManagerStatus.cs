@@ -29,6 +29,12 @@ public static class WindowManagerStatus
     /// <summary>Shown when windows are no longer being arranged.</summary>
     public const string Paused = "paused";
 
+    /// <summary>Shown when the window manager cannot be reached.</summary>
+    public const string Disconnected = "no window manager";
+
+    /// <summary>The template value that carries <see cref="Disconnected"/>: <c>{{ connection }}</c>.</summary>
+    public const string ConnectionKey = "connection";
+
     /// <summary>
     /// The single label for a bar with room for one.
     /// </summary>
@@ -44,6 +50,22 @@ public static class WindowManagerStatus
         suspended ? Suspended
             : paused ? Paused
             : string.Empty;
+
+    /// <summary>
+    /// The label for the connection pill: something while the window manager is gone,
+    /// nothing while it is there.
+    /// </summary>
+    /// <remarks>
+    /// Only once a window manager has been reached and lost. A bar started by the
+    /// window manager's own startup command can win the race and be up first, and a
+    /// pill saying the window manager is missing for the half second it takes to
+    /// arrive would be the first thing every logon showed. Until then a bar with no
+    /// window manager looks exactly as it did before this existed: it is still a clock.
+    /// </remarks>
+    /// <param name="connected">Whether a connection is open now.</param>
+    /// <param name="everConnected">Whether one has ever been.</param>
+    public static string ConnectionLabel(bool connected, bool everConnected) =>
+        !connected && everConnected ? Disconnected : string.Empty;
 
     /// <summary>The label for the suspended pill on its own.</summary>
     /// <remarks>

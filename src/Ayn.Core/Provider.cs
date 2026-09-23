@@ -20,6 +20,27 @@ public enum Fact
 
     /// <summary>The default microphone is muted at the system level.</summary>
     MicrophoneMuted,
+
+    /// <summary>A program is capturing the screen - sharing it, or recording it.</summary>
+    ScreenCaptured,
+
+    /// <summary>The default speaker is muted at the system level.</summary>
+    SpeakerMuted,
+
+    /// <summary>The machine is running from its battery.</summary>
+    OnBattery,
+
+    /// <summary>The battery is at or below the configured percentage.</summary>
+    BatteryLow,
+
+    /// <summary>A laptop's lid is shut.</summary>
+    LidClosed,
+
+    /// <summary>Windows judges nobody to be at the keyboard.</summary>
+    UserAway,
+
+    /// <summary>Apps are set to the dark theme.</summary>
+    DarkTheme,
 }
 
 /// <summary>The names a <see cref="Fact"/> goes by outside the process.</summary>
@@ -31,6 +52,13 @@ public static class FactNames
         Fact.CameraInUse => "camera-in-use",
         Fact.MicrophoneInUse => "microphone-in-use",
         Fact.MicrophoneMuted => "microphone-muted",
+        Fact.ScreenCaptured => "screen-captured",
+        Fact.SpeakerMuted => "speaker-muted",
+        Fact.OnBattery => "on-battery",
+        Fact.BatteryLow => "battery-low",
+        Fact.LidClosed => "lid-closed",
+        Fact.UserAway => "user-away",
+        Fact.DarkTheme => "dark-theme",
         _ => fact.ToString().ToLowerInvariant(),
     };
 
@@ -38,14 +66,46 @@ public static class FactNames
     /// Whether a change to the fact waits out the settle time before it is believed.
     /// </summary>
     /// <remarks>
-    /// Use does: a call opens and closes the devices several times while it sets up.
-    /// Mute does not: it changes when a person presses a key, and a person who pressed
-    /// the key wants the icon now.
+    /// Use does: a call opens and closes the devices several times while it sets up,
+    /// and a share is set up the same way. Mute does not: it changes when a person
+    /// presses a key, and a person who pressed the key wants the icon now. Nor do the
+    /// power facts or the theme: the mains lead is in or it is not, and Windows has
+    /// already taken its time deciding that nobody is there.
     /// </remarks>
-    public static bool Settles(this Fact fact) => fact != Fact.MicrophoneMuted;
+    public static bool Settles(this Fact fact) =>
+        fact is Fact.CameraInUse or Fact.MicrophoneInUse or Fact.ScreenCaptured;
+
+    /// <summary>The device whose use the fact reports, or null for a fact about something else.</summary>
+    public static DeviceKind? Device(this Fact fact) => fact switch
+    {
+        Fact.CameraInUse => DeviceKind.Camera,
+        Fact.MicrophoneInUse => DeviceKind.Microphone,
+        Fact.ScreenCaptured => DeviceKind.Screen,
+        _ => null,
+    };
 
     /// <summary>Every fact, in a stable order.</summary>
-    public static IReadOnlyList<Fact> All { get; } = [Fact.CameraInUse, Fact.MicrophoneInUse, Fact.MicrophoneMuted];
+    public static IReadOnlyList<Fact> All { get; } =
+    [
+        Fact.CameraInUse, Fact.MicrophoneInUse, Fact.MicrophoneMuted,
+        Fact.ScreenCaptured, Fact.SpeakerMuted,
+        Fact.OnBattery, Fact.BatteryLow, Fact.LidClosed, Fact.UserAway,
+        Fact.DarkTheme,
+    ];
+}
+
+/// <summary>
+/// What a slot is about: a fact, and for a <c>by</c> rule the one program it is about.
+/// </summary>
+/// <param name="Fact">The fact.</param>
+/// <param name="App">
+/// The program the rule names, as a pattern - <c>ms-teams.exe</c>, <c>*teams*</c> -
+/// or null for the fact about any program.
+/// </param>
+public readonly record struct FactKey(Fact Fact, string? App = null)
+{
+    /// <summary>The name, for the log: <c>camera-in-use</c>, or <c>camera-in-use by ms-teams.exe</c>.</summary>
+    public override string ToString() => App is null ? Fact.Wire() : $"{Fact.Wire()} by {App}";
 }
 
 /// <summary>How a command sent to the window manager fared.</summary>
@@ -68,8 +128,17 @@ public enum SendOutcome
 /// <param name="Context">The context concerned.</param>
 /// <param name="Hold">True to hold it on with a lease; false to hand it back to its conditions.</param>
 /// <param name="Because">Why, for the log: <c>camera in use by Teams.exe</c>.</param>
-public sealed record ProviderAction(Fact Fact, string Context, bool Hold, string Because)
+/// <param name="Ttl">
+/// How long the window manager may hold it unrenewed, or null for as long as the
+/// connection lives. Set when the file asks for renewal; see <see cref="AynConfig.Renew"/>.
+/// </param>
+/// <param name="App">The program a <c>by</c> rule names, or null for the fact about any program.</param>
+public sealed record ProviderAction(
+    Fact Fact, string Context, bool Hold, string Because, TimeSpan? Ttl = null, string? App = null)
 {
+    /// <summary>The slot this books against.</summary>
+    public FactKey Key => new(Fact, App);
+
     /// <summary>
     /// The command, spelled the way the window manager's parser reads it.
     /// </summary>
@@ -84,11 +153,16 @@ public sealed record ProviderAction(Fact Fact, string Context, bool Hold, string
     /// us.
     /// </para>
     /// <para>
-    /// Quoted, because a context may be called anything the file can spell.
+    /// Quoted, because a context may be called anything the file can spell. A time to
+    /// live goes on the hold when the file asks for renewal: then a watcher that is
+    /// alive but stuck - connection open, loop wedged - loses its pins too, a little
+    /// after it stops renewing them.
     /// </para>
     /// </remarks>
     public string Command => Hold
-        ? $"context --set \"{Context}\" --lease"
+        ? Ttl is { } ttl
+            ? $"context --set \"{Context}\" --lease --ttl {(long)Math.Ceiling(ttl.TotalSeconds)}s"
+            : $"context --set \"{Context}\" --lease"
         : $"context --auto \"{Context}\"";
 }
 
@@ -115,13 +189,14 @@ public sealed record ProviderAction(Fact Fact, string Context, bool Hold, string
 /// </remarks>
 public sealed class Provider
 {
-    private readonly Slot[] _slots;
+    private readonly List<Slot> _slots;
     private AynConfig _config;
+    private Reading _lastReading = Reading.Idle;
 
     public Provider(AynConfig config)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
-        _slots = [.. FactNames.All.Select(fact => new Slot(fact))];
+        _slots = [.. SlotsFor(config)];
     }
 
     /// <summary>The settings in force.</summary>
@@ -136,16 +211,13 @@ public sealed class Provider
     {
         ArgumentNullException.ThrowIfNull(reading);
 
+        _lastReading = reading;
+
         foreach (Slot slot in _slots)
         {
-            bool wanted = reading.Holds(slot.Fact);
+            (bool wanted, IReadOnlyList<string> apps) = Judge(slot.Key, reading);
 
-            slot.Apps = slot.Fact switch
-            {
-                Fact.CameraInUse => reading.CameraApps,
-                Fact.MicrophoneInUse => reading.MicrophoneApps,
-                _ => [],
-            };
+            slot.Apps = apps;
 
             if (wanted == slot.Wanted) continue;
 
@@ -155,8 +227,61 @@ public sealed class Provider
     }
 
     /// <summary>
+    /// What the desk says about one slot: whether its fact holds, and by whose hand.
+    /// </summary>
+    /// <remarks>
+    /// A device's use is the programs using it less the ones the file says to ignore -
+    /// a recording tool that keeps the camera open all day is not a meeting. A
+    /// <c>by</c> rule holds while one of the programs left matches its pattern. Low
+    /// battery is the reading's percentage against the file's threshold, which is why
+    /// the reading cannot answer it alone.
+    /// </remarks>
+    private (bool Wanted, IReadOnlyList<string> Apps) Judge(FactKey key, Reading reading)
+    {
+        if (key.Fact.Device() is { } device)
+        {
+            IReadOnlyList<string> apps = Counted(reading.AppsFor(device), _config.IgnoredApps(device));
+
+            if (key.App is { } pattern)
+            {
+                string[] matching = [.. apps.Where(app => AppMatches(pattern, app))];
+                return (matching.Length > 0, matching);
+            }
+
+            return (apps.Count > 0, apps);
+        }
+
+        if (key.Fact == Fact.BatteryLow)
+            return (reading.Power?.BatteryPercent is { } percent && percent <= _config.BatteryLowPercent, []);
+
+        return (reading.Holds(key.Fact), []);
+    }
+
+    /// <summary>The programs that count: everything less the ignored.</summary>
+    private static IReadOnlyList<string> Counted(IReadOnlyList<string> apps, IReadOnlyList<string> ignored)
+    {
+        if (ignored.Count == 0 || apps.Count == 0) return apps;
+
+        return [.. apps.Where(app => !ignored.Any(pattern => AppMatches(pattern, app)))];
+    }
+
+    /// <summary>
+    /// Whether a program's name matches a pattern from the file: case-insensitive, with
+    /// <c>*</c> and <c>?</c> as wildcards, so <c>*teams*</c> covers the packaged and the
+    /// classic Teams alike.
+    /// </summary>
+    public static bool AppMatches(string pattern, string app)
+    {
+        ArgumentNullException.ThrowIfNull(pattern);
+        ArgumentNullException.ThrowIfNull(app);
+
+        return System.IO.Enumeration.FileSystemName.MatchesSimpleExpression(pattern, app, ignoreCase: true);
+    }
+
+    /// <summary>
     /// What to tell the window manager now: every fact whose wanted state has held
-    /// long enough and differs from what was last asserted.
+    /// long enough and differs from what was last asserted, and every hold that is due
+    /// to be renewed.
     /// </summary>
     /// <remarks>
     /// Handing an action out marks it asserted. The host sends it and reports how that
@@ -169,17 +294,33 @@ public sealed class Provider
 
         foreach (Slot slot in _slots)
         {
-            if (_config.ContextFor(slot.Fact) is not { } context) continue;
-            if (!Outstanding(slot)) continue;
-            if (slot.Fact.Settles() && now - slot.WantedSince < SettleMilliseconds) continue;
+            if (_config.ContextFor(slot.Key) is not { } context) continue;
 
-            slot.Asserted = slot.Wanted;
+            if (Outstanding(slot))
+            {
+                if (slot.Key.Fact.Settles() && now - slot.WantedSince < SettleMilliseconds) continue;
 
-            (due ??= []).Add(new ProviderAction(slot.Fact, context, slot.Wanted, Because(slot)));
+                slot.Asserted = slot.Wanted;
+                slot.AssertedAt = now;
+
+                (due ??= []).Add(Action(slot, context, slot.Wanted, Because(slot)));
+                continue;
+            }
+
+            // A hold that is due to be renewed: the same command again, which the
+            // window manager reads as the pin replaced by itself with a fresh clock.
+            if (RenewMilliseconds is { } renew && slot.Asserted && slot.Wanted && now - slot.AssertedAt >= renew)
+            {
+                slot.AssertedAt = now;
+                (due ??= []).Add(Action(slot, context, true, $"renewing {slot.Key}"));
+            }
         }
 
         return due ?? (IReadOnlyList<ProviderAction>)[];
     }
+
+    private ProviderAction Action(Slot slot, string context, bool hold, string because) =>
+        new(slot.Key.Fact, context, hold, because, hold ? _config.LeaseTtl : null, slot.Key.App);
 
     /// <summary>
     /// How long until something becomes due, or null when nothing is pending.
@@ -197,14 +338,24 @@ public sealed class Provider
 
         foreach (Slot slot in _slots)
         {
-            if (_config.ContextFor(slot.Fact) is null) continue;
-            if (!Outstanding(slot)) continue;
+            if (_config.ContextFor(slot.Key) is null) continue;
 
-            long due = slot.Fact.Settles() ? slot.WantedSince + SettleMilliseconds - now : 0;
-            if (soonest is null || due < soonest) soonest = due;
+            if (Outstanding(slot))
+            {
+                Consider(slot.Key.Fact.Settles() ? slot.WantedSince + SettleMilliseconds - now : 0);
+                continue;
+            }
+
+            if (RenewMilliseconds is { } renew && slot.Asserted && slot.Wanted)
+                Consider(slot.AssertedAt + renew - now);
         }
 
         return soonest is { } wait ? TimeSpan.FromMilliseconds(Math.Max(0, wait)) : null;
+
+        void Consider(long due)
+        {
+            if (soonest is null || due < soonest) soonest = due;
+        }
     }
 
     /// <summary>
@@ -252,9 +403,12 @@ public sealed class Provider
         switch (outcome)
         {
             case SendOutcome.Refused when action.Hold:
-                Slot slot = SlotFor(action.Fact);
-                slot.Asserted = false;
-                slot.Refused = true;
+                if (SlotFor(action.Key) is { } slot)
+                {
+                    slot.Asserted = false;
+                    slot.Refused = true;
+                }
+
                 break;
 
             case SendOutcome.Unreachable:
@@ -292,6 +446,7 @@ public sealed class Provider
     /// holds under the new names follow from <see cref="Due"/>.
     /// </returns>
     /// <remarks>
+    /// <para>
     /// A context that kept its name is held again too, if it is still true. The window
     /// manager drops every pin on a context the reloaded file no longer declares, and
     /// says nothing to whoever set it; and a hold it refused before the file declared the
@@ -299,17 +454,25 @@ public sealed class Provider
     /// manager already holds replaces it with itself, so the cost of being sure is one
     /// command per held context per reload. A hand-back that is waiting out its settle
     /// is left booked, so it still goes out on time.
+    /// </para>
+    /// <para>
+    /// A <c>by</c> rule the new file drops takes its slot with it, handing back what it
+    /// held; one the new file adds starts from nothing and is judged against the last
+    /// reading at once, so a program already on the camera is noticed without waiting
+    /// for it to do something.
+    /// </para>
     /// </remarks>
     public IReadOnlyList<ProviderAction> Reconfigure(AynConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
 
         List<ProviderAction>? released = null;
+        HashSet<FactKey> keep = [.. SlotsFor(config).Select(slot => slot.Key)];
 
-        foreach (Slot slot in _slots)
+        foreach (Slot slot in _slots.ToArray())
         {
-            string? before = _config.ContextFor(slot.Fact);
-            string? after = config.ContextFor(slot.Fact);
+            string? before = _config.ContextFor(slot.Key);
+            string? after = keep.Contains(slot.Key) ? config.ContextFor(slot.Key) : null;
 
             slot.Refused = false;
 
@@ -322,52 +485,100 @@ public sealed class Provider
             if (slot.Asserted && before is not null)
             {
                 (released ??= []).Add(new ProviderAction(
-                    slot.Fact, before, false, $"{slot.Fact.Wire()} is now reported as \"{after ?? "nothing"}\""));
+                    slot.Key.Fact, before, false,
+                    $"{slot.Key} is now reported as \"{after ?? "nothing"}\"", App: slot.Key.App));
             }
 
             // Whatever was asserted was under the old name. The new one starts from
             // nothing, and the settle time has already been served.
             slot.Asserted = false;
+
+            if (!keep.Contains(slot.Key)) _slots.Remove(slot);
+        }
+
+        foreach (Slot slot in SlotsFor(config))
+        {
+            if (SlotFor(slot.Key) is not null) continue;
+
+            _slots.Add(slot);
         }
 
         _config = config;
+
+        // The new slots, and the ones whose ignore list changed, judged against what
+        // the desk last said - without waiting for it to say something again.
+        Observe(_lastReading, long.MinValue / 2);
 
         return released ?? (IReadOnlyList<ProviderAction>)[];
     }
 
     /// <summary>Whether a fact is currently held on the window manager.</summary>
-    public bool IsHeld(Fact fact) => SlotFor(fact).Asserted;
+    public bool IsHeld(Fact fact, string? app = null) => SlotFor(new FactKey(fact, app))?.Asserted == true;
 
     private long SettleMilliseconds => (long)_config.EffectiveSettle.TotalMilliseconds;
+
+    private long? RenewMilliseconds =>
+        _config.Renew is { } renew && renew > TimeSpan.Zero ? (long)renew.TotalMilliseconds : null;
 
     /// <summary>Whether the window manager has yet to be told what the desk says about a fact.</summary>
     private static bool Outstanding(Slot slot) => slot.Wanted != slot.Asserted && !slot.Refused;
 
-    private Slot SlotFor(Fact fact)
+    private Slot? SlotFor(FactKey key)
     {
         foreach (Slot slot in _slots)
-            if (slot.Fact == fact) return slot;
+            if (slot.Key == key) return slot;
 
-        throw new ArgumentOutOfRangeException(nameof(fact), fact, "Not a fact this provider knows.");
+        return null;
     }
 
-    private static string Because(Slot slot) => (slot.Fact, slot.Wanted) switch
+    /// <summary>One slot per fact, and one per <c>by</c> rule.</summary>
+    private static IEnumerable<Slot> SlotsFor(AynConfig config)
     {
-        (Fact.CameraInUse, true) => $"camera in use by {string.Join(", ", slot.Apps)}",
-        (Fact.CameraInUse, false) => "camera no longer in use",
-        (Fact.MicrophoneInUse, true) => $"microphone in use by {string.Join(", ", slot.Apps)}",
-        (Fact.MicrophoneInUse, false) => "microphone no longer in use",
-        (Fact.MicrophoneMuted, true) => "microphone muted",
-        (Fact.MicrophoneMuted, false) => "microphone unmuted",
-        _ => slot.Fact.Wire(),
-    };
+        foreach (Fact fact in FactNames.All) yield return new Slot(new FactKey(fact));
 
-    private sealed class Slot(Fact fact)
+        foreach (AppRule rule in config.AppRules)
+            yield return new Slot(new FactKey(rule.Device.InUseFact(), rule.App));
+    }
+
+    private static string Because(Slot slot)
     {
-        public Fact Fact { get; } = fact;
+        string apps = string.Join(", ", slot.Apps);
+
+        return (slot.Key.Fact, slot.Wanted) switch
+        {
+            (Fact.CameraInUse, true) => $"camera in use by {apps}",
+            (Fact.CameraInUse, false) => "camera no longer in use",
+            (Fact.MicrophoneInUse, true) => $"microphone in use by {apps}",
+            (Fact.MicrophoneInUse, false) => "microphone no longer in use",
+            (Fact.MicrophoneMuted, true) => "microphone muted",
+            (Fact.MicrophoneMuted, false) => "microphone unmuted",
+            (Fact.ScreenCaptured, true) => $"screen captured by {apps}",
+            (Fact.ScreenCaptured, false) => "screen no longer captured",
+            (Fact.SpeakerMuted, true) => "speaker muted",
+            (Fact.SpeakerMuted, false) => "speaker unmuted",
+            (Fact.OnBattery, true) => "running on battery",
+            (Fact.OnBattery, false) => "back on the mains",
+            (Fact.BatteryLow, true) => "battery low",
+            (Fact.BatteryLow, false) => "battery no longer low",
+            (Fact.LidClosed, true) => "lid closed",
+            (Fact.LidClosed, false) => "lid opened",
+            (Fact.UserAway, true) => "user away",
+            (Fact.UserAway, false) => "user back",
+            (Fact.DarkTheme, true) => "dark theme",
+            (Fact.DarkTheme, false) => "light theme",
+            _ => slot.Key.ToString(),
+        } + (slot.Key.App is { } app && slot.Wanted ? $" (rule for {app})" : string.Empty);
+    }
+
+    private sealed class Slot(FactKey key)
+    {
+        public FactKey Key { get; } = key;
         public bool Wanted { get; set; }
         public long WantedSince { get; set; }
         public bool Asserted { get; set; }
+
+        /// <summary>When the hold was last sent, for renewal.</summary>
+        public long AssertedAt { get; set; }
 
         /// <summary>
         /// The window manager refused to hold this; not asked again until a reload or a
@@ -378,11 +589,10 @@ public sealed class Provider
         public IReadOnlyList<string> Apps { get; set; } = [];
     }
 }
-
 /// <summary>
 /// What a <c>signal "ayn" ...</c> asks for.
 /// </summary>
-/// <param name="Subject">What to act on: <c>microphone</c>.</param>
+/// <param name="Subject">What to act on: <c>microphone</c> or <c>speaker</c>.</param>
 /// <param name="Verb">What to do: <c>mute</c>, <c>unmute</c>, <c>toggle-mute</c>.</param>
 /// <remarks>
 /// Subject then verb, so the next subject slots in beside this one and a keybinding
@@ -395,7 +605,10 @@ public sealed record SignalRequest(string Subject, string Verb)
 {
     /// <summary>The subjects and verbs understood, for the refusal.</summary>
     public static IReadOnlyList<string> Accepted { get; } =
-        ["microphone mute", "microphone unmute", "microphone toggle-mute"];
+    [
+        "microphone mute", "microphone unmute", "microphone toggle-mute",
+        "speaker mute", "speaker unmute", "speaker toggle-mute",
+    ];
 
     /// <summary>
     /// Reads the arguments after the signal's name, or says why they cannot be.
@@ -415,7 +628,14 @@ public sealed record SignalRequest(string Subject, string Verb)
         string subject = arguments[0].ToLowerInvariant();
         string verb = arguments.Count > 1 ? arguments[1].ToLowerInvariant() : string.Empty;
 
-        if (subject is not ("microphone" or "mic"))
+        subject = subject switch
+        {
+            "microphone" or "mic" => "microphone",
+            "speaker" or "speakers" or "output" => "speaker",
+            _ => string.Empty,
+        };
+
+        if (subject.Length == 0)
         {
             refusal = $"'{arguments[0]}' is not something ayn acts on. One of: {string.Join(", ", Accepted)}.";
             return null;
@@ -430,10 +650,10 @@ public sealed record SignalRequest(string Subject, string Verb)
 
         if (verb.Length == 0)
         {
-            refusal = $"the signal does not say what to do with the microphone. One of: mute, unmute, toggle-mute.";
+            refusal = $"the signal does not say what to do with the {subject}. One of: mute, unmute, toggle-mute.";
             return null;
         }
 
-        return new SignalRequest("microphone", verb);
+        return new SignalRequest(subject, verb);
     }
 }

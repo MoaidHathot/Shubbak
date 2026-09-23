@@ -31,9 +31,14 @@ in memory regardless, which is what `shubbak diagnose` reads. Crashes write
 `%LOCALAPPDATA%\Shubbak\crash-<timestamp>.md` on their own.
 
 **Does it survive a reboot?**
-Yes. Windows go back to their workspaces. Titles are hashed rather than stored,
+Mostly. Windows go back to their workspaces, with their tags, their stickiness and
+whether they were tiled, floating or minimised; each monitor shows the workspace it
+was showing. What is not kept: the layout each workspace was in, the ratios of the
+splits, and where a floating window sat - those come from the config's defaults and
+the windows' own positions on the next start. Titles are hashed rather than stored,
 because titles contain URLs and document names and that is your business. A logoff
-or shutdown saves the session cleanly on the way out.
+or shutdown saves the session cleanly on the way out. For a snapshot you can restore
+by name, layouts and all, see `arrangement --save`.
 
 **Multi-monitor? High DPI?**
 Both. Per-monitor DPI awareness (V2) in all three GUI processes, effective DPI read

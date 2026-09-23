@@ -815,6 +815,7 @@ public static class IpcProtocol
         "workspace.destroyed",
         "workspace.moved",
         "layout.changed",
+        "gaps.changed",
         "container.resized",
         "monitor.added",
         "monitor.removed",

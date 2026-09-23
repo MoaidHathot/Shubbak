@@ -17,6 +17,189 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **The bar scales with the display.** Every size in the `bar` section - `height`,
+  `font-size`, `padding`, `margin`, `radius`, `size`, `gap`, `min-width` - is now in
+  device-independent pixels and scaled to each display's DPI just before layout, so a
+  `height 34` is the same bar on a 4K display at 150 percent and a 1080p one at 100,
+  and a change of scaling in Settings is followed live through `WM_DPICHANGED`
+  without a restart. The scaling is on by default, which means a config tuned in raw
+  pixels on a high-DPI display will find its bar half again as large the first time it
+  loads; `dpi-scaling #false` in `bar` reads the numbers as pixels, as every version
+  before this one did. `VisualScaling` in `Shubbak.Ui` is the arithmetic, applied in
+  place to the tree; a border that exists stays at least a pixel, a padding rounds to
+  the nearest one. `TAJ0026` says when the setting is not a boolean.
+- **The pointer can do more than click.** `on-right-click`, `on-middle-click`,
+  `on-scroll-up` and `on-scroll-down` join `on-click` on `text` and `icon` widgets,
+  each a command on the same path as a keybinding. A widget with any of the five is a
+  control - hand cursor, hover style - so a pill that only scrolls still looks like
+  one. The `workspaces` widget scrolls on its own: the wheel over it names the
+  previous or next workspace, wrapping at the ends and counting hidden empty ones,
+  quoted the way its clicks are; `scroll=#false` turns it off. `TAJ0023` names the
+  gesture a bad `keyboard` command was written on. `PointerActions` is the record the
+  five settings land in.
+- **A `command` source can be a script that prints and exits.** With an `interval`,
+  the program is run on that schedule and its last non-empty line is the value - the
+  shape a shell one-liner or an i3blocks script already has - and its exit is
+  neither a failure nor a restart. Without one it is a resident program as before,
+  and a resident program that keeps exiting without printing is now restarted with a
+  wait that doubles to a minute, logged once per step rather than seventeen thousand
+  times a day for one mistyped path. A poll waits out a stand-down and runs at once
+  when the bar comes back.
+- **The sources are made once and shared by every bar.** Each bar built its own set
+  from the same declarations, so a desk with three displays ran three clocks, three
+  keyboard pollers and three copies of every script. `SourceHub` owns the set and
+  fans each value out to whichever bar models are attached; a bar made later - a
+  monitor plugged in - is handed every value at once, a reload disposes the old set
+  and inherits a stand-down in force, and a second source with the same name is
+  disposed rather than left half-made.
+- **A clock speaks the language you name.** `culture="de-DE"` on a `kind="time"`
+  source decides what `dddd` and `MMMM` come out as; without one they are English, as
+  they always were. An unknown culture is pointed out at load (`TAJ0032`) where the
+  machine has the data to judge, and by shape where it does not.
+- **`{{ connection }}` and `{{ workspace }}`.** The first reads `no window manager`
+  while a window manager the bar had reached is gone, and nothing before the first
+  connection, so a bar that wins the race at logon does not open by announcing the
+  window manager missing. The second is the active workspace's name on the bar's own
+  display, for a template that wants it as text rather than as pills.
+- **`min-width` and `max-width` on any widget.** A floor stops a clock with seconds
+  nudging its neighbours twice a minute; a ceiling cuts with the same ellipsis a
+  shrinking zone uses. Both scale with the display.
+- **The bar reloads without a window manager.** It watches its own file, as the
+  window manager does, so a bar being tuned on its own follows every save. A save the
+  window manager also announces is one reload, not two: both routes compare the
+  file's stamp with the one that was read. `ConfigWatcher` and `ConfigStamp` moved to
+  `Shubbak.Config` to be shared.
+- **The bar's silent misconfigurations now speak.** `extends` naming a profile that
+  does not exist or is declared further down (`TAJ0029`, with the nearest name or the
+  ordering rule as the hint), an `edge` or a `justify` that is not one of the words
+  (`TAJ0030`), a colour that does not parse wherever a colour may be written
+  (`TAJ0031`), a source whose `kind` the bar does not know (`TAJ0027`, with a guess)
+  and a `command` source with nothing to run (`TAJ0028`). Every one of these used to
+  produce a bar that was wrong in a way nothing connected to the line, and a clean
+  `check-config`.
+- **The palette takes the best alignment, not the first.** The matcher took each
+  letter at its earliest occurrence, so `st` against *Visual Studio* landed on the
+  *s* of Visual and the *t* of Studio - scored as a scatter and highlighted as one -
+  when the *St* that starts a word was there to be had. Every placement is now
+  weighed and the best kept, a dynamic programme over query and candidate instead of
+  a walk; the walk remains for titles past 512 characters. An abbreviation is no
+  longer charged for the words it skips, and the camel-case bonus equals the
+  word-start one, since *VisualStudioCode*'s boundaries are words. Every ranking the
+  old tests pinned still holds.
+- **The palette folds what it compares.** Accents no longer stand in the way -
+  `cafe` finds *Café*, either way round - and the Arabic spellings of one sound are
+  one: the alifs with and without hamza, `ة` and `ه`, `ى` and `ي`, the Persian kaf
+  and yeh and the Arabic ones. Vowel marks are stepped over on both sides, so `محمد`
+  finds *مُحَمَّد* and the letters across a mark still count as adjacent. The Latin
+  table is built at startup from the runtime's own decomposition rather than typed in.
+- **A space in the palette's query is several words that must all match**, in any
+  order: `code proj` finds *My Project - Visual Studio Code*. The trailing space
+  before a next word is not a word yet and no longer empties the list.
+- **The palette's search box has paste, select-all and whole-character editing.**
+  Ctrl+V and Shift+Insert paste - a copied line with its newline becomes one line, and
+  a pasted `>` into an empty palette changes mode as typing it would. Ctrl+A selects
+  what was typed, drawn as a pill, so the next key replaces it; the prefix is not part
+  of it. Left, Right, Backspace and Delete step by text element, so an emoji or a
+  letter with its combining mark is one step and one Backspace rather than two, and
+  the caret can no longer land inside a surrogate pair - where the renderer had half a
+  character on each side to measure. An emoji typed from the Win+. panel, which
+  arrives as two messages, is held until both halves are in. `Clipboard.GetText`
+  joins `SetText` in `Shubbak.Native`.
+- **The command list learns.** What is run from it is remembered - a count per verb
+  or action that halves every fortnight, `Frecency` in `Dalil.Core` - and before a
+  letter is typed the list is in that order; once one is, the match decides and the
+  history settles ties. Anything used sits above everything unused whatever its kind;
+  the unused keep their alphabet; a `not now` row stays where it is. The record is
+  `%LOCALAPPDATA%\Shubbak\dalil-frecency.tsv`, one line per command, written whole
+  and renamed into place, capped at two hundred entries.
+- **The palette's empty list speaks the language of its mode.** "Nothing to show -
+  the window manager may still be starting up" served every mode and was misleading
+  in most: an empty scratchpad now says nothing is stashed and how to stash something,
+  an empty inspect list says every window is managed, an empty workspace list says
+  where they are declared, and only the lists the window manager fills say they are
+  waiting. `EmptyStateText` is the pure function behind it.
+- **A palette prefix that is a letter or a digit is pointed out** (`DAL0018`).
+  `layouts "l"` - the example the docs gave - meant typing `l` into an empty palette
+  changed mode instead of searching for Lightroom, for as long as the setting stood.
+  The example is now `^`.
+- **The watcher grew from three facts to ten.** `screen-captured` (a program is
+  sharing or recording the screen, from the `graphicsCaptureProgrammatic` consent
+  record the shell's own indicator reads), `speaker-muted`, `on-battery`,
+  `battery-low` (at `battery-low-at`, twenty percent unless said), `lid-closed`,
+  `user-away` (Windows's own judgement that nobody is at the keyboard) and
+  `dark-theme` join `camera-in-use`, `microphone-in-use` and `microphone-muted`. The
+  new ones are off until the file names them, so a file that never mentioned the
+  watcher does not wake up holding contexts it never declared. Each source is opened
+  only when a fact needs it: `PowerWatch` registers for power-setting notifications
+  with no window and no timer, `ThemeWatch` is a registry notification on
+  `Personalize`, the screen's key is opened only when the screen is watched, and the
+  audio endpoint follows the default speaker only when asked. None of them settle;
+  the mains lead is in or it is not.
+- **A program can be told not to count, and a program can be given a context of its
+  own.** `camera { ignore "obs64.exe" "Lens*" }` says the recording tool that keeps
+  the camera open all day is not a meeting; `camera { by "ms-teams.exe" "in-a-call" }`
+  holds `in-a-call` while that one program has the camera, so a Teams call and an OBS
+  stream can be told apart without a context knowing the difference between programs.
+  Names are matched as `ayn --report` prints them, with `*` and `?` as wildcards and
+  no regard for case; `microphone` and `screen` take the same two settings. A rule is
+  a slot of its own in the provider - refused, released and reloaded independently of
+  the fact about any program - and one added by a reload is judged against the last
+  reading at once.
+- **`renew` re-asserts every held context on a schedule with a time to live.**
+  `ayn { renew 60 }` sends each hold again every minute as `--lease --ttl 120s`, so a
+  watcher that is alive but stuck - connection open, loop wedged - loses its pins a
+  little after it stops renewing them. Off unless said, deliberately: the lease
+  already dies with the connection, and a window manager stalled past the time to
+  live would drop a context and take it back, running whatever the file hangs on that.
+- **`signal "ayn" "speaker" "mute" | "unmute" | "toggle-mute"`** flips the default
+  speaker's mute as the microphone's is flipped, and `ayn --report` prints the
+  speaker, the power and the theme beside the devices.
+- **The watcher's new mistakes are pointed out.** Two facts naming one context
+  (`AYN0006` - each hands it back when it goes false and takes the other's pin with
+  it), `camera "meeting"` read as `camera { in-use "meeting" }` (`AYN0007`), a `by`
+  rule missing its program or its context (`AYN0008`), a `renew` that is not a number
+  of seconds or is under five (`AYN0009`), and a `battery-low-at` outside 1 to 100
+  (`AYN0010`). A `by` rule's context is checked against the `contexts` section like
+  every other name.
+- **Four verbs and three flags the keyboard was missing.** `swap --direction left`
+  exchanges the focused window with its neighbour that way, wherever in the tree the
+  neighbour is, and changes nothing else about the shape - where `move` into a
+  neighbouring container joins it. `gaps --inner +4`, `gaps --outer -4` and
+  `gaps --inner 0 --outer 0` change the gaps for the session, by a signed amount or to
+  a value, for the key that closes them up for a screen-share; a reload puts the file's
+  back, and a `gaps.changed` event says so. `toggle-maximized` fills the work area
+  with the focused window, frame and all, and puts it back - `WindowState.Maximised`
+  had been in the enum since the beginning with nothing that set it. `focus --monitor
+  right` and `focus --monitor laptop` go to another display outright, where
+  `focus --direction` crosses only when nothing within the workspace is that way;
+  `move --monitor right` puts the focused window on that display's active workspace,
+  following with `--focus`. `layout --masters +1`, `-1` or `2` sets how many windows a
+  master-stack layout keeps in its master area, a count the layouts had carried since
+  they were written with no way to change it. `SHB0323` to `SHB0325` are the new
+  refusals. Every one is in the catalogue, so the palette completes it.
+- **`no-focus` in a rule.** The window it matched is managed and placed but focus
+  stays where it was - for the chat that pops when a message lands and the updater
+  that opens a window nobody asked for. Managing gave every new window focus, since
+  that is what a window somebody opened wants, and the only remedy for the other kind
+  was a rule that sent it to another workspace.
+- **`release=#true` on a binding** runs it when the key comes up rather than when it
+  goes down: a push-to-talk, or a `signal` that should fire as a held key is let go.
+  The press is still swallowed, so the key reaches no application either way; the hook
+  delivers a release only for a binding that asked for one, so every other binding
+  costs what it did. A release binding never repeats.
+- **`shubbak query tree`** prints the tree as text - monitors, workspaces, containers
+  and windows with their layouts, ratios and rectangles - the same rendering
+  `shubbak diagnose` puts in its report, for reading the tree as it is rather than
+  reconstructing it from `query windows`.
+- **A catalogue of every diagnostic.** `docs/diagnostics.md` lists all 156 codes the
+  four loaders can print - SHB, TAJ, DAL and AYN - with severity and message, generated
+  from the source by `tools/list-diagnostics.ps1` so it cannot drift. The docs also
+  caught up with the code: thirty event topics, not twenty-eight; the session keeps
+  workspaces, tags, stickiness and state and not layouts, ratios or floating
+  rectangles; the pipe's methods beyond `command` and `query` - `inspect`,
+  `window-icon`, `add-rule`, `remove-rule`, `diagnose`, `log-level`, `ping`,
+  `subscribe` - are written down; and the watcher's microphone is the default
+  communications one, falling back to the default, as the code has always had it.
 - **`shubbak setup`: from a fresh install to a running desktop in one command.** It
   writes the starter config if there is none, registers the window manager to start at
   logon, starts it, and prints the keys - each step skipped when already done, so
@@ -266,6 +449,68 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A workspace named with a `|` broke the workspace strip.** The bar carries its
+  workspaces to the widget as one string with `|` between fields and a tab between
+  records, and a name containing either split into half-records too short to read:
+  the workspace vanished from the strip and every one after it shifted a field. Names
+  and labels are now escaped on the way in and unescaped on the way out; plain names
+  are on the wire exactly as before.
+- **The bar drew over another docked bar's strip.** It set its strip with
+  `ABM_SETPOS` alone, which the shell grants as asked, so a second appbar on the same
+  edge - a docked toolbar, another bar - was overlapped rather than made room for. It
+  now asks with `ABM_QUERYPOS` first and follows the rectangle the shell hands back,
+  moving the window to where the strip actually is.
+- **A value no widget showed still repainted the bar.** Every source publish marked
+  the model dirty whether or not the profile in force read the value, so a clock
+  declared for a variant that was not showing woke the bar twice a second for
+  nothing. The model now knows which keys its widgets read and wakes only for those;
+  the "re-renders only when a source it uses changes" the docs promised is now what
+  happens.
+- **Alt+F4 in the palette closed the palette process.** Left to `DefWindowProc` it
+  became `WM_CLOSE`, and the process left, taking the keybinding that opens it with it
+  until the window manager was restarted. It now dismisses the popup - one level at a
+  time, like Escape.
+- **A reload shrank the palette on a high-DPI display.** `Reconfigure` installed the
+  file's numbers raw, so a palette on a 150 percent display that had its config saved
+  came out two thirds the size until it was closed and opened again - and stayed that
+  way if it was open at the time. The reloaded config is scaled as the original was.
+- **The palette's help list showed the stock prefixes whatever the config said**, and
+  completing a verb from the command list wrote a literal `>` even when commands had
+  been moved to another character, so the palette went looking for a window called
+  `>focus`. Both now use the table in force.
+- **A burst of window events started a read per event, all racing down the pipe**, and
+  whichever finished last was installed, whether or not it had started last. One read
+  is in flight at a time; a request during it is a note to go again when it lands, and
+  every read is numbered so a slow one can never land over a newer one.
+- **Right-to-left titles in the palette were drawn back to front and broken apart.**
+  The highlight laid the matched and unmatched pieces out in logical order from the
+  left, which for Arabic and Hebrew reversed the words and, because an Arabic letter
+  takes its shape from its neighbours, changed the letters at every colour change. A
+  title with right-to-left text in it is now drawn whole and unhighlighted.
+- **A microphone unplugged left its mute reported for ever.** The audio endpoint
+  answered device-state and device-removed notifications with nothing, so the watcher
+  went on reading the mute off an endpoint that was in a drawer. Both now wake the
+  loop and make it ask for the defaults again; a default that is gone reads as not
+  muted and the context is let go.
+- **A floating window left off every screen stayed there.** Its saved rectangle
+  described the display it was on, and when that display was unplugged, rearranged in
+  Settings or its workspace moved to a smaller one, the window was placed there
+  anyway - off screen, with the tree saying it was visible. A floating rectangle
+  wholly outside its workspace's work area is now slid in by the least that puts it on
+  screen, and shrunk if it is larger than the area; one that touches the screen is the
+  user's and is left alone.
+- **Moving the focused window to another monitor and following it left the focused
+  monitor behind.** `SetFocus` did nothing when the window was already the focused
+  one, so a directional push across a boundary - or `move --workspace --focus` to a
+  workspace on the other display - kept the focused monitor where the window had
+  been, and the next directional command was measured from the wrong screen. The
+  focused monitor now follows the focused window's workspace whether or not the
+  window changed. A test that encoded the old behaviour has been corrected.
+- **`row` and `rows` name different layouts, and now the docs say so.** The aliases
+  follow the count - one row of windows is `splith`, several rows stacked is `splitv`,
+  and the same for `columns` and `column` - which is consistent and easy to trip on.
+  Re-mapping either would silently change a working config, so the rule is written
+  down instead.
 - **The watcher spun a core whenever the window manager was down and any fact was
   true.** After a send failed, Ayn forgot what it held so it could hold it again, and
   everything still true was then due at once - a pending time of zero. The wait was

@@ -156,6 +156,14 @@ public sealed record LayoutChanged(ContainerNode Container, string Layout) : WmE
     public override string Topic => "layout.changed";
 }
 
+/// <summary>The gaps were changed at runtime; see <c>gaps</c>.</summary>
+/// <param name="Inner">The gap between windows now.</param>
+/// <param name="Outer">The gap around the edge now.</param>
+public sealed record GapsChanged(int Inner, Geometry.Gaps Outer) : WmEvent
+{
+    public override string Topic => "gaps.changed";
+}
+
 /// <summary>A container's children were given new shares of its space.</summary>
 /// <remarks>
 /// Distinct from <see cref="LayoutChanged"/>: the layout is the same, only the

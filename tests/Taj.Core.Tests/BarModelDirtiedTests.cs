@@ -62,6 +62,32 @@ public sealed class BarModelDirtiedTests
     }
 
     [Fact]
+    public void AValueNoWidgetReadsDoesNotWakeIt()
+    {
+        // The documentation has always said widgets re-render only when a source they
+        // use changes. Every widget declared what it reads, and the model consulted
+        // none of it: a `command` source publishing twice a second rebuilt a bar that
+        // showed no widget for it. The default profile shows a clock and a title and
+        // no weather.
+        BarModel model = Model();
+        Settle(model);
+
+        int woken = 0;
+        model.Dirtied += () => woken++;
+
+        model.SetValue("weather", "raining");
+
+        Assert.Equal(0, woken);
+        Assert.False(model.IsDirty);
+
+        // The value is still kept, so a profile that does show it later has it.
+        Assert.Equal("raining", model.GetValue("weather"));
+
+        // And a value some widget reads still wakes it.
+        model.SetValue("clock", "12:34");
+        Assert.Equal(1, woken);
+    }
+    [Fact]
     public void AModelAlreadyDirtyDoesNotWakeAgain()
     {
         // Edge-triggered. Whoever was going to be woken has been, and has not looked
@@ -72,9 +98,9 @@ public sealed class BarModelDirtiedTests
         int woken = 0;
         model.Dirtied += () => woken++;
 
-        model.SetValue("a", "1");
-        model.SetValue("b", "2");
-        model.SetValue("c", "3");
+        model.SetValue("clock", "1");
+        model.SetValue("date", "2");
+        model.SetValue("layout", "3");
 
         Assert.Equal(1, woken);
     }
@@ -104,17 +130,17 @@ public sealed class BarModelDirtiedTests
         // The path that matters most in practice: values arrive from thread-pool
         // timers and from the pipe, on threads that are not the loop's.
         BarModel model = Model();
-        var source = new PushSource("weather");
+        var source = new PushSource("clock");
         model.AddSource(source);
         Settle(model);
 
         int woken = 0;
         model.Dirtied += () => woken++;
 
-        source.Set("raining");
+        source.Set("12:35");
 
         Assert.Equal(1, woken);
-        Assert.Equal("raining", model.GetValue("weather"));
+        Assert.Equal("12:35", model.GetValue("clock"));
     }
 
     [Fact]
@@ -140,7 +166,7 @@ public sealed class BarModelDirtiedTests
 
         int produced = 0;
         var source = new IntervalSource(
-            "counter",
+            "clock",
             TimeSpan.FromMilliseconds(50),
             () => Interlocked.Increment(ref produced).ToString(CultureInfo.InvariantCulture));
 

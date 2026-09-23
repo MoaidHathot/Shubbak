@@ -1,3 +1,5 @@
+using Shubbak.Config;
+
 namespace Shubbak.Wm.Tests;
 
 /// <summary>

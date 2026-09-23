@@ -83,4 +83,28 @@ public sealed class WindowManagerStatusTests
         Assert.Equal("suspended", WindowManagerStatus.Suspended);
         Assert.Equal("paused", WindowManagerStatus.Paused);
     }
+    /// <summary>
+    /// The connection pill says something only once a window manager has been and gone.
+    /// </summary>
+    /// <remarks>
+    /// The bar is started by the window manager's own startup command and can be up
+    /// first; a pill announcing the window manager missing for the half second it
+    /// takes to arrive would be the first thing every logon showed. Before the first
+    /// connection the bar is a clock, as it always was.
+    /// </remarks>
+    [Fact]
+    public void TheConnectionPillWaitsForTheFirstConnectionBeforeItComplains()
+    {
+        Assert.Equal(string.Empty, WindowManagerStatus.ConnectionLabel(connected: false, everConnected: false));
+        Assert.Equal(string.Empty, WindowManagerStatus.ConnectionLabel(connected: true, everConnected: true));
+        Assert.Equal(WindowManagerStatus.Disconnected, WindowManagerStatus.ConnectionLabel(connected: false, everConnected: true));
+    }
+
+    [Fact]
+    public void TheConnectionValueHasAStableName()
+    {
+        // Templates write {{ connection }}; the name is part of the config format.
+        Assert.Equal("connection", WindowManagerStatus.ConnectionKey);
+        Assert.Equal("no window manager", WindowManagerStatus.Disconnected);
+    }
 }

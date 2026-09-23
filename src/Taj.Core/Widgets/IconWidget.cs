@@ -68,8 +68,15 @@ public sealed class IconWidget : IWidget
 
     public BoxStyle Box { get; set; }
 
-    /// <summary>Command performed when clicked, if any; the same as a text widget's.</summary>
-    public string? OnClick { get; set; }
+    /// <summary>Command performed when clicked, if any; shorthand for <see cref="Actions"/>.</summary>
+    public string? OnClick
+    {
+        get => Actions.Click;
+        set => Actions = Actions with { Click = value };
+    }
+
+    /// <summary>What the pointer does here: a command per gesture, or nothing.</summary>
+    public PointerActions Actions { get; set; } = PointerActions.None;
 
     /// <summary>Colours while the pointer is over it, when it is clickable and they were written.</summary>
     public VisualStyle? HoverStyle { get; set; }
@@ -81,7 +88,7 @@ public sealed class IconWidget : IWidget
         string? value = values.GetValueOrDefault(Source);
         ImageBitmap? image = Decode(value);
 
-        return new VisualNode
+        var node = new VisualNode
         {
             Id = Id,
             Kind = VisualKind.Image,
@@ -93,9 +100,11 @@ public sealed class IconWidget : IWidget
                 Height = Size + Box.Padding.Vertical,
             },
             Visible = image is not null,
-            OnClick = OnClick,
-            HoverStyle = OnClick is { Length: > 0 } ? Hovered() : null,
+            HoverStyle = Actions.Any ? Hovered() : null,
         };
+
+        Actions.ApplyTo(node);
+        return node;
     }
 
     /// <summary>

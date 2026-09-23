@@ -38,6 +38,19 @@ public sealed record TajConfig(
     /// </para>
     /// </remarks>
     public TimeSpan? WindowManagerTimeout { get; init; } = DefaultWindowManagerTimeout;
+
+    /// <summary>
+    /// Whether every size in the bar's configuration is a device-independent pixel,
+    /// scaled to each display's DPI, rather than a raw pixel.
+    /// </summary>
+    /// <remarks>
+    /// On, because it is what the documentation always said and what a configuration
+    /// written once and used on two displays needs: <c>height 34</c> should be the same
+    /// height on a 4K display beside a 1080p one. Off - <c>bar { dpi-scaling #false }</c> -
+    /// is for a file whose numbers were tuned in raw pixels on a scaled display before
+    /// this existed, and would otherwise grow by the scale factor.
+    /// </remarks>
+    public bool DpiScaling { get; init; } = true;
 }
 
 /// <summary>A source declared in config.</summary>
@@ -47,7 +60,18 @@ public sealed record TajConfig(
 /// <param name="Interval">How often to poll, for pull sources.</param>
 /// <param name="TimeZone">Timezone id for a clock, or null for local time.</param>
 public sealed record SourceSpec(
-    string Name, string Kind, string Argument, TimeSpan Interval, string? TimeZone = null);
+    string Name, string Kind, string Argument, TimeSpan Interval, string? TimeZone = null)
+{
+    /// <summary>For a clock, the BCP 47 name of the culture its day and month names come from.</summary>
+    public string? Culture { get; init; }
+
+    /// <summary>
+    /// Whether the file wrote an interval, as opposed to the default being in force.
+    /// Decides what a <c>command</c> source is: a program run on that schedule, or one
+    /// kept running.
+    /// </summary>
+    public bool IntervalWasWritten { get; init; }
+}
 
 /// <summary>
 /// Reads Taj's section of the Shubbak config.
@@ -216,6 +240,7 @@ public static class TajConfigLoader
         var config = new TajConfig(profiles, rules, fallbackProfile, sources)
         {
             WindowManagerTimeout = ParseWindowManagerTimeout(bar, diagnostics),
+            DpiScaling = ParseDpiScaling(bar, diagnostics),
         };
 
         return (config, diagnostics);
@@ -255,6 +280,23 @@ public static class TajConfigLoader
         return seconds == 0 ? null : TimeSpan.FromSeconds(seconds);
     }
 
+    /// <summary>Reads <c>dpi-scaling</c>: on unless the file says <c>#false</c>.</summary>
+    private static bool ParseDpiScaling(KdlNode bar, List<Diagnostic> diagnostics)
+    {
+        KdlValue? value = bar.Child("dpi-scaling")?.Argument(0) ?? bar.Property("dpi-scaling");
+        if (value is null) return true;
+
+        if (value.TryAsBool(out bool on)) return on;
+
+        diagnostics.Add(Diagnostic.Warning(
+            "TAJ0026",
+            $"'dpi-scaling' should be #true or #false, not '{value.AsString()}'; sizes are scaled to each display.",
+            value.Span,
+            "Write dpi-scaling #false to have every size read as raw pixels."));
+
+        return true;
+    }
+
     private static SourceSpec? ParseSource(KdlNode node, List<Diagnostic> diagnostics)
     {
         string? name = node.Argument(0)?.AsString();
@@ -270,14 +312,53 @@ public static class TajConfigLoader
         string kind = SettingText(node, "kind") ?? "time";
         string argument = SettingText(node, "format") ?? SettingText(node, "command") ?? string.Empty;
 
-        int intervalMs = SettingInt(node, "interval") ?? 1000;
+        int? explicitInterval = SettingInt(node, "interval");
+        int intervalMs = explicitInterval ?? 1000;
+
+        // An unknown kind was a warning in the log at startup and nothing at load, so
+        // shubbak check-config said a file with kind=\"cmmand\" was fine.
+        if (kind is not ("time" or "command" or "keyboard"))
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0027",
+                $"Source '{name}' has kind=\"{kind}\", which is not one the bar knows; it will produce nothing.",
+                Setting(node, "kind")?.Span ?? node.Span,
+                Suggestion.Closest(kind, ["time", "command", "keyboard"]) is { } guess ? $"Did you mean '{guess}'?" : "One of: time, command, keyboard."));
+        }
+
+        string? culture = SettingText(node, "culture");
+
+        // Said here, where the file can be pointed at. The source says it again in the
+        // log when it runs, for a culture the machine lost between check and run.
+        if (culture is { Length: > 0 } && !ClockSource.IsKnownCulture(culture))
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0032",
+                $"Source '{name}' has culture=\"{culture}\", which is not a culture this machine knows; the invariant culture is used.",
+                Setting(node, "culture")?.Span ?? node.Span,
+                "Cultures are BCP 47 names such as en-GB, de-DE or ar-SA."));
+        }
+
+        // A command with nothing to run was dropped without a word.
+        if (kind == "command" && argument.Length == 0)
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0028",
+                $"Source '{name}' is a command with no command= to run; it will produce nothing.",
+                node.Span,
+                "Write command=\"pwsh -File my-script.ps1\"."));
+        }
 
         return new SourceSpec(
             name,
             kind,
             argument,
             TimeSpan.FromMilliseconds(intervalMs),
-            SettingText(node, "timezone"));
+            SettingText(node, "timezone"))
+        {
+            IntervalWasWritten = explicitInterval is not null,
+            Culture = culture,
+        };
     }
 
     /// <summary>
@@ -295,7 +376,7 @@ public static class TajConfigLoader
 
     /// <summary>Children of <c>bar</c> the loader understands.</summary>
     private static readonly string[] KnownBarKeys =
-        ["source", "profile", "rule", "window-manager-timeout"];
+        ["source", "profile", "rule", "window-manager-timeout", "dpi-scaling"];
 
     /// <summary>Settings a <c>profile</c> understands, as a child or a property.</summary>
     private static readonly string[] KnownProfileKeys =
@@ -314,7 +395,7 @@ public static class TajConfigLoader
     /// write one or the other and being told off for either would be absurd.
     /// </remarks>
     private static readonly string[] CommonWidgetKeys =
-        ["id", "font", "font-size", "bold", "italic", "colour", "color", "background", "radius"];
+        ["id", "font", "font-size", "bold", "italic", "colour", "color", "background", "radius", "min-width", "max-width"];
 
     private static readonly string[] KnownWorkspacesKeys =
     [
@@ -323,24 +404,24 @@ public static class TajConfigLoader
         "focused-background", "focused-colour", "focused-color",
         "empty-colour", "empty-color",
         "hover-background", "hover-colour", "hover-color",
-        "hide-empty",
+        "hide-empty", "scroll",
     ];
 
     private static readonly string[] KnownSpacerKeys = [.. CommonWidgetKeys, "width", "grow"];
 
     private static readonly string[] KnownTextKeys =
-        [.. CommonWidgetKeys, "template", "on-click", "when", "hover-background", "hover-colour", "hover-color"];
+        [.. CommonWidgetKeys, .. PointerActions.Keys, "template", "when", "hover-background", "hover-colour", "hover-color"];
 
     /// <summary>What an <c>icon</c> widget accepts: where the picture comes from, and how big.</summary>
     private static readonly string[] KnownIconKeys =
-        [.. CommonWidgetKeys, "source", "size", "on-click", "hover-background", "hover-colour", "hover-color"];
+        [.. CommonWidgetKeys, .. PointerActions.Keys, "source", "size", "hover-background", "hover-colour", "hover-color"];
 
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
     private static readonly string[] KnownConditionKeys =
         ["value", "not", "of", "font", "font-size", "bold", "italic", "colour", "color", "background"];
 
     private static readonly string[] KnownSourceKeys =
-        ["kind", "format", "command", "interval", "timezone"];
+        ["kind", "format", "command", "interval", "timezone", "culture"];
 
     private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor", "context"];
 
@@ -506,6 +587,7 @@ public static class TajConfigLoader
         }
 
         WarnAboutUnknown(node, KnownProfileKeys, "setting in a profile", "TAJ0014", diagnostics);
+        WarnAboutBadColours(node, "the profile", diagnostics);
 
         // `extends` lets a profile change one thing about another, which is what
         // makes a per-workspace variant a few lines rather than a duplicate.
@@ -514,9 +596,39 @@ public static class TajConfigLoader
             ? found
             : null;
 
-        BarEdge edge = string.Equals(SettingText(node, "edge"), "bottom", StringComparison.OrdinalIgnoreCase)
-            ? BarEdge.Bottom
-            : parent?.Edge ?? BarEdge.Top;
+        // A parent that does not exist - misspelt, or declared later in the file -
+        // left the profile on the built-in defaults without a word, which is the
+        // class of mistake `extends` exists to make rare.
+        if (SettingText(node, "extends") is { } wanted && parent is null)
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0029",
+                $"Profile extends \"{wanted}\", which is not a profile declared above it; the built-in defaults are used instead.",
+                Setting(node, "extends")?.Span ?? node.Span,
+                Suggestion.Closest(wanted, [.. existing.Keys]) is { } guess
+                    ? $"Did you mean '{guess}'? A parent has to be declared before the profile that extends it."
+                    : "A parent has to be declared before the profile that extends it."));
+        }
+
+        string? edgeText = SettingText(node, "edge");
+
+        BarEdge edge = edgeText?.ToLowerInvariant() switch
+        {
+            "bottom" => BarEdge.Bottom,
+            "top" => BarEdge.Top,
+            null => parent?.Edge ?? BarEdge.Top,
+            _ => Unknown(edgeText, "edge", "top or bottom", parent?.Edge ?? BarEdge.Top),
+        };
+
+        BarEdge Unknown(string written, string key, string accepted, BarEdge fallback)
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0030",
+                $"'{key}' is \"{written}\", which is not one of {accepted}; the bar sits at the {fallback.ToString().ToLowerInvariant()}.",
+                Setting(node, key)?.Span ?? node.Span));
+
+            return fallback;
+        }
 
         int height = SettingInt(node, "height") ?? parent?.Height ?? 26;
 
@@ -646,14 +758,27 @@ public static class TajConfigLoader
 
         WarnAboutUnknown(node, KnownZoneKeys, "widget or setting in a zone", "TAJ0015", diagnostics);
 
-        JustifyContent justify = (SettingText(node, "justify") ?? "start").ToLowerInvariant() switch
+        string justifyText = SettingText(node, "justify") ?? "start";
+
+        JustifyContent justify = justifyText.ToLowerInvariant() switch
         {
+            "start" => JustifyContent.Start,
             "center" or "centre" => JustifyContent.Center,
             "end" => JustifyContent.End,
             "space-between" => JustifyContent.SpaceBetween,
             "space-around" => JustifyContent.SpaceAround,
-            _ => JustifyContent.Start,
+            _ => UnknownJustify(),
         };
+
+        JustifyContent UnknownJustify()
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0030",
+                $"'justify' is \"{justifyText}\", which is not one of start, center, end, space-between or space-around; the widgets start at the left.",
+                Setting(node, "justify")?.Span ?? node.Span));
+
+            return JustifyContent.Start;
+        }
 
         double grow = SettingDouble(node, "grow") ?? 0;
         int gap = SettingInt(node, "gap") ?? 6;
@@ -676,6 +801,40 @@ public static class TajConfigLoader
     /// Each one restates only what differs, inheriting everything else from the
     /// widget, so marking a value usually costs a colour and nothing more.
     /// </remarks>
+    /// <summary>
+    /// Reads what the pointer does to a widget: <c>on-click</c>, <c>on-right-click</c>,
+    /// <c>on-middle-click</c>, <c>on-scroll-up</c> and <c>on-scroll-down</c>.
+    /// </summary>
+    /// <remarks>
+    /// The one verb the bar answers itself is checked here, because it is the one verb
+    /// the window manager will never get the chance to refuse. Everything else is the
+    /// window manager's to judge, when the gesture happens.
+    /// </remarks>
+    private static PointerActions ParsePointerActions(KdlNode node, string id, List<Diagnostic> diagnostics)
+    {
+        var actions = new PointerActions(
+            Click: SettingText(node, "on-click"),
+            RightClick: SettingText(node, "on-right-click"),
+            MiddleClick: SettingText(node, "on-middle-click"),
+            ScrollUp: SettingText(node, "on-scroll-up"),
+            ScrollDown: SettingText(node, "on-scroll-down"));
+
+        foreach ((string key, string command) in actions.Commands())
+        {
+            if (KeyboardCommand.Recognises(command) &&
+                !KeyboardCommand.TryParse(command, out _, out string? problem))
+            {
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0023",
+                    $"'{id}' has {key}=\"{command}\", which the bar cannot perform: {problem}",
+                    Setting(node, key)?.Span ?? node.Span,
+                    $"The gesture will be refused. Write {key}=\"keyboard next\" to cycle the input language."));
+            }
+        }
+
+        return actions;
+    }
+
     private static List<WidgetCondition> ParseConditions(
         KdlNode node, VisualStyle baseStyle, FontStyle baseFont, List<Diagnostic> diagnostics)
     {
@@ -684,6 +843,7 @@ public static class TajConfigLoader
         foreach (KdlNode child in node.ChildrenNamed("when"))
         {
             WarnAboutUnknown(child, KnownConditionKeys, "setting in a 'when' block", "TAJ0017", diagnostics);
+            WarnAboutBadColours(child, "a 'when' block", diagnostics);
 
             // `value` matches, `not` matches everything else. One or the other, and
             // the bare argument form spells `value`.
@@ -747,10 +907,18 @@ public static class TajConfigLoader
             CornerRadius = SettingInt(node, "radius") ?? 0,
         };
 
-        var box = new BoxStyle(Padding: Edges.Symmetric(6, 0));
+        // A minimum width stops a readout jittering as its text changes - a clock
+        // whose digits are not all the same width, a title that comes and goes - and a
+        // maximum caps one that would otherwise take the whole zone.
+        var box = new BoxStyle(
+            Padding: Edges.Symmetric(6, 0),
+            MinWidth: Math.Max(0, SettingInt(node, "min-width") ?? 0),
+            MaxWidth: SettingInt(node, "max-width") is { } max && max > 0 ? max : null);
 
         if (KnownKeysFor(node.Name) is { } widgetKeys)
             WarnAboutUnknown(node, widgetKeys, $"setting on a '{node.Name}' widget", "TAJ0016", diagnostics);
+
+        WarnAboutBadColours(node, $"'{id}'", diagnostics);
 
         switch (node.Name)
         {
@@ -803,6 +971,7 @@ public static class TajConfigLoader
                         CornerRadius = SettingInt(node, "radius") ?? 4,
                     },
                     HideEmpty = SettingBool(node, "hide-empty") ?? false,
+                    Scrolls = SettingBool(node, "scroll") ?? true,
                 };
             }
 
@@ -824,12 +993,12 @@ public static class TajConfigLoader
                     return null;
                 }
 
-                string? onClick = SettingText(node, "on-click");
+                PointerActions actions = ParsePointerActions(node, id, diagnostics);
                 Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
                 Colour? hoverForeground = ParseColour(SettingText(node, "hover-colour") ?? SettingText(node, "hover-color"));
 
                 // A hover on something that cannot be clicked would claim it can be.
-                if (onClick is null && (hoverBackground is not null || hoverForeground is not null))
+                if (!actions.Any && (hoverBackground is not null || hoverForeground is not null))
                 {
                     diagnostics.Add(Diagnostic.Warning(
                         "TAJ0022",
@@ -838,22 +1007,9 @@ public static class TajConfigLoader
                         "Add on-click=\"...\" to make it a control, or drop the hover settings."));
                 }
 
-                // The one verb the bar answers itself is checked here, because it is
-                // the one verb the window manager will never get the chance to refuse.
-                // Everything else is the window manager's to judge, when it is clicked.
-                if (KeyboardCommand.Recognises(onClick) &&
-                    !KeyboardCommand.TryParse(onClick, out _, out string? problem))
-                {
-                    diagnostics.Add(Diagnostic.Warning(
-                        "TAJ0023",
-                        $"'{id}' has on-click=\"{onClick}\", which the bar cannot perform: {problem}",
-                        Setting(node, "on-click")?.Span ?? node.Span,
-                        "The click will be refused. Write on-click=\"keyboard next\" to cycle the input language."));
-                }
-
                 return new TemplateWidget(id, template, style, box)
                 {
-                    OnClick = onClick,
+                    Actions = actions,
                     Conditions = ParseConditions(node, style, widgetFont, diagnostics),
                     HoverStyle = hoverBackground is null && hoverForeground is null
                         ? null
@@ -882,18 +1038,8 @@ public static class TajConfigLoader
                     size = 20;
                 }
 
-                string? onClick = SettingText(node, "on-click");
+                PointerActions actions = ParsePointerActions(node, id, diagnostics);
                 Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
-
-                if (KeyboardCommand.Recognises(onClick) &&
-                    !KeyboardCommand.TryParse(onClick, out _, out string? problem))
-                {
-                    diagnostics.Add(Diagnostic.Warning(
-                        "TAJ0023",
-                        $"'{id}' has on-click=\"{onClick}\", which the bar cannot perform: {problem}",
-                        Setting(node, "on-click")?.Span ?? node.Span,
-                        "The click will be refused. Write on-click=\"keyboard next\" to cycle the input language."));
-                }
 
                 // A picture has no text colour; a colour written on it is the one
                 // thing here that would silently do nothing.
@@ -908,9 +1054,9 @@ public static class TajConfigLoader
 
                 // Padded evenly rather than the text widgets' sideways-only padding, so
                 // the pill a clickable icon gains on hover is a square around it.
-                return new IconWidget(id, source, size, style, new BoxStyle(Padding: Edges.All(4)))
+                return new IconWidget(id, source, size, style, box with { Padding = Edges.All(4) })
                 {
-                    OnClick = onClick,
+                    Actions = actions,
                     HoverStyle = hoverBackground is null
                         ? null
                         : VisualStyle.Default with { Background = hoverBackground.Value },
@@ -926,6 +1072,43 @@ public static class TajConfigLoader
 
     private static Colour? ParseColour(string? text) =>
         Colour.TryParse(text, out Colour colour) ? colour : null;
+
+    /// <summary>Every setting on a node that is a colour, wherever it appears.</summary>
+    private static readonly string[] ColourKeys =
+    [
+        "background", "foreground", "colour", "color", "border",
+        "active-background", "active-colour", "active-color",
+        "focused-background", "focused-colour", "focused-color",
+        "empty-colour", "empty-color",
+        "hover-background", "hover-colour", "hover-color",
+    ];
+
+    /// <summary>
+    /// Says so for a colour that was written and could not be read.
+    /// </summary>
+    /// <remarks>
+    /// Every colour falls back to something - inherited, or the default - when it does
+    /// not parse, which is the right behaviour and the wrong silence: `#12345`,
+    /// `red`, `accent 400%` all produced a bar in the default colours and a clean
+    /// `check-config`, and a mistyped colour is the commonest slip a bar config has.
+    /// </remarks>
+    private static void WarnAboutBadColours(KdlNode node, string where, List<Diagnostic> diagnostics)
+    {
+        foreach (string key in ColourKeys)
+        {
+            if (Setting(node, key) is not { } value) continue;
+
+            string text = value.AsString();
+
+            if (text.Length == 0 || Colour.TryParse(text, out _)) continue;
+
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0031",
+                $"'{key}' on {where} is \"{text}\", which is not a colour; the default is used.",
+                value.Span,
+                "Colours are #rgb, #rrggbb, #rrggbbaa, or accent, each optionally followed by an opacity such as 40%."));
+        }
+    }
 
     /// <summary>Sources always available, without being declared.</summary>
     private static IEnumerable<SourceSpec> DefaultSources() =>
@@ -1032,12 +1215,15 @@ public static class TajConfigLoader
             {
                 case "time":
                     yield return new ClockSource(
-                        spec.Name, spec.Argument, spec.Interval, spec.TimeZone);
+                        spec.Name, spec.Argument, spec.Interval, spec.TimeZone, spec.Culture);
                     break;
 
                 case "command":
+                    // With an interval written, the program is run on that schedule and
+                    // its last line is the value; without one it is kept running and
+                    // every line it prints is.
                     if (spec.Argument.Length > 0)
-                        yield return new ProcessSource(spec.Name, spec.Argument);
+                        yield return new ProcessSource(spec.Name, spec.Argument, interval: spec.IntervalWasWritten ? spec.Interval : null);
                     break;
 
                 case "keyboard":

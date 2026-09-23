@@ -362,12 +362,17 @@ public sealed class WmConnection : IAsyncDisposable
     /// and all, rather than the ones worth listing by default. Asked for by a row in
     /// that list, and forgotten when the palette closes.
     /// </param>
+    /// <param name="prefixes">
+    /// The prefix table in force, so the help list shows the characters the user
+    /// actually has rather than the stock ones. Null is the stock table.
+    /// </param>
     public async Task<PaletteSources> ReadAsync(
         bool includeUnmanaged,
         IReadOnlyList<PaletteMacro>? macros = null,
         long foreground = 0,
         int configProblems = 0,
-        bool everyWindow = false)
+        bool everyWindow = false,
+        PalettePrefixes? prefixes = null)
     {
         try
         {
@@ -477,7 +482,7 @@ public sealed class WmConnection : IAsyncDisposable
                 PaletteEntries.ForLayouts(layouts, focused?.Layout),
                 PaletteEntries.ForMonitors(monitors),
                 PaletteEntries.ForScratchpad(windows, here, names),
-                PaletteEntries.ForHelp(bindings),
+                PaletteEntries.ForHelp(bindings, prefixes),
                 completions,
                 status,
 

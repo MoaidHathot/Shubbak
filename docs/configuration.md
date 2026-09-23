@@ -195,7 +195,9 @@ sit inside a columns region with no special case. Eleven of them:
 `fibonacci` opens with a left/right divide and `fibonacci-v` with a top/bottom one -
 two windows in `fibonacci-v` are one above the other. If you think of the divider
 rather than the windows, the names read the other way round; the names follow the
-windows.
+windows. The aliases follow the count: `row` and `columns` are `splith` (one row of
+windows, or several columns side by side), `rows` and `column` are `splitv` (several
+rows stacked, or one column). Mind the plural.
 
 `splith` and `splitv` are the two **manual** layouts: the tree is the layout, a window
 goes exactly where you put it, and `split` nests one inside the other. The other nine

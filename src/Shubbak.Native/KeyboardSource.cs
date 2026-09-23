@@ -324,6 +324,26 @@ public sealed class KeyboardSource : IDisposable
             if (source.WasSwallowed(virtualKey))
             {
                 source.ClearSwallowed(virtualKey);
+
+                // A binding that runs on release wants this edge delivered, not only
+                // swallowed. The modifiers are read now, for a swallowed key only, so a
+                // release with the modifier already let go is a release of a different
+                // combination and fires nothing - the one reading of "alt+tab on
+                // release" that cannot fire twice.
+                KeyModifiers held = ReadModifiers();
+
+                if (source._probe is { } releaseProbe && releaseProbe(virtualKey, held, false))
+                {
+                    var release = new KeyEvent(
+                        virtualKey,
+                        held,
+                        IsKeyDown: false,
+                        (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0,
+                        IsRepeat: false);
+
+                    source.Enqueue(in release);
+                }
+
                 return new LRESULT(1);
             }
 

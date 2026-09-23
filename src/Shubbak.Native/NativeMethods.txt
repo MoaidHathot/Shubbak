@@ -339,6 +339,9 @@ OpenClipboard
 CloseClipboard
 EmptyClipboard
 SetClipboardData
+GetClipboardData
+IsClipboardFormatAvailable
+GlobalSize
 CLIPBOARD_FORMAT
 GlobalAlloc
 GlobalLock

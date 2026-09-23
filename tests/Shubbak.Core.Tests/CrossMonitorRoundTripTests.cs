@@ -105,17 +105,22 @@ public sealed class CrossMonitorRoundTripTests
     }
 
     [Fact]
-    public void TheMonitorItReturnsToBecomesTheFocusedOne()
+    public void TheFocusedMonitorFollowsADirectionalMoveAndStaysForANamedOne()
     {
-        // Otherwise the next directional command is measured from the wrong screen.
+        // The next directional command is measured from the focused monitor, so it
+        // has to be the screen the view is on. A directional push carries the view
+        // across, even though the window it carries was already the focused one - the
+        // case SetFocus used to skip, leaving the focused monitor a screen behind. A
+        // named move without --focus leaves the view where it is.
         WindowManager wm = Create();
         wm.Open("terminal");
         wm.Arrange();
 
         wm.MoveDirection(Direction.Right);
-        wm.MoveToWorkspace("3");
+        Assert.Equal(wm.Root.Monitors[1].DeviceId, wm.FocusedMonitor!.DeviceId);
 
-        Assert.Equal(wm.Root.Monitors[0].DeviceId, wm.FocusedMonitor!.DeviceId);
+        wm.MoveToWorkspace("3");
+        Assert.Equal(wm.Root.Monitors[1].DeviceId, wm.FocusedMonitor!.DeviceId);
     }
 
     [Fact]
