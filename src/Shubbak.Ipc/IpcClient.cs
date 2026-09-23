@@ -71,22 +71,33 @@ public sealed class IpcClient : IAsyncDisposable
     /// <inheritdoc cref="IsServerRunning()"/>
     public static bool IsServerRunning(string pipeName)
     {
-        try
+        // Enumerated more than once before answering no. The pipe namespace is a live
+        // directory, and an enumeration that overlaps another process creating or
+        // closing pipes can skip an entry - observed as one miss in a few hundred
+        // under a parallel test run with dozens of pipes churning. A false "not
+        // running" is the worse error here: the command line prints that the window
+        // manager is not there while it is, and a companion waits for a start that
+        // has already happened. Three passes cost a millisecond or two, and only on
+        // the way to no; a running server is found on the first.
+        for (int attempt = 0; attempt < 3; attempt++)
         {
-            foreach (string pipe in Directory.EnumerateFiles(@"\\.\pipe\"))
+            try
             {
-                if (string.Equals(
-                        Path.GetFileName(pipe), pipeName, StringComparison.OrdinalIgnoreCase))
+                foreach (string pipe in Directory.EnumerateFiles(@"\\.\pipe\"))
                 {
-                    return true;
+                    if (string.Equals(
+                            Path.GetFileName(pipe), pipeName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
                 }
             }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Fall through to the cruder check rather than reporting "not running"
-            // for what is really an enumeration failure.
-            return File.Exists($@"\\.\pipe\{pipeName}");
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Fall through to the cruder check rather than reporting "not running"
+                // for what is really an enumeration failure.
+                return File.Exists($@"\\.\pipe\{pipeName}");
+            }
         }
 
         return false;

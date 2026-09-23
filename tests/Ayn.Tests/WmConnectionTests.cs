@@ -31,6 +31,10 @@ public sealed class WmConnectionTests
             return Task.FromResult(new IpcResponse(request.Id, Ok: true));
         });
 
+        // Start creates its listener pipes before it returns, so the connection
+        // below finds one at once; this is the assertion of that, not a wait for it.
+        Assert.True(IpcClient.IsServerRunning(pipe), "the server is not listening after Start");
+
         await Task.Yield();
         return (server, commands);
     }

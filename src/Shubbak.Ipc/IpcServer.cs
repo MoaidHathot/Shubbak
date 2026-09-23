@@ -117,9 +117,27 @@ public sealed class IpcServer : IAsyncDisposable
         // nothing is listening - so back-to-back CLI invocations fail
         // intermittently, which is maddening to diagnose because it is timing
         // dependent and never reproduces under a debugger.
+        //
+        // Each loop's first pipe instance is created here, on the caller's thread,
+        // before the loop is started. Created inside the loop instead, Start returned
+        // with nothing yet listening, and a client that connected in the next few
+        // milliseconds - a test, a script that starts the daemon and then talks to it -
+        // found no pipe and was told the server was not running. The pipe exists, and
+        // IsServerRunning answers true, from the moment Start returns.
         _acceptLoop = Task.WhenAll(
-            Enumerable.Range(0, ListenerCount).Select(_ => Task.Run(AcceptLoopAsync)));
+            Enumerable.Range(0, ListenerCount).Select(_ =>
+            {
+                NamedPipeServerStream first = CreatePipe();
+                return Task.Run(() => AcceptLoopAsync(first));
+            }));
     }
+
+    private NamedPipeServerStream CreatePipe() => new(
+        PipeName,
+        PipeDirection.InOut,
+        NamedPipeServerStream.MaxAllowedServerInstances,
+        PipeTransmissionMode.Byte,
+        PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
 
     /// <summary>
     /// How many pipe instances listen at once.
@@ -158,7 +176,7 @@ public sealed class IpcServer : IAsyncDisposable
             if (client.IsSubscribed(topic)) client.TryEnqueue(message);
     }
 
-    private async Task AcceptLoopAsync()
+    private async Task AcceptLoopAsync(NamedPipeServerStream? first)
     {
         while (!_shutdown.IsCancellationRequested)
         {
@@ -166,12 +184,9 @@ public sealed class IpcServer : IAsyncDisposable
 
             try
             {
-                pipe = new NamedPipeServerStream(
-                    PipeName,
-                    PipeDirection.InOut,
-                    NamedPipeServerStream.MaxAllowedServerInstances,
-                    PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                // The instance Start made, the first time round; a fresh one after.
+                pipe = first ?? CreatePipe();
+                first = null;
 
                 await pipe.WaitForConnectionAsync(_shutdown.Token).ConfigureAwait(false);
 

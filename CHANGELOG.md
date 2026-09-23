@@ -498,6 +498,14 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **The pipe server was not listening the moment `Start` returned.** Its listener
+  pipes were created inside the accept loops' tasks, so a client connecting in the
+  next few milliseconds - a script that starts the daemon and talks to it, a test -
+  found no pipe and was told the window manager was not running. The first instance
+  of each listener is now created before `Start` returns. And `IsServerRunning`
+  enumerates the pipe namespace more than once before answering no: a live directory
+  enumeration overlapping another process's pipe churn was seen to skip an entry, and
+  a false "not running" is the worse mistake.
 - **Closing a window is said in the log.** `close` is the one thing the window manager
   does to a window that cannot be undone, and it was logged only at debug - so a
   window that vanished during a session of tests could not be traced to the key that

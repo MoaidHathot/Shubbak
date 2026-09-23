@@ -24,6 +24,24 @@ public sealed class IpcServerRobustnessTests
     }
 
     [Fact]
+    public async Task TheServerIsListeningTheMomentStartReturns()
+    {
+        // The listener pipes used to be created inside the accept loops' tasks, so
+        // Start returned with nothing yet listening and a client connecting in the
+        // next few milliseconds - a test, a script - was told the server was not
+        // running. Asked a hundred times, because the race was a race.
+        for (int i = 0; i < 100; i++)
+        {
+            string pipe = IsolatedPipe();
+
+            await using var server = new IpcServer { PipeName = pipe };
+            server.Start(request => Task.FromResult(new IpcResponse(request.Id, Ok: true)));
+
+            Assert.True(IpcClient.IsServerRunning(pipe), $"attempt {i}: no pipe the instant Start returned");
+        }
+    }
+
+    [Fact]
     public async Task AHandlerThatThrowsAnswersTheRequestAndKeepsTheConnection()
     {
         // It used to close the pipe with no reply and no log line: the exception left
