@@ -337,7 +337,7 @@ internal static class PaletteRenderer
         renderer.DrawText(
             label,
             new Rect(pill.X + layout.ChipPadding, pill.Y + layout[4], size.Width + 2, size.Height + 2),
-            alarming ? theme.Danger : theme.ChipText,
+            alarming ? theme.Danger : theme.AccentText,
             small);
 
         return x - layout[6];

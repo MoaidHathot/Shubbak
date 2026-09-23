@@ -164,4 +164,27 @@ public sealed class PaletteHostBehaviourTests
         Assert.Contains("text \"Stud\"", renderer.Calls);
         Assert.Contains("text \"io\"", renderer.Calls);
     }
+    // ---- the pill's text can be read on the pill --------------------------------
+
+    [Fact]
+    public void TextOnALightAccentIsDarkAndOnADarkAccentIsLight()
+    {
+        // The contexts pill is filled with the accent - any colour Windows is set to -
+        // and used the chip's text on it: the accent lightened a quarter of the way to
+        // white, which on a light-blue accent is the accent on itself. The names of the
+        // contexts in force could not be read.
+        var dark = new Shubbak.Core.Rendering.Colour(0x16, 0x16, 0x1C);
+
+        PaletteTheme lightAccent = PaletteTheme.From(new DalilConfigView(
+            dark, Shubbak.Core.Rendering.Colour.White, new Shubbak.Core.Rendering.Colour(0x7D, 0xD3, 0xFC), dark, dark, dark));
+
+        PaletteTheme darkAccent = PaletteTheme.From(new DalilConfigView(
+            dark, Shubbak.Core.Rendering.Colour.White, new Shubbak.Core.Rendering.Colour(0x00, 0x3A, 0x8C), dark, dark, dark));
+
+        Assert.Equal(dark, lightAccent.AccentText);
+        Assert.Equal(Shubbak.Core.Rendering.Colour.White, darkAccent.AccentText);
+
+        Assert.False(new Shubbak.Core.Rendering.Colour(0x7D, 0xD3, 0xFC).IsDark);
+        Assert.True(new Shubbak.Core.Rendering.Colour(0x00, 0x3A, 0x8C).IsDark);
+    }
 }

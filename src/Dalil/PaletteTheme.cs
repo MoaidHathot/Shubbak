@@ -28,8 +28,20 @@ internal readonly record struct PaletteTheme
     /// <summary>The mode name itself.</summary>
     public required Colour ChipText { get; init; }
 
-    /// <summary>The bar down the left of the selected row.</summary>
+    /// <summary>The bar down the left of the selected row, and the fill of the contexts pill.</summary>
     public required Colour Accent { get; init; }
+
+    /// <summary>
+    /// Text laid on <see cref="Accent"/>: the background when the accent is light,
+    /// white when it is dark.
+    /// </summary>
+    /// <remarks>
+    /// The contexts pill used the chip's text colour, which is the accent lightened a
+    /// quarter of the way to white - readable on the dark chip it was made for and
+    /// invisible on a pill filled with the accent itself. With the accent set to a
+    /// light blue, the names of the contexts in force could not be read at all.
+    /// </remarks>
+    public required Colour AccentText { get; init; }
 
     /// <summary>Behind a badge.</summary>
     public required Colour Pill { get; init; }
@@ -77,6 +89,7 @@ internal readonly record struct PaletteTheme
         ChipText = config.Match.Lerp(Colour.White, 0.25),
 
         Accent = config.Match,
+        AccentText = config.Match.IsDark ? Colour.White : config.Background,
         Mark = config.Match,
 
         Pill = config.Background.Lerp(config.Border, 0.75),

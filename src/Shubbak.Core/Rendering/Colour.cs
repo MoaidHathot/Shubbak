@@ -47,6 +47,14 @@ public readonly record struct Colour(byte R, byte G, byte B, byte A = 255)
     public bool IsTransparent => A == 0;
 
     /// <summary>
+    /// Whether the colour reads as dark: relative luminance under a half, so text laid
+    /// on it should be light. The one question every pill has to answer before it
+    /// picks a text colour, and the accent - which may be any colour Windows is set
+    /// to - is the one fill that cannot be assumed either way.
+    /// </summary>
+    public bool IsDark => ((0.2126 * R) + (0.7152 * G) + (0.0722 * B)) / 255.0 < 0.5;
+
+    /// <summary>
     /// Parses <c>#RGB</c>, <c>#RRGGBB</c>, <c>#RRGGBBAA</c> or a named colour, each
     /// optionally followed by an opacity: <c>#8dbcff 40%</c>, <c>accent 25%</c>.
     /// </summary>

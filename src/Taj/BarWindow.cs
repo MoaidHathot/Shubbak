@@ -870,7 +870,7 @@ public sealed class BarWindow : CompanionWindow
 
         var look = new Look(
             profile.Backdrop,
-            IsDark(profile.Background),
+            profile.Background.IsDark,
             clipToMaterial ? (profile.Radius >= 6 ? Round : RoundSmall) : DoNotRound);
 
         if (look == _look) return;
@@ -889,10 +889,6 @@ public sealed class BarWindow : CompanionWindow
         _ = PInvoke.DwmSetWindowAttribute(hwnd, CornerPreference, &corners, sizeof(int));
         _ = PInvoke.DwmSetWindowAttribute(hwnd, SystemBackdropType, &backdrop, sizeof(int));
     }
-
-    /// <summary>Whether a colour reads as dark: relative luminance under a half.</summary>
-    private static bool IsDark(Colour colour) =>
-        ((0.2126 * colour.R) + (0.7152 * colour.G) + (0.0722 * colour.B)) / 255.0 < 0.5;
 
     // ---- window plumbing ---------------------------------------------------
 

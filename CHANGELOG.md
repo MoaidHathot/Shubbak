@@ -466,6 +466,12 @@ schedule and breaking either is a different kind of event:
   nothing. The model now knows which keys its widgets read and wakes only for those;
   the "re-renders only when a source it uses changes" the docs promised is now what
   happens.
+- **The palette's contexts pill could not be read.** It is filled with the accent -
+  whatever colour Windows is set to - and its text was the chip's: the accent
+  lightened a quarter of the way to white, which on a light-blue accent is the accent
+  on itself. The names of the contexts in force were invisible. Text on the accent is
+  now the background when the accent is light and white when it is dark;
+  `Colour.IsDark` is the one luminance test, shared with the bar's backdrop.
 - **Alt+F4 in the palette closed the palette process.** Left to `DefWindowProc` it
   became `WM_CLOSE`, and the process left, taking the keybinding that opens it with it
   until the window manager was restarted. It now dismisses the popup - one level at a
