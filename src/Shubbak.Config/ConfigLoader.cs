@@ -342,7 +342,7 @@ public sealed class ConfigLoader
     private static readonly string[] KnownAnimationKeys =
     [
         "enabled", "animate-new-windows", "minimum-distance", "fps",
-        "window-open", "window-move", "layout-change", "workspace-switch",
+        "window-open", "window-move", "layout-change", "workspace-switch", "resize",
     ];
 
     private static readonly string[] KnownEffectsKeys =
@@ -663,7 +663,8 @@ public sealed class ConfigLoader
             ReadProfile(node, "window-open"),
             ReadProfile(node, "window-move"),
             ReadProfile(node, "layout-change"),
-            ReadProfile(node, "workspace-switch"));
+            ReadProfile(node, "workspace-switch"),
+            ReadProfile(node, "resize"));
     }
 
     /// <summary>

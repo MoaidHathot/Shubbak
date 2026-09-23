@@ -21,6 +21,21 @@ public enum AnimationKind
 
     /// <summary>Windows appearing because a workspace became active.</summary>
     WorkspaceSwitch,
+
+    /// <summary>
+    /// Windows changing share because one was resized by a key or a drag.
+    /// </summary>
+    /// <remarks>
+    /// Instant unless the file says otherwise, and for a reason that was measured. A
+    /// resize is two windows moving one shared edge, and the frames that move them are
+    /// posted to each window's own thread rather than sent, so the window whose
+    /// application is busy re-laying out its contents - a browser, an editor - applies
+    /// its frames late while its neighbour keeps up: the edge splits into a gap or an
+    /// overlap that closes only when the motion ends. A key that auto-repeats every
+    /// thirty milliseconds against a hundred-and-forty-millisecond curve never let it
+    /// end. Placed directly, the two are one atomic batch and the edge stays one edge.
+    /// </remarks>
+    Resize,
 }
 
 /// <summary>Duration and curve for one animation kind.</summary>
@@ -114,6 +129,9 @@ public sealed record AnimationOptions
     public AnimationProfile LayoutChange { get; init; } =
         new(TimeSpan.FromMilliseconds(180), Easing.EaseOut);
 
+    /// <summary>The profile for a resize; instant by default. See <see cref="AnimationKind.Resize"/>.</summary>
+    public AnimationProfile Resize { get; init; } = AnimationProfile.Instant;
+
     public AnimationProfile WorkspaceSwitch { get; init; } =
         new(TimeSpan.FromMilliseconds(120), Easing.EaseOut);
 
@@ -136,6 +154,7 @@ public sealed record AnimationOptions
         AnimationKind.WindowMove => WindowMove,
         AnimationKind.LayoutChange => LayoutChange,
         AnimationKind.WorkspaceSwitch => WorkspaceSwitch,
+        AnimationKind.Resize => Resize,
         _ => WindowMove,
     };
 }

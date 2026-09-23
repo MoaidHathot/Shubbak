@@ -498,6 +498,16 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **A resize pulled the two windows apart while it animated.** Frames are posted to
+  each window's own thread rather than sent - the measured choice that keeps a busy
+  application from stalling the daemon - so the window whose application was
+  re-laying out its contents applied its frames late while its neighbour kept up, and
+  the shared edge opened into a gap or an overlap that closed only when the motion
+  ended; a key auto-repeating every thirty milliseconds against a
+  hundred-and-forty-millisecond curve never let it. A resize now has its own
+  animation profile, `resize`, instant by default: both windows land in one atomic
+  batch and the edge stays one edge. `animation { resize duration=100 }` brings the
+  motion back for anyone who prefers it.
 - **Resize did nothing in the spiral.** `resize` looked for an ancestor whose primary
   axis matched, and `fibonacci`, `grid` and `monocle` have none - so in the layout most
   people start in, the resize keys logged "No container splits along Horizontal" and

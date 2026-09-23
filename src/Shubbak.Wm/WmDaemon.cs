@@ -4182,6 +4182,9 @@ public sealed class WmDaemon : IDisposable
 
         if (_animation.Retarget(placement.Window.Handle, current, placement.Rect, kind))
         {
+            if (Log.IsEnabled(LogLevel.Trace))
+                Log.Trace(LogCategory.Animation, $"retarget 0x{handle:X} {current} -> {placement.Rect} ({kind})");
+
             // Raised here, because an animated window never reaches Commit and Commit
             // is where Raise is otherwise honoured. The layout engine sets it for
             // exactly two things - a fullscreen or maximised window, and the focused

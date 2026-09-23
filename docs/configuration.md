@@ -445,10 +445,18 @@ many were placed, and the palette completes the names.
 
 ## Animation
 
-Per-event durations and cubic-bezier curves, in the `animation` section. The
-important bit: re-targeting blends from the window's *current* position, so hammering
-a layout key never makes windows jump backwards or stutter. Frame rate follows your
-fastest display by default (`fps "auto"`) and is re-read when monitors come and go.
+Per-event durations and cubic-bezier curves, in the `animation` section: `window-open`,
+`window-move`, `layout-change`, `workspace-switch` and `resize`. The important bit:
+re-targeting blends from the window's *current* position, so hammering a layout key
+never makes windows jump backwards or stutter. Frame rate follows your fastest display
+by default (`fps "auto"`) and is re-read when monitors come and go.
+
+`resize` is instant unless you give it a duration, on purpose. A resize moves one edge
+shared by two windows, and animation frames are posted to each window's own thread
+rather than sent - so the window whose application is busy re-laying out its contents
+applies its frames late while its neighbour keeps up, and the shared edge splits into
+a gap or an overlap until the motion ends. Placed directly, both land in one atomic
+batch. `resize duration=100` brings the motion back if you would rather have it.
 
 ## Mouse
 

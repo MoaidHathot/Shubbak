@@ -256,12 +256,13 @@ public sealed record AnimationOverride(
     ProfileOverride? WindowOpen,
     ProfileOverride? WindowMove,
     ProfileOverride? LayoutChange,
-    ProfileOverride? WorkspaceSwitch)
+    ProfileOverride? WorkspaceSwitch,
+    ProfileOverride? Resize = null)
 {
     public bool Any =>
         Enabled is not null || AnimateNewWindows is not null || MinimumDistance is not null ||
         Fps is not null || WindowOpen is not null || WindowMove is not null ||
-        LayoutChange is not null || WorkspaceSwitch is not null;
+        LayoutChange is not null || WorkspaceSwitch is not null || Resize is not null;
 
     public ShubbakConfig Apply(ShubbakConfig config)
     {
@@ -281,6 +282,7 @@ public sealed record AnimationOverride(
                 WindowMove = WindowMove?.Apply(animation.WindowMove) ?? animation.WindowMove,
                 LayoutChange = LayoutChange?.Apply(animation.LayoutChange) ?? animation.LayoutChange,
                 WorkspaceSwitch = WorkspaceSwitch?.Apply(animation.WorkspaceSwitch) ?? animation.WorkspaceSwitch,
+                Resize = Resize?.Apply(animation.Resize) ?? animation.Resize,
             },
         };
     }

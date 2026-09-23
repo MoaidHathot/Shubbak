@@ -129,7 +129,10 @@ public static class WmEventGeometry
     {
         WorkspaceActivated => AnimationKind.WorkspaceSwitch,
         // The gaps moving every window at once is a layout change in all but name.
-        LayoutChanged or ContainerResized or GapsChanged => AnimationKind.LayoutChange,
+        LayoutChanged or GapsChanged => AnimationKind.LayoutChange,
+
+        // A resize has its own profile, instant by default; see AnimationKind.Resize.
+        ContainerResized => AnimationKind.Resize,
         _ => null,
     };
 

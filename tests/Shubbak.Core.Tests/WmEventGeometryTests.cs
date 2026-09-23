@@ -208,7 +208,11 @@ public sealed class WmEventGeometryTests
             new WorkspaceActivated(TreeBuilder.Workspace(), null, TreeBuilder.Monitor()).LayoutAnimationKind());
 
         Assert.Equal(AnimationKind.LayoutChange, new LayoutChanged(container, "grid").LayoutAnimationKind());
-        Assert.Equal(AnimationKind.LayoutChange, new ContainerResized(container).LayoutAnimationKind());
+        // A resize has its own profile - instant by default - because two windows
+        // sharing an edge cannot be animated coherently when their frames are posted
+        // to two applications that answer at different speeds.
+        Assert.Equal(AnimationKind.Resize, new ContainerResized(container).LayoutAnimationKind());
+        Assert.Equal(TimeSpan.Zero, new AnimationOptions().Resize.Duration);
 
         // Changing the gaps moves every window at once: geometric, and shown as a
         // layout change rather than as a hundred separate moves.

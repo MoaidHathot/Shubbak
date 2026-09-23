@@ -190,6 +190,10 @@ animation {
     window-move      duration=140 curve="ease-out"
     layout-change    duration=180 curve="ease-out"
     workspace-switch duration=120 curve="ease-out"
+
+    // A resize is instant: two windows share the edge being moved, and frames posted
+    // to two applications land at two speeds. Give it a duration to animate anyway.
+    // resize          duration=100 curve="ease-out"
 }
 
 window-effects {
