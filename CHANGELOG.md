@@ -498,6 +498,10 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **Closing a window is said in the log.** `close` is the one thing the window manager
+  does to a window that cannot be undone, and it was logged only at debug - so a
+  window that vanished during a session of tests could not be traced to the key that
+  closed it. One line at info per close, naming the window.
 - **The log kept one earlier session; it keeps three.** A window went missing during
   a run of tests that restarted the window manager eight times, and by the time the
   question was asked the start that had the answer was seven rotations gone. Each

@@ -3069,7 +3069,20 @@ public sealed class WmDaemon : IDisposable
         switch (outcome.Action)
         {
             case HostAction.CloseFocusedWindow:
-                if (_wm.FocusedWindow is { } window) WindowActions.Close((nint)window.Handle);
+                if (_wm.FocusedWindow is { } window)
+                {
+                    // Said at info, always. Closing is the one thing this program does
+                    // to a window that cannot be undone, and a window that vanished
+                    // during a session of tests could not be traced to anything: the
+                    // key that closed it was logged only at debug, and the log had
+                    // rotated. One line per close is cheap, and it is the line that
+                    // answers "what happened to my Notepad".
+                    Log.Info(LogCategory.Command,
+                        $"closing 0x{window.Handle:X} \"{window.Identity.Title.Truncate(40)}\" ({window.Identity.ProcessName}) on request");
+
+                    WindowActions.Close((nint)window.Handle);
+                }
+
                 break;
 
             case HostAction.ToggleManaged:
