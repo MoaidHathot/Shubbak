@@ -177,6 +177,15 @@ schedule and breaking either is a different kind of event:
   master-stack layout keeps in its master area, a count the layouts had carried since
   they were written with no way to change it. `SHB0323` to `SHB0325` are the new
   refusals. Every one is in the catalogue, so the palette completes it.
+- **Ayn: `device` rules for the speaker and the microphone.** `speaker { device
+  "*barracuda*" "on-headset" }` holds a context while the default speaker is a device
+  whose name matches - the name Windows shows, with the same wildcards `by` takes - and
+  lets go the moment Windows moves the default; `microphone` takes it too. The name is
+  read from the device's property store once per resolve, so following it costs
+  nothing per wake, and `ayn --report` prints both names so the pattern can be copied.
+  A rule missing its name or context is pointed out (`AYN0011`); one sharing a fact's
+  context gets the same warning two facts on one context get. Verified live: the
+  headset's name held `on-headset` on the window manager within a moment of the reload.
 - **`no-focus` in a rule.** The window it matched is managed and placed but focus
   stays where it was - for the chat that pops when a message lands and the updater
   that opens a window nobody asked for. Managing gave every new window focus, since

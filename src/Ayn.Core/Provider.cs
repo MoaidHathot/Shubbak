@@ -41,6 +41,16 @@ public enum Fact
 
     /// <summary>Apps are set to the dark theme.</summary>
     DarkTheme,
+
+    /// <summary>
+    /// The default speaker is a device whose name matches a rule. Only ever asked with
+    /// a pattern - <c>speaker { device "*jabra*" "on-headset" }</c> - since the fact
+    /// without one would be "there is a speaker".
+    /// </summary>
+    SpeakerDevice,
+
+    /// <summary>The default microphone is a device whose name matches a rule; see <see cref="SpeakerDevice"/>.</summary>
+    MicrophoneDevice,
 }
 
 /// <summary>The names a <see cref="Fact"/> goes by outside the process.</summary>
@@ -59,6 +69,8 @@ public static class FactNames
         Fact.LidClosed => "lid-closed",
         Fact.UserAway => "user-away",
         Fact.DarkTheme => "dark-theme",
+        Fact.SpeakerDevice => "speaker-device",
+        Fact.MicrophoneDevice => "microphone-device",
         _ => fact.ToString().ToLowerInvariant(),
     };
 
@@ -84,6 +96,13 @@ public static class FactNames
         _ => null,
     };
 
+    /// <summary>
+    /// Whether the fact is about which device is the default, which is only ever
+    /// asked with a name pattern; see <see cref="Fact.SpeakerDevice"/>.
+    /// </summary>
+    public static bool IsAboutADeviceName(this Fact fact) =>
+        fact is Fact.SpeakerDevice or Fact.MicrophoneDevice;
+
     /// <summary>Every fact, in a stable order.</summary>
     public static IReadOnlyList<Fact> All { get; } =
     [
@@ -91,6 +110,7 @@ public static class FactNames
         Fact.ScreenCaptured, Fact.SpeakerMuted,
         Fact.OnBattery, Fact.BatteryLow, Fact.LidClosed, Fact.UserAway,
         Fact.DarkTheme,
+        Fact.SpeakerDevice, Fact.MicrophoneDevice,
     ];
 }
 
@@ -100,12 +120,19 @@ public static class FactNames
 /// <param name="Fact">The fact.</param>
 /// <param name="App">
 /// The program the rule names, as a pattern - <c>ms-teams.exe</c>, <c>*teams*</c> -
-/// or null for the fact about any program.
+/// or null for the fact about any program. For a fact about which device is the
+/// default (<see cref="FactNames.IsAboutADeviceName"/>) it is the device's name
+/// pattern instead: <c>*jabra*</c>.
 /// </param>
 public readonly record struct FactKey(Fact Fact, string? App = null)
 {
-    /// <summary>The name, for the log: <c>camera-in-use</c>, or <c>camera-in-use by ms-teams.exe</c>.</summary>
-    public override string ToString() => App is null ? Fact.Wire() : $"{Fact.Wire()} by {App}";
+    /// <summary>
+    /// The name, for the log: <c>camera-in-use</c>, <c>camera-in-use by ms-teams.exe</c>,
+    /// or <c>speaker-device matching *jabra*</c>.
+    /// </summary>
+    public override string ToString() => App is null
+        ? Fact.Wire()
+        : Fact.IsAboutADeviceName() ? $"{Fact.Wire()} matching {App}" : $"{Fact.Wire()} by {App}";
 }
 
 /// <summary>How a command sent to the window manager fared.</summary>
@@ -253,6 +280,18 @@ public sealed class Provider
 
         if (key.Fact == Fact.BatteryLow)
             return (reading.Power?.BatteryPercent is { } percent && percent <= _config.BatteryLowPercent, []);
+
+        if (key.Fact.IsAboutADeviceName())
+        {
+            // The device's name is carried whether or not it matches, so the log can
+            // say what the default became when a rule lets go: "speaker is now
+            // Realtek Speakers", not merely "no longer matches".
+            string? name = key.Fact == Fact.SpeakerDevice ? reading.SpeakerDeviceName : reading.MicrophoneDeviceName;
+
+            if (name is null) return (false, []);
+
+            return (key.App is { } pattern && AppMatches(pattern, name), [name]);
+        }
 
         return (reading.Holds(key.Fact), []);
     }
@@ -531,13 +570,20 @@ public sealed class Provider
         return null;
     }
 
-    /// <summary>One slot per fact, and one per <c>by</c> rule.</summary>
+    /// <summary>One slot per fact, one per <c>by</c> rule, and one per <c>device</c> rule.</summary>
+    /// <remarks>
+    /// The device-name facts get a bare slot with the rest, for uniformity; it is
+    /// never due, since the file cannot name a context for the fact without a pattern.
+    /// </remarks>
     private static IEnumerable<Slot> SlotsFor(AynConfig config)
     {
         foreach (Fact fact in FactNames.All) yield return new Slot(new FactKey(fact));
 
         foreach (AppRule rule in config.AppRules)
             yield return new Slot(new FactKey(rule.Device.InUseFact(), rule.App));
+
+        foreach (DeviceRule rule in config.DeviceRules)
+            yield return new Slot(new FactKey(rule.Fact, rule.Pattern));
     }
 
     private static string Because(Slot slot)
@@ -566,6 +612,10 @@ public sealed class Provider
             (Fact.UserAway, false) => "user back",
             (Fact.DarkTheme, true) => "dark theme",
             (Fact.DarkTheme, false) => "light theme",
+            (Fact.SpeakerDevice, true) => $"speaker is \"{apps}\"",
+            (Fact.SpeakerDevice, false) => apps.Length > 0 ? $"speaker is now \"{apps}\"" : "no speaker",
+            (Fact.MicrophoneDevice, true) => $"microphone is \"{apps}\"",
+            (Fact.MicrophoneDevice, false) => apps.Length > 0 ? $"microphone is now \"{apps}\"" : "no microphone",
             _ => slot.Key.ToString(),
         } + (slot.Key.App is { } app && slot.Wanted ? $" (rule for {app})" : string.Empty);
     }

@@ -20,6 +20,20 @@ namespace Ayn.Core;
 public sealed record AppRule(DeviceKind Device, string App, string Context);
 
 /// <summary>
+/// A context held while the default speaker or microphone is a particular device.
+/// </summary>
+/// <param name="Fact"><see cref="Fact.SpeakerDevice"/> or <see cref="Fact.MicrophoneDevice"/>.</param>
+/// <param name="Pattern">The device name to match, with <c>*</c> and <c>?</c> and no regard for case: <c>*jabra*</c>.</param>
+/// <param name="Context">The context to hold.</param>
+/// <remarks>
+/// <c>speaker { device "*headphones*" "on-headphones" }</c>: the file can quieten the
+/// bar's volume widget, or switch a profile, when the headset is what sound goes to,
+/// and switch back when Windows moves the default to the monitor's speakers. The
+/// name is the one Windows shows in its sound settings and <c>ayn --report</c> prints.
+/// </remarks>
+public sealed record DeviceRule(Fact Fact, string Pattern, string Context);
+
+/// <summary>
 /// The watcher's own settings: which context to hold for which fact, and how long a
 /// change has to last before it is believed.
 /// </summary>
@@ -54,6 +68,7 @@ public sealed record AppRule(DeviceKind Device, string App, string Context);
 /// <param name="MicrophoneIgnores">Programs whose use of the microphone does not count.</param>
 /// <param name="ScreenIgnores">Programs whose capture of the screen does not count.</param>
 /// <param name="AppRules">The <c>by</c> rules; see <see cref="AppRule"/>.</param>
+/// <param name="DeviceRules">The <c>device</c> rules; see <see cref="DeviceRule"/>.</param>
 /// <remarks>
 /// Facts are named <c>subject-state</c> - <c>camera-in-use</c>, <c>microphone-muted</c>
 /// - so that the ones about one device sort together and the next device slots in
@@ -78,7 +93,8 @@ public sealed record AynConfig(
     IReadOnlyList<string>? CameraIgnores = null,
     IReadOnlyList<string>? MicrophoneIgnores = null,
     IReadOnlyList<string>? ScreenIgnores = null,
-    IReadOnlyList<AppRule>? AppRules = null)
+    IReadOnlyList<AppRule>? AppRules = null,
+    IReadOnlyList<DeviceRule>? DeviceRules = null)
 {
     /// <summary>What <see cref="Settle"/> is when the file does not say.</summary>
     public static TimeSpan DefaultSettle { get; } = TimeSpan.FromMilliseconds(500);
@@ -101,6 +117,9 @@ public sealed record AynConfig(
     /// <summary>The <c>by</c> rules; empty when none.</summary>
     public IReadOnlyList<AppRule> AppRules { get; init; } = AppRules ?? [];
 
+    /// <summary>The <c>device</c> rules; empty when none.</summary>
+    public IReadOnlyList<DeviceRule> DeviceRules { get; init; } = DeviceRules ?? [];
+
     /// <summary>The context for a fact, or null when that fact is not reported.</summary>
     public string? ContextFor(Fact fact) => fact switch
     {
@@ -117,10 +136,21 @@ public sealed record AynConfig(
         _ => null,
     };
 
-    /// <summary>The context for a slot: a fact's, or a <c>by</c> rule's.</summary>
+    /// <summary>The context for a slot: a fact's, a <c>by</c> rule's, or a <c>device</c> rule's.</summary>
     public string? ContextFor(FactKey key)
     {
         if (key.App is null) return ContextFor(key.Fact);
+
+        if (key.Fact.IsAboutADeviceName())
+        {
+            foreach (DeviceRule rule in DeviceRules)
+            {
+                if (rule.Fact == key.Fact && string.Equals(rule.Pattern, key.App, StringComparison.OrdinalIgnoreCase))
+                    return rule.Context;
+            }
+
+            return null;
+        }
 
         foreach (AppRule rule in AppRules)
         {
@@ -146,16 +176,16 @@ public sealed record AynConfig(
 
     /// <summary>Whether anything is reported at all.</summary>
     public bool WatchesAnything =>
-        FactNames.All.Any(fact => ContextFor(fact) is not null) || AppRules.Count > 0;
+        FactNames.All.Any(fact => ContextFor(fact) is not null) || AppRules.Count > 0 || DeviceRules.Count > 0;
 
     /// <summary>Whether the consent store needs watching: some device's use is reported.</summary>
     public bool NeedsConsentStore => DeviceKinds.All.Any(Watches);
 
     /// <summary>Whether the audio endpoint needs watching: the microphone's mute is reported.</summary>
-    public bool NeedsAudioEndpoint => MicrophoneMuted is not null;
+    public bool NeedsAudioEndpoint => MicrophoneMuted is not null || DeviceRules.Any(rule => rule.Fact == Fact.MicrophoneDevice);
 
-    /// <summary>Whether the speaker's mute is reported.</summary>
-    public bool NeedsSpeakerEndpoint => SpeakerMuted is not null;
+    /// <summary>Whether the speaker is followed: its mute is reported, or a rule names a speaker.</summary>
+    public bool NeedsSpeakerEndpoint => SpeakerMuted is not null || DeviceRules.Any(rule => rule.Fact == Fact.SpeakerDevice);
 
     /// <summary>Whether any power fact is reported.</summary>
     public bool NeedsPower =>
@@ -218,13 +248,13 @@ public static class AynConfigLoader
     public static IReadOnlyList<string> KnownCameraKeys { get; } = ["in-use", "ignore", "by"];
 
     /// <summary>What a <c>microphone</c> block accepts.</summary>
-    public static IReadOnlyList<string> KnownMicrophoneKeys { get; } = ["in-use", "muted", "ignore", "by"];
+    public static IReadOnlyList<string> KnownMicrophoneKeys { get; } = ["in-use", "muted", "ignore", "by", "device"];
 
     /// <summary>What a <c>screen</c> block accepts.</summary>
     public static IReadOnlyList<string> KnownScreenKeys { get; } = ["captured", "ignore", "by"];
 
     /// <summary>What a <c>speaker</c> block accepts.</summary>
-    public static IReadOnlyList<string> KnownSpeakerKeys { get; } = ["muted"];
+    public static IReadOnlyList<string> KnownSpeakerKeys { get; } = ["muted", "device"];
 
     /// <summary>What a <c>power</c> block accepts.</summary>
     public static IReadOnlyList<string> KnownPowerKeys { get; } =
@@ -264,15 +294,24 @@ public static class AynConfigLoader
         var defaults = new AynConfig();
         var names = new Naming(declaredContexts, diagnostics);
         List<AppRule> rules = [];
+        List<DeviceRule> deviceRules = [];
 
         DeviceBlock camera = Device(node, DeviceKind.Camera, KnownCameraKeys, "in-use", defaults.CameraInUse, null, names, rules);
         DeviceBlock microphone = Device(node, DeviceKind.Microphone, KnownMicrophoneKeys, "in-use", defaults.MicrophoneInUse, defaults.MicrophoneMuted, names, rules);
         DeviceBlock screen = Device(node, DeviceKind.Screen, KnownScreenKeys, "captured", defaults.ScreenCaptured, null, names, rules);
 
+        // The microphone's device rules, read from the same block Device() read. Not
+        // from within it: the camera and the screen have no default device to name.
+        if (Block(node, "microphone", KnownMicrophoneKeys, null) is { } microphoneBlock)
+            DeviceRules(microphoneBlock, Fact.MicrophoneDevice, "microphone", names, deviceRules);
+
         string? speakerMuted = null;
 
         if (Block(node, "speaker", KnownSpeakerKeys, diagnostics) is { } speaker)
+        {
             speakerMuted = names.Context(speaker, "muted", null, "speaker");
+            DeviceRules(speaker, Fact.SpeakerDevice, "speaker", names, deviceRules);
+        }
 
         string? onBattery = null, batteryLow = null, lidClosed = null, userAway = null;
         int batteryLowPercent = defaults.BatteryLowPercent;
@@ -295,7 +334,7 @@ public static class AynConfigLoader
             camera.InUse, microphone.InUse, microphone.Muted, Settle(node, diagnostics),
             screen.InUse, speakerMuted, onBattery, batteryLow, lidClosed, userAway, darkTheme,
             batteryLowPercent, Renew(node, diagnostics),
-            camera.Ignores, microphone.Ignores, screen.Ignores, rules);
+            camera.Ignores, microphone.Ignores, screen.Ignores, rules, deviceRules);
 
         WarnAboutSharedContexts(config, names, diagnostics);
 
@@ -378,15 +417,46 @@ public static class AynConfigLoader
         return new(inUse, muted, ignores);
     }
 
-    /// <summary>A named block with nothing but settings in it, or null when absent or turned off.</summary>
-    private static KdlNode? Block(KdlNode parent, string name, IReadOnlyList<string> known, List<Diagnostic> diagnostics)
+    /// <summary>
+    /// The <c>device</c> rules of a speaker or microphone block:
+    /// <c>device "*jabra*" "on-headset"</c>, a name pattern and a context.
+    /// </summary>
+    private static void DeviceRules(KdlNode block, Fact fact, string word, Naming names, List<DeviceRule> rules)
+    {
+        foreach (KdlNode device in block.ChildrenNamed("device"))
+        {
+            string? pattern = device.Argument(0)?.AsString();
+            KdlValue? contextValue = device.Argument(1);
+
+            if (pattern is not { Length: > 0 } || contextValue is null || contextValue.AsString().Length == 0)
+            {
+                names.Diagnostics.Add(Diagnostic.Warning(
+                    "AYN0011",
+                    $"'{word} device' needs a device name and a context; this rule is ignored.",
+                    device.Span,
+                    $"Write device \"*headphones*\" \"on-headphones\" to hold on-headphones while the default {word} is one whose name matches; ayn --report prints the names."));
+
+                continue;
+            }
+
+            names.Declared(contextValue, $"{word} device \"{pattern}\"");
+            rules.Add(new DeviceRule(fact, pattern, contextValue.AsString()));
+        }
+    }
+
+    /// <summary>
+    /// A named block with nothing but settings in it, or null when absent or turned
+    /// off. Without a diagnostics list, the unknown keys are not warned about - for a
+    /// second look at a block another reader has already checked.
+    /// </summary>
+    private static KdlNode? Block(KdlNode parent, string name, IReadOnlyList<string> known, List<Diagnostic>? diagnostics)
     {
         KdlNode? node = parent.Child(name);
         if (node is null) return null;
 
         if (node.Argument(0) is { } argument && argument.TryAsBool(out bool enabled) && !enabled) return null;
 
-        WarnAboutUnknown(node, known, name, diagnostics);
+        if (diagnostics is not null) WarnAboutUnknown(node, known, name, diagnostics);
         return node;
     }
 
@@ -478,6 +548,9 @@ public static class AynConfigLoader
 
         foreach (AppRule rule in config.AppRules)
             inForce.Add((rule.Context, $"{rule.Device.Word()} by \"{rule.App}\""));
+
+        foreach (DeviceRule rule in config.DeviceRules)
+            inForce.Add((rule.Context, $"{(rule.Fact == Fact.SpeakerDevice ? "speaker" : "microphone")} device \"{rule.Pattern}\""));
 
         foreach (IGrouping<string, (string Context, string Where)> shared in inForce
                      .GroupBy(entry => entry.Context, StringComparer.OrdinalIgnoreCase)

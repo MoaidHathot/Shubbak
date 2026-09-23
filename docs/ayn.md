@@ -72,7 +72,10 @@ ayn {
         by "ms-teams.exe" "in-a-call"       // a context of its own for one program
     }
     screen  { captured "sharing" }
-    speaker { muted "speaker-muted" }
+    speaker {
+        muted "speaker-muted"
+        device "*barracuda*" "on-headset"  // while the headset is what sound goes to
+    }
     power   { on-battery "unplugged"; battery-low "low-battery"; battery-low-at 15; user-away "away"; lid-closed "lid-closed" }
     theme   { dark "dark" }
     renew 60                                // re-assert every held context each minute
@@ -85,6 +88,16 @@ use a context of its own, so a Teams call and an OBS stream can be told apart wi
 any context knowing the difference between programs. Both take the program's name as
 it appears in `ayn --report`, with `*` and `?` as wildcards and no regard for case.
 `microphone` and `screen` take the same two.
+
+`device` is about which device is the default rather than who is using it: `speaker {
+device "*barracuda*" "on-headset" }` holds `on-headset` while the default speaker is
+one whose name matches, and lets go the moment Windows moves the default — to the
+monitor when the headset is unplugged, say. `microphone` takes it too, for the webcam's
+microphone against the headset's. The name is the one Windows shows in its sound
+settings and `ayn --report` prints, with the same wildcards and no regard for case.
+Nothing to settle here: plugging a headset in is one event, and the person who did it
+is looking at the bar. A rule missing its name or its context is pointed out and
+skipped (`AYN0011`).
 
 `battery-low-at` is the percentage `battery-low` starts at; twenty unless said.
 `renew` is off unless said: with it, every held context is asserted again that many

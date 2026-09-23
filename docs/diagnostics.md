@@ -191,3 +191,4 @@ code, not the page.
 | `AYN0008` | Warning | '{word} by' needs a program and a context; this rule is ignored. |
 | `AYN0009` | Warning | 'renew' should be a whole number of seconds, not '{value.AsString()}'; renewal is off. |
 | `AYN0010` | Warning | '{key}' should be a percentage from 1 to 100, not '{value.AsString()}'; {fallback} is used. |
+| `AYN0011` | Warning | '{word} device' needs a device name and a context; this rule is ignored. |

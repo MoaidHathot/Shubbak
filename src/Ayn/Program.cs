@@ -152,6 +152,8 @@ internal static class Program
         public Reading Read() => Reading.From(Store, Endpoint.IsMuted()) with
         {
             SpeakerMuted = Endpoint.IsSpeakerMuted(),
+            SpeakerDeviceName = Endpoint.SpeakerName,
+            MicrophoneDeviceName = Endpoint.MicrophoneName,
             Power = Power.IsOpen ? Power.Read() : null,
             DarkTheme = Theme.IsOpen ? Theme.IsDark() : null,
         };
@@ -491,6 +493,10 @@ internal static class Program
                 false => "speaker mute: not muted",
                 null => "speaker mute: no speaker",
             });
+
+            // The names a `device` rule matches against, spelled as Windows spells them.
+            Console.WriteLine($"microphone device: {(endpoint.MicrophoneName is { } microphone ? $"\"{microphone}\"" : "none")}");
+            Console.WriteLine($"speaker device: {(endpoint.SpeakerName is { } speaker ? $"\"{speaker}\"" : "none")}");
         }
 
         using var power = new PowerWatch();
@@ -533,6 +539,9 @@ internal static class Program
 
         foreach (AppRule rule in config.AppRules)
             parts.Add($"{rule.Device.Word()} by {rule.App} as \"{rule.Context}\"");
+
+        foreach (DeviceRule rule in config.DeviceRules)
+            parts.Add($"{(rule.Fact == Fact.SpeakerDevice ? "speaker" : "microphone")} device {rule.Pattern} as \"{rule.Context}\"");
 
         return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
     }

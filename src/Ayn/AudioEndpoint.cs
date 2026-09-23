@@ -73,6 +73,18 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
     // IMMDevice slots.
     private const int ActivateSlot = 3;
+    private const int OpenPropertyStoreSlot = 4;
+
+    // IPropertyStore slots.
+    private const int GetValueSlot = 5;
+
+    // PKEY_Device_FriendlyName: {A45C254E-DF1C-4EFD-8020-67D146A850E0} 14, the name
+    // Windows shows in its sound settings - "Speakers (Realtek(R) Audio)".
+    private static readonly Guid DeviceFriendlyNameFmtid = new(0xA45C254E, 0xDF1C, 0x4EFD, 0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0);
+    private const uint DeviceFriendlyNamePid = 14;
+
+    private const int StgmRead = 0;
+    private const ushort VtLpwstr = 31;
 
     // IAudioEndpointVolume slots.
     private const int RegisterControlChangeNotifySlot = 3;
@@ -101,6 +113,17 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
     /// <summary>Whether there is a speaker to ask.</summary>
     public bool HasSpeaker => _speakerVolume != 0;
+
+    /// <summary>
+    /// The default microphone's name as Windows shows it, or null when there is none.
+    /// Read once when the device is resolved, not on every wake: a name is a property
+    /// store round trip, and it changes only when the default device does, which is
+    /// exactly when <see cref="Resolve"/> runs again.
+    /// </summary>
+    public string? MicrophoneName { get; private set; }
+
+    /// <summary>The default speaker's name, or null when there is none or it is not followed.</summary>
+    public string? SpeakerName { get; private set; }
 
     /// <summary>
     /// Whether the default speaker is followed as well as the default microphone. Off
@@ -150,18 +173,30 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
     {
         ReleaseVolume(ref _volume);
         ReleaseVolume(ref _speakerVolume);
+        MicrophoneName = null;
+        SpeakerName = null;
 
-        _volume = ResolveEndpoint(ECapture, "microphone");
+        _volume = ResolveEndpoint(ECapture, "microphone", out string? microphoneName);
+        MicrophoneName = microphoneName;
 
-        if (WatchSpeaker) _speakerVolume = ResolveEndpoint(ERender, "speaker");
+        if (WatchSpeaker)
+        {
+            _speakerVolume = ResolveEndpoint(ERender, "speaker", out string? speakerName);
+            SpeakerName = speakerName;
+        }
     }
 
     /// <summary>
     /// The default device of one flow - the communications one, falling back to the
     /// console one - with its endpoint volume activated and our callback registered.
     /// </summary>
-    private nint ResolveEndpoint(int flow, string what)
+    /// <param name="flow">Render or capture.</param>
+    /// <param name="what">The word for the log.</param>
+    /// <param name="name">The device's name, or null when there is no device or it has none.</param>
+    private nint ResolveEndpoint(int flow, string what, out string? name)
     {
+        name = null;
+
         nint device = DefaultDevice(flow, ECommunications, what) is var communications && communications != 0
             ? communications
             : DefaultDevice(flow, EConsole, what);
@@ -174,6 +209,10 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
         try
         {
+            name = FriendlyName(device, what);
+
+            if (name is not null) Log.Debug(LogCategory.Wm, $"the {what} is \"{name}\"");
+
             Guid iid = IAudioEndpointVolumeIid;
             nint volume = 0;
 
@@ -198,6 +237,74 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
         {
             Release(device);
         }
+    }
+
+    /// <summary>
+    /// The device's friendly name from its property store, or null when it has none
+    /// or the store cannot be read - which is logged once and is not a reason to do
+    /// without the device's mute.
+    /// </summary>
+    /// <remarks>
+    /// <c>IMMDevice::OpenPropertyStore</c>, then <c>IPropertyStore::GetValue</c> with
+    /// <c>PKEY_Device_FriendlyName</c>; the value is a <c>PROPVARIANT</c> holding an
+    /// <c>LPWSTR</c> the caller frees with <c>PropVariantClear</c>. The variant is
+    /// twenty-four bytes on x64 - type word, three reserved words, then the union -
+    /// and the string pointer sits at offset eight.
+    /// </remarks>
+    private string? FriendlyName(nint device, string what)
+    {
+        nint store = 0;
+
+        var open = (delegate* unmanaged[Stdcall]<nint, int, nint*, int>)(*(void***)device)[OpenPropertyStoreSlot];
+        int hr = open(device, StgmRead, &store);
+
+        if (hr < 0 || store == 0)
+        {
+            Fail($"opening the {what}'s properties", hr);
+            return null;
+        }
+
+        try
+        {
+            var key = new PropertyKey(DeviceFriendlyNameFmtid, DeviceFriendlyNamePid);
+            byte* variant = stackalloc byte[24];
+            new Span<byte>(variant, 24).Clear();
+
+            var getValue = (delegate* unmanaged[Stdcall]<nint, PropertyKey*, byte*, int>)(*(void***)store)[GetValueSlot];
+            hr = getValue(store, &key, variant);
+
+            if (hr < 0)
+            {
+                Fail($"reading the {what}'s name", hr);
+                return null;
+            }
+
+            try
+            {
+                if (*(ushort*)variant != VtLpwstr) return null;
+
+                nint text = *(nint*)(variant + 8);
+                string? name = text == 0 ? null : Marshal.PtrToStringUni(text);
+
+                return string.IsNullOrWhiteSpace(name) ? null : name;
+            }
+            finally
+            {
+                _ = PropVariantClear(variant);
+            }
+        }
+        finally
+        {
+            Release(store);
+        }
+    }
+
+    /// <summary>A <c>PROPERTYKEY</c>: a property set and a property within it.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct PropertyKey(Guid fmtid, uint pid)
+    {
+        public readonly Guid Fmtid = fmtid;
+        public readonly uint Pid = pid;
     }
 
     /// <summary>
@@ -459,4 +566,7 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
 
     [LibraryImport("ole32.dll")]
     private static partial int CoCreateInstance(Guid* rclsid, nint pUnkOuter, int dwClsContext, Guid* riid, nint* ppv);
+
+    [LibraryImport("ole32.dll")]
+    private static partial int PropVariantClear(byte* pvar);
 }

@@ -127,6 +127,8 @@ public sealed record PowerReading(
 /// <param name="SpeakerMuted">Whether the default speaker is muted, or null when there is none.</param>
 /// <param name="Power">The machine's power, or null when it was not asked.</param>
 /// <param name="DarkTheme">Whether apps are set to the dark theme, or null when it was not asked.</param>
+/// <param name="SpeakerDeviceName">The default speaker's name as Windows shows it - <c>Speakers (Realtek(R) Audio)</c> - or null when there is none or it was not asked.</param>
+/// <param name="MicrophoneDeviceName">The default microphone's name, or null when there is none or it was not asked.</param>
 public sealed record Reading(
     IReadOnlyList<string> CameraApps,
     IReadOnlyList<string> MicrophoneApps,
@@ -134,7 +136,9 @@ public sealed record Reading(
     IReadOnlyList<string>? ScreenApps = null,
     bool? SpeakerMuted = null,
     PowerReading? Power = null,
-    bool? DarkTheme = null)
+    bool? DarkTheme = null,
+    string? SpeakerDeviceName = null,
+    string? MicrophoneDeviceName = null)
 {
     /// <summary>Nothing open anywhere, nothing muted.</summary>
     public static Reading Idle { get; } = new([], []);
@@ -167,8 +171,11 @@ public sealed record Reading(
         Fact.UserAway => Power?.UserAway == true,
         Fact.DarkTheme => DarkTheme == true,
 
-        // Low needs a threshold, which is the config's; see Provider.
+        // Low needs a threshold, which is the config's, and the device facts need a
+        // name pattern, which is a rule's; see Provider.
         Fact.BatteryLow => false,
+        Fact.SpeakerDevice => false,
+        Fact.MicrophoneDevice => false,
         _ => false,
     };
 

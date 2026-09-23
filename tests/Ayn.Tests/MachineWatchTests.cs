@@ -45,6 +45,50 @@ public sealed class MachineWatchTests
     }
 
     [Fact]
+    public void TheAudioEndpointNamesItsDevices()
+    {
+        // The name a `device` rule matches against, read from the device's property
+        // store through the hand-rolled IMMDevice and IPropertyStore vtables. A wrong
+        // slot here would not fail neatly: it would call some other method with our
+        // arguments. So the read is made on the real device, and its answer has to
+        // look like a name Windows shows - "Speakers (Realtek(R) Audio)" - not empty,
+        // not a GUID.
+        using var endpoint = new AudioEndpoint { WatchSpeaker = true };
+
+        Assert.True(endpoint.Open(), "Core Audio is not available on this machine");
+
+        if (endpoint.HasDevice)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(endpoint.MicrophoneName), "a microphone with no name");
+            Assert.DoesNotContain("{", endpoint.MicrophoneName, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(endpoint.MicrophoneName);
+        }
+
+        if (endpoint.HasSpeaker)
+        {
+            Assert.False(string.IsNullOrWhiteSpace(endpoint.SpeakerName), "a speaker with no name");
+            Assert.DoesNotContain("{", endpoint.SpeakerName, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Null(endpoint.SpeakerName);
+        }
+
+        // Resolving again, as a default-device change does, reads the same names and
+        // leaks nothing that a second read would trip over.
+        string? microphone = endpoint.MicrophoneName;
+        string? speaker = endpoint.SpeakerName;
+
+        endpoint.Resolve();
+
+        Assert.Equal(microphone, endpoint.MicrophoneName);
+        Assert.Equal(speaker, endpoint.SpeakerName);
+    }
+
+    [Fact]
     public void TheConsentStoreWatchesOnlyTheDevicesAsked()
     {
         using var camera = new RegistryConsentStore([DeviceKind.Camera]);
