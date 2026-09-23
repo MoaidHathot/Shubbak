@@ -883,6 +883,12 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **A racy message-loop test.** `PostedWorkRunsOnTheLoopsThread` read the loop's
+  thread id from a field the loop's pass wrote, but a turn drains the inbox before it
+  runs the pass, so work posted before the loop's first turn - the thread not yet
+  scheduled, which a busy parallel test run makes likely - ran before the field was
+  set, and the test failed about once in three full runs. Shown deterministically by
+  posting before the thread started; the test now awaits the pass as well.
 - **CI regenerates the diagnostics catalogue and fails on drift.** `docs/diagnostics.md`
   is produced by `tools/list-diagnostics.ps1`; the build now runs the script and
   compares, so a code added without the page being regenerated is caught at the pull

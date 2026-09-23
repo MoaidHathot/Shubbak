@@ -58,6 +58,7 @@ contexts {
     context "sharing" { }
     context "in-a-call" { }
     context "speaker-muted" { }
+    context "on-headset" { }
     context "unplugged" { }
     context "low-battery" { }
     context "away" { }

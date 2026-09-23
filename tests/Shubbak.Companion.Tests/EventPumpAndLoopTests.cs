@@ -278,12 +278,12 @@ public sealed class MessageLoopTests
     [Fact]
     public async Task PostedWorkRunsOnTheLoopsThread()
     {
-        int loopThread = -1;
+        var passed = new TaskCompletionSource<int>();
         var ran = new TaskCompletionSource<int>();
 
         (Thread thread, MessageLoop loop, TaskCompletionSource ended) = Start(() =>
         {
-            loopThread = Environment.CurrentManagedThreadId;
+            passed.TrySetResult(Environment.CurrentManagedThreadId);
             return true;
         });
 
@@ -292,6 +292,13 @@ public sealed class MessageLoopTests
             loop.Post(() => ran.TrySetResult(Environment.CurrentManagedThreadId));
 
             int where = await ran.Task.WaitAsync(Timeout);
+
+            // Awaited rather than read from a field the pass wrote: a turn drains the
+            // inbox before it runs the pass, so a post that lands before the loop's
+            // first turn - the thread had not been scheduled yet, which a busy test
+            // run makes likely - is run before the pass has said which thread it is
+            // on. Read as a field, the answer was still "no thread" once in a while.
+            int loopThread = await passed.Task.WaitAsync(Timeout);
 
             Assert.Equal(thread.ManagedThreadId, where);
             Assert.Equal(thread.ManagedThreadId, loopThread);
