@@ -48,6 +48,26 @@ public interface ILayout
     Axis? PrimaryAxis { get; }
 
     /// <summary>
+    /// Whether a child's share of this container can be changed along an axis: whether
+    /// <see cref="Node.SizeRatio"/> means anything to the layout in that direction.
+    /// </summary>
+    /// <remarks>
+    /// The split layouts answer for their own axis and no other, since a child of a
+    /// vertical split has the container's full width whatever its ratio. The spiral
+    /// answers for both, because its ratios drive every division and the axis
+    /// alternates as it descends. A layout that sizes its children itself - the grid,
+    /// monocle - answers for neither, and a resize asked of it is refused with a
+    /// reason rather than silently failing to find a container.
+    /// </remarks>
+    bool Resizes(Axis axis) => PrimaryAxis == axis;
+
+    /// <summary>
+    /// Why a resize along <paramref name="axis"/> does nothing here, for the refusal.
+    /// Null when <see cref="Resizes"/> is true.
+    /// </summary>
+    string? WhyNotResizable(Axis axis) => Resizes(axis) ? null : $"The {Name} layout does not divide space along {axis.ToString().ToLowerInvariant()}.";
+
+    /// <summary>
     /// Whether the rectangles this layout produces overlap one another.
     /// </summary>
     /// <remarks>

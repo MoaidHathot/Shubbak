@@ -1545,8 +1545,20 @@ public sealed class WmDaemon : IDisposable
             case WinEventKind.MinimiseEnd:
                 // Back to what it was - floating stays floating - not to tiling
                 // regardless, which is what this wrote for as long as it existed.
+                //
+                // Only from Minimised. The event is Windows's word for "no longer
+                // minimised", and it also arrives when a window is maximised - the
+                // shell's transitions are not as tidy as their names - so a window the
+                // tree had just made Maximised was restored to tiling by this, in the
+                // same frame the committer zoomed it. Maximised has its own detection.
                 if (_windows.TryGet(handle, out WindowNode? restoring))
-                    Publish(_wm.RestoreFromAway(restoring));
+                {
+                    if (restoring.State == WindowState.Minimised)
+                        Publish(_wm.RestoreFromAway(restoring));
+                    else if (Log.IsEnabled(LogLevel.Debug))
+                        Log.Debug(LogCategory.Window, $"0x{handle:X} MINIMIZEEND while {restoring.State}; ignored");
+                }
+
                 break;
 
             case WinEventKind.MoveSizeStart:
@@ -2006,6 +2018,7 @@ public sealed class WmDaemon : IDisposable
         _ = _committer.Restore(handle);
 
         _committer.Forget(handle);
+        _maximiseGrace.Remove(handle);
         _animation.Remove(window.Handle);
         _dragOrigin.Remove(handle);
         Publish(_wm.UnmanageWindow(window));
@@ -4086,6 +4099,33 @@ public sealed class WmDaemon : IDisposable
             return;
         }
 
+        // A maximised window is Windows's to size, and is never animated. The committer
+        // realises Maximised as the desktop's own maximise; a frame-by-frame resize
+        // landing on the window while that maximise is being applied cancels it - the
+        // window ended the motion at the work area and un-zoomed, and the maximise
+        // detection then put the tree back to tiling. Windows animates its own
+        // maximise anyway. The reveal still happens, as below.
+        if (placement.Window.State == WindowState.Maximised)
+        {
+            _committer.Reveal(handle);
+            _animation.Remove(placement.Window.Handle);
+            _commitScratch.Add(placement);
+            return;
+        }
+
+        // The other direction. A window still carrying the desktop's maximise flag -
+        // toggle-maximized back to tiling, Win+Down, a window that arrived maximised -
+        // is placed rather than animated, because only Commit clears the flag, and it
+        // does so with the restored rectangle in hand; frames sent to a zoomed window
+        // are the black strip along the top. One style read per visible placement.
+        if (Win32Window.IsMaximised(handle))
+        {
+            _committer.Reveal(handle);
+            _animation.Remove(placement.Window.Handle);
+            _commitScratch.Add(placement);
+            return;
+        }
+
         // Visibility is applied here, separately from geometry, because an animated
         // window never reaches Commit - the animation engine drives it frame by frame
         // instead. Leaving the reveal to Commit meant a window whose position changed
@@ -4947,6 +4987,12 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private const double NativeFullscreenPollMs = 200;
 
+    /// <summary>When the tree last changed each window's maximised state; see <see cref="NativeMaximise"/>.</summary>
+    private readonly Dictionary<nint, long> _maximiseGrace = [];
+
+    private bool InMaximiseGrace(nint handle, long now) =>
+        _maximiseGrace.TryGetValue(handle, out long since) && Stopwatch.GetElapsedTime(since, now) < NativeMaximise.Grace;
+
     private long _lastNativeFullscreenTicks;
 
     /// <summary>
@@ -4974,12 +5020,15 @@ public sealed class WmDaemon : IDisposable
 
         bool changed = false;
 
+        long now = Stopwatch.GetTimestamp();
+
         foreach ((nint handle, WindowNode window) in _windows)
         {
-            // Only what Shubbak has not itself placed on the monitor. Fullscreen,
-            // monitor-fullscreen and maximised windows all match the geometric test by
-            // construction, and minimised ones have no rectangle worth reading.
-            if (window.State is not (WindowState.Tiling or WindowState.Floating)) continue;
+            // Only what Shubbak has not itself placed on the monitor. Fullscreen and
+            // monitor-fullscreen windows match the geometric test by construction, and
+            // minimised ones have no rectangle worth reading. Maximised is looked at
+            // for one thing only: whether it still is.
+            if (window.State is not (WindowState.Tiling or WindowState.Floating or WindowState.Maximised)) continue;
 
             // Off screen, so its rectangle says nothing about what the user can see -
             // and a concealed window is parked deliberately.
@@ -4991,6 +5040,34 @@ public sealed class WmDaemon : IDisposable
             // every answer this asks for.
             if (_animation.TryGetCurrent(window.Handle, out _)) continue;
 
+            // The maximise flag, read once here for both questions below. A style read,
+            // beside the GetBounds this loop already pays for.
+            bool zoomed = Win32Window.IsMaximised(handle);
+
+            // Win+Up, Win+Down, the title-bar buttons: the desktop's maximise and the
+            // tree's agree, or the tree gives way. See NativeMaximise for the rule and
+            // for why a change the tree made itself is not second-guessed at once.
+            switch (NativeMaximise.Decide(window.State, zoomed, InMaximiseGrace(handle, now)))
+            {
+                case MaximiseTransition.Enter:
+                    _maximiseGrace[handle] = now;
+                    _committer.Forget(handle);
+                    Publish(_wm.SetWindowState(window, WindowState.Maximised));
+                    Log.Debug(LogCategory.Layout, $"0x{handle:X} was maximised; the tree follows");
+                    changed = true;
+                    continue;
+
+                case MaximiseTransition.Leave:
+                    _maximiseGrace[handle] = now;
+                    _committer.Forget(handle);
+                    Publish(_wm.RestoreFromAway(window));
+                    Log.Debug(LogCategory.Layout, $"0x{handle:X} was un-maximised; putting it back where it was");
+                    changed = true;
+                    continue;
+            }
+
+            if (window.State == WindowState.Maximised) continue;
+
             bool covers = NativeFullscreen.CoversMonitor(
                 Win32Window.GetBounds(handle), monitor.Bounds);
 
@@ -5001,12 +5078,7 @@ public sealed class WmDaemon : IDisposable
             // auto-hiding taskbar and nothing docked at the top the work area is the
             // whole panel. The rectangle then covers the monitor exactly and the
             // geometric test alone says full-screen.
-            //
-            // Asked second, and only of a window that has already answered yes, so the
-            // common case pays nothing. Windows that really are maximised keep the
-            // treatment they already had: the committer clears the flag and tiles
-            // them.
-            if (covers && Win32Window.IsMaximised(handle)) covers = false;
+            if (covers && zoomed) covers = false;
 
             if (covers == window.IsNativeFullscreen) continue;
 
@@ -6494,6 +6566,12 @@ public sealed class WmDaemon : IDisposable
             if (wmEvent is WindowStateChanged changed)
             {
                 ReconcileMinimised(changed.Window);
+
+                // A state change to or from Maximised that came from a command is the
+                // tree's own doing; the maximise detection must not read the flag's lag
+                // as the user undoing it. See NativeMaximise.
+                if (changed.Previous == WindowState.Maximised || changed.Current == WindowState.Maximised)
+                    _maximiseGrace[(nint)changed.Window.Handle] = Stopwatch.GetTimestamp();
 
                 if (_config.Effects.Enabled) RefreshBorderFor((nint)changed.Window.Handle);
             }

@@ -1555,8 +1555,18 @@ public sealed class WindowManager
         // inside a vertical split has to be applied at the first ancestor that
         // divides space horizontally.
         ContainerNode? container = TreeOps.NearestAncestorOnAxis(window, axis);
+
         if (container is null)
-            return Reject("resize", $"No container splits along {axis} to resize within.");
+        {
+            // Refused with the layout's own reason. "No container splits along
+            // Horizontal" was true and unhelpful: it was said for a grid, whose cells
+            // are equal by definition, for the stack of a master layout, which shares
+            // its space by design, and for a workspace with one window on it, which
+            // has nothing to take the space from - three different answers.
+            return Reject("resize", TreeOps.NearestCrowdedAncestor(window) is { } crowded
+                ? crowded.Layout.WhyNotResizable(axis) ?? $"No container splits along {axis} to resize within."
+                : "The window is alone on its workspace; there is nothing to take the space from.");
+        }
 
         Node? child = TreeOps.ChildContaining(container, window);
         if (child is null) return Reject("resize", "Could not locate the resizable node.");
@@ -1874,6 +1884,10 @@ public sealed class WindowManager
         window.IsNativeFullscreen = false;
 
         window.State = state;
+
+        if (Log.IsEnabled(LogLevel.Debug))
+            Log.Debug(LogCategory.Wm, $"0x{window.Handle:X} {previous} -> {state}");
+
         Emit(new WindowStateChanged(window, previous, state));
 
         if (successor is not null) SetFocus(successor);

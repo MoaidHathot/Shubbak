@@ -23,6 +23,10 @@ public sealed class GridLayout : ILayout
     /// <summary>Null: a grid extends in both directions equally.</summary>
     public Axis? PrimaryAxis => null;
 
+    /// <summary>The cells are equal by definition; a ratio has nothing to change.</summary>
+    public string? WhyNotResizable(Axis axis) =>
+        "The grid sizes its cells equally; switch to splith, splitv or fibonacci to resize windows.";
+
     public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
         ArgumentNullException.ThrowIfNull(container);
@@ -127,6 +131,10 @@ public sealed class MonocleLayout : ILayout
     public string Name => "monocle";
 
     public Axis? PrimaryAxis => null;
+
+    /// <summary>One window fills the area at a time; there is no neighbour to take space from.</summary>
+    public string? WhyNotResizable(Axis axis) =>
+        "Monocle shows one window at a time, filling the area; there is nothing to resize.";
 
     /// <summary>Every child gets the whole area, so only stacking decides what is seen.</summary>
     public bool Overlaps => true;

@@ -2,6 +2,7 @@ using Shubbak.Core.Animation;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Layouts;
+using Shubbak.Core.Tree;
 using Shubbak.Core.Wm;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -258,7 +259,10 @@ public sealed class WindowCommitter
          Interlocked.Read(ref _hiddenCount),
          Interlocked.Read(ref _minimisedCount));
 
-    /// <summary>Forgets a window, e.g. once it has closed.</summary>
+    /// <summary>
+    /// Forgets where a window was put, so the next pass places it again rather than
+    /// skipping it as already there.
+    /// </summary>
     public void Forget(nint handle)
     {
         lock (_lastCommitted)
@@ -270,6 +274,8 @@ public sealed class WindowCommitter
 
         ForgetShadow(handle);
     }
+
+
 
     /// <summary>How many windows are currently concealed.</summary>
     public int ConcealedCount
@@ -454,6 +460,27 @@ public sealed class WindowCommitter
                 if (placement.Raise) (toRaise ??= []).Add(handle);
             }
 
+            // A maximised window is Windows's to size. The tree says Maximised for a
+            // window the user or a key maximised, and the honest way to fill the work
+            // area with a window and keep its frame is the maximise Windows already has
+            // - the compositor draws it without a shadow and with the frame off the top
+            // of the screen, which a window merely sized to the work area is not. So the
+            // flag is set if it is not already, and the window is never moved: SetWindowPos
+            // on a zoomed window is what puts a black strip along the top.
+            if (placement.Window.State == WindowState.Maximised)
+            {
+                if (placement.Visible && !Win32Window.IsMaximised(handle))
+                    WindowActions.Maximise(handle);
+
+                lock (_lastCommitted)
+                {
+                    _lastCommitted[handle] = placement.Rect;
+                    _lastApplied[handle] = placement.Rect;
+                }
+
+                continue;
+            }
+
             // Skip windows already where we want them. This is the difference
             // between a relayout costing one SetWindowPos and costing dozens, and
             // it also suppresses a large share of the LOCATIONCHANGE echo.
@@ -513,10 +540,15 @@ public sealed class WindowCommitter
         // the Store ones, arrived that way and were tiled that way.
         //
         // Here rather than at adoption, because adoption is only one of the routes in.
-        // Win+Up, a double-clicked title bar, or an application maximising itself all
-        // set the flag later, and by then the drift watch has long since expired and
-        // EVENT_OBJECT_LOCATIONCHANGE is deliberately not subscribed. This is the one
-        // place every rectangle passes through.
+        // An application maximising itself, or a window the tree has just taken out of
+        // Maximised, both carry the flag into a placement that is not maximised, and
+        // this is the one place every rectangle passes through. A window the *user*
+        // maximised is also caught here if a pass happens to run before the daemon's
+        // detection has looked - at most one poll, a fifth of a second - and is then
+        // tiled; the next Win+Up is honoured, since the detection sees it first. The
+        // alternative, leaving a zoomed window alone here, was tried and made
+        // toggle-maximized a one-way door: the tree said Tiling, the window stayed
+        // zoomed, and the detection put the tree back to Maximised a second later.
         //
         // The cost is one IsZoomed per window actually being moved - windows already
         // where they belong were skipped above - which is a style read beside a

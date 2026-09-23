@@ -242,7 +242,22 @@ public static class WindowActions
             },
         };
 
-        return PInvoke.SetWindowPlacement(hwnd, in placement);
+        bool placed = PInvoke.SetWindowPlacement(hwnd, in placement);
+
+        if (placed && !PInvoke.IsZoomed(hwnd)) return true;
+
+        // Accepted and ignored. A WinUI window - Windows 11's own Notepad is one -
+        // answers true to a placement of SW_SHOWNORMAL and stays maximised, so the
+        // committer went on tiling a window the compositor still drew full-size, and
+        // the maximise detection then read the flag as the user's and put the tree
+        // back to Maximised a second later. A plain restore it does honour; sent
+        // synchronously, since the placement that follows must not be overtaken, and
+        // the hung check above has already excused the windows that would block it.
+        // The normal position was set by the placement, so the restore lands where the
+        // layout wants it rather than where the window last was.
+        PInvoke.ShowWindow(hwnd, SHOW_WINDOW_CMD.SW_RESTORE);
+
+        return !PInvoke.IsZoomed(hwnd);
     }
 
     /// <summary>

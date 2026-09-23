@@ -58,6 +58,15 @@ public sealed class MasterStackLayout : ILayout
 
     public Axis? PrimaryAxis => Axis;
 
+    /// <summary>
+    /// Along the divider only. The stack's members share their space equally by
+    /// design - see <see cref="FillArea"/> - so a resize across the divider has
+    /// nothing to act on, and says so rather than hunting for a container.
+    /// </summary>
+    public string? WhyNotResizable(Axis axis) => axis == Axis
+        ? null
+        : $"In {Name} the stack's windows share their space equally; resize {(Axis == Axis.Horizontal ? "--width" : "--height")} moves the divider between master and stack.";
+
     /// <summary>Returns a variant with a different number of master windows.</summary>
     public MasterStackLayout WithMasterCount(int count) =>
         new(Axis, MasterFirst, Math.Max(1, count));

@@ -380,4 +380,33 @@ public sealed class NewerVerbsTests
         Assert.Equal(new Rect(1920 - 400, 1080 - 300, 400, 300), a.Rect);
         Assert.Equal(a.Rect, a.FloatingRect);
     }
+    // ---- the desktop's maximise and the tree's --------------------------------
+
+    [Theory]
+    [InlineData(WindowState.Tiling, true, MaximiseTransition.Enter)]
+    [InlineData(WindowState.Floating, true, MaximiseTransition.Enter)]
+    [InlineData(WindowState.Maximised, false, MaximiseTransition.Leave)]
+    [InlineData(WindowState.Maximised, true, MaximiseTransition.None)]
+    [InlineData(WindowState.Tiling, false, MaximiseTransition.None)]
+    [InlineData(WindowState.Fullscreen, true, MaximiseTransition.None)]
+    [InlineData(WindowState.MonitorFullscreen, true, MaximiseTransition.None)]
+    [InlineData(WindowState.Minimised, false, MaximiseTransition.None)]
+    public void TheFlagAndTheTreeAgreeOrTheTreeGivesWay(WindowState state, bool zoomed, MaximiseTransition expected)
+    {
+        // Win+Up on a tiled window enters Maximised; Win+Down on a Maximised one
+        // leaves it. Fullscreen windows match the flag for their own reasons and are
+        // not touched; a minimised one has nothing to say.
+        Assert.Equal(expected, NativeMaximise.Decide(state, zoomed, inGrace: false));
+    }
+
+    [Fact]
+    public void AChangeTheTreeJustMadeIsNotSecondGuessed()
+    {
+        // toggle-maximized sets the state; the committer zooms the window a pass
+        // later and Windows applies it a frame after that. A look in between sees
+        // Maximised with the flag still off, which is not the user undoing it.
+        Assert.Equal(MaximiseTransition.None, NativeMaximise.Decide(WindowState.Maximised, zoomed: false, inGrace: true));
+        Assert.Equal(MaximiseTransition.None, NativeMaximise.Decide(WindowState.Tiling, zoomed: true, inGrace: true));
+        Assert.True(NativeMaximise.Grace >= TimeSpan.FromMilliseconds(500));
+    }
 }

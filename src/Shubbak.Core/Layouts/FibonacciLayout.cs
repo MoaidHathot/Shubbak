@@ -58,6 +58,16 @@ public sealed class FibonacciLayout : ILayout
     /// </summary>
     public Axis? PrimaryAxis => null;
 
+    /// <summary>
+    /// Both. Every division the spiral makes is a child's weight against the average
+    /// of those still to be placed, and the axis alternates, so one weight sizes a
+    /// window in both directions: growing it widens the slice it takes and deepens
+    /// the remainder it was cut from. Resizing was refused here for want of a
+    /// primary axis, which is the wrong question - the spiral has no single axis but
+    /// honours every ratio it is given.
+    /// </summary>
+    public bool Resizes(Axis axis) => true;
+
     public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
         ArgumentNullException.ThrowIfNull(container);

@@ -498,6 +498,34 @@ schedule and breaking either is a different kind of event:
   went on reading the mute off an endpoint that was in a drawer. Both now wake the
   loop and make it ask for the defaults again; a default that is gone reads as not
   muted and the context is let go.
+- **Resize did nothing in the spiral.** `resize` looked for an ancestor whose primary
+  axis matched, and `fibonacci`, `grid` and `monocle` have none - so in the layout most
+  people start in, the resize keys logged "No container splits along Horizontal" and
+  moved nothing. The spiral honours every ratio it is given; only the question was
+  wrong. Each layout now says what it resizes (`ILayout.Resizes`): the spiral along
+  either axis, the splits along their own, the master layouts along their divider. The
+  grid and monocle genuinely cannot, and the refusal now says so in their own words,
+  as does a resize across a master layout's stack - whose windows share their space
+  equally by design - and a window alone on its workspace.
+- **Win+Up was undone as drift.** The tree had a Maximised state that nothing set,
+  and the committer cleared the maximise flag on every window it moved, so a native
+  maximise lasted until the next layout pass. The flag is now read on the timer that
+  watches for full-screen (one style read per displayed window), and the two agree in
+  both directions: Win+Up, the title-bar button or an application maximising itself
+  puts a tiled or floating window into Maximised, and Win+Down or the restore button
+  puts it back where it was; `toggle-maximized` is Windows's own maximise underneath.
+  A change the tree made is trusted for a second before the flag is read against it,
+  so the committer's zoom landing a frame late is not mistaken for the user undoing
+  it. `NativeMaximise.Decide` is the rule, as a table. A maximised window is never
+  animated - frames resizing it cancelled the maximise - and a window still carrying
+  the flag is placed rather than animated, since only the placing path clears it.
+- **Un-maximising a WinUI window did nothing.** Windows 11's Notepad answers true to
+  `SetWindowPlacement(SW_SHOWNORMAL)` and stays maximised, so it was tiled while the
+  compositor still drew it full-size. The flag is now checked after the placement and
+  a plain `SW_RESTORE` sent when it is still set, which such windows honour.
+- **A window's minimise-end event is only acted on for a minimised window.** It used
+  to restore any away state, which was harmless while Maximised was never entered
+  and would have been a way out of it nobody asked for.
 - **A floating window left off every screen stayed there.** Its saved rectangle
   described the display it was on, and when that display was unplugged, rearranged in
   Settings or its workspace moved to a smaller one, the window was placed there

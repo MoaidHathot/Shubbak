@@ -257,7 +257,8 @@ public static class TreeOps
 
     /// <summary>
     /// The nearest ancestor container (including <paramref name="node"/> itself)
-    /// whose layout runs along <paramref name="axis"/>.
+    /// whose layout can be resized along <paramref name="axis"/>; see
+    /// <see cref="Layouts.ILayout.Resizes"/>.
     /// </summary>
     /// <remarks>
     /// This is how a resize request finds the container that can actually satisfy
@@ -269,7 +270,22 @@ public static class TreeOps
         ArgumentNullException.ThrowIfNull(node);
 
         for (Node? n = node; n is not null; n = n.Parent)
-            if (n is ContainerNode container && container.Layout.PrimaryAxis == axis && container.Count > 1)
+            if (n is ContainerNode container && container.Layout.Resizes(axis) && container.Count > 1)
+                return container;
+
+        return null;
+    }
+
+    /// <summary>
+    /// The nearest container with more than one child, whatever its layout: the one
+    /// whose layout gets to say why a resize did nothing.
+    /// </summary>
+    public static ContainerNode? NearestCrowdedAncestor(Node node)
+    {
+        ArgumentNullException.ThrowIfNull(node);
+
+        for (Node? n = node; n is not null; n = n.Parent)
+            if (n is ContainerNode container && container.Count > 1)
                 return container;
 
         return null;
