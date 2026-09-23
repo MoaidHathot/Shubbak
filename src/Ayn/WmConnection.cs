@@ -6,19 +6,6 @@ using System.Text.Json;
 
 namespace Ayn;
 
-/// <summary>How a command fared.</summary>
-internal enum SendOutcome
-{
-    /// <summary>The window manager accepted it.</summary>
-    Accepted,
-
-    /// <summary>The window manager answered and said no; the connection is fine.</summary>
-    Refused,
-
-    /// <summary>Nobody answered. The connection, if there was one, is gone.</summary>
-    Unreachable,
-}
-
 /// <summary>
 /// The watcher's two connections to the window manager.
 /// </summary>
@@ -166,10 +153,17 @@ internal sealed class WmConnection : IAsyncDisposable
     private async Task PumpAsync(CancellationToken token)
     {
         TimeSpan wait = TimeSpan.FromSeconds(1);
-        bool everConnected = false;
+        string? lastComplaint = null;
 
         while (!token.IsCancellationRequested)
         {
+            // Whether the pipe opened this time round, and whether the subscription was
+            // then refused. A pipe that opened and then ended for any other reason is a
+            // window manager gone; a refusal is a window manager that is there and
+            // disagrees, which is a different thing entirely.
+            bool connected = false;
+            bool refused = false;
+
             try
             {
                 if (!IpcClient.IsServerRunning())
@@ -180,16 +174,31 @@ internal sealed class WmConnection : IAsyncDisposable
 
                 await using IpcClient client = new();
                 await client.ConnectAsync(ConnectTimeout, token).ConfigureAwait(false);
+                connected = true;
 
                 IAsyncEnumerator<IpcEvent> events =
                     client.SubscribeAsync(Topics, token).GetAsyncEnumerator(token);
 
+                // The first MoveNextAsync performs the handshake, and a refusal is the
+                // exception it raises; once it has answered at all, the subscription
+                // was accepted.
+                bool subscribed = false;
+
                 try
                 {
-                    everConnected = true;
-
-                    while (await events.MoveNextAsync().ConfigureAwait(false))
+                    while (true)
                     {
+                        bool more = await events.MoveNextAsync().ConfigureAwait(false);
+
+                        if (!subscribed)
+                        {
+                            subscribed = true;
+                            wait = TimeSpan.FromSeconds(1);
+                            lastComplaint = null;
+                        }
+
+                        if (!more) break;
+
                         switch (events.Current.Topic)
                         {
                             case "config.reloaded":
@@ -213,6 +222,30 @@ internal sealed class WmConnection : IAsyncDisposable
                                 break;
                         }
                     }
+
+                    // A read that meets the closed end of a pipe reports the end of the
+                    // stream, not an error; said here or the gap would have no line.
+                    Log.Info(LogCategory.Ipc, "the window manager closed the events connection");
+                }
+                catch (InvalidOperationException ex) when (!subscribed)
+                {
+                    // The subscription was refused, which is a window manager that does
+                    // not publish a topic this build asks for - older than this watcher,
+                    // nearly always. Not a connection lost: the leases on the other
+                    // connection are fine, and dropping them every second would be the
+                    // worse bug. Said once, and asked again slowly.
+                    refused = true;
+
+                    if (!string.Equals(lastComplaint, ex.Message, StringComparison.Ordinal))
+                    {
+                        Log.Warn(LogCategory.Ipc,
+                            $"the window manager refused the subscription: {ex.Message}. " +
+                            "This usually means shubbak-wm is older than ayn; restart it.");
+
+                        lastComplaint = ex.Message;
+                    }
+
+                    wait = TimeSpan.FromSeconds(30);
                 }
                 finally
                 {
@@ -231,11 +264,7 @@ internal sealed class WmConnection : IAsyncDisposable
             // The stream ending is the signal. Whatever leases the commands connection
             // held died with the window manager that granted them, and the loop needs
             // to know so it can hold them again on the next one.
-            if (everConnected)
-            {
-                everConnected = false;
-                Lost.Set();
-            }
+            if (connected && !refused) Lost.Set();
 
             try
             {

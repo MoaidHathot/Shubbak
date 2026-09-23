@@ -505,4 +505,122 @@ public sealed class PaletteEditingTests
 
         Assert.Equal("focuss --direction left", Assert.Single(model.Rows).Entry.Primary);
     }
+
+    [Fact]
+    public void ARowThatLeadsSomewhereGoesAboveTheMatchesEvenWithNoCommand()
+    {
+        // The row that says the window you were just in is not being managed runs
+        // nothing - Enter opens the explanation - and its remarks promise it sits at
+        // the top. It was put at the bottom, with the diagnostics, because "has a
+        // command" was the only test of whether a derived row does anything.
+        var model = new PaletteModel
+        {
+            Augmenter = (mode, term) => mode is PaletteMode.Windows && term.Length == 0
+                ? [new PaletteEntry("\u201CSettings\u201D is not being managed", "why?", ["why?"], string.Empty, Explains: 0x1234)]
+                : [],
+        };
+
+        model.SetEntries([Entry("Discord"), Entry("Notepad"), Entry("Terminal")]);
+
+        Assert.Equal(4, model.Rows.Count);
+        Assert.Contains("not being managed", model.Rows[0].Entry.Primary, StringComparison.Ordinal);
+        Assert.Equal(0, model.SelectedIndex);
+    }
+
+    [Fact]
+    public void DerivedRowsAreNotAddedToAFrame()
+    {
+        // Inside a frame the mode is whatever the list underneath was in and the term is
+        // empty, because a frame starts with a clean filter - exactly the state the
+        // context row is derived from. So it was appended to every action list and to
+        // every Yes/No, and Down-Down-Enter in "Close it?" opened an inspect report.
+        var model = new PaletteModel
+        {
+            Augmenter = (mode, term) => mode is PaletteMode.Windows && term.Length == 0
+                ? [new PaletteEntry("context row", "why?", [], string.Empty, Explains: 1)]
+                : [],
+        };
+
+        model.SetEntries([Entry("Discord")]);
+        Assert.Equal(2, model.Rows.Count);
+
+        // The host pushes a frame: says so, clears the query, installs the frame's rows.
+        model.Overlaid = true;
+        model.SetQuery(string.Empty);
+        model.SetEntries([Entry("Yes, close it"), Entry("No, leave it alone")]);
+
+        Assert.Equal(2, model.Rows.Count);
+        Assert.DoesNotContain(model.Rows, r => r.Entry.Primary == "context row");
+
+        // And back out, the row is there again.
+        model.Overlaid = false;
+        model.SetEntries([Entry("Discord")]);
+
+        Assert.Equal(2, model.Rows.Count);
+        Assert.Equal("context row", model.Rows[0].Entry.Primary);
+    }
+
+    // ---- coming back out of a frame -------------------------------------------------
+
+    [Fact]
+    public void ReselectPutsTheSelectionBackOnTheRowItWasOn()
+    {
+        var model = new PaletteModel();
+        model.SetEntries([Entry("a"), Entry("b"), Entry("c"), Entry("d")]);
+        model.MoveSelection(2);
+
+        PaletteEntry was = model.Selected!.Entry;
+        Assert.Equal("c", was.Primary);
+
+        // What a frame closing does: the query goes back, which resets the selection.
+        model.SetQuery(string.Empty);
+        Assert.Equal(0, model.SelectedIndex);
+
+        model.Reselect(was);
+
+        Assert.Equal("c", model.Selected!.Entry.Primary);
+    }
+
+    [Fact]
+    public void ReselectFindsTheRowThatStandsForTheSameThingInARebuiltList()
+    {
+        // The list underneath a frame is refilled from the host when the frame closes,
+        // so the entry objects are new; the row is found by what it is.
+        var model = new PaletteModel();
+        model.SetEntries([Entry("a", "cmd-a"), Entry("b", "cmd-b"), Entry("c", "cmd-c")]);
+        model.MoveSelection(1);
+        PaletteEntry was = model.Selected!.Entry;
+
+        model.SetQuery(string.Empty);
+        model.SetEntries([Entry("a", "cmd-a"), Entry("b", "cmd-b"), Entry("c", "cmd-c")]);
+        model.Reselect(was);
+
+        Assert.Equal("b", model.Selected!.Entry.Primary);
+
+        // Gone from the list: the top, as before.
+        model.SetEntries([Entry("a", "cmd-a"), Entry("c", "cmd-c")]);
+        model.Reselect(was);
+        Assert.Equal(0, model.SelectedIndex);
+    }
+
+    [Fact]
+    public void TwoRowsThatDifferOnlyInTheirCommandKeepAStableOrder()
+    {
+        // Two untitled Notepads, never focused: same title, same rank, same score. The
+        // sort is unstable, so without a final tie-break they could swap between
+        // keystrokes and the row under the finger would change.
+        var model = new PaletteModel();
+
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            List<PaletteEntry> entries = [];
+            for (int i = 0; i < 12; i++)
+                entries.Add(new PaletteEntry("Untitled - Notepad", "notepad", [], $"focus-window {1000 + ((i * 7) % 12)}"));
+
+            model.SetEntries(entries);
+
+            for (int i = 1; i < model.Rows.Count; i++)
+                Assert.True(string.CompareOrdinal(model.Rows[i - 1].Entry.Command, model.Rows[i].Entry.Command) < 0);
+        }
+    }
 }

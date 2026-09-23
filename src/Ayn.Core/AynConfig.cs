@@ -58,7 +58,14 @@ public sealed record AynConfig(
 /// <summary>The result of reading the <c>ayn</c> section.</summary>
 /// <param name="Config">What was read, with defaults for anything not said.</param>
 /// <param name="Diagnostics">What was wrong with it. Warnings only; nothing here is fatal.</param>
-public sealed record AynConfigLoad(AynConfig Config, IReadOnlyList<Diagnostic> Diagnostics);
+/// <param name="SyntaxErrors">
+/// Whether the file did not parse at all, in which case <paramref name="Config"/> is
+/// the defaults and <paramref name="Diagnostics"/> is empty - the parser's own
+/// complaint is the window manager's to report, not this loader's to repeat. A host
+/// starting up on such a file still owes the user one line saying which file it is
+/// ignoring.
+/// </param>
+public sealed record AynConfigLoad(AynConfig Config, IReadOnlyList<Diagnostic> Diagnostics, bool SyntaxErrors = false);
 
 /// <summary>
 /// Reads the <c>ayn</c> section of the shared configuration file.
@@ -109,7 +116,7 @@ public static class AynConfigLoader
         List<Diagnostic> diagnostics = [];
         KdlParseResult parsed = KdlParser.Parse(source);
 
-        if (parsed.HasErrors) return new AynConfigLoad(new AynConfig(), diagnostics);
+        if (parsed.HasErrors) return new AynConfigLoad(new AynConfig(), diagnostics, SyntaxErrors: true);
 
         AynConfig config = parsed.Document.Node("ayn") is { } node
             ? Read(node, DeclaredContexts(parsed.Document), diagnostics)

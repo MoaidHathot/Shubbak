@@ -45,17 +45,29 @@ internal static class Program
         /// <summary>Per-bar state a reload has to rebuild.</summary>
         public required BarProfileSelector Selector { get; set; }
 
-        /// <summary>The workspace this bar last reported, so a reload can re-pick its profile.</summary>
-        public string Workspace { get; set; } = string.Empty;
+        /// <summary>
+        /// What the window manager last said about this bar's display, as one value.
+        /// </summary>
+        /// <remarks>
+        /// Written by the connection's pump thread, read by the message loop, and one
+        /// reference rather than four fields so the loop never reads the workspace from
+        /// one report and the monitor from another. The profile is picked from it on
+        /// the loop, never on the pump: picking it there raced a reload, which swaps
+        /// <see cref="Selector"/> on the loop, and the pump could finish choosing from
+        /// the old selector after the loop had installed the new profile - leaving a
+        /// bar on a profile from a configuration that no longer existed.
+        /// </remarks>
+        public volatile Standing Reported = Standing.Unknown;
 
-        /// <summary>Where its display sits in the window manager's list, as last reported.</summary>
-        public int MonitorIndex { get; set; } = -1;
+        /// <summary>Set by the pump when <see cref="Reported"/> changed; cleared by the loop when it has re-picked the profile.</summary>
+        public volatile bool ProfileDirty;
+    }
 
-        /// <summary>What the window manager's configuration calls its display, as last reported.</summary>
-        public IReadOnlyList<string> MonitorNames { get; set; } = [];
-
-        /// <summary>The contexts the window manager holds, as last reported.</summary>
-        public IReadOnlyList<string> Contexts { get; set; } = [];
+    /// <summary>One report of where a bar stands: its workspace, its display, the contexts in force.</summary>
+    private sealed record Standing(
+        string Workspace, int MonitorIndex, IReadOnlyList<string> MonitorNames, IReadOnlyList<string> Contexts)
+    {
+        public static Standing Unknown { get; } = new(string.Empty, -1, [], []);
     }
 
     private static readonly List<Bar> s_bars = [];
@@ -142,7 +154,6 @@ internal static class Program
             return 0;
         }
 
-        ConfigureLogging(args);
         s_args = args;
 
         // One bar per account, for the same reason there is one window manager.
@@ -158,6 +169,11 @@ internal static class Program
         // the window manager restarting - that is deliberate, it reconnects inside
         // window-manager-timeout - and the restarted window manager then runs its
         // startup commands, one of which starts a bar.
+        //
+        // Claimed before the log file is opened. Opening the file truncates it, and the
+        // bar that is already running is writing to it: a second copy that said
+        // "already running" and left used to take the first copy's log with it, on
+        // every restart of the window manager.
         using SingleInstanceLock instance = SingleInstanceLock.Claim(
             IpcProtocol.InstanceMutexNameFor("taj"));
 
@@ -167,13 +183,19 @@ internal static class Program
         // outcome than the thing being guarded against.
         if (!instance.Held && instance.Certain)
         {
-            ConsoleHost.Ensure();
-            Console.Error.WriteLine("taj: a bar is already running.");
-            Console.Error.WriteLine("hint: `shubbak taj-exit` stops it.");
+            // Said to the terminal this was typed into, if it was typed. The usual
+            // second copy is started by the window manager, which has no console, and
+            // allocating one to print a line nobody will read flashes a window.
+            if (ConsoleHost.TryAttach())
+            {
+                Console.Error.WriteLine("taj: a bar is already running.");
+                Console.Error.WriteLine("hint: `shubbak taj-exit` stops it.");
+            }
 
-            Log.Info(LogCategory.Wm, "another bar is already running; leaving it to it");
             return 1;
         }
+
+        ConfigureLogging(args);
 
         // Before any window is created: without it Windows reports virtualised
         // coordinates on scaled displays and the bar lands in the wrong place.
@@ -343,20 +365,23 @@ internal static class Program
 
         // The handlers capture the bar, not a position in a list. A position was how a
         // bar came to filter on the wrong display after its neighbour was unplugged.
+        //
+        // Recorded and flagged, not acted on: these run on the connection's pump thread,
+        // and picking the profile belongs to the loop; see Bar.Reported.
         connection.ActiveWorkspaceChanged += (workspace, monitorIndex, monitorNames) =>
         {
-            bar.Workspace = workspace;
-            bar.MonitorIndex = monitorIndex;
-            bar.MonitorNames = monitorNames;
-            SelectProfile(bar);
+            bar.Reported = bar.Reported with { Workspace = workspace, MonitorIndex = monitorIndex, MonitorNames = monitorNames };
+            bar.ProfileDirty = true;
+            Wake();
         };
 
         // Same shape as the workspace: remembered on the bar so a reload can re-pick
         // its profile, and the profile re-picked at once because a rule may name it.
         connection.ContextsChanged += contexts =>
         {
-            bar.Contexts = contexts;
-            SelectProfile(bar);
+            bar.Reported = bar.Reported with { Contexts = contexts };
+            bar.ProfileDirty = true;
+            Wake();
         };
 
         connection.MonitorsChanged += monitors =>
@@ -504,11 +529,12 @@ internal static class Program
     private static bool SameDevice(string a, string b) =>
         string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Picks and applies the profile for one bar.</summary>
+    /// <summary>Picks and applies the profile for one bar. Runs on the message loop.</summary>
     private static void SelectProfile(Bar bar)
     {
         BarModel model = bar.Model;
-        BarProfile chosen = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames, bar.Contexts);
+        Standing standing = bar.Reported;
+        BarProfile chosen = bar.Selector.Select(standing.Workspace, standing.MonitorIndex, standing.MonitorNames, standing.Contexts);
 
         if (ReferenceEquals(chosen, model.Profile)) return;
 
@@ -519,10 +545,23 @@ internal static class Program
         // wrong profile was chosen, the right one was built badly, or the
         // window failed to resize.
         Log.Info(LogCategory.Config,
-            $"{bar.Window.Label} -> profile \"{chosen.Name}\" on workspace \"{bar.Workspace}\"" +
-            (bar.Contexts.Count > 0 ? $" in context {string.Join(", ", bar.Contexts)}" : string.Empty) + " " +
+            $"{bar.Window.Label} -> profile \"{chosen.Name}\" on workspace \"{standing.Workspace}\"" +
+            (standing.Contexts.Count > 0 ? $" in context {string.Join(", ", standing.Contexts)}" : string.Empty) + " " +
             $"(height {chosen.Height}, zones: " +
             $"{string.Join(", ", chosen.Zones.Select(z => $"{z.Id}/{z.Widgets.Count}w/grow{z.Grow}"))})");
+    }
+
+    /// <summary>Re-picks the profile of every bar whose standing changed since the loop last looked.</summary>
+    private static void SelectDirtyProfiles()
+    {
+        foreach (Bar bar in s_bars)
+        {
+            if (!bar.ProfileDirty) continue;
+
+            // Cleared before the pick, so a report that lands during it is not lost.
+            bar.ProfileDirty = false;
+            SelectProfile(bar);
+        }
     }
 
     /// <summary>
@@ -592,7 +631,9 @@ internal static class Program
             // Forced through, rather than going via SelectProfile: the profile object
             // is new after a reload even when it is the same profile by name, and the
             // reference check would otherwise skip it.
-            model.Profile = bar.Selector.Select(bar.Workspace, bar.MonitorIndex, bar.MonitorNames, bar.Contexts);
+            Standing standing = bar.Reported;
+            model.Profile = bar.Selector.Select(standing.Workspace, standing.MonitorIndex, standing.MonitorNames, standing.Contexts);
+            bar.ProfileDirty = false;
 
             model.SetValue("config", Problems(problems));
         }
@@ -718,6 +759,10 @@ internal static class Program
             // reconciling is kept for the next one rather than lost.
             if (Interlocked.Exchange(ref s_pendingMonitors, null) is { } monitors)
                 ReconcileBars(monitors);
+
+            // After the reload, so a standing reported during it is judged against the
+            // selector the reload installed rather than the one it replaced.
+            SelectDirtyProfiles();
 
             ApplyStandDown();
 

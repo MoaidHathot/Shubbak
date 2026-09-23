@@ -421,7 +421,13 @@ public static class DalilConfigLoader
                 foreach (KdlValue argument in child.Arguments)
                     tokens.Add(argument.AsString());
 
-                string display = string.Join(' ', tokens);
+                // What is kept is the wire form: each token spelled the way the window
+                // manager's tokeniser reads it back, so the string that is sent means
+                // what the tokens that were checked meant. Joining them with spaces,
+                // which is what this did, undid the KDL quotes and sent `focus
+                // --workspace Second Monitor` for a workspace called "Second Monitor" -
+                // validated as tokens, refused as text.
+                string display = MacroText.Wire(tokens);
 
                 // A placeholder nobody declared is the failure this whole feature is
                 // most likely to produce, and the one the parser cannot catch: `focus

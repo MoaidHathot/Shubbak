@@ -226,4 +226,54 @@ public sealed class KdlParserTests
         Assert.Contains(result.Diagnostics, d => d.Code == "SHB0006");
         Assert.Equal("b", result.Document.Nodes[0].Property("key")!.AsString());
     }
+
+    [Fact]
+    public void BlocksNestedBeyondTheLimitAreRefusedRatherThanRecursedInto()
+    {
+        // The parser is recursive, and a megabyte of '{' can arrive over the pipe
+        // through add-rule. Under NativeAOT a stack overflow is the process ending, so
+        // the descent stops at a depth no real file reaches and says so, once.
+        const int Depth = 200_000;
+        string source = string.Concat(Enumerable.Repeat("a {", Depth)) + "leaf" + new string('}', Depth);
+
+        KdlParseResult result = KdlParser.Parse(source);
+
+        Assert.Single(result.Diagnostics, d => d.Code == "SHB0014");
+
+        // What was parsed above the limit is intact.
+        KdlNode node = Assert.Single(result.Document.Nodes);
+        Assert.Equal("a", node.Name);
+
+        int depth = 0;
+        while (node.Children.Count == 1) { node = node.Children[0]; depth++; }
+        Assert.InRange(depth, 1, KdlParser.MaxDepth);
+    }
+
+    [Fact]
+    public void ARealisticallyDeepFileIsFine()
+    {
+        string source = "a { b { c { d { e { f { g { h { i { j { k \"deep\" } } } } } } } } } }";
+
+        KdlDocument document = ParseOk(source);
+
+        KdlNode node = document.Nodes[0];
+        for (int i = 0; i < 10; i++) node = Assert.Single(node.Children);
+        Assert.Equal("k", node.Name);
+    }
+
+    [Fact]
+    public void ABlockSkippedForDepthDoesNotUnbalanceWhatFollows()
+    {
+        // The skipped block's braces are counted, quoted braces included, so the node
+        // after it is still parsed.
+        int levels = KdlParser.MaxDepth + 2;
+        string inner = string.Concat(Enumerable.Repeat("a {", levels)) + "x \"}\"" + new string('}', levels);
+        string source = $"{inner}\nsecond";
+
+        KdlParseResult result = KdlParser.Parse(source);
+
+        Assert.Contains(result.Diagnostics, d => d.Code == "SHB0014");
+        Assert.Equal(2, result.Document.Nodes.Count);
+        Assert.Equal("second", result.Document.Nodes[1].Name);
+    }
 }

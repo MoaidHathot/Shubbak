@@ -62,7 +62,7 @@ public sealed class UnknownSettingTests
     }
 
     [Theory]
-    [InlineData("general { focus-follows-cursor #true }")]
+    [InlineData("general { follow-window-on-move #true }")]
     [InlineData("general { allow-shell-exec-over-ipc #true }")]
     [InlineData("animation { animate-new-windows #true }")]
     [InlineData("animation { window-open duration=100 curve=\"ease-out\" }")]

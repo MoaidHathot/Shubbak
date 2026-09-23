@@ -23,8 +23,16 @@ public enum DeviceKind
 /// </remarks>
 public sealed record ConsentEntry(string App, long Started, long Stopped)
 {
-    /// <summary>Whether this program has the device open right now.</summary>
-    public bool InUse => Started != 0 && Stopped == 0;
+    /// <summary>
+    /// Whether this program has the device open right now.
+    /// </summary>
+    /// <remarks>
+    /// A start with no stop is the observed shape: Windows zeroes the stop when the
+    /// device is opened. A start after the stop is read the same way, in case a build
+    /// of Windows leaves the old stop in place and writes only the new start - a
+    /// device opened after it was last closed is open, whichever way the store says it.
+    /// </remarks>
+    public bool InUse => Started != 0 && (Stopped == 0 || Started > Stopped);
 
     /// <summary>
     /// The program's name as a person would say it, from the store's key name.

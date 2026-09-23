@@ -65,6 +65,25 @@ public sealed class WindowNode : Node
 
     public WindowState State { get; set; } = WindowState.Tiling;
 
+    /// <summary>
+    /// The state the window was in before it was put away - minimised, or made
+    /// fullscreen - and so the state it comes back to.
+    /// </summary>
+    /// <remarks>
+    /// A floating dialog that is minimised and restored is still a floating dialog;
+    /// a floating window made fullscreen and un-made is still floating. Without this
+    /// every way back landed in <see cref="WindowState.Tiling"/>, which for a window
+    /// that had been floated on purpose meant being tiled into the layout by the act
+    /// of minimising it. Only <see cref="WindowState.Tiling"/> and
+    /// <see cref="WindowState.Floating"/> are worth remembering: the away states are
+    /// what is being left, and nothing comes back to them.
+    /// </remarks>
+    public WindowState StateBeforeAway { get; set; } = WindowState.Tiling;
+
+    /// <summary>Whether a state is one a window is put away into, rather than one it lives in.</summary>
+    public static bool IsAway(WindowState state) =>
+        state is WindowState.Minimised or WindowState.Fullscreen or WindowState.MonitorFullscreen or WindowState.Maximised;
+
     /// <summary>True when the layout engine should size this window.</summary>
     public bool IsTiled => State is WindowState.Tiling;
 

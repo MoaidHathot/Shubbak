@@ -1,3 +1,4 @@
+using Shubbak.Config;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Rendering;
 using Shubbak.Ui.Layout;
@@ -325,8 +326,10 @@ public sealed class WorkspacesWidget : IWidget
 
                 // Quoted, because workspace names include characters the command
                 // tokeniser would otherwise treat as syntax - the author's config
-                // has workspaces named `-`, `\` and `'`.
-                OnClick = $"focus --workspace \"{entry.Name}\"",
+                // has workspaces named `-`, `\` and `'`. Through the shared spelling,
+                // so a name that is itself a double quote is written in single ones
+                // rather than as an empty string.
+                OnClick = $"focus --workspace {CommandParser.Quote(entry.Name)}",
             });
         }
 

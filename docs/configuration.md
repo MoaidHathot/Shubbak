@@ -72,10 +72,14 @@ keep working on the last good config rather than reverting to stock.
 
 ## Reloading
 
-Reloading is explicit: `wm-reload-config`, from a keybinding, the CLI or the tray icon.
-The window manager re-reads its part and tells the bar and the palette to re-read
-theirs. Nothing watches your file behind your back, so a half-saved config cannot take
-your desktop with it.
+Saving the file reloads it. The window manager watches the folder the file is in - a
+directory notification, nothing polled - and re-reads its part a moment after any
+editor saves, then tells the bar, the palette and the watcher to re-read theirs. The
+reload is the ordinary one, gate and all: a file with errors is reported and the
+configuration that was running is kept, so a half-saved config cannot take your
+desktop with it. `general { reload-on-save #false }` turns the watching off, and
+`wm-reload-config` - from a keybinding, the CLI or the tray icon - reloads on demand
+either way.
 
 ## The sections
 
@@ -85,7 +89,7 @@ your desktop with it.
 | `gaps` | `inner`, and `outer` per side |
 | `window-effects` | Focused / unfocused / floating border colours |
 | `animation` | `enabled`, `fps`, `minimum-distance`, and per-event duration + curve |
-| `logging` | `level`, `file`, `console` |
+| `logging` | `level`, `file` |
 | `workspaces` | Names, display names, monitor binding, starting layout |
 | `monitor` | A display named by what it is, for workspaces and commands to refer to |
 | `contexts` | Named conditions on the desktop that layer overrides on the config while they hold |
@@ -458,9 +462,10 @@ result - drop onto a `fibonacci-v` monitor and you get two windows stacked as
 `fibonacci-v` stacks them, wherever the mouse was. Drag a border to resize, and the
 resize is written back into the tree's ratios, so the next layout pass respects it
 instead of undoing it.
-`focus-follows-cursor` in `general` does what it says; `cursor-jump` moves the pointer
-to the window that just took focus, on every focus change or only when it crosses
-monitors.
+
+Focus follows the keyboard, not the pointer, and Shubbak never moves the pointer.
+Two older settings, `focus-follows-cursor` and `cursor-jump`, were accepted and did
+nothing; a file that still has them is told so at load (`SHB0455`).
 
 ## Suspend is different from pause
 

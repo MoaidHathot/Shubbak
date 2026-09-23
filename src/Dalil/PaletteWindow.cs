@@ -98,6 +98,10 @@ public sealed class PaletteWindow : IDisposable
     /// <summary>One level of list opened from a row.</summary>
     /// <param name="Title">What the search box calls it.</param>
     /// <param name="SavedQuery">What was typed before it took over the box.</param>
+    /// <param name="SavedSelection">
+    /// The row that was selected before it took over, so Escape lands back on it
+    /// rather than at the top of the list.
+    /// </param>
     /// <param name="Entries">The rows it shows.</param>
     /// <param name="Whole">
     /// The single value this frame is showing broken across its rows, when it is one.
@@ -118,6 +122,7 @@ public sealed class PaletteWindow : IDisposable
     private readonly record struct Overlay(
         string Title,
         string SavedQuery,
+        PaletteEntry? SavedSelection,
         IReadOnlyList<PaletteEntry> Entries,
         string? Whole = null,
         bool Confirms = false);
@@ -349,6 +354,7 @@ public sealed class PaletteWindow : IDisposable
         // finding them still set on a palette opened an hour later, and acting on them,
         // is the worst possible way to discover the feature exists.
         _overlays.Clear();
+        _model.Overlaid = false;
         _model.ClearMarks();
 
         _model.SetQuery(PrefixFor(mode));
@@ -486,6 +492,7 @@ public sealed class PaletteWindow : IDisposable
         // Forgotten on the way out, so the next open starts from the list rather than
         // from whatever was showing when it was dismissed.
         _overlays.Clear();
+        _model.Overlaid = false;
         _model.ClearMarks();
 
         _closing = true;
@@ -836,8 +843,11 @@ public sealed class PaletteWindow : IDisposable
     {
         if (entries.Count == 0) return;
 
-        _overlays.Push(new Overlay(title, _model.Query, entries, whole, confirms));
+        _overlays.Push(new Overlay(title, _model.Query, _model.Selected?.Entry, entries, whole, confirms));
 
+        // Told before the rows are installed, so the derived rows for the list
+        // underneath are not appended to this frame; see PaletteModel.Overlaid.
+        _model.Overlaid = true;
         _model.SetQuery(string.Empty);
         _model.SetEntries(entries);
 
@@ -1070,10 +1080,16 @@ public sealed class PaletteWindow : IDisposable
         else
         {
             // Back to the mode's own list, which the host owns and restores. The
-            // window never kept a copy to go stale.
+            // window never kept a copy to go stale. Told before the query goes back,
+            // so the derived rows the list carries are computed again.
+            _model.Overlaid = false;
             _model.SetQuery(frame.SavedQuery);
             ModeChanged?.Invoke(_model.Mode);
         }
+
+        // The query going back resets the selection to the top, as typing should; a
+        // frame closing should put it back where it was.
+        _model.Reselect(frame.SavedSelection);
 
         Refreshed();
     }
@@ -1274,6 +1290,7 @@ public sealed class PaletteWindow : IDisposable
         // is while a report or an action list is open would leave the frame describing
         // something that is no longer there.
         _overlays.Clear();
+        _model.Overlaid = false;
 
         _model.SetMode(mode);
 
@@ -1547,10 +1564,23 @@ public sealed class PaletteWindow : IDisposable
                 switch (message)
                 {
                     case PInvoke.WM_PAINT:
+                    {
+                        // EndPaint whatever Paint does, or a throw leaves the update
+                        // region unvalidated and Windows posts the message again at
+                        // once, for ever.
                         PInvoke.BeginPaint(hwnd, out PAINTSTRUCT ps);
-                        window.Paint();
-                        PInvoke.EndPaint(hwnd, in ps);
+
+                        try
+                        {
+                            window.Paint();
+                        }
+                        finally
+                        {
+                            PInvoke.EndPaint(hwnd, in ps);
+                        }
+
                         return new LRESULT(0);
+                    }
 
                     case PInvoke.WM_MOUSEMOVE:
                         window.OnMouseMove((short)(lParam.Value & 0xFFFF), (short)((lParam.Value >> 16) & 0xFFFF));
@@ -1663,10 +1693,13 @@ public sealed class PaletteWindow : IDisposable
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
             // An exception escaping an UnmanagedCallersOnly callback tears the process
-            // down. A missed keystroke is better than a palette that vanishes.
+            // down. A missed keystroke is better than a palette that vanishes - but not
+            // a silent one: every key, click and paint that failed used to fail with no
+            // line in the log, which made "Enter does nothing" impossible to diagnose.
+            Log.Error(LogCategory.Ui, $"the palette's window procedure failed handling message 0x{message:X4}", ex);
         }
 
         return PInvoke.DefWindowProc(hwnd, message, wParam, lParam);

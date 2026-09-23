@@ -315,12 +315,29 @@ public sealed class ConfigLoader
 
     private static readonly string[] KnownGeneralKeys =
     [
-        "focus-follows-cursor", "toggle-workspace-on-refocus", "follow-window-on-move",
-        "cursor-jump", "initial-window-state", "hide-method", "keep-in-taskbar",
+        "toggle-workspace-on-refocus", "follow-window-on-move",
+        "initial-window-state", "hide-method", "keep-in-taskbar",
         "default-layout", "unmanaged-window-commands", "allow-shell-exec-over-ipc",
         "allow-config-edits-over-ipc", "reload-on-save",
         "startup-command", "new-window-placement", "empty-workspace-focus",
     ];
+
+    /// <summary>
+    /// Settings that were once accepted and are no more, with what to do instead.
+    /// </summary>
+    /// <remarks>
+    /// A setting that parses and does nothing is worse than one that is refused: the
+    /// person who wrote it believes it is in force. <c>focus-follows-cursor</c> and
+    /// <c>cursor-jump</c> were read into the configuration and consulted by nothing,
+    /// for their whole existence; the example file carried them and the documentation
+    /// said they did what they said. Reported by name (SHB0455) rather than as an unknown
+    /// setting with a guess, because the guess would be the setting itself.
+    /// </remarks>
+    private static readonly Dictionary<string, string> RemovedGeneralKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["focus-follows-cursor"] = "Shubbak follows the keyboard, not the pointer; the setting never did anything. Remove it.",
+        ["cursor-jump"] = "The pointer is never moved by Shubbak; the setting never did anything. Remove it.",
+    };
 
     private static readonly string[] KnownAnimationKeys =
     [
@@ -336,7 +353,13 @@ public sealed class ConfigLoader
 
     private static readonly string[] KnownGapsKeys = ["inner", "outer"];
 
-    private static readonly string[] KnownLoggingKeys = ["level", "file", "console"];
+    private static readonly string[] KnownLoggingKeys = ["level", "file"];
+
+    /// <summary>See <see cref="RemovedGeneralKeys"/>.</summary>
+    private static readonly Dictionary<string, string> RemovedLoggingKeys = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["console"] = "The log goes to the console whenever there is one; the setting never did anything. Remove it.",
+    };
 
     /// <summary>
     /// Reports anything in a block that is not a name this loader knows.
@@ -355,11 +378,25 @@ public sealed class ConfigLoader
     /// </para>
     /// </remarks>
     private void WarnAboutUnknown(
-        IEnumerable<KdlNode> nodes, string[] known, string what, string code)
+        IEnumerable<KdlNode> nodes, string[] known, string what, string code,
+        Dictionary<string, string>? removed = null)
     {
         foreach (KdlNode node in nodes)
         {
             if (known.Contains(node.Name, StringComparer.OrdinalIgnoreCase)) continue;
+
+            // A setting that used to exist is named as such, with what replaced it or
+            // why nothing did; a guess at the nearest known setting would only ever be
+            // the removed one's own name.
+            if (removed is not null && removed.TryGetValue(node.Name, out string? advice))
+            {
+                Report(Diagnostic.Warning(
+                    "SHB0455",
+                    $"The setting '{node.Name}' has been removed and is ignored.",
+                    node.Span,
+                    advice));
+                continue;
+            }
 
             string? guess = Suggestion.Closest(node.Name, known);
 
@@ -377,7 +414,7 @@ public sealed class ConfigLoader
     {
         if (node is null) return config;
 
-        WarnAboutUnknown(node.Children, KnownGeneralKeys, "setting in 'general'", "SHB0428");
+        WarnAboutUnknown(node.Children, KnownGeneralKeys, "setting in 'general'", "SHB0428", RemovedGeneralKeys);
 
         List<string> startup = [];
         foreach (KdlNode child in node.ChildrenNamed("startup-command"))
@@ -385,11 +422,8 @@ public sealed class ConfigLoader
 
         return config with
         {
-            FocusFollowsCursor = Bool(node, "focus-follows-cursor", config.FocusFollowsCursor),
             ToggleWorkspaceOnRefocus = Bool(node, "toggle-workspace-on-refocus", config.ToggleWorkspaceOnRefocus),
             FollowWindowOnMove = Bool(node, "follow-window-on-move", config.FollowWindowOnMove),
-            CursorJumpOnMonitorFocus = CursorJump(node, "monitor"),
-            CursorJumpOnWindowFocus = CursorJump(node, "window"),
             InitialWindowState = InitialState(node, config.InitialWindowState),
             NewWindowPlacement = Placement(node, config.NewWindowPlacement),
             EmptyWorkspaceFocus = EmptyFocus(node, config.EmptyWorkspaceFocus),
@@ -424,17 +458,6 @@ public sealed class ConfigLoader
             $"Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}."));
 
         return fallback;
-    }
-
-    private bool CursorJump(KdlNode general, string trigger)
-    {
-        KdlNode? jump = general.Child("cursor-jump");
-        if (jump is null) return false;
-
-        if (!Bool(jump, "enabled", true)) return false;
-
-        string configured = Text(jump, "trigger", "monitor") ?? "monitor";
-        return string.Equals(configured, trigger, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -749,8 +772,7 @@ public sealed class ConfigLoader
     private ShubbakConfig ApplyLogging(ShubbakConfig config, KdlNode? node)
     {
         if (node is null) return config;
-        WarnAboutUnknown(node.Children, KnownLoggingKeys, "setting in 'logging'", "SHB0428");
-
+        WarnAboutUnknown(node.Children, KnownLoggingKeys, "setting in 'logging'", "SHB0428", RemovedLoggingKeys);
 
         Core.Diagnostics.LogLevel level = config.LogLevel;
 
@@ -808,6 +830,19 @@ public sealed class ConfigLoader
                     "SHB0403",
                     $"Workspace '{name}' is declared more than once; the first declaration wins.",
                     child.Span));
+                continue;
+            }
+
+            // A name the command language cannot spell is a workspace no key, no bar
+            // click and no palette row could ever reach: the tokeniser has no escape,
+            // so a name holding both kinds of quote has no written form.
+            if (!CommandParser.CanQuote(name))
+            {
+                Report(Diagnostic.Error(
+                    "SHB0454",
+                    $"Workspace '{name}' holds both a double and a single quote, which no command can write.",
+                    nameValue.Span,
+                    "Use one kind of quote in the name, or neither."));
                 continue;
             }
 

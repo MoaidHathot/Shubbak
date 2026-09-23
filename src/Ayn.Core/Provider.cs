@@ -48,13 +48,27 @@ public static class FactNames
     public static IReadOnlyList<Fact> All { get; } = [Fact.CameraInUse, Fact.MicrophoneInUse, Fact.MicrophoneMuted];
 }
 
+/// <summary>How a command sent to the window manager fared.</summary>
+public enum SendOutcome
+{
+    /// <summary>The window manager accepted it.</summary>
+    Accepted,
+
+    /// <summary>The window manager answered and said no; the connection is fine.</summary>
+    Refused,
+
+    /// <summary>Nobody answered. The connection, if there was one, is gone.</summary>
+    Unreachable,
+}
+
 /// <summary>
 /// One thing to tell the window manager.
 /// </summary>
+/// <param name="Fact">The fact this is about, so the outcome can be booked against it.</param>
 /// <param name="Context">The context concerned.</param>
 /// <param name="Hold">True to hold it on with a lease; false to hand it back to its conditions.</param>
 /// <param name="Because">Why, for the log: <c>camera in use by Teams.exe</c>.</param>
-public sealed record ProviderAction(string Context, bool Hold, string Because)
+public sealed record ProviderAction(Fact Fact, string Context, bool Hold, string Because)
 {
     /// <summary>
     /// The command, spelled the way the window manager's parser reads it.
@@ -145,8 +159,9 @@ public sealed class Provider
     /// long enough and differs from what was last asserted.
     /// </summary>
     /// <remarks>
-    /// Handing an action out marks it asserted. The host sends it; if the send fails
-    /// the connection is gone, and <see cref="Forget"/> is how the host says so.
+    /// Handing an action out marks it asserted. The host sends it and reports how that
+    /// went through <see cref="Sent"/>, which is where a refusal or a lost connection
+    /// is booked.
     /// </remarks>
     public IReadOnlyList<ProviderAction> Due(long now)
     {
@@ -155,12 +170,12 @@ public sealed class Provider
         foreach (Slot slot in _slots)
         {
             if (_config.ContextFor(slot.Fact) is not { } context) continue;
-            if (slot.Wanted == slot.Asserted) continue;
+            if (!Outstanding(slot)) continue;
             if (slot.Fact.Settles() && now - slot.WantedSince < SettleMilliseconds) continue;
 
             slot.Asserted = slot.Wanted;
 
-            (due ??= []).Add(new ProviderAction(context, slot.Wanted, Because(slot)));
+            (due ??= []).Add(new ProviderAction(slot.Fact, context, slot.Wanted, Because(slot)));
         }
 
         return due ?? (IReadOnlyList<ProviderAction>)[];
@@ -172,7 +187,9 @@ public sealed class Provider
     /// <remarks>
     /// The host waits exactly this long and no longer, so a change is reported the
     /// moment it has held long enough rather than on the next unrelated wake-up -
-    /// and, when nothing is pending, the host waits for the desk alone.
+    /// and, when nothing is pending, the host waits for the desk alone. Asks the same
+    /// question <see cref="Due"/> asks, or the two would disagree about a slot and the
+    /// host would wake for nothing, at once, for ever.
     /// </remarks>
     public TimeSpan? Pending(long now)
     {
@@ -181,13 +198,69 @@ public sealed class Provider
         foreach (Slot slot in _slots)
         {
             if (_config.ContextFor(slot.Fact) is null) continue;
-            if (slot.Wanted == slot.Asserted) continue;
+            if (!Outstanding(slot)) continue;
 
             long due = slot.Fact.Settles() ? slot.WantedSince + SettleMilliseconds - now : 0;
             if (soonest is null || due < soonest) soonest = due;
         }
 
         return soonest is { } wait ? TimeSpan.FromMilliseconds(Math.Max(0, wait)) : null;
+    }
+
+    /// <summary>
+    /// How long the host should sleep before looking again.
+    /// </summary>
+    /// <param name="retrying">Whether the last flush found the window manager unreachable with something to say.</param>
+    /// <param name="pending">What <see cref="Pending"/> answered.</param>
+    /// <param name="retry">How often to try an unreachable window manager again.</param>
+    /// <remarks>
+    /// While the window manager cannot be reached, whatever is due cannot be sent, so a
+    /// pending time of zero - "due now" - must not be waited for; it would be waited for
+    /// zero milliseconds, at once, in a loop, and a watcher that spins a core whenever
+    /// the window manager restarts with the microphone muted is what this replaces. The
+    /// retry interval is the floor while retrying; a settle that expires sooner is still
+    /// honoured, since it may be the window manager that has just come back.
+    /// </remarks>
+    public static TimeSpan NextWait(bool retrying, TimeSpan? pending, TimeSpan retry)
+    {
+        if (!retrying) return pending ?? Timeout.InfiniteTimeSpan;
+
+        return pending is { } soon && soon > TimeSpan.Zero && soon < retry ? soon : retry;
+    }
+
+    /// <summary>
+    /// The host says how a send fared, so the provider's picture of the window manager
+    /// stays true.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A refused hold is unbooked: the window manager holds nothing, so nothing will be
+    /// handed back later, and the fact is not asked again until the file is reloaded or
+    /// the connection is remade - the likeliest refusal is a context the file does not
+    /// declare, and it will be refused on every change until somebody declares it. A
+    /// refused hand-back needs nothing; <see cref="Due"/> already booked it as gone.
+    /// </para>
+    /// <para>
+    /// An unreachable window manager means every lease died with the connection, which
+    /// is <see cref="Forget"/>.
+    /// </para>
+    /// </remarks>
+    public void Sent(ProviderAction action, SendOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+
+        switch (outcome)
+        {
+            case SendOutcome.Refused when action.Hold:
+                Slot slot = SlotFor(action.Fact);
+                slot.Asserted = false;
+                slot.Refused = true;
+                break;
+
+            case SendOutcome.Unreachable:
+                Forget();
+                break;
+        }
     }
 
     /// <summary>
@@ -198,11 +271,16 @@ public sealed class Provider
     /// itself, or has restarted and never had them. The next <see cref="Due"/> hands
     /// back a hold for every fact still true, at once - the settle time was served the
     /// first time round - and nothing for a fact that has gone false, since there is no
-    /// pin left to hand back.
+    /// pin left to hand back. A refusal is forgotten with it: the window manager that
+    /// comes back may have a different file.
     /// </remarks>
     public void Forget()
     {
-        foreach (Slot slot in _slots) slot.Asserted = false;
+        foreach (Slot slot in _slots)
+        {
+            slot.Asserted = false;
+            slot.Refused = false;
+        }
     }
 
     /// <summary>
@@ -213,6 +291,15 @@ public sealed class Provider
     /// longer use, so a renamed context is not left pinned under its old name. The
     /// holds under the new names follow from <see cref="Due"/>.
     /// </returns>
+    /// <remarks>
+    /// A context that kept its name is held again too, if it is still true. The window
+    /// manager drops every pin on a context the reloaded file no longer declares, and
+    /// says nothing to whoever set it; and a hold it refused before the file declared the
+    /// context is exactly what a reload exists to ask again. Asserting a pin the window
+    /// manager already holds replaces it with itself, so the cost of being sure is one
+    /// command per held context per reload. A hand-back that is waiting out its settle
+    /// is left booked, so it still goes out on time.
+    /// </remarks>
     public IReadOnlyList<ProviderAction> Reconfigure(AynConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -224,12 +311,18 @@ public sealed class Provider
             string? before = _config.ContextFor(slot.Fact);
             string? after = config.ContextFor(slot.Fact);
 
-            if (string.Equals(before, after, StringComparison.Ordinal)) continue;
+            slot.Refused = false;
+
+            if (string.Equals(before, after, StringComparison.Ordinal))
+            {
+                if (slot.Asserted && slot.Wanted) slot.Asserted = false;
+                continue;
+            }
 
             if (slot.Asserted && before is not null)
             {
                 (released ??= []).Add(new ProviderAction(
-                    before, false, $"{slot.Fact.Wire()} is now reported as \"{after ?? "nothing"}\""));
+                    slot.Fact, before, false, $"{slot.Fact.Wire()} is now reported as \"{after ?? "nothing"}\""));
             }
 
             // Whatever was asserted was under the old name. The new one starts from
@@ -243,15 +336,20 @@ public sealed class Provider
     }
 
     /// <summary>Whether a fact is currently held on the window manager.</summary>
-    public bool IsHeld(Fact fact)
-    {
-        foreach (Slot slot in _slots)
-            if (slot.Fact == fact) return slot.Asserted;
-
-        return false;
-    }
+    public bool IsHeld(Fact fact) => SlotFor(fact).Asserted;
 
     private long SettleMilliseconds => (long)_config.EffectiveSettle.TotalMilliseconds;
+
+    /// <summary>Whether the window manager has yet to be told what the desk says about a fact.</summary>
+    private static bool Outstanding(Slot slot) => slot.Wanted != slot.Asserted && !slot.Refused;
+
+    private Slot SlotFor(Fact fact)
+    {
+        foreach (Slot slot in _slots)
+            if (slot.Fact == fact) return slot;
+
+        throw new ArgumentOutOfRangeException(nameof(fact), fact, "Not a fact this provider knows.");
+    }
 
     private static string Because(Slot slot) => (slot.Fact, slot.Wanted) switch
     {
@@ -270,6 +368,13 @@ public sealed class Provider
         public bool Wanted { get; set; }
         public long WantedSince { get; set; }
         public bool Asserted { get; set; }
+
+        /// <summary>
+        /// The window manager refused to hold this; not asked again until a reload or a
+        /// reconnect, which are the two things that can change its answer.
+        /// </summary>
+        public bool Refused { get; set; }
+
         public IReadOnlyList<string> Apps { get; set; } = [];
     }
 }

@@ -175,13 +175,18 @@ public sealed class WidgetTests
     public void WorkspacesWidgetQuotesNamesInItsClickCommands()
     {
         // Workspace names include characters the command tokeniser would otherwise
-        // treat as syntax - the author's config has workspaces named -, \ and '.
+        // treat as syntax - the author's config has workspaces named -, \ and '. The
+        // spelling is the shared one, so a name the tokeniser reads back whole as it
+        // is written is written as it is, and one that is itself a double quote goes
+        // in single ones rather than becoming an empty string.
         var widget = new WorkspacesWidget("workspaces");
 
         string encoded = WorkspacesWidget.Encode(
         [
             new("'", "AI", Active: false, HasWindows: false),
             new("\\", "Presentation", Active: false, HasWindows: false),
+            new("\"", "Quoted", Active: false, HasWindows: false),
+            new("Second Monitor", "Two", Active: false, HasWindows: false),
         ]);
 
         VisualNode node = widget.Build(new Dictionary<string, string?>(StringComparer.Ordinal)
@@ -190,7 +195,9 @@ public sealed class WidgetTests
         });
 
         Assert.Equal("focus --workspace \"'\"", node.Children[0].OnClick);
-        Assert.Equal("focus --workspace \"\\\"", node.Children[1].OnClick);
+        Assert.Equal("focus --workspace \\", node.Children[1].OnClick);
+        Assert.Equal("focus --workspace '\"'", node.Children[2].OnClick);
+        Assert.Equal("focus --workspace \"Second Monitor\"", node.Children[3].OnClick);
     }
 
     [Fact]

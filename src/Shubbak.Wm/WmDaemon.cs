@@ -426,7 +426,11 @@ public sealed class WmDaemon : IDisposable
         _keyboard.Start(_bindings.IsBound);
         phase = ReportPhase("keyboard hook", phase);
 
-        _ipc = new IpcServer { Warn = message => Log.Warn(LogCategory.Ipc, message) };
+        _ipc = new IpcServer
+        {
+            Warn = message => Log.Warn(LogCategory.Ipc, message),
+            HandlerFaulted = (method, ex) => Log.Error(LogCategory.Ipc, $"the '{method}' handler failed; the request was answered with the failure", ex),
+        };
 
         // A leased pin dies with the connection that made it. The notice arrives on a
         // pipe thread; the pins belong to the loop.
@@ -1240,7 +1244,16 @@ public sealed class WmDaemon : IDisposable
                     [.. binding.Commands.Select(c => c.Name)])]));
             }
 
-            Execute(binding.Commands);
+            // Each chord on its own: the keystrokes have already been taken out of the
+            // ring, so one command that throws must not lose the chords typed after it.
+            try
+            {
+                Execute(binding.Commands);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(LogCategory.Command, $"{binding.Key.Display} -> {binding.Commands.Describe()} failed", ex);
+            }
         }
     }
 
@@ -1256,8 +1269,22 @@ public sealed class WmDaemon : IDisposable
 
         int count = _winEvents.Drain(_eventScratch, _eventScratch.Length);
 
+        // Each event on its own, because the scratch array has already been emptied
+        // from the source: an exception that escaped the loop would lose every event
+        // after it - the Destroyed for a window that has just gone included, which
+        // leaves a node in the tree for a window that is not there - and the tick's
+        // own catch would log one failure and say nothing about the rest.
         for (int i = 0; i < count; i++)
-            HandleWindowEvent(_eventScratch[i]);
+        {
+            try
+            {
+                HandleWindowEvent(_eventScratch[i]);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(LogCategory.Window, $"handling {_eventScratch[i].Kind} for 0x{_eventScratch[i].Handle:X} failed", ex);
+            }
+        }
     }
 
     /// <summary>Runs work queued by IPC threads, on the daemon thread.</summary>
@@ -1502,8 +1529,10 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.MinimiseEnd:
+                // Back to what it was - floating stays floating - not to tiling
+                // regardless, which is what this wrote for as long as it existed.
                 if (_windows.TryGet(handle, out WindowNode? restoring))
-                    Publish(_wm.SetWindowState(restoring, WindowState.Tiling));
+                    Publish(_wm.RestoreFromAway(restoring));
                 break;
 
             case WinEventKind.MoveSizeStart:
@@ -5483,6 +5512,32 @@ public sealed class WmDaemon : IDisposable
 
     private void SyncMonitors(IReadOnlyList<MonitorInfo> current)
     {
+        // No monitors is not a shape the desktop takes; it is an answer the enumeration
+        // gives while a remote session detaches its display, while a driver resets, and
+        // when the callback stops early. Syncing to it would remove the last monitor,
+        // and the tree removes a last monitor by detaching it with every workspace and
+        // every window still inside - there is nowhere to migrate them - so nothing on
+        // it is reachable again: the display that comes back gets a fresh node and fresh
+        // workspaces, the old windows stay managed and stay cloaked, and the only way out
+        // is a restart. Left alone, the tree keeps yesterday's monitors until today's are
+        // known, which is what every window on them needs.
+        if (current.Count == 0)
+        {
+            if (_wm.Root.Monitors.Count > 0 && !_warnedOfNoMonitors)
+            {
+                _warnedOfNoMonitors = true;
+                Log.Warn(LogCategory.Monitor, "the display enumeration returned no monitors; keeping the ones known until it returns some");
+            }
+
+            return;
+        }
+
+        if (_warnedOfNoMonitors)
+        {
+            _warnedOfNoMonitors = false;
+            Log.Info(LogCategory.Monitor, $"the display enumeration returned {current.Count} monitor(s) again");
+        }
+
         // Asked here and nowhere else. The enumeration runs twice a second for the life
         // of the process; this runs when it has changed, which is a dock, an undock or
         // a cable - and is the only time the answer can be different.
@@ -5547,6 +5602,12 @@ public sealed class WmDaemon : IDisposable
 
     /// <summary>The Win+P arrangement as of the last monitor change.</summary>
     private DisplayTopologyKind _displayTopology;
+
+    /// <summary>
+    /// Whether the empty enumeration has been remarked on; once per episode, since it
+    /// is asked twice a second and a remote session can stay detached for hours.
+    /// </summary>
+    private bool _warnedOfNoMonitors;
 
     /// <summary>
     /// Attaches what the display configuration API knows about a monitor to its node.

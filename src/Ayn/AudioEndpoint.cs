@@ -91,17 +91,23 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
     private nint _volume;
     private void* _volumeCallback;
     private void* _deviceCallback;
-    private bool _complained;
+    private string? _lastComplaint;
 
     /// <summary>Whether there is an endpoint to ask.</summary>
     public bool HasDevice => _volume != 0;
 
+    /// <summary>Whether Core Audio has been opened; see <see cref="Open"/>.</summary>
+    public bool IsOpen => _enumerator != 0;
+
     /// <summary>
     /// Opens Core Audio and finds the default microphone. False if Core Audio itself
-    /// is not there, which is not a machine this can do anything useful on.
+    /// is not there, which is not a machine this can do anything useful on. Opening
+    /// what is already open is nothing.
     /// </summary>
     public bool Open()
     {
+        if (IsOpen) return true;
+
         int hr = CoInitializeEx(0, CoinitMultiThreaded);
         if (hr < 0 && hr != RpcEChangedMode) return Fail("CoInitializeEx", hr);
 
@@ -261,12 +267,20 @@ internal sealed unsafe partial class AudioEndpoint : IDisposable
         _volume = 0;
     }
 
+    /// <summary>
+    /// Says what failed, once per distinct failure. The same call failing on every wake
+    /// - a microphone that answers nothing while it sleeps - is one line, not a line per
+    /// wake; a different call failing later is still said, where a flag set by the first
+    /// failure for the life of the process would have hidden it.
+    /// </summary>
     private bool Fail(string what, int hr)
     {
-        if (!_complained)
+        string complaint = $"Core Audio: {what} failed (hr 0x{hr:X8}); the microphone's mute will not be reported";
+
+        if (!string.Equals(complaint, _lastComplaint, StringComparison.Ordinal))
         {
-            _complained = true;
-            Log.Warn(LogCategory.Wm, $"Core Audio: {what} failed (hr 0x{hr:X8}); the microphone's mute will not be reported");
+            _lastComplaint = complaint;
+            Log.Warn(LogCategory.Wm, complaint);
         }
 
         return false;

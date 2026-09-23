@@ -87,4 +87,28 @@ public sealed class MatcherOperatorTests
 
         Assert.Contains(result.Diagnostics, d => d.Code == "SHB0426");
     }
+
+    [Fact]
+    public void ARegexThatRunsOutOfTimeDoesNotMatchRatherThanThrowing()
+    {
+        // Catastrophic backtracking: every nested quantifier on a value that nearly
+        // matches. The timeout exists so this cannot hold the window manager's loop;
+        // throwing when it fired lost the event that prompted the match and every one
+        // queued behind it, so the window was never managed at all.
+        var matcher = new WindowMatcher(
+            MatchTarget.Title, MatchOperator.Regex, "^(a+)+$", Negated: false, default);
+
+        string value = new string('a', 40) + "!";
+
+        bool matched = matcher.Matches(value);
+
+        Assert.False(matched);
+
+        // Asked again the answer is the same, and still an answer.
+        Assert.False(matcher.Matches(value));
+
+        // And a negated matcher reads the timeout the same way it reads any non-match.
+        var negated = matcher with { Negated = true };
+        Assert.True(negated.Matches(value));
+    }
 }

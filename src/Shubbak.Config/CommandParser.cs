@@ -829,12 +829,64 @@ public static class CommandParser
     }
 
     /// <summary>
+    /// Spells a value so that the tokeniser reads it back as exactly one token.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For anything that builds a command from a name it did not choose - the palette
+    /// writing <c>focus --workspace</c> for the workspace a row stands for, the bar for
+    /// the one that was clicked, the command line for whatever was typed. A name with
+    /// a space in it, written bare, is two tokens; a name that is a quote character,
+    /// written bare, opens a quotation that never closes and the command is refused
+    /// with nothing on screen to say why.
+    /// </para>
+    /// <para>
+    /// Left alone when nothing in it needs quoting, so a command built from a plain
+    /// name reads as it always did. Double quotes unless the value has one, single
+    /// quotes otherwise. A value with both cannot be written in this command language
+    /// - the tokeniser has no escape - and <see cref="CanQuote"/> says so ahead of time;
+    /// the loader refuses such a name (SHB0454) so it never reaches here.
+    /// </para>
+    /// </remarks>
+    /// <exception cref="ArgumentException">The value contains both kinds of quote.</exception>
+    public static string Quote(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        if (value.Length == 0) return "\"\"";
+
+        bool needsQuoting = false;
+
+        foreach (char c in value)
+        {
+            if (char.IsWhiteSpace(c) || c is '"' or '\'')
+            {
+                needsQuoting = true;
+                break;
+            }
+        }
+
+        if (!needsQuoting) return value;
+        if (!value.Contains('"')) return $"\"{value}\"";
+        if (!value.Contains('\'')) return $"'{value}'";
+
+        throw new ArgumentException(
+            "The value contains both a double and a single quote, and the command language has no way to write that.",
+            nameof(value));
+    }
+
+    /// <summary>Whether <see cref="Quote"/> can spell a value at all.</summary>
+    public static bool CanQuote(string value) =>
+        value is not null && !(value.Contains('"') && value.Contains('\''));
+
+    /// <summary>
     /// Splits on whitespace, honouring quotes.
     /// </summary>
     /// <remarks>
     /// Quotes matter for workspace names: the author's config has workspaces called
     /// <c>-</c>, <c>\</c> and <c>'</c>, and without quoting support
-    /// <c>focus --workspace "'"</c> would be unwritable.
+    /// <c>focus --workspace "'"</c> would be unwritable. <see cref="Quote"/> is the
+    /// inverse, for code that builds a command from a name.
     /// </remarks>
     private static string[] Tokenise(string text)
     {

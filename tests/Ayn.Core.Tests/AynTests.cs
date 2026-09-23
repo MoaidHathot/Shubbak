@@ -235,16 +235,21 @@ public sealed class ProviderTests
     }
 
     [Fact]
-    public void AReloadThatChangesNothingSaysNothing()
+    public void AReloadThatChangesNothingReleasesNothingAndHoldsAgainWhatItHeld()
     {
         var provider = new Provider(Defaults);
 
         provider.Observe(Camera("Teams.exe"), 0);
         _ = provider.Due(500);
 
+        // Nothing renamed, so nothing is handed back under an old name. The hold is
+        // asserted again all the same - see AReloadHoldsAgainWhatIsStillTrueUnderAnUnchangedName
+        // - and the picture afterwards is the one from before.
         Assert.Empty(provider.Reconfigure(Defaults with { Settle = TimeSpan.FromSeconds(1) }));
-        Assert.Empty(provider.Due(1_000));
+
+        Assert.True(Assert.Single(provider.Due(1_000)).Hold);
         Assert.True(provider.IsHeld(Fact.CameraInUse));
+        Assert.Empty(provider.Due(2_000));
     }
 
     [Fact]
@@ -278,6 +283,228 @@ public sealed class ProviderTests
         var config = new AynConfig();
         Assert.All(FactNames.All, fact => Assert.Equal(fact.Wire(), config.ContextFor(fact)));
     }
+
+    [Fact]
+    public void AnActionSaysWhichFactItIsAbout()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(new Reading(["Teams.exe"], [], MicrophoneMuted: true), 0);
+
+        IReadOnlyList<ProviderAction> due = provider.Due(500);
+
+        Assert.Contains(due, a => a is { Fact: Fact.CameraInUse, Context: "camera-in-use" });
+        Assert.Contains(due, a => a is { Fact: Fact.MicrophoneMuted, Context: "microphone-muted" });
+    }
+
+    // ---- what the host does with the outcome of a send -------------------------
+
+    [Fact]
+    public void AnUnreachableWindowManagerIsForgottenAndHeldAgainOnceReachable()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        ProviderAction hold = Assert.Single(provider.Due(500));
+
+        // Sent into the void: the connection is gone and every lease with it.
+        provider.Sent(hold, SendOutcome.Unreachable);
+
+        Assert.False(provider.IsHeld(Fact.CameraInUse));
+        Assert.Equal("context --set \"camera-in-use\" --lease", Assert.Single(provider.Due(501)).Command);
+    }
+
+    [Fact]
+    public void ARefusedHoldIsNotAskedAgainOnEveryChange()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        ProviderAction hold = Assert.Single(provider.Due(500));
+
+        // "No context called camera-in-use": the file does not declare it. Asking on
+        // every wake would say the same thing a hundred times.
+        provider.Sent(hold, SendOutcome.Refused);
+
+        Assert.False(provider.IsHeld(Fact.CameraInUse));
+        Assert.Empty(provider.Due(1_000));
+
+        // And nothing is pending for it either - a host that waited for a pending time
+        // of zero would wake at once, for ever.
+        Assert.Null(provider.Pending(1_000));
+
+        // The camera closing hands nothing back: the window manager holds nothing.
+        provider.Observe(Reading.Idle, 2_000);
+        Assert.Empty(provider.Due(2_500));
+        Assert.Null(provider.Pending(2_500));
+    }
+
+    [Fact]
+    public void ARefusedHoldIsAskedAgainAfterAReloadUnderTheSameName()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        provider.Sent(Assert.Single(provider.Due(500)), SendOutcome.Refused);
+
+        // The user adds `context "camera-in-use" { }` and saves. The name in the ayn
+        // section did not change; the answer will.
+        Assert.Empty(provider.Reconfigure(Defaults));
+
+        ProviderAction again = Assert.Single(provider.Due(501));
+        Assert.True(again.Hold);
+        Assert.Equal("camera-in-use", again.Context);
+    }
+
+    [Fact]
+    public void ARefusedHoldIsAskedAgainAfterTheConnectionIsRemade()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        provider.Sent(Assert.Single(provider.Due(500)), SendOutcome.Refused);
+
+        // The window manager restarted, perhaps with a different file.
+        provider.Forget();
+
+        Assert.True(Assert.Single(provider.Due(501)).Hold);
+    }
+
+    [Fact]
+    public void ARefusedHandBackNeedsNoBookkeeping()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        provider.Sent(Assert.Single(provider.Due(500)), SendOutcome.Accepted);
+
+        provider.Observe(Reading.Idle, 1_000);
+        ProviderAction handBack = Assert.Single(provider.Due(1_500));
+        Assert.False(handBack.Hold);
+
+        // Refused on the way down - the context was removed from the file between the
+        // two. Already booked as gone; the camera coming back is a fresh hold.
+        provider.Sent(handBack, SendOutcome.Refused);
+
+        provider.Observe(Camera("Teams.exe"), 2_000);
+        Assert.True(Assert.Single(provider.Due(2_500)).Hold);
+    }
+
+    [Fact]
+    public void AReloadHoldsAgainWhatIsStillTrueUnderAnUnchangedName()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        provider.Sent(Assert.Single(provider.Due(500)), SendOutcome.Accepted);
+
+        // The window manager drops every pin on a context the reloaded file no longer
+        // declares, and says nothing. Asserting a pin it still holds replaces it with
+        // itself, so being sure costs one command per held context per reload.
+        Assert.Empty(provider.Reconfigure(Defaults));
+
+        ProviderAction again = Assert.Single(provider.Due(501));
+        Assert.True(again.Hold);
+        Assert.Equal("camera-in-use", again.Context);
+
+        // Once.
+        Assert.Empty(provider.Due(1_000));
+    }
+
+    [Fact]
+    public void AReloadThatLengthensTheSettleWaitsItOutBeforeHoldingAgain()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        provider.Sent(Assert.Single(provider.Due(500)), SendOutcome.Accepted);
+
+        // The new file wants a second of quiet before believing the camera. The
+        // re-hold is judged by the new rule, which is what the rule is for; it is
+        // bounded by the longest settle the loader allows.
+        Assert.Empty(provider.Reconfigure(Defaults with { Settle = TimeSpan.FromSeconds(1) }));
+
+        Assert.Empty(provider.Due(600));
+        Assert.Equal(TimeSpan.FromMilliseconds(400), provider.Pending(600));
+        Assert.True(Assert.Single(provider.Due(1_000)).Hold);
+    }
+
+    [Fact]
+    public void AReloadLeavesAPendingHandBackToGoOutOnTime()
+    {
+        var provider = new Provider(Defaults);
+
+        provider.Observe(Camera("Teams.exe"), 0);
+        provider.Sent(Assert.Single(provider.Due(500)), SendOutcome.Accepted);
+
+        // The camera closed 100 ms ago; the hand-back is waiting out its settle when
+        // the file is saved. It must still be sent, or the pin would be held until the
+        // camera was used again.
+        provider.Observe(Reading.Idle, 1_000);
+        Assert.Empty(provider.Reconfigure(Defaults));
+
+        Assert.Empty(provider.Due(1_100));
+        ProviderAction handBack = Assert.Single(provider.Due(1_500));
+        Assert.False(handBack.Hold);
+    }
+
+    // ---- how long the host sleeps -----------------------------------------------
+
+    [Fact]
+    public void NothingPendingAndNothingToRetryWaitsForTheDeskAlone()
+    {
+        Assert.Equal(Timeout.InfiniteTimeSpan, Provider.NextWait(retrying: false, pending: null, TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void ASettleThatIsPendingIsWaitedForExactly()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(400), Provider.NextWait(retrying: false, TimeSpan.FromMilliseconds(400), TimeSpan.FromSeconds(1)));
+        Assert.Equal(TimeSpan.Zero, Provider.NextWait(retrying: false, TimeSpan.Zero, TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void AnUnreachableWindowManagerWithSomethingDueNowIsRetriedNotSpunOn()
+    {
+        // The case that spun a core: after a failed send the provider forgets what it
+        // held, everything still true is due at once - a pending time of zero - and a
+        // wait of zero is no wait at all.
+        Assert.Equal(TimeSpan.FromSeconds(1), Provider.NextWait(retrying: true, TimeSpan.Zero, TimeSpan.FromSeconds(1)));
+        Assert.Equal(TimeSpan.FromSeconds(1), Provider.NextWait(retrying: true, pending: null, TimeSpan.FromSeconds(1)));
+        Assert.Equal(TimeSpan.FromSeconds(1), Provider.NextWait(retrying: true, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void ASettleExpiringBeforeTheRetryIsStillHonouredWhileRetrying()
+    {
+        Assert.Equal(TimeSpan.FromMilliseconds(300), Provider.NextWait(retrying: true, TimeSpan.FromMilliseconds(300), TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public void TheLoopAsWrittenNeverWaitsZeroWhileTheWindowManagerIsDown()
+    {
+        // What the host does: observe, hand out, fail to send, forget, ask what is
+        // pending, decide how long to sleep. With the microphone muted - a fact that is
+        // true for hours - every step of that is repeated on every wake.
+        var provider = new Provider(Defaults);
+        provider.Observe(Muted(true), 0);
+
+        for (int round = 0; round < 3; round++)
+        {
+            bool retrying = false;
+
+            foreach (ProviderAction action in provider.Due(round))
+            {
+                provider.Sent(action, SendOutcome.Unreachable);
+                retrying = true;
+            }
+
+            TimeSpan wait = Provider.NextWait(retrying, provider.Pending(round), TimeSpan.FromSeconds(1));
+
+            Assert.True(retrying, "the hold should be due again after being forgotten");
+            Assert.Equal(TimeSpan.FromSeconds(1), wait);
+        }
+    }
 }
 
 /// <summary>Tests for how the consent store is read.</summary>
@@ -302,6 +529,10 @@ public sealed class ConsentStoreTests
 
         // Granted access, never used: neither value, not an open device.
         Assert.False(new ConsentEntry("Teams.exe", Started: 0, Stopped: 0).InUse);
+
+        // Opened after it was last closed is open too, should a build of Windows leave
+        // the old stop in place rather than zeroing it.
+        Assert.True(new ConsentEntry("Teams.exe", Started: 133_000_000_000_000_002, Stopped: 133_000_000_000_000_001).InUse);
     }
 
     [Fact]
@@ -483,11 +714,15 @@ public sealed class AynConfigLoaderTests
     public void AFileThatDoesNotParseYieldsTheDefaultsWithoutRepeatingTheParsersComplaint()
     {
         // The window manager's loader reports the syntax error; this one stays quiet
-        // rather than saying it twice.
+        // rather than saying it twice - but says that it did, so a host starting up on
+        // the broken file can say which file it is ignoring.
         AynConfigLoad load = AynConfigLoader.Validate("ayn { camera { in-use \"c\" ");
 
         Assert.Empty(load.Diagnostics);
+        Assert.True(load.SyntaxErrors);
         Assert.Equal("camera-in-use", load.Config.CameraInUse);
+
+        Assert.False(AynConfigLoader.Validate("ayn { }").SyntaxErrors);
     }
 }
 

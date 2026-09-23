@@ -79,8 +79,10 @@ public static class MonitorSource
         catch
         {
             // An exception escaping an UnmanagedCallersOnly callback tears down the
-            // process, so enumeration stops quietly instead.
-            return false;
+            // process. One display that cannot be described is skipped and the rest are
+            // still collected: stopping the enumeration here would hand the caller a
+            // list missing every monitor after this one - or an empty list, which the
+            // window manager reads as the desktop having no displays at all.
         }
 
         return true;

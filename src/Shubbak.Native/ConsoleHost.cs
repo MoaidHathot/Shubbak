@@ -110,6 +110,32 @@ public static class ConsoleHost
     }
 
     /// <summary>
+    /// Attaches to the launching terminal's console if there is one, and otherwise
+    /// does nothing.
+    /// </summary>
+    /// <returns>Whether output has somewhere to go afterwards.</returns>
+    /// <remarks>
+    /// For a message that is worth a line in a terminal but not a window of its own: a
+    /// companion telling a person who started a second copy by hand that one is already
+    /// running. The usual second copy is started by the window manager, which has no
+    /// console, and <see cref="Ensure"/> would conjure one to print into - a black
+    /// window flashing on every restart of the window manager, saying something to
+    /// nobody.
+    /// </remarks>
+    public static bool TryAttach()
+    {
+        if (HasOutput) return true;
+
+        if (PInvoke.AttachConsole(AttachParentProcess))
+        {
+            Rebind();
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Gets a console for reporting a fatal startup problem, if one can be had.
     /// </summary>
     /// <remarks>

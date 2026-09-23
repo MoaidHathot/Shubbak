@@ -27,7 +27,7 @@ public sealed class ConfigEditorTests
 
     private const string Existing = """
         general {
-            focus-follows-cursor #true
+            follow-window-on-move #true
         }
 
         rules {

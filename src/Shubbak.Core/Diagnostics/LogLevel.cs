@@ -67,6 +67,13 @@ public enum LogCategory
 
     /// <summary>Monitors and DPI.</summary>
     Monitor,
+
+    /// <summary>
+    /// A companion's own window: painting, input, the window procedure. The bar and
+    /// the palette, which have no window-manager work to categorise and used to file
+    /// theirs under <see cref="Wm"/>.
+    /// </summary>
+    Ui,
 }
 
 /// <summary>One log entry.</summary>

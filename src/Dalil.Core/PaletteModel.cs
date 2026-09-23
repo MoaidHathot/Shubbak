@@ -379,9 +379,25 @@ public sealed class PaletteModel
     /// </summary>
     /// <remarks>
     /// Set once by the host. Null means the palette only ever offers things from its
-    /// entry list.
+    /// entry list. Not consulted while <see cref="Overlaid"/>.
     /// </remarks>
     public QueryAugmenter? Augmenter { get; set; }
+
+    /// <summary>
+    /// Whether the entries on show are a frame pushed over the list - an action list,
+    /// a confirmation, a report - rather than the list itself.
+    /// </summary>
+    /// <remarks>
+    /// The model has no frames of its own; the host stacks them and installs each
+    /// frame's rows as the entries. What the model needs to know is only that it is
+    /// showing one, because the <see cref="Augmenter"/> derives its rows from the mode
+    /// and the term, and inside a frame both lie: the mode is whatever the list under
+    /// the frame was in, and the term is empty because a frame starts with a clean
+    /// filter. So a palette opened from an unmanaged window offered "this window is
+    /// not being managed" as an extra row on every action list and under every
+    /// Yes/No, and Down-Down-Enter in a confirmation opened an inspect report.
+    /// </remarks>
+    public bool Overlaid { get; set; }
 
     /// <summary>
     /// Which character selects which mode.
@@ -637,6 +653,24 @@ public sealed class PaletteModel
         // the old selection would leave them pressing Enter on something that is no
         // longer what they were aiming at.
         Refilter(keep: null);
+    }
+
+    /// <summary>
+    /// Puts the selection back on an entry from an earlier list, or on the row that
+    /// stands for the same thing now, or at the top.
+    /// </summary>
+    /// <remarks>
+    /// For coming back out of a frame. Ctrl+Enter on the twelfth window opened its
+    /// actions, Escape came back - to the first window, because restoring the query
+    /// resets the selection, as it should when the query is being typed. Here the query
+    /// is being put back, not narrowed, and the row under the finger should be the one
+    /// that was there.
+    /// </remarks>
+    public void Reselect(PaletteEntry? entry)
+    {
+        if (_rows.Count == 0) return;
+
+        SelectedIndex = IndexOf(entry);
     }
 
     /// <summary>Switches mode, keeping whatever has been typed.</summary>
@@ -940,29 +974,35 @@ public sealed class PaletteModel
         // work until something else legitimately scored higher.
         //
         // Split by whether they can actually do anything. A row that runs what has been
-        // typed belongs above the matches - it is the thing being composed. A row that
-        // only explains why the text will not parse belongs below them, because Enter
-        // lands on the first row and must never land on something inert.
+        // typed, or that leads somewhere - the row that explains why the window you
+        // were just in is not managed - belongs above the matches: it is the thing
+        // being composed, or the thing the palette knows you are about to look for. A
+        // row that only explains why the text will not parse belongs below them,
+        // because Enter lands on the first row and must never land on something inert.
         //
         // That distinction is not cosmetic. Every macro with a space in its name -
         // "Code layout" - put an "unknown command 'Code'" row above itself, so pressing
         // Enter on what looked like the obvious match did nothing at all, and the
         // feature appeared not to work. The diagnostic is still there, at the bottom,
         // and is still the only row when nothing else matched.
-        if (Augmenter?.Invoke(Mode, term) is { Count: > 0 } derived)
+        if (!Overlaid && Augmenter?.Invoke(Mode, term) is { Count: > 0 } derived)
         {
             _rows.InsertRange(
                 0,
-                derived.Where(e => e.Command.Length > 0)
+                derived.Where(Actionable)
                        .Select(e => new PaletteRow(e, int.MaxValue, [])));
 
             _rows.AddRange(
-                derived.Where(e => e.Command.Length == 0)
+                derived.Where(e => !Actionable(e))
                        .Select(e => new PaletteRow(e, 0, [])));
         }
 
         SelectedIndex = _rows.Count == 0 ? -1 : IndexOf(keep);
     }
+
+    /// <summary>Whether Enter on a derived row does something, as opposed to only saying something.</summary>
+    private static bool Actionable(PaletteEntry entry) =>
+        entry.Command.Length > 0 || entry.Explains is not null || entry.SwitchesTo is not null || entry.HasActions;
 
     /// <summary>
     /// The positions actually written down, which is not always all of them.
@@ -978,9 +1018,12 @@ public sealed class PaletteModel
         positions[..Math.Min(match.Matched, positions.Length)].ToArray();
 
     /// <remarks>
-    /// Score first, then rank, then text. The last is not cosmetic: without a total
-    /// order, two equally good matches can swap places between keystrokes and the row
-    /// under the user's finger changes as they type.
+    /// Score first, then rank, then text, then the command. The last two are not
+    /// cosmetic: without a total order, two equally good matches can swap places
+    /// between keystrokes and the row under the user's finger changes as they type.
+    /// Two windows with the same title and the same standing - a pair of untitled
+    /// Notepads, never focused - are told apart only by the command, which names the
+    /// handle.
     /// </remarks>
     private static int Compare(PaletteRow left, PaletteRow right)
     {
@@ -990,7 +1033,10 @@ public sealed class PaletteModel
         int byRank = right.Entry.Rank.CompareTo(left.Entry.Rank);
         if (byRank != 0) return byRank;
 
-        return string.Compare(left.Entry.Primary, right.Entry.Primary, StringComparison.OrdinalIgnoreCase);
+        int byText = string.Compare(left.Entry.Primary, right.Entry.Primary, StringComparison.OrdinalIgnoreCase);
+        if (byText != 0) return byText;
+
+        return string.CompareOrdinal(left.Entry.Command, right.Entry.Command);
     }
 
     /// <summary>

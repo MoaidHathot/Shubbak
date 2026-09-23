@@ -253,8 +253,151 @@ schedule and breaking either is a different kind of event:
   `--autostart` and what happens on a first run. The "no config file found" message
   suggests `shubbak setup` first and `config init` second. The docs use the winget
   moniker - `winget install shubbak` - which the manifest has declared all along.
+- **`focus-follows-cursor`, `cursor-jump` and `logging { console }` are gone.** All
+  three parsed, were stored, and were read by nothing, for their whole existence; the
+  example file shipped the first two and the documentation said they did what they
+  said. Shubbak follows the keyboard and never moves the pointer, and the log goes to
+  the console whenever there is one. A file that still has them is told so by name
+  (`SHB0455`, a warning) with why nothing replaced them, rather than being offered
+  "did you mean `focus-follows-cursor`" as an unknown setting.
+- **The configuration page says what reloading is now.** It said reloading was explicit
+  and that nothing watched the file, which stopped being true when `reload-on-save`
+  became the default.
 
 ### Fixed
+
+- **The watcher spun a core whenever the window manager was down and any fact was
+  true.** After a send failed, Ayn forgot what it held so it could hold it again, and
+  everything still true was then due at once - a pending time of zero. The wait was
+  computed from that: zero milliseconds, at once, in a loop, measured at 99% of a
+  core from `wm-exit` until the window manager came back. The mute is a fact that is
+  true for hours. The retry interval is now the floor while the window manager is
+  unreachable; measured at 0% on the same desk, with the lease re-held within a
+  second of the window manager returning. `Provider.NextWait` is the decision, and
+  is tested for the exact case.
+- **A context the window manager refused was never held after the file was fixed.**
+  The likeliest refusal is "no context called `camera-in-use`" - the file has not
+  declared it - and the fix is to declare it and save. The watcher booked the refused
+  hold as sent, and on reload re-asserted only facts whose *name* had changed, so the
+  declaration made no difference until the fact toggled or the window manager
+  restarted. A refusal is now unbooked and not asked again until a reload or a
+  reconnect, which are the two things that can change the answer; and a reload
+  re-asserts every held context under an unchanged name too, because the window
+  manager drops the pins of contexts the reloaded file no longer declares and tells
+  nobody. A hand-back waiting out its settle is left to go out on time. Provider
+  gained `Sent(action, outcome)` so the bookkeeping lives where it is tested.
+- **A second copy of the bar, the palette or the watcher truncated the first copy's
+  log.** Each opened its log file before claiming the single-instance lock; opening
+  truncates, and the copy already running was writing to it. Nothing strange had to
+  happen: a restarted window manager runs its startup commands, so every `--replace`
+  and every upgrade wiped `taj.log`, `dalil.log` and `ayn.log` mid-session. The lock
+  is claimed first now. The duplicate also no longer conjures a console to say
+  "already running" into - a black window flashing on every restart for nobody - and
+  says it only to a terminal it was actually typed into (`ConsoleHost.TryAttach`).
+- **A display enumeration that returned no monitors orphaned every window.** An
+  empty answer - which the enumeration gives while a remote session detaches its
+  display, while a driver resets, and when one display could not be described -
+  removed the last monitor, and the tree removes a last monitor by detaching it with
+  every workspace and window still inside, since there is nowhere to migrate them.
+  The display that came back got a fresh node and fresh workspaces; the old windows
+  stayed managed and stayed cloaked, unreachable until a restart. An empty
+  enumeration is now ignored, said once per episode, and one display that cannot be
+  described no longer empties the list of the rest.
+- **A floating window minimised and brought back is still floating.** Every way
+  back from minimised or fullscreen wrote `Tiling`, so a floating dialog was tiled
+  into the layout by the act of minimising it, and a floating window made
+  fullscreen and un-made came back tiled. The window remembers the state it was put
+  away from (`WindowNode.StateBeforeAway`) and `RestoreFromAway` is the one way
+  back; going from one away state to another keeps the earlier memory. Six tests.
+- **One window event that threw lost every event queued behind it.** The events had
+  already been taken out of the ring, so an exception in handling one dropped the
+  rest of the batch - the `Destroyed` for a window that had just gone included,
+  leaving a node in the tree for a window that was not there. Each event and each
+  keyboard chord is now handled on its own and a failure is logged with what it was
+  handling. The concrete thrower: a rule regex that ran out of its 100 ms timeout
+  threw `RegexMatchTimeoutException` through the rule engine and out of the drain,
+  so the window it was matching was never managed. A pattern that times out is now
+  read as not matching and named once in the log as one that backtracks badly.
+- **The bar's and the palette's window procedures failed in silence.** Both caught
+  everything - an exception escaping the callback would end the process - and said
+  nothing, so every paint, click and keystroke that failed left no line in the log.
+  Both log at error with the message concerned (`LogCategory.Ui`). `BeginPaint` is
+  now paired with `EndPaint` whatever painting does: a throw between the two left
+  the update region unvalidated and Windows posted the paint again at once, for
+  ever. The composited renderer takes the window's DC after the call that can fail
+  rather than before it, so a failed frame no longer leaks a DC, and creates both of
+  its surfaces or neither - a glyph surface that failed after the frame succeeded
+  was never tried again and drew a bar with backgrounds and no words.
+- **The "this window is not being managed" row was appended to every frame.** Inside
+  an action list, a confirmation or a report the palette's mode is whatever the list
+  underneath was in and the filter is empty, which is exactly the state the row is
+  derived from - so a palette opened from an unmanaged window offered it under every
+  Yes/No, and Down-Down-Enter in "Close it?" opened an inspect report. It was also
+  placed last, with the diagnostics, while its own remarks promised the top.
+  Derived rows are not added inside a frame (`PaletteModel.Overlaid`), and a derived
+  row that leads somewhere goes above the matches like one that runs something.
+- **A workspace with a space in its name did nothing from the palette or the bar.**
+  Names were written bare into the commands a row runs - `focus --workspace Second
+  Monitor` - and the window manager's tokeniser split them; a workspace called `'`
+  opened a quotation that never closed. Macros were validated as tokens and stored as
+  tokens joined with spaces, so `focus --workspace "Second Monitor"` in an `action`
+  passed the check and failed at the keystroke; the bar quoted with double quotes
+  only, so a workspace called `"` became an empty name. Everything that builds a
+  command from a name it did not choose now spells it through
+  `CommandParser.Quote`, which is the tokeniser's inverse: the palette's rows, its
+  completions, its macros (placeholders included, and not doubled when the file
+  already quoted around one), the bar's click commands, and `shubbak` itself, whose
+  arguments had already been unquoted by the shell. A name holding both kinds of
+  quote has no spelling in this command language and the loader now says so
+  (`SHB0454`).
+- **Escape out of a frame put the selection back at the top.** Ctrl+Enter on the
+  twelfth window, Escape, and the first window was selected. The frame remembers the
+  row it was opened from and the selection goes back to it, or to the row that
+  stands for the same window in a list rebuilt meanwhile.
+- **Two rows that differed only by window could swap places between keystrokes.** The
+  order ended at the title, and the sort is unstable; two untitled Notepads never
+  focused traded places. The command, which names the handle, is the final tie-break.
+- **The bar took its snapshot before subscribing, and lost what happened between.** A
+  focus change or a workspace switch in that gap was in neither the snapshot nor
+  the stream, and the bar showed the wrong workspace until something unrelated
+  happened. It subscribes first (`IpcClient.BeginSubscriptionAsync`, the handshake
+  half of `SubscribeAsync`) and reads the snapshot second; the events queued between
+  the two are applied on top and are idempotent.
+- **A reload could leave a bar on a profile from the configuration it replaced.** The
+  connection's pump thread picked the profile the moment a workspace or context
+  report arrived, and the loop swapped the selector on a reload; the pump could
+  finish choosing from the old selector after the loop had installed the new profile.
+  A report is now recorded on the bar as one value and the loop picks the profile,
+  after any reload, on its next pass.
+- **A pipe request whose handler threw closed the connection with no reply and no log
+  line.** The client waited out its ten-second timeout and the daemon's log said
+  nothing, because the failure never reached anything that logs. The request is
+  answered with the failure, the connection stays, and the daemon logs it
+  (`IpcServer.HandlerFaulted`). A message that deserialises to `null` is answered as
+  malformed rather than ignored.
+- **A megabyte of `{` over the pipe could end the process.** The KDL parser is
+  recursive and `add-rule` parses client text; under NativeAOT a stack overflow is
+  the process ending with every managed window stranded. Blocks nested deeper than
+  64 are refused with a diagnostic (`SHB0014`) and skipped whole, braces counted, so
+  what follows still parses.
+- **The watcher read a refused subscription as a lost connection.** A window manager
+  that did not publish a topic this build asks for made Ayn drop and re-hold every
+  lease once a second, for ever, with one debug line per second. It is said once at
+  warning and asked again every thirty seconds, as the palette already did; a pipe
+  that closed under the subscription is logged rather than reconnected in silence.
+- **Turning `microphone { muted #false }` off also disabled the mute button.** Core
+  Audio was opened only if the mute *fact* was wanted, so a file that said not to
+  report the mute lost the mute *signal* as well - `signal ayn microphone mute` said
+  there was no microphone. The two are separate: the signal opens Core Audio when it
+  needs it, and a reload that starts wanting the fact opens it too, where before the
+  endpoint was opened once at startup and never again.
+- **`ayn --report` shows when each program opened and closed the device**, which is
+  the one question a report is asked: why the watcher thinks a program that crashed
+  a fortnight ago still has the camera. A start after the last stop is read as open,
+  in case a build of Windows leaves the old stop in place; and a missing user hive is
+  a warning, since programs running as the user write nowhere else. A file that does
+  not parse at startup is named in the watcher's log as the file it is running its
+  defaults against.
 
 - **An application launched from an empty workspace opens on that workspace, not on
   the other monitor.** Switch to an empty workspace on one display, open a launcher -

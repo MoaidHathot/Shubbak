@@ -109,8 +109,6 @@ internal static class Program
         // machine's rather than the stock blue.
         SystemColours.Adopt();
 
-        ConfigureLogging(args);
-
         // One palette per account, for the same reason there is one window manager.
         //
         // Dalil is opened by a signal rather than by being started, so two of them are
@@ -121,6 +119,11 @@ internal static class Program
         // Nothing strange has to happen to end up with two. The palette survives the
         // window manager restarting - deliberately, it reconnects - and the restarted
         // window manager then runs its startup commands, one of which starts a palette.
+        //
+        // Claimed before the log file is opened. Opening the file truncates it, and the
+        // palette that is already running is writing to it: a second copy that said
+        // "already running" and left used to take the first copy's log with it, on
+        // every restart of the window manager.
         using SingleInstanceLock instance = SingleInstanceLock.Claim(
             IpcProtocol.InstanceMutexNameFor("dalil"));
 
@@ -129,13 +132,19 @@ internal static class Program
         // into half of what Shubbak can do.
         if (!instance.Held && instance.Certain)
         {
-            ConsoleHost.Ensure();
-            Console.Error.WriteLine("dalil: a palette is already running.");
-            Console.Error.WriteLine("hint: `shubbak dalil-exit` stops it.");
+            // Said to the terminal this was typed into, if it was typed. The usual
+            // second copy is started by the window manager, which has no console, and
+            // allocating one to print a line nobody will read flashes a window.
+            if (ConsoleHost.TryAttach())
+            {
+                Console.Error.WriteLine("dalil: a palette is already running.");
+                Console.Error.WriteLine("hint: `shubbak dalil-exit` stops it.");
+            }
 
-            Log.Info(LogCategory.Wm, "another palette is already running; leaving it to it");
             return 1;
         }
+
+        ConfigureLogging(args);
 
         s_config = LoadConfig().Config;
 

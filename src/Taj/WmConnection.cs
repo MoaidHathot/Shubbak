@@ -325,15 +325,24 @@ public sealed class WmConnection : IAsyncDisposable
 
                 Log.Info(LogCategory.Ipc, "connected to the window manager");
 
-                await RefreshAsync(client).ConfigureAwait(false);
-
                 // A separate client for the subscription, because the command
                 // channel must stay free to respond while events are streaming.
+                //
+                // Subscribed before the snapshot is read, not after. In the other order
+                // there was a gap between the two in which a focus change or a
+                // workspace switch was in neither, and the bar showed the wrong
+                // workspace until something unrelated happened. Every event that lands
+                // between the handshake and the snapshot is queued for this connection
+                // and applied on top of the snapshot, which is idempotent for all of
+                // them.
                 await using var events = new IpcClient();
                 await events.ConnectAsync(TimeSpan.FromSeconds(2), _shutdown.Token).ConfigureAwait(false);
+                await events.BeginSubscriptionAsync(Subscribed, _shutdown.Token).ConfigureAwait(false);
+
+                await RefreshAsync(client).ConfigureAwait(false);
 
                 await foreach (IpcEvent notification in
-                    events.SubscribeAsync(Subscribed, _shutdown.Token).ConfigureAwait(false))
+                    events.ReadEventsAsync(_shutdown.Token).ConfigureAwait(false))
                 {
                     await HandleEventAsync(client, notification).ConfigureAwait(false);
                 }

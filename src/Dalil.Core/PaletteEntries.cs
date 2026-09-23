@@ -515,21 +515,11 @@ public static class PaletteEntries
 
     /// <summary>What the last row of a picker promises, with every answer filled in.</summary>
     private static string Describe(PaletteMacro macro, IReadOnlyDictionary<string, string> answers) =>
-        string.Join("  \u00B7  ", macro.Commands.Select(c => Fill(c, answers)));
+        string.Join("  \u00B7  ", macro.Commands.Select(c => MacroText.Fill(c, answers, quoted: false)));
 
     private static string Substitute(
         IReadOnlyList<string> commands, IReadOnlyDictionary<string, string> answers) =>
-        string.Join('\n', commands.Select(c => Fill(c, answers)));
-
-    private static string Fill(string command, IReadOnlyDictionary<string, string> answers)
-    {
-        string filled = command;
-
-        foreach ((string name, string value) in answers)
-            filled = filled.Replace($"{{{name}}}", value, StringComparison.Ordinal);
-
-        return filled;
-    }
+        string.Join('\n', commands.Select(c => MacroText.Fill(c, answers, quoted: true)));
 
     /// <summary>The choices a prompt offers, from whichever list it named.</summary>
     private static IReadOnlyList<string> ValuesFor(MacroParam prompt, CompletionSources sources) =>
@@ -770,7 +760,7 @@ public static class PaletteEntries
                 string.IsNullOrEmpty(w.DisplayName) ? w.Name : w.DisplayName,
                 DescribeWorkspace(w, severalMonitors),
                 w.Focused ? ["focused"] : w.Active ? ["displayed"] : [],
-                $"focus --workspace {w.Name}",
+                $"focus --workspace {CommandParser.Quote(w.Name)}",
 
                 // Occupied workspaces first: an empty one is somewhere to go, not
                 // something to find.
@@ -851,7 +841,7 @@ public static class PaletteEntries
                     ? $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  showing {monitor.ActiveWorkspace}"
                     : $"{monitor.Width}\u00D7{monitor.Height}  \u00B7  nothing on it",
                 badges,
-                showing ? $"focus --workspace {monitor.ActiveWorkspace}" : string.Empty,
+                monitor.ActiveWorkspace is { Length: > 0 } active ? $"focus --workspace {CommandParser.Quote(active)}" : string.Empty,
                 monitor.Primary ? 1 : 0,
 
                 // A display showing nothing cannot be gone to. Saying so is better
@@ -1329,7 +1319,7 @@ public static class PaletteEntries
                 l,
                 DescribeLayout(l),
                 string.Equals(l, current, StringComparison.OrdinalIgnoreCase) ? ["in use"] : [],
-                $"layout --set {l}",
+                $"layout --set {CommandParser.Quote(l)}",
                 string.Equals(l, current, StringComparison.OrdinalIgnoreCase) ? 1 : 0)),
         ];
     }
@@ -1397,7 +1387,7 @@ public static class PaletteEntries
                 slot,
                 Title(window),
                 [.. Badges(window), "stashed"],
-                $"scratchpad {slot}",
+                $"scratchpad {CommandParser.Quote(slot)}",
                 window.FocusSequence,
                 SwitchesTo: null,
                 Actions: null,

@@ -38,6 +38,13 @@ public readonly record struct KdlParseResult(KdlDocument Document, IReadOnlyList
 /// </remarks>
 public sealed class KdlParser
 {
+    /// <summary>
+    /// How deep blocks may nest before the parser stops descending. Far beyond any
+    /// real configuration - the example file reaches four - and far short of the
+    /// stack; see the check in <see cref="ParseNode"/>.
+    /// </summary>
+    public const int MaxDepth = 64;
+
     private readonly string _source;
     private readonly List<Diagnostic> _diagnostics = [];
 
@@ -84,6 +91,45 @@ public sealed class KdlParser
         }
 
         _offset++;
+    }
+
+    /// <summary>
+    /// Skips to the '}' that closes the block whose '{' was just consumed, counting
+    /// nested braces without recursing, and consumes it.
+    /// </summary>
+    /// <remarks>
+    /// Iterative on purpose: this is the way out of a block the recursive parser has
+    /// refused to enter. Quoted strings are stepped over so a brace inside one does
+    /// not count.
+    /// </remarks>
+    private void SkipBlock()
+    {
+        int open = 1;
+
+        while (!AtEnd && open > 0)
+        {
+            char c = Current;
+
+            if (c == '"')
+            {
+                Advance();
+                while (!AtEnd && Current != '"')
+                {
+                    if (Current == '\\') Advance();
+                    Advance();
+                }
+            }
+            else if (c == '{')
+            {
+                open++;
+            }
+            else if (c == '}')
+            {
+                open--;
+            }
+
+            Advance();
+        }
     }
 
     private TextSpan SpanFrom(TextPosition start) => new(start, _offset - start.Offset);
@@ -259,6 +305,24 @@ public sealed class KdlParser
             if (Current == '{')
             {
                 Advance();
+
+                // The parser is recursive, and the stack is finite. Nothing a person
+                // writes nests more than a handful deep; a megabyte of '{' does, and one
+                // can arrive over the pipe through add-rule. Under NativeAOT a stack
+                // overflow is the process ending, with no diagnostic and every managed
+                // window stranded. The block is skipped whole and named once.
+                if (depth >= MaxDepth)
+                {
+                    Report(Diagnostic.Error(
+                        "SHB0014",
+                        $"Blocks are nested more than {MaxDepth} deep; the inner block is ignored.",
+                        new TextSpan(start, 1),
+                        "Nothing in a Shubbak configuration nests this far. Check for a '{' that was meant to be a '}'."));
+
+                    SkipBlock();
+                    break;
+                }
+
                 children = ParseNodes(depth + 1);
 
                 SkipTrivia(includeNewlines: true);

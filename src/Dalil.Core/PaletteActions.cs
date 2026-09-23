@@ -1,4 +1,5 @@
 using System.Globalization;
+using Shubbak.Config;
 using Shubbak.Ipc;
 
 namespace Dalil.Core;
@@ -123,7 +124,7 @@ public static class PaletteActions
         ArgumentNullException.ThrowIfNull(window);
 
         return window.Scratchpad is { Length: > 0 } slot
-            ? $"scratchpad {slot}"
+            ? $"scratchpad {CommandParser.Quote(slot)}"
             : $"focus-window {window.Handle.ToString(CultureInfo.InvariantCulture)}";
     }
 
@@ -178,7 +179,7 @@ public static class PaletteActions
             actions.Add(new PaletteAction(
                 "Bring it here",
                 $"Move it to workspace {here}",
-                $"{focus}\nmove --workspace {here}",
+                $"{focus}\nmove --workspace {CommandParser.Quote(here)}",
                 Chord: "Alt+Enter"));
         }
 
@@ -366,7 +367,7 @@ public static class PaletteActions
             actions.Add(new PaletteAction(
                 "Bring them here",
                 $"Move {many} to workspace {here}",
-                Sequence(targets, $"move --workspace {here}")));
+                Sequence(targets, $"move --workspace {CommandParser.Quote(here)}")));
         }
 
         if (workspaces is { Count: > 0 })
@@ -378,7 +379,7 @@ public static class PaletteActions
                     .Select(w => new PaletteAction(
                         w,
                         $"Send {many} to {w}",
-                        Sequence(targets, $"move --workspace {w}"))),
+                        Sequence(targets, $"move --workspace {CommandParser.Quote(w)}"))),
             ];
 
             if (destinations.Count > 0)
@@ -703,7 +704,7 @@ public static class PaletteActions
             choices.Add(new PaletteAction(
                 workspace,
                 $"Send it to {workspace} and leave it there",
-                $"{focus}\nmove --workspace {workspace}"));
+                $"{focus}\nmove --workspace {CommandParser.Quote(workspace)}"));
         }
 
         return choices;
@@ -754,7 +755,7 @@ public static class PaletteActions
                 tagged
                     ? "tagged - Enter removes it"
                     : "not tagged - Enter adds it",
-                $"{focus}\ntag --toggle {workspace}"));
+                $"{focus}\ntag --toggle {CommandParser.Quote(workspace)}"));
         }
 
         return choices;

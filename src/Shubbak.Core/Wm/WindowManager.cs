@@ -1857,6 +1857,13 @@ public sealed class WindowManager
         if (previous == WindowState.Tiling && state != WindowState.Tiling)
             window.FloatingRect ??= window.Rect;
 
+        // Going away from a state the window lives in: that is the state it comes back
+        // to. Going from one away state to another - minimised while fullscreen,
+        // fullscreen in both sizes - keeps the earlier memory, since neither of those
+        // is somewhere to come back to.
+        if (!WindowNode.IsAway(previous) && WindowNode.IsAway(state))
+            window.StateBeforeAway = previous;
+
         // Any deliberate state change ends the observation. It was only ever an
         // observation about a tiled or floating window, and once the user has said
         // what this window should be, the layout follows that instead. Leaving it set
@@ -1870,6 +1877,25 @@ public sealed class WindowManager
         Emit(new WindowStateChanged(window, previous, state));
 
         if (successor is not null) SetFocus(successor);
+    }
+
+    /// <summary>
+    /// Brings a window back from an away state to the one it was in before: tiling, or
+    /// floating. A window that is not away is left as it is.
+    /// </summary>
+    /// <remarks>
+    /// The one way back from minimised and from fullscreen. Every caller used to write
+    /// <see cref="WindowState.Tiling"/> here, which tiled a floating dialog for having
+    /// been minimised; see <see cref="WindowNode.StateBeforeAway"/>.
+    /// </remarks>
+    public WmResult RestoreFromAway(WindowNode window)
+    {
+        ArgumentNullException.ThrowIfNull(window);
+
+        if (WindowNode.IsAway(window.State))
+            SetWindowStateCore(window, window.StateBeforeAway);
+
+        return Complete();
     }
 
     /// <summary>Toggles the focused window between tiling and floating.</summary>
@@ -1917,9 +1943,9 @@ public sealed class WindowManager
             ? WindowState.MonitorFullscreen
             : WindowState.Fullscreen;
 
-        return SetWindowState(
-            window,
-            window.State == target ? WindowState.Tiling : target);
+        return window.State == target
+            ? RestoreFromAway(window)
+            : SetWindowState(window, target);
     }
 
     /// <summary>
@@ -1958,7 +1984,7 @@ public sealed class WindowManager
         {
             _lastMinimised = null;
 
-            WmResult restored = SetWindowState(remembered, WindowState.Tiling);
+            WmResult restored = RestoreFromAway(remembered);
 
             // Focused as well as restored: it was brought back to be used, and
             // leaving focus on whatever inherited it when the window went away makes
@@ -1974,7 +2000,7 @@ public sealed class WindowManager
         if (window.State == WindowState.Minimised)
         {
             _lastMinimised = null;
-            return SetWindowState(window, WindowState.Tiling);
+            return RestoreFromAway(window);
         }
 
         _lastMinimised = window;

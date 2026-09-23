@@ -155,4 +155,111 @@ public sealed class ToggleMinimisedTests
         Assert.False(result.Succeeded);
         Assert.NotNull(result.RejectionReason);
     }
+
+    // ---- coming back to what it was -------------------------------------------
+
+    [Fact]
+    public void AFloatingWindowMinimisedAndBroughtBackIsStillFloating()
+    {
+        // A floating dialog put away and restored used to come back tiled: every
+        // route back wrote Tiling. The window remembers what it was.
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        WindowNode dialog = wm.Open("dialog");
+        wm.FocusWindow(dialog);
+        wm.SetWindowState(dialog, WindowState.Floating);
+
+        wm.ToggleMinimised();
+        Assert.Equal(WindowState.Minimised, dialog.State);
+
+        wm.ToggleMinimised();
+
+        Assert.Equal(WindowState.Floating, dialog.State);
+        Assert.Equal(WindowState.Tiling, a.State);
+    }
+
+    [Fact]
+    public void AFloatingWindowRestoredFromTheTaskbarIsStillFloating()
+    {
+        // The daemon's MinimiseEnd path: the window was brought back by the shell, not
+        // by the key, and RestoreFromAway is what it calls.
+        WindowManager wm = WmFixture.Create();
+        WindowNode dialog = wm.Open("dialog");
+        wm.SetWindowState(dialog, WindowState.Floating);
+        wm.SetWindowState(dialog, WindowState.Minimised);
+
+        wm.RestoreFromAway(dialog);
+
+        Assert.Equal(WindowState.Floating, dialog.State);
+    }
+
+    [Fact]
+    public void AFloatingWindowMadeFullscreenAndBackIsStillFloating()
+    {
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.FocusWindow(a);
+        wm.SetWindowState(a, WindowState.Floating);
+
+        wm.ToggleFullscreen();
+        Assert.Equal(WindowState.Fullscreen, a.State);
+
+        wm.ToggleFullscreen();
+        Assert.Equal(WindowState.Floating, a.State);
+
+        wm.ToggleFullscreen(wholeMonitor: true);
+        Assert.Equal(WindowState.MonitorFullscreen, a.State);
+
+        wm.ToggleFullscreen(wholeMonitor: true);
+        Assert.Equal(WindowState.Floating, a.State);
+    }
+
+    [Fact]
+    public void ATiledWindowStillComesBackTiled()
+    {
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.FocusWindow(a);
+
+        wm.ToggleFullscreen();
+        wm.ToggleFullscreen();
+        Assert.Equal(WindowState.Tiling, a.State);
+
+        wm.ToggleMinimised();
+        wm.ToggleMinimised();
+        Assert.Equal(WindowState.Tiling, a.State);
+    }
+
+    [Fact]
+    public void GoingFromOneAwayStateToAnotherKeepsTheEarlierMemory()
+    {
+        // Fullscreen, then minimised from the taskbar while fullscreen, then restored:
+        // neither away state is somewhere to come back to, so the window returns to
+        // what it was before either.
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.FocusWindow(a);
+        wm.SetWindowState(a, WindowState.Floating);
+
+        wm.ToggleFullscreen();
+        wm.SetWindowState(a, WindowState.Minimised);
+
+        wm.RestoreFromAway(a);
+
+        Assert.Equal(WindowState.Floating, a.State);
+    }
+
+    [Fact]
+    public void RestoringAWindowThatIsNotAwayChangesNothing()
+    {
+        WindowManager wm = WmFixture.Create();
+        WindowNode a = wm.Open("a");
+        wm.SetWindowState(a, WindowState.Floating);
+
+        WmResult result = wm.RestoreFromAway(a);
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(result.Events);
+        Assert.Equal(WindowState.Floating, a.State);
+    }
 }

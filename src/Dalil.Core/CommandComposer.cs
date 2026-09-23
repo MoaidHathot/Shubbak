@@ -190,7 +190,9 @@ public static class CommandComposer
                 continue;
             }
 
-            string composed = (head + value).Trim();
+            // Spelled for the tokeniser, so a workspace called "Second Monitor" is
+            // completed as one argument and the row that offers it runs as written.
+            string composed = (head + (CommandParser.CanQuote(value) ? CommandParser.Quote(value) : value)).Trim();
 
             // A completion that spells exactly what is already typed is a duplicate of
             // the run row directly above it.

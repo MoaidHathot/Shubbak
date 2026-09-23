@@ -42,7 +42,7 @@ public sealed class ConfigWatcherTests : IDisposable
         using var gate = new SemaphoreSlim(0);
         using var watcher = new ConfigWatcher(_path, Settle, () => { Interlocked.Increment(ref saves); gate.Release(); });
 
-        await File.WriteAllTextAsync(_path, "general { focus-follows-cursor #true }\n");
+        await File.WriteAllTextAsync(_path, "general { follow-window-on-move #true }\n");
 
         Assert.True(await gate.WaitAsync(Patience), "the save was never announced");
         Assert.Equal(1, saves);
@@ -114,7 +114,7 @@ public sealed class ConfigWatcherTests : IDisposable
 
         watcher.Dispose();
 
-        await File.WriteAllTextAsync(_path, "general { focus-follows-cursor #true }\n");
+        await File.WriteAllTextAsync(_path, "general { follow-window-on-move #true }\n");
 
         Assert.False(await gate.WaitAsync(Settle * 3));
         Assert.Equal(0, saves);

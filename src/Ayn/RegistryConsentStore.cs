@@ -47,7 +47,15 @@ internal sealed class RegistryConsentStore : IConsentStore, IDisposable
 
                 if (key is null)
                 {
-                    Log.Debug(LogCategory.Wm, $"{hiveName}\\...\\{leaf} is not there or cannot be watched; skipping it");
+                    // The user's hive is where every program that runs as the user
+                    // writes, so its absence means the watcher will see none of them and
+                    // deserves a warning; the machine's hive carries a few services and
+                    // is often not there at all.
+                    if (ReferenceEquals(hive, Registry.CurrentUser))
+                        Log.Warn(LogCategory.Wm, $"{hiveName}\\...\\{leaf} is not there or cannot be watched; programs running as this user will not be noticed using the {device.ToString().ToLowerInvariant()}");
+                    else
+                        Log.Debug(LogCategory.Wm, $"{hiveName}\\...\\{leaf} is not there or cannot be watched; skipping it");
+
                     continue;
                 }
 

@@ -432,9 +432,17 @@ internal static class Program
     }
 
     /// <summary>Sends the remaining arguments as a command string.</summary>
+    /// <remarks>
+    /// Each argument is spelled the way the daemon's tokeniser reads it back, because
+    /// the shell has already done its quoting and thrown the quotes away:
+    /// <c>shubbak focus --workspace "my ws"</c> arrives here as the one argument
+    /// <c>my ws</c>, and joined with spaces it went over the pipe as two. An argument
+    /// the command language cannot spell at all - both kinds of quote in it - is sent
+    /// as it is and refused at the far end, which is the honest outcome.
+    /// </remarks>
     private static async Task<int> CommandAsync(string[] args)
     {
-        string command = string.Join(' ', args);
+        string command = string.Join(' ', args.Select(a => CommandParser.CanQuote(a) ? CommandParser.Quote(a) : a));
 
         // A lease dies with the connection that made it, and this connection closes the
         // moment the reply arrives - so the pin would be gone before the prompt came

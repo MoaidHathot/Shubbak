@@ -84,6 +84,17 @@ public sealed class IpcServer : IAsyncDisposable
     /// </remarks>
     public Action<long>? ClientDisconnected { get; set; }
 
+    /// <summary>
+    /// Raised when the handler threw for a request, with the method it was handling.
+    /// </summary>
+    /// <remarks>
+    /// The request is still answered - with the failure, so the client is not left to
+    /// time out - and the connection stays. This is for the host to log it: the server
+    /// has no logger of its own, on purpose, and a failure that reached neither the
+    /// client nor the log was how a handler bug went undiagnosed.
+    /// </remarks>
+    public Action<string, Exception>? HandlerFaulted { get; set; }
+
     /// <summary>Starts listening.</summary>
     public void Start(RequestHandler handler)
     {
@@ -622,7 +633,15 @@ public sealed class IpcServer : IAsyncDisposable
                 return;
             }
 
-            if (request is null) return;
+            // The literal `null` deserialises to no request. Answered rather than
+            // ignored: a client that gets nothing back waits out its whole response
+            // timeout for a message it could have been told about at once.
+            if (request is null)
+            {
+                await WriteAsync(writer, new IpcResponse(0, false, null, "malformed request: the message is null"))
+                    .ConfigureAwait(false);
+                return;
+            }
 
             if (string.Equals(request.Method, "subscribe", StringComparison.Ordinal))
             {
@@ -635,9 +654,29 @@ public sealed class IpcServer : IAsyncDisposable
                 return;
             }
 
-            IpcResponse response = _server._handler is { } handler
-                ? await handler(request, Info).ConfigureAwait(false)
-                : new IpcResponse(request.Id, false, null, "server is not ready");
+            IpcResponse response;
+
+            try
+            {
+                response = _server._handler is { } handler
+                    ? await handler(request, Info).ConfigureAwait(false)
+                    : new IpcResponse(request.Id, false, null, "server is not ready");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // A handler that throws used to take the connection down with it: the
+                // exception left this method, the connection's loop read it as the
+                // client having gone, and the client saw its pipe close with no reply
+                // and no reason - and the daemon's log said nothing either, because the
+                // failure never reached anything that logs. The request is answered
+                // with the failure and the connection stays; the exception is the
+                // daemon's to fix, not the client's to time out on.
+                _server.HandlerFaulted?.Invoke(request.Method, ex);
+
+                response = new IpcResponse(
+                    request.Id, false, null,
+                    $"the window manager failed handling '{request.Method}': {ex.GetType().Name}: {ex.Message}");
+            }
 
             await WriteAsync(writer, response).ConfigureAwait(false);
         }

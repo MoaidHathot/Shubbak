@@ -23,16 +23,43 @@ public sealed class ConfigLoaderTests
         ShubbakConfig config = LoadOk("""
             general {
                 toggle-workspace-on-refocus #true
-                focus-follows-cursor #false
+                follow-window-on-move #true
                 initial-window-state "floating"
                 startup-command "shell-exec pwsh -Command Restart-Taj"
             }
             """);
 
         Assert.True(config.ToggleWorkspaceOnRefocus);
-        Assert.False(config.FocusFollowsCursor);
+        Assert.True(config.FollowWindowOnMove);
         Assert.Equal(Core.Tree.WindowState.Floating, config.InitialWindowState);
         Assert.Single(config.StartupCommands);
+    }
+
+    [Fact]
+    public void ASettingThatWasRemovedIsNamedAsSuchRatherThanGuessedAt()
+    {
+        // focus-follows-cursor and cursor-jump parsed and did nothing for their whole
+        // existence, and the example file shipped both. A file that still has them is
+        // told they are gone and why - not offered "did you mean focus-follows-cursor".
+        ConfigLoadResult result = ConfigLoader.Load("""
+            general {
+                focus-follows-cursor #true
+                cursor-jump { enabled #true; trigger "monitor" }
+            }
+            logging {
+                console #true
+            }
+            """);
+
+        Diagnostic[] removed = [.. result.Diagnostics.Where(d => d.Code == "SHB0455")];
+
+        Assert.Equal(3, removed.Length);
+        Assert.All(removed, d => Assert.Equal(DiagnosticSeverity.Warning, d.Severity));
+        Assert.Contains(removed, d => d.Message.Contains("focus-follows-cursor", StringComparison.Ordinal));
+        Assert.Contains(removed, d => d.Message.Contains("cursor-jump", StringComparison.Ordinal));
+        Assert.Contains(removed, d => d.Message.Contains("console", StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Code == "SHB0428");
+        Assert.False(result.HasErrors);
     }
 
     [Fact]

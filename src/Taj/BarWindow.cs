@@ -871,9 +871,21 @@ public sealed class BarWindow : IDisposable
                 {
                     case PInvoke.WM_PAINT:
                     {
+                        // EndPaint whatever Paint does. Without it a throw skipped the
+                        // call that validates the update region, so Windows posted the
+                        // WM_PAINT again at once, for ever: a core spent on a bar that
+                        // never painted, with nothing in the log to say so.
                         PInvoke.BeginPaint(hwnd, out PAINTSTRUCT ps);
-                        window.Paint();
-                        PInvoke.EndPaint(hwnd, in ps);
+
+                        try
+                        {
+                            window.Paint();
+                        }
+                        finally
+                        {
+                            PInvoke.EndPaint(hwnd, in ps);
+                        }
+
                         return new LRESULT(0);
                     }
 
@@ -980,10 +992,13 @@ public sealed class BarWindow : IDisposable
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
             // An exception escaping an UnmanagedCallersOnly callback tears down the
-            // process, and a crashed bar is worse than a missed repaint.
+            // process, and a crashed bar is worse than a missed repaint. Said out loud,
+            // though: a bar whose every click and paint failed silently was a bar that
+            // looked broken for no reason anyone could find in the log.
+            Log.Error(LogCategory.Ui, $"the bar's window procedure failed handling message 0x{message:X4}", ex);
         }
 
         return PInvoke.DefWindowProc(hwnd, message, wParam, lParam);

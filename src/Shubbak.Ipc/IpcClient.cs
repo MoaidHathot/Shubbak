@@ -264,11 +264,36 @@ public sealed class IpcClient : IAsyncDisposable
     /// <remarks>
     /// Takes the connection over. Once subscribed it owns the reader for good, so
     /// <see cref="SendAsync(string, string?, CancellationToken)"/> on the same client is
-    /// refused rather than allowed to race the event loop for lines.
+    /// refused rather than allowed to race the event loop for lines. The handshake runs
+    /// inside the first <c>MoveNextAsync</c>; a caller that needs to know the
+    /// subscription is in place before doing something else - taking a snapshot that
+    /// the events then keep current - uses <see cref="BeginSubscriptionAsync"/> and
+    /// <see cref="ReadEventsAsync"/> separately.
     /// </remarks>
     public async IAsyncEnumerable<IpcEvent> SubscribeAsync(
         string? topics,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
+    {
+        await BeginSubscriptionAsync(topics, token).ConfigureAwait(false);
+
+        await foreach (IpcEvent notification in ReadEventsAsync(token).ConfigureAwait(false))
+            yield return notification;
+    }
+
+    /// <summary>
+    /// Asks for a subscription and returns once the window manager has accepted it,
+    /// from which moment every event on the topics is queued for this connection.
+    /// </summary>
+    /// <remarks>
+    /// The half of <see cref="SubscribeAsync"/> that decides whether events will
+    /// arrive, separated so a client can subscribe first and read its snapshot second.
+    /// The other order - snapshot, then subscribe - has a gap between the two in which
+    /// a focus change or a workspace switch is neither in the snapshot nor in the
+    /// stream, and the bar showed the wrong workspace until something unrelated
+    /// happened.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The window manager refused the subscription.</exception>
+    public async Task BeginSubscriptionAsync(string? topics, CancellationToken token = default)
     {
         if (_reader is null) throw new InvalidOperationException("Not connected.");
 
@@ -280,6 +305,14 @@ public sealed class IpcClient : IAsyncDisposable
 
         if (!response.Ok)
             throw new InvalidOperationException(response.Error ?? "the subscription was refused.");
+    }
+
+    /// <summary>Yields the events of a subscription begun with <see cref="BeginSubscriptionAsync"/>.</summary>
+    public async IAsyncEnumerable<IpcEvent> ReadEventsAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token = default)
+    {
+        if (_reader is null) throw new InvalidOperationException("Not connected.");
+        if (!_streaming) throw new InvalidOperationException("Not subscribed; call BeginSubscriptionAsync first.");
 
         while (!token.IsCancellationRequested)
         {

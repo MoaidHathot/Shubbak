@@ -304,3 +304,13 @@ These are design constraints, not bugs:
 - **A window cannot be on two workspaces at once.** Tags relocate a window to
   whichever tagged workspace you last activated. A Windows window has one position on
   one monitor; anything else would be a promise the platform cannot keep.
+- **Windows' own virtual desktops (Win+Ctrl+Left/Right) do not mix with Shubbak's
+  workspaces.** Switching desktop makes Windows cloak every window on the one you
+  left, which Shubbak reads as those windows going away, and uncloak them when you
+  return, which it reads as new windows arriving on the focused workspace. Use
+  Shubbak's workspaces for what virtual desktops did; they are the same idea with
+  the keyboard, the bar and the rules attached.
+- **`resize` needs a split to resize within.** In `splith`, `splitv` and the
+  master-stack layouts a window's edges are ratios, and that is what `resize` moves.
+  `fibonacci`, `grid` and `monocle` decide the geometry from the order of the windows
+  alone, so there is no ratio for the key to act on and it says so.

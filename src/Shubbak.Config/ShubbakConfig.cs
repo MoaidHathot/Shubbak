@@ -153,14 +153,6 @@ public sealed record ShubbakConfig
     /// </remarks>
     public bool FollowWindowOnMove { get; init; }
 
-    public bool FocusFollowsCursor { get; init; }
-
-    /// <summary>Move the cursor when focus crosses monitors.</summary>
-    public bool CursorJumpOnMonitorFocus { get; init; }
-
-    /// <summary>Move the cursor on every focus change.</summary>
-    public bool CursorJumpOnWindowFocus { get; init; }
-
     public WindowEffects Effects { get; init; } = new();
 
     /// <summary>

@@ -32,8 +32,6 @@ general {
     // leave it there" then does not leave it there.
     follow-window-on-move #false
 
-    focus-follows-cursor #false
-
     // New windows start tiled.
     initial-window-state "tiling"
 
@@ -128,13 +126,6 @@ general {
     // so they stay stranded with their process still running. Only fall back to it
     // if the compositor is unavailable, which mainly means remote sessions.
     hide-method "cloak"
-
-    cursor-jump {
-        enabled #true
-        // "monitor" jumps only when focus crosses displays; "window" jumps on
-        // every focus change.
-        trigger "monitor"
-    }
 
     // The bar, the palette and the watcher are separate programs, started here when
     // the window manager starts. Each reads its own section of this file. A bare

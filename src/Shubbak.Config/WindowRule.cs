@@ -1,3 +1,4 @@
+using Shubbak.Core.Diagnostics;
 using System.Text.RegularExpressions;
 
 namespace Shubbak.Config;
@@ -61,13 +62,52 @@ public static class PatternMatch
             MatchOperator.StartsWith => value.StartsWith(pattern, StringComparison.OrdinalIgnoreCase),
             MatchOperator.EndsWith => value.EndsWith(pattern, StringComparison.OrdinalIgnoreCase),
             MatchOperator.Contains => value.Contains(pattern, StringComparison.OrdinalIgnoreCase),
-            MatchOperator.Regex => (compiled ??= new Regex(
-                pattern,
-                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
-                TimeSpan.FromMilliseconds(100))).IsMatch(value),
+            MatchOperator.Regex => MatchesRegex(pattern, value, ref compiled),
             _ => false,
         };
     }
+
+    /// <summary>How long a regex may take on one window before it is read as not matching.</summary>
+    public static TimeSpan RegexTimeout { get; } = TimeSpan.FromMilliseconds(100);
+
+    /// <summary>
+    /// A regex that runs out of time does not match.
+    /// </summary>
+    /// <remarks>
+    /// The timeout exists so a pattern with catastrophic backtracking cannot hold the
+    /// window manager's loop while a long title is examined. Throwing when it fires
+    /// defeated that purpose from the other side: the exception left the rule engine,
+    /// the event that had prompted the match was lost with every event queued behind
+    /// it, and the window was never managed at all - and the loop had already paid the
+    /// hundred milliseconds. Not matching is the answer a rule that cannot be evaluated
+    /// deserves; the pattern is named once so it can be fixed.
+    /// </remarks>
+    private static bool MatchesRegex(string pattern, string value, ref Regex? compiled)
+    {
+        compiled ??= new Regex(pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, RegexTimeout);
+
+        try
+        {
+            return compiled.IsMatch(value);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            bool first;
+            lock (s_timedOut) first = s_timedOut.Add(pattern);
+
+            if (first)
+            {
+                Log.Warn(
+                    LogCategory.Rule,
+                    $"the pattern /{pattern}/ took more than {RegexTimeout.TotalMilliseconds:F0} ms against a {value.Length}-character value and is read as not matching; it probably backtracks badly");
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>The patterns that have timed out, so each is remarked on once.</summary>
+    private static readonly HashSet<string> s_timedOut = new(StringComparer.Ordinal);
 
     /// <summary>The operator as the config writes it.</summary>
     public static string Symbol(MatchOperator op) => op switch

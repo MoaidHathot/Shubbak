@@ -50,12 +50,11 @@ internal static class Program
         // and opening it again rotates the live log out from under that watcher.
         bool report = args.Contains("--report", StringComparer.Ordinal);
 
-        ConfigureLogging(args, toFile: !report);
-
         // What Windows says right now, and nothing else. For a person wondering why a
         // meeting was or was not noticed: this is the same reading the watcher acts on.
         if (report)
         {
+            ConfigureLogging(args, toFile: false);
             ConsoleHost.Ensure();
             return Report();
         }
@@ -64,18 +63,29 @@ internal static class Program
         // harmless, and both write the log, which is not. Nothing strange has to
         // happen to end up with two: the watcher survives the window manager
         // restarting, and the restarted window manager runs its startup commands.
+        //
+        // Claimed before the log file is opened, for the same reason a report opens no
+        // log: opening the file truncates it, and the watcher that is already running
+        // is writing to it. A second copy that said "already running" and left used to
+        // take the first copy's log with it, on every restart of the window manager.
         using SingleInstanceLock instance = SingleInstanceLock.Claim(
             IpcProtocol.InstanceMutexNameFor("ayn"));
 
         if (!instance.Held && instance.Certain)
         {
-            ConsoleHost.Ensure();
-            Console.Error.WriteLine("ayn: a watcher is already running.");
-            Console.Error.WriteLine("hint: `shubbak ayn-exit` stops it.");
+            // Said to the terminal this was typed into, if it was typed. The usual
+            // second copy is started by the window manager, which has no console, and
+            // allocating one to print a line nobody will read flashes a window.
+            if (ConsoleHost.TryAttach())
+            {
+                Console.Error.WriteLine("ayn: a watcher is already running.");
+                Console.Error.WriteLine("hint: `shubbak ayn-exit` stops it.");
+            }
 
-            Log.Info(LogCategory.Wm, "another watcher is already running; leaving it to it");
             return 1;
         }
+
+        ConfigureLogging(args, toFile: true);
 
         AynConfig config = LoadConfig();
 
@@ -178,7 +188,7 @@ internal static class Program
 
         // While the window manager cannot be reached and there is something to tell it,
         // try again about once a second; otherwise sleep until the registry speaks.
-        static TimeSpan RetryWait() => TimeSpan.FromSeconds(1);
+        TimeSpan retry = TimeSpan.FromSeconds(1);
         bool retrying = false;
 
         while (true)
@@ -187,11 +197,7 @@ internal static class Program
 
             retrying = Flush(provider, connection, now);
 
-            TimeSpan? pending = provider.Pending(now);
-            TimeSpan wait = pending ?? Timeout.InfiniteTimeSpan;
-
-            if (retrying && (pending is null || RetryWait() < pending))
-                wait = RetryWait();
+            TimeSpan wait = Provider.NextWait(retrying, provider.Pending(now), retry);
 
             int woke = WaitHandle.WaitAny(handles, wait);
             now = Environment.TickCount64;
@@ -216,7 +222,8 @@ internal static class Program
                     break;
 
                 case ReloadedIndex:
-                    Reconfigure(provider, connection);
+                    Reconfigure(provider, connection, endpoint);
+                    provider.Observe(Reading.From(store, endpoint.IsMuted()), now);
                     break;
 
                 case SignalledIndex:
@@ -251,8 +258,21 @@ internal static class Program
     }
 
     /// <summary>Does what a signal asked: mutes, unmutes or flips the microphone.</summary>
+    /// <remarks>
+    /// Core Audio is opened here if the file never asked for the mute to be reported.
+    /// The fact and the action are two different things: <c>microphone { muted #false }</c>
+    /// says the bar does not want a muted pill, not that the bar's mute button should
+    /// stop working, and a person who pressed it has asked for the one thing that
+    /// justifies touching Core Audio in a file that said not to.
+    /// </remarks>
     private static void Act(SignalRequest request, AudioEndpoint endpoint)
     {
+        if (!endpoint.IsOpen && !endpoint.Open())
+        {
+            Log.Warn(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: Core Audio is not available");
+            return;
+        }
+
         if (!endpoint.HasDevice)
         {
             Log.Warn(LogCategory.Wm, $"signal {request.Subject} {request.Verb}: there is no microphone to act on");
@@ -284,6 +304,7 @@ internal static class Program
         foreach (ProviderAction action in provider.Due(now))
         {
             SendOutcome outcome = connection.Send(action.Command);
+            provider.Sent(action, outcome);
 
             switch (outcome)
             {
@@ -292,13 +313,12 @@ internal static class Program
                     break;
 
                 case SendOutcome.Refused:
-                    // Logged by the connection, once. Treated as sent: the context is
-                    // not declared, and asking again on every change would say the
-                    // same thing a hundred times. A reload or a reconnect asks again.
+                    // Logged by the connection, once. The provider does not ask again
+                    // until a reload or a reconnect, which are the two things that can
+                    // change the answer.
                     break;
 
                 case SendOutcome.Unreachable:
-                    provider.Forget();
                     return true;
             }
         }
@@ -306,15 +326,31 @@ internal static class Program
         return false;
     }
 
-    private static void Reconfigure(Provider provider, WmConnection connection)
+    /// <summary>
+    /// The file was reloaded: re-read the section, release what is no longer wanted
+    /// under its old name, and open the sources the new settings need.
+    /// </summary>
+    /// <remarks>
+    /// Core Audio is opened if the mute is newly asked for, and left open if it is not:
+    /// the callbacks cost nothing while idle, and the mute <em>signal</em> still needs
+    /// it whatever the file says about the mute <em>fact</em>. The reading that follows
+    /// in the caller is what turns a newly opened endpoint into a reported fact.
+    /// </remarks>
+    private static void Reconfigure(Provider provider, WmConnection connection, AudioEndpoint endpoint)
     {
         AynConfig config = LoadConfig();
 
         foreach (ProviderAction release in provider.Reconfigure(config))
         {
-            if (connection.Send(release.Command) == SendOutcome.Accepted)
+            SendOutcome outcome = connection.Send(release.Command);
+            provider.Sent(release, outcome);
+
+            if (outcome == SendOutcome.Accepted)
                 Log.Info(LogCategory.Wm, $"{release.Because}: {release.Command}");
         }
+
+        if (config.NeedsAudioEndpoint && !endpoint.IsOpen && !endpoint.Open())
+            Log.Warn(LogCategory.Wm, "Core Audio is not available; the microphone's mute will not be reported");
 
         // The holds under any new names follow from the next flush, which the caller
         // runs at the top of the loop.
@@ -331,6 +367,11 @@ internal static class Program
 
             AynConfigLoad load = AynConfigLoader.Validate(File.ReadAllText(path));
             ConfigDiagnostics.Report(load.Diagnostics, path, "the watcher's settings");
+
+            // The parser's complaint is the window manager's to report; this is the one
+            // line the watcher owes for running on defaults while the file is broken.
+            if (load.SyntaxErrors)
+                Log.Warn(LogCategory.Config, $"{path} does not parse; the watcher runs on its defaults until it does (shubbak check-config says what is wrong)");
 
             return load.Config;
         }
@@ -359,6 +400,18 @@ internal static class Program
             Console.WriteLine(inUse.Length > 0
                 ? $"{device.ToString().ToLowerInvariant()}: in use by {string.Join(", ", inUse)}"
                 : $"{device.ToString().ToLowerInvariant()}: not in use ({entries.Count} program(s) have used it)");
+
+            // The two times behind each verdict, for the one question a report is
+            // usually asked: why does the watcher think this program still has the
+            // device? A start with no stop from a program that crashed weeks ago reads
+            // as "in use" here exactly as it does in the Settings app, and the date says
+            // so.
+            foreach (ConsentEntry entry in entries.OrderByDescending(e => e.Started))
+            {
+                Console.WriteLine(
+                    $"  {(entry.InUse ? "open  " : "closed")}  {entry.App,-40}  " +
+                    $"opened {Describe(entry.Started)}  closed {Describe(entry.Stopped)}");
+            }
         }
 
         using var endpoint = new AudioEndpoint();
@@ -390,6 +443,21 @@ internal static class Program
         }
 
         return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
+    }
+
+    /// <summary>A FILETIME from the consent store as a local date and time, or "never".</summary>
+    private static string Describe(long fileTime)
+    {
+        if (fileTime <= 0) return "never";
+
+        try
+        {
+            return DateTime.FromFileTime(fileTime).ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return $"0x{fileTime:X}";
+        }
     }
 
     private static void ConfigureLogging(string[] args, bool toFile)

@@ -84,9 +84,14 @@ public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer
     public void BeginFrame(Rect bounds, Colour background)
     {
         _bounds = bounds;
-        _windowDc = PInvoke.GetDC(_window);
 
+        // The surfaces first, the window's DC after. CreateDIBSection can fail - out of
+        // GDI handles, a window mid-destruction - and a DC taken before the throw was a
+        // DC never released, once per attempted frame, until the process hit the handle
+        // limit for real.
         EnsureSurfaces(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
+
+        _windowDc = PInvoke.GetDC(_window);
 
         // A translucent clear is a translucent bar; a transparent one leaves the
         // compositor's backdrop, or the desktop, showing wherever nothing is drawn.
@@ -379,13 +384,26 @@ public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer
 
     private void EnsureSurfaces(int width, int height)
     {
-        if (_frame.Bits is not null && _frame.Width == width && _frame.Height == height) return;
+        // Both surfaces, or neither: the check is on the frame alone, so a glyph
+        // surface that failed after the frame succeeded would never be tried again and
+        // every text call would return early - a bar with backgrounds and no words, at
+        // that size, for good.
+        if (_frame.Bits is not null && _glyphs.Bits is not null && _frame.Width == width && _frame.Height == height) return;
 
         Release(ref _frame);
         Release(ref _glyphs);
 
         _frame = CreateSurface(width, height);
-        _glyphs = CreateSurface(width, height);
+
+        try
+        {
+            _glyphs = CreateSurface(width, height);
+        }
+        catch
+        {
+            Release(ref _frame);
+            throw;
+        }
 
         // Set once: text is always drawn white on black, and the mode is a property
         // of the device context rather than of the call.
