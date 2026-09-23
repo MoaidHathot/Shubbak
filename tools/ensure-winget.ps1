@@ -22,7 +22,13 @@
 #>
 [CmdletBinding()]
 param(
-    [Version] $Minimum = '1.12.0'
+    [Version] $Minimum = '1.12.0',
+
+    # The version of Microsoft.WinGet.Client to install, pinned as the workflows pin
+    # their actions: this module runs with the workflow token in its environment, and
+    # a pinned version is one that has been looked at. The first with the token
+    # support is 1.29.290; bump deliberately.
+    [Version] $ModuleVersion = '1.29.380'
 )
 
 Set-StrictMode -Version Latest
@@ -61,8 +67,8 @@ if (-not ($env:GH_TOKEN -or $env:GITHUB_TOKEN)) {
 # Repair-WinGetPackageManager installs or updates App Installer and its framework
 # dependencies. -Latest takes the newest stable; -Force reinstalls even when a client
 # of some version is already present.
-Install-Module -Name Microsoft.WinGet.Client -Force -Scope CurrentUser -AllowClobber -Repository PSGallery
-Import-Module Microsoft.WinGet.Client
+Install-Module -Name Microsoft.WinGet.Client -RequiredVersion $ModuleVersion -Force -Scope CurrentUser -AllowClobber -Repository PSGallery
+Import-Module Microsoft.WinGet.Client -RequiredVersion $ModuleVersion
 Repair-WinGetPackageManager -Latest -Force
 
 $found = Get-WingetVersion

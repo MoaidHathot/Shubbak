@@ -18,6 +18,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here writes to the repository, so the workflow token is read-only - stated
+# here rather than left to the repository's default setting, since one step hands the
+# token to code fetched at run time (see the winget step) and what that code could do
+# with it should not depend on a setting somebody may one day flip.
+permissions:
+  contents: read
+
 env:
   DOTNET_NOLOGO: 'true'
   DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
@@ -61,7 +68,9 @@ jobs:
       # module calls anonymously unless a token is in the environment - and anonymous
       # calls share a rate limit with everything else on the runner's address. One
       # run failed on exactly that, while the same step had passed on every earlier
-      # run. The workflow token is read-only and the module wants nothing more of it.
+      # run. The token is read-only (permissions, above) and the module wants nothing
+      # more of it: it sends it to api.github.com alone, and downloads the client's
+      # packages without it.
       - name: Validate the winget manifests
         shell: pwsh
         env:
