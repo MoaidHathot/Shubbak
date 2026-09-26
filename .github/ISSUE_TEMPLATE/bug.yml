@@ -1,0 +1,92 @@
+name: Something is wrong
+description: A window did the wrong thing, a key did nothing, the bar or the palette misbehaved, or a program crashed.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. One file carries most of what is needed to reason about a failure that has
+        already happened, and it takes one command to write:
+
+        ```
+        shubbak diagnose -o report.md
+        ```
+
+        It bundles the environment, the config as loaded, the live window tree and the recent
+        log - and if the window manager has died, everything on disk instead: the log files'
+        tails, the session, and any crash report, with a note at the top saying so. Please
+        attach it below. Read it first if you like; it holds window titles and process names,
+        and the whole config file, and nothing else about you.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. A window title or a process name helps more than a description of it.
+      placeholder: |
+        Pressed alt+3 with a Firefox window focused. Expected the window to move to workspace 3;
+        it stayed where it was and the bar's workspace 3 pill lit up anyway.
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: The report
+      description: Attach `report.md` from `shubbak diagnose -o report.md` - drag it into this box. If `shubbak` is not on your PATH yet, open a new terminal first.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`shubbak --version`, or the first lines of the report."
+      placeholder: 0.10.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - winget (the MSI, under Program Files)
+        - winget --scope user (portable)
+        - Scoop
+        - The zip from Releases
+        - Built from source
+    validations:
+      required: true
+
+  - type: dropdown
+    id: program
+    attributes:
+      label: Which program
+      multiple: true
+      options:
+        - shubbak-wm, the window manager
+        - taj, the bar
+        - dalil, the palette
+        - ayn, the watcher
+        - shubbak, the command line
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: The part of the config that matters, if the report is not attached
+      description: The report already has the whole file. If you are not attaching one, paste the rule, binding or section concerned.
+      render: kdl
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Already tried
+      options:
+        - label: "`shubbak doctor` reports nothing wrong with the install"
+        - label: "`shubbak check-config` reports no errors or warnings"
+        - label: "`shubbak inspect` on the window, for a window that did not tile"
+        - label: Restarting the window manager did not change it

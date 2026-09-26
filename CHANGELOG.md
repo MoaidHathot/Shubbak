@@ -17,6 +17,32 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **`shubbak diagnose` works with the window manager dead.** A report is most wanted
+  after a crash, and that was the one case it refused: "a report needs the running
+  window manager to describe its state". True of the live tree and the log ring, and of
+  nothing else. With nothing running it now says so at the top - what it is missing and
+  the command that gives the rest once the window manager is back - and reports from
+  what is on disk: the environment, the five binaries beside it with their dates and
+  sizes, the configuration as resolved and as every one of the four loaders reads it
+  with each diagnostic rendered with its caret and the file itself after, the tails of
+  every program's log and of the run before it, the session as last saved, and every
+  crash report from the last week with the newest one whole. `--config <path>` names
+  the file to read when nothing is running. Logs a running companion still holds open
+  are read all the same, which the first live report was not doing: `File.ReadAllLines`
+  asks for a share the writer refuses, and two of four logs came back "unreadable".
+  `OfflineDiagnosis` is the piece; tested against a scratch state directory.
+- **Issue templates, a contributing guide and a security policy.** The README has asked
+  for a `diagnose` report since the first release, and nothing asked for it where an
+  issue is written. Three templates now do - something wrong (with the report), a
+  window that will not tile (with `shubbak inspect`), an idea - and a fourth link sends
+  questions to Discussions. `CONTRIBUTING.md` says what CI holds a change to and gives
+  the one command for each check; `tools/check-test-count.ps1 -Fix` is new, and does to
+  the documented test count what `list-diagnostics.ps1` does to the catalogue.
+  `SECURITY.md` says what the pipe does and does not let a process do, in the terms the
+  ADR's addendum already used, and how to report privately. And the minimum Windows -
+  10 version 2004, build 19041 - is stated in the README and the getting-started page,
+  with the short list of what is Windows 11 only and quietly left out on 10; it had been
+  implied by the winget manifest and nowhere a person reads.
 - **`shubbak context --set <name> --hold`: a script is a provider.** A lease dies with
   the connection that made it, and the command line's closed the moment the reply
   arrived - so `--lease` was refused with a hint to "hold a pipe connection open from

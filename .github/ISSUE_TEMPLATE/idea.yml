@@ -1,0 +1,32 @@
+name: An idea
+description: Something Shubbak could do, or do differently.
+labels: [idea]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas are welcome. The most useful ones say what you were trying to do and what got in
+        the way, rather than naming a feature - the feature that fixes it may not be the one
+        you had in mind, and the problem is the part that survives. If another window manager
+        does it, say which; the answer is often "here is how Shubbak spells that" rather than
+        new code.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you were trying to do, and what got in the way
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead, if you have a shape in mind
+      description: Config you wish you could write, a command you wish existed, a row you wish the palette had.
+      render: kdl
+
+  - type: input
+    id: elsewhere
+    attributes:
+      label: Where you have seen it done
+      placeholder: i3's tabbed layout / komorebi's `focus-follows-mouse` / yasb's media widget

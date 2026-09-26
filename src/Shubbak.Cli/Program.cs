@@ -707,43 +707,52 @@ internal static class Program
     private static async Task<int> DiagnoseAsync(string[] args)
     {
         string? output = null;
+        string? configPath = null;
 
         // Stops one short of the end so the value can be read, which meant a trailing
         // -o with nothing after it was skipped entirely and the report went to stdout
         // instead - the one place the user was certain it would not.
         for (int i = 1; i < args.Length; i++)
         {
-            if (args[i] is not ("--output" or "-o")) continue;
+            if (args[i] is not ("--output" or "-o" or "--config")) continue;
 
             if (i + 1 >= args.Length)
             {
-                Console.Error.WriteLine($"shubbak: {args[i]} needs a file to write to.");
+                Console.Error.WriteLine($"shubbak: {args[i]} needs a value.");
                 Console.Error.WriteLine("hint: shubbak diagnose -o report.md");
                 return 1;
             }
 
-            output = args[i + 1];
+            if (args[i] == "--config") configPath = args[i + 1];
+            else output = args[i + 1];
+
+            i++;
         }
 
         string reason = args.Length > 1 && !args[1].StartsWith('-') ? args[1] : "manual";
+        string report;
 
-        if (!IpcClient.IsServerRunning())
+        if (IpcClient.IsServerRunning())
         {
-            Console.Error.WriteLine("shubbak: no window manager is running.");
-            Console.Error.WriteLine("hint: a report needs the running window manager to describe its state.");
-            return 2;
+            await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+            IpcResponse response = await client.SendAsync("diagnose", reason).ConfigureAwait(false);
+
+            if (!response.Ok)
+            {
+                Console.Error.WriteLine($"shubbak: {response.Error}");
+                return 1;
+            }
+
+            report = response.Data ?? string.Empty;
         }
-
-        await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
-        IpcResponse response = await client.SendAsync("diagnose", reason).ConfigureAwait(false);
-
-        if (!response.Ok)
+        else
         {
-            Console.Error.WriteLine($"shubbak: {response.Error}");
-            return 1;
+            // The case a report is most wanted in, and the one this used to refuse. The
+            // live tree and the log ring are gone with the process; everything on disk
+            // is not, and the report says at the top what it is missing.
+            Console.Error.WriteLine("shubbak: no window manager is running; reporting from what is on disk.");
+            report = OfflineDiagnosis.Build(reason, configPath);
         }
-
-        string report = response.Data ?? string.Empty;
 
         if (output is null)
         {
@@ -1194,8 +1203,14 @@ internal static class Program
         DIAGNOSTICS
           diagnose [reason]    Write a self-contained report: environment, config,
                                the live window tree, and the recent log. This is the
-                               one command to run when something is wrong.
+                               one command to run when something is wrong. With no
+                               window manager running - after a crash - it reports
+                               from what is on disk instead: the binaries, the config
+                               as every loader reads it, the log files' tails, the
+                               session, and any crash report from the last week, and
+                               says at the top what it could not include.
                     -o <path>  Write to a file instead of stdout.
+                    --config <path>  The file to read when nothing is running.
 
           restore              Bring back windows left concealed by a window manager
                                that exited without restoring them - after a crash, a

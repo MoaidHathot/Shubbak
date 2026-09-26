@@ -16,6 +16,14 @@ window tree drawn as indented text, and the last few thousand log entries.
 usually worth running *after* something has already gone wrong. You do not need to
 have enabled logging in advance.
 
+**It works with the window manager dead, too** — which is when a report is most
+wanted. With nothing running it says so at the top and reports from what is on disk
+instead: the binaries and their dates, the config as every one of the four loaders
+reads it with each diagnostic rendered, the tails of every program's log and of the
+run before, the session as last saved, and any crash report from the last week, the
+newest one whole. Start the window manager and run it again for the live half, and
+attach both.
+
 Attach that file to a bug report.
 
 ## "This window isn't being tiled"

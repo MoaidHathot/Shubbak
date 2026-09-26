@@ -1,0 +1,48 @@
+name: A window will not tile, or tiles when it should not
+description: Shubbak managed a window it should have left alone, or left one alone it should have managed.
+labels: [bug, window-rules]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the most common report, and the one with the best tool for it. Run
+
+        ```
+        shubbak inspect
+        ```
+
+        and click the window. You get every attribute Shubbak read, the verdict, the reason,
+        and which of your rules matched - and if a rule would change the verdict, the palette
+        (`!` mode, then Ctrl+Enter on the window, "Write a rule for it…") composes it. Paste
+        the inspect output here; it is what would be asked for first.
+
+  - type: textarea
+    id: inspect
+    attributes:
+      label: "`shubbak inspect` output for the window"
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened instead
+      placeholder: It is an ordinary application window and should tile. / It is a floating tool palette and should be left alone.
+    validations:
+      required: true
+
+  - type: input
+    id: app
+    attributes:
+      label: The application
+      description: Name and version, and where it came from (Store, installer, portable) if you know.
+      placeholder: Adobe Lightroom Classic 14.2, installer
+
+  - type: input
+    id: version
+    attributes:
+      label: Shubbak version
+      placeholder: 0.10.0
+    validations:
+      required: true

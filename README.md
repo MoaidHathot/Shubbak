@@ -77,7 +77,8 @@ I liked about them and changes what kept getting in my way:
 
 ## Install
 
-With winget:
+Windows 10 version 2004 or later, x64 or ARM64; a few looks - the focused-window
+border, the bar's acrylic - need Windows 11 and are quietly left out on 10. With winget:
 
 ```
 winget install shubbak
@@ -209,8 +210,10 @@ config to read and borrow from.
 
 Shubbak is what I run all day, but it is young and has not been through many hands
 yet. Expect rough edges. When you hit one, `shubbak diagnose -o report.md` writes a
-single file with everything I need; open an issue and attach it.
-[CHANGELOG.md](CHANGELOG.md) says what changed between releases.
+single file with everything I need - with the window manager running or after it has
+died; [open an issue](https://github.com/MoaidHathot/Shubbak/issues/new/choose) and
+attach it. [CHANGELOG.md](CHANGELOG.md) says what changed between releases;
+[SECURITY.md](SECURITY.md) says what the pipe does and does not let a process do.
 
 ## Building
 
@@ -220,8 +223,9 @@ dotnet test
 ```
 
 [Architecture](docs/architecture.md) explains the layout and the two quirks worth
-knowing before you change anything; [RELEASING.md](RELEASING.md) is how a release is
-cut.
+knowing before you change anything; [CONTRIBUTING.md](CONTRIBUTING.md) is what CI
+will hold a change to and how to check it first; [RELEASING.md](RELEASING.md) is how
+a release is cut.
 
 ## Thanks
 

@@ -5,6 +5,20 @@ raises a question this page does not answer, [Configuration](configuration.md) i
 the reference, and [Taj](taj.md), [Dalil](dalil.md) and [Ayn](ayn.md) each have a
 page of their own.
 
+## 0. What it runs on
+
+Windows 10 version 2004 (build 19041) or later, x64 or ARM64. Everything the window
+manager does works on both; a few things the bar and the palette can be asked for are
+Windows 11 only and are quietly not done on Windows 10 rather than refused: the
+focused-window border (`window-effects { border }`, which uses the compositor's
+border colour), the bar's `backdrop` materials (acrylic, mica, tabbed) and its rounded
+corners, and the palette's rounded corners. `shubbak doctor` says which of these your
+config asks for on a Windows that has none. The watcher needs the record Windows keeps
+of which programs use the camera and microphone, which appeared in Windows 10 1903;
+without it the watcher says so and exits. Nothing else has to be installed first: the
+five programs are native executables, about 25 MB together, with no runtime to
+download.
+
 ## 1. Install
 
 **winget** (recommended)

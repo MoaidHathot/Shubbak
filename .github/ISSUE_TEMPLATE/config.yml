@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: A question
+    url: https://github.com/MoaidHathot/Shubbak/discussions
+    about: How-do-I questions belong in Discussions, after a look at the FAQ (docs/faq.md) and Troubleshooting (docs/troubleshooting.md), which cover the questions that come up first.
+  - name: A security concern
+    url: https://github.com/MoaidHathot/Shubbak/security/advisories/new
+    about: Report privately through a security advisory rather than an issue; SECURITY.md says what counts and what to expect.
