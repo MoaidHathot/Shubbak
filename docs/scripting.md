@@ -166,3 +166,18 @@ level* — so leaving it open would mean any process running as you could ask an
 elevated Shubbak to launch something elevated. Flip `allow-shell-exec-over-ipc` in the
 `general` section if you want it; keybindings and startup commands can always use it
 either way.
+
+## A second Shubbak beside the first
+
+Two environment variables let a separate set of Shubbak processes run under one
+account without finding the first, which is what the end-to-end test does and what a
+script that wants to try a config against a throwaway daemon might. `SHUBBAK_INSTANCE`
+is a short name — letters, digits, dot and dash — appended to the pipe, the
+single-instance mutexes and the stop events: a daemon started with it listens on
+`shubbak-v2-<SID>-<name>`, and a `shubbak` started with the same value talks to that
+daemon and no other. `SHUBBAK_STATE_DIR` is an absolute path used in place of
+`%LOCALAPPDATA%\Shubbak` for the logs, the session, the arrangements, crash reports and
+the palette's memory. Both are read once, when the process starts. Neither stops two
+window managers from both managing the same windows — a second daemon with its own
+pipe is still a second daemon on the one desktop — so a config for the second usually
+begins with a rule that ignores everything it is not there to look at.

@@ -126,10 +126,8 @@ public sealed class SessionStore
 {
     private const int CurrentVersion = 1;
 
-    /// <summary>Where sessions are kept by default.</summary>
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Shubbak", "session.json");
+    /// <summary>Where sessions are kept by default; see <see cref="ShubbakPaths"/>.</summary>
+    public static string DefaultPath => Path.Combine(ShubbakPaths.StateDirectory, "session.json");
 
     /// <summary>Captures the current placement of every managed window.</summary>
     public static Session Capture(RootNode root, MonitorNode? focusedMonitor = null)

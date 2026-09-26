@@ -44,7 +44,7 @@ src/
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the watcher: the rest of the machine, as contexts
-tests/              2510 test methods across 14 projects
+tests/              2515 test methods across 15 projects
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests: one package, the MSI and the portable zip
@@ -59,16 +59,32 @@ replaced behind the `Shubbak.Native` boundary without touching any of the logic.
 
 ## Tests
 
-**2510 test methods**, around a second to run. Everything except the platform layer and
+**2515 test methods**, around a second to run. Everything except the platform layer and
 the renderer runs headless, so the entire behavioural surface — tree, layout, focus,
 animation, tags, sessions, the state machine, the config diagnostics, the palette's
 matching, the bar's model — is testable in milliseconds with no window manager
 running.
 
 `Shubbak.Native.Tests` is the exception: it creates real windows, and refuses to run
-while a window manager is managing them. `shubbak stop`, run them, `shubbak-wm`. The
-count above is checked by CI against the tree, because it was wrong on every occasion
-somebody looked.
+while a window manager is managing them. `shubbak stop`, run them, `shubbak-wm`. So is
+`Shubbak.EndToEnd.Tests`, for the same reason and one more: it starts the real
+`shubbak-wm.exe` - with a config, a state directory and a pipe of its own - opens a
+window belonging to another process, and asks the daemon over the pipe what it did
+with it, then stops it the way `shubbak stop` does and checks the window was given
+back. Two seconds, and the only test that can see the pieces stop fitting together;
+its first run found a rule's `tile` being refused because an unmanaged window held the
+foreground, which 2,500 green unit tests could not. The count above is checked by CI
+against the tree, because it was wrong on every occasion somebody looked.
+
+Two environment variables exist for that test and for anyone with the same need.
+`SHUBBAK_STATE_DIR` moves everything a program keeps between runs - the logs, the
+session, the arrangements, a crash report, the palette's memory - from
+`%LOCALAPPDATA%\Shubbak` to the directory named; setting `LOCALAPPDATA` itself does
+not, since the runtime asks the shell for that folder. `SHUBBAK_INSTANCE` appends a
+short name to the pipe, the single-instance mutexes and the stop events, so a second
+set of Shubbak processes can run under one account without finding the first; a
+command line started with the same value finds that set and no other. Both are read
+once, at first use.
 
 ## Why .NET
 

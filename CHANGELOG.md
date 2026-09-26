@@ -566,6 +566,19 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A rule's `tile`, `float` or `move` was refused when an unmanaged window held the
+  foreground.** A rule acts on the window it matched, and the daemon puts the tree's
+  focus there before running the rule's commands - but the commands then went through
+  the same gate a keybinding's do, which asks the desktop which window is in front and
+  refuses when that window is not one Shubbak manages. A rule's window is not the one in
+  front: it has just appeared, often behind whatever was, and when what was in front was
+  the desktop, Task Manager, or an application a rule ignores, the rule's command was
+  refused with a complaint about that other window - `tile: "Netflix - Mozilla
+  Firefox" is not managed` - and the matched window was left as the filter had it.
+  Masked whenever the user's focus was on a managed window, which is most of the time,
+  and so never reported. A rule's commands now declare their target settled and skip
+  the foreground check; keybindings and the pipe keep it. Found by the new end-to-end
+  test on its first run, which is what it is for.
 - **A workspace named with a `|` broke the workspace strip.** The bar carries its
   workspaces to the widget as one string with `|` between fields and a tab between
   records, and a name containing either split into half-records too short to read:
@@ -995,6 +1008,29 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **One test runs the real window manager.** `Shubbak.EndToEnd.Tests` starts
+  `shubbak-wm.exe` as a user would - a config, a state directory and a pipe of its own -
+  opens `winver` beside it, and asks the daemon over the pipe what it did: managed, tiled
+  by the config's rule into most of its monitor, visible and uncloaked, one window on the
+  workspace, floated and tiled again on command; then `shubbak stop`, and the window is
+  still there uncloaked, the session names it and the log has no errors. A second test
+  starts it on a file that will not parse and finds it up and answering. Two seconds;
+  every wait bounded and naming what it waited for; every process it starts has its
+  output drained rather than inherited, since a leaked child holding the test host's
+  pipes is how the first run wedged `dotnet test` for as long as it was allowed to. It
+  refuses to run beside a window manager of the user's, as the native tests do, and is
+  marked `Requires=Foreground` so the ARM64 job leaves it out with the focus-sink tests.
+  Twenty-five hundred unit tests were green when its first run found the rule-dispatch
+  bug above.
+- **`SHUBBAK_STATE_DIR` and `SHUBBAK_INSTANCE`.** Six places each asked the shell for
+  `%LOCALAPPDATA%` and appended `Shubbak`; they now ask `ShubbakPaths.StateDirectory`,
+  which honours the first variable - setting `LOCALAPPDATA` does not move a .NET
+  program's known folders, which the first end-to-end run learned by saving the test
+  daemon's session over the author's. The second appends a name to the pipe, the
+  single-instance mutexes and the stop events in the one place they are built, so a
+  second Shubbak can run under one account and a command line started with the same
+  value finds it and no other; `IpcProtocol.PipeNameForInstance` says where. Both read
+  once, documented in `docs/scripting.md`.
 - **The signal and shutdown payloads are read with `Utf8JsonReader`, not a document.**
   Both were two fields parsed through `JsonDocument`, which the bar had never linked;
   reading a signal there would have pulled the document machinery into a binary that

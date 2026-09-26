@@ -494,10 +494,8 @@ public static class Log
         }
     }
 
-    /// <summary>The default log location.</summary>
-    public static string DefaultLogPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Shubbak", "shubbak.log");
+    /// <summary>The default log location; see <see cref="ShubbakPaths"/> for where that is.</summary>
+    public static string DefaultLogPath => Path.Combine(ShubbakPaths.StateDirectory, "shubbak.log");
 
     /// <summary>Resets everything. Test support.</summary>
     internal static void ResetForTests()

@@ -2571,10 +2571,26 @@ public sealed class WmDaemon : IDisposable
             // Rules act on the window they matched, so focus is moved there first.
             // Otherwise `move --workspace 5` in a rule would move whatever the user
             // happened to be looking at.
+            //
+            // And the target is declared settled, so ResolveTarget does not consult the
+            // desktop's foreground. That check exists to stop a keybinding acting on a
+            // window Shubbak does not manage while the user is looking at one; a rule's
+            // window is not the one the user is looking at - it has just appeared, often
+            // behind whatever is in front - and when what was in front was unmanaged, the
+            // rule's tile, float or move was refused with a complaint about that other
+            // window. Masked whenever the user's focus was on a managed window, which is
+            // most of the time; found by the end-to-end test, whose test window opened
+            // over an unmanaged browser.
             WindowNode? previous = _wm.FocusedWindow;
 
             Publish(_wm.FocusWindow(window));
-            Execute(rule.Commands.Where(c => c is not IgnoreCommand and not ManageCommand and not NoFocusCommand));
+
+            foreach (WmCommand command in rule.Commands)
+            {
+                if (command is IgnoreCommand or ManageCommand or NoFocusCommand) continue;
+
+                _ = RunCommand(command, origin: null, targetSettled: true);
+            }
 
             if (previous is not null && !ReferenceEquals(previous, window) && previous.Workspace is not null)
                 Publish(_wm.FocusWindow(previous));
@@ -2871,9 +2887,17 @@ public sealed class WmDaemon : IDisposable
             : "Clear it by binding tag --clear, or run: shubbak tag --clear";
     }
 
-    internal CommandOutcome RunCommand(WmCommand command, CommandOrigin? origin = null)
+    /// <param name="command">What to run.</param>
+    /// <param name="origin">The pipe client asking, when one is, so a pin can be attributed to it.</param>
+    /// <param name="targetSettled">
+    /// Whether the caller has already put focus on the window the command is for, so
+    /// the desktop's foreground is not consulted. True for a rule, which acts on the
+    /// window it matched; false for a keybinding or the pipe, which act on whatever
+    /// the user is looking at and must be refused when that is not one of ours.
+    /// </param>
+    internal CommandOutcome RunCommand(WmCommand command, CommandOrigin? origin = null, bool targetSettled = false)
     {
-        if (!ResolveTarget(command))
+        if (!targetSettled && !ResolveTarget(command))
         {
             return new CommandOutcome(
                 new WmResult(false, [new CommandRejected(command.Name, "the focused window is not managed")]));

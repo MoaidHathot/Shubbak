@@ -22,10 +22,7 @@ namespace Dalil;
 /// </remarks>
 internal static class FirstOpen
 {
-    private static readonly string s_marker = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Shubbak",
-        "dalil.opened");
+    private static readonly string s_marker = Path.Combine(Shubbak.Core.ShubbakPaths.StateDirectory, "dalil.opened");
 
     /// <summary>
     /// Whether this is the first open ever, recording that it has now happened.

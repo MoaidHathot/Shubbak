@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The one test project that runs the real window manager.
+
+    Every other project tests a piece in isolation, and 2,500 of them were green on the
+    day a change left the desktop broken in a way none of them could see. This starts
+    shubbak-wm.exe as a user would, with a config of its own and a state directory of
+    its own, and asks it over the pipe what it did to a real window belonging to another
+    process. Then it stops it the way `shubbak stop` does and checks the window was
+    given back.
+
+    It refuses to run while a window manager is already running, for the same reason
+    Shubbak.Native.Tests does: two of them would fight over every window, and any result
+    would measure the fight. Stop yours first.
+
+    The daemon and the command line are project references so their apphosts land in
+    this project's output; the test runs those, which are the managed builds rather than
+    the NativeAOT ones that ship. The AOT-specific failures - trimming, reflection - are
+    caught by the publish and install steps CI already runs.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(ShubbakRid)</RuntimeIdentifier>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Shubbak.Wm\Shubbak.Wm.csproj" />
+    <ProjectReference Include="..\..\src\Shubbak.Cli\Shubbak.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+    <ProjectReference Include="..\..\src\Shubbak.Native\Shubbak.Native.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>

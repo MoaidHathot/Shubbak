@@ -41,7 +41,7 @@ public static class OfflineDiagnosis
     {
         ArgumentNullException.ThrowIfNull(reason);
 
-        string state = stateDirectory ?? Path.GetDirectoryName(Log.DefaultLogPath)!;
+        string state = stateDirectory ?? Shubbak.Core.ShubbakPaths.StateDirectory;
         DateTime today = now ?? DateTime.Now;
 
         var report = new DiagnosticReport(reason);

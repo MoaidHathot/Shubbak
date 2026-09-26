@@ -14,10 +14,7 @@ namespace Dalil;
 /// </remarks>
 internal sealed class FrecencyStore
 {
-    private static readonly string s_path = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Shubbak",
-        "dalil-frecency.tsv");
+    private static readonly string s_path = Path.Combine(Shubbak.Core.ShubbakPaths.StateDirectory, "dalil-frecency.tsv");
 
     private readonly string _path;
     private bool _warnedOfWrite;

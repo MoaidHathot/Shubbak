@@ -97,4 +97,50 @@ public class InstanceNameTests
         Assert.Equal(IpcProtocol.InstanceMutexNameFor("taj"), IpcProtocol.InstanceMutexNameFor("taj"));
         Assert.Equal(IpcProtocol.PipeName, IpcProtocol.PipeName);
     }
+
+    [Fact]
+    public void AnInstanceHasItsOwnPipeBesideTheAccounts()
+    {
+        // A second Shubbak started with SHUBBAK_INSTANCE=e2e listens beside this one, and
+        // the process that started it - which did not set the variable - can say where.
+        // This process's own names carry no suffix, since the test host sets none.
+        string own = IpcProtocol.PipeName;
+        string isolated = IpcProtocol.PipeNameForInstance("e2e");
+
+        Assert.Equal(own + "-e2e", isolated);
+        Assert.NotEqual(own, isolated);
+        Assert.StartsWith($"shubbak-v{IpcProtocol.ProtocolVersion}-", isolated, StringComparison.Ordinal);
+
+        Assert.Throws<ArgumentException>(() => IpcProtocol.PipeNameForInstance(" "));
+    }
+}
+
+/// <summary>Where the programs keep what they keep between runs.</summary>
+public sealed class StatePathTests
+{
+    [Fact]
+    public void TheStateDirectoryIsUnderTheProfileUnlessTheEnvironmentSaysOtherwise()
+    {
+        // This process sets no SHUBBAK_STATE_DIR, so the default is in force: the
+        // profile's local application data, then Shubbak. Read once, so it is the same
+        // answer every time it is asked.
+        string state = Core.ShubbakPaths.StateDirectory;
+
+        Assert.EndsWith(Path.Combine("Shubbak"), state, StringComparison.Ordinal);
+        Assert.StartsWith(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), state, StringComparison.OrdinalIgnoreCase);
+        Assert.False(Path.EndsInDirectorySeparator(state));
+        Assert.Same(state, Core.ShubbakPaths.StateDirectory);
+    }
+
+    [Fact]
+    public void EveryFileTheProgramsKeepIsUnderIt()
+    {
+        // The six places that each asked for the folder by hand now ask this one, so a
+        // test that moves it moves all of them - which is the whole point of having it.
+        string state = Core.ShubbakPaths.StateDirectory;
+
+        Assert.Equal(Path.Combine(state, "shubbak.log"), Core.Diagnostics.Log.DefaultLogPath);
+        Assert.Equal(Path.Combine(state, "session.json"), Core.Wm.SessionStore.DefaultPath);
+        Assert.Equal(Path.Combine(state, "arrangements.json"), Core.Wm.ArrangementStore.DefaultPath);
+    }
 }

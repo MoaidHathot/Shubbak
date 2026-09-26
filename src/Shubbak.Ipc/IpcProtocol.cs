@@ -662,9 +662,49 @@ public static class IpcProtocol
 
     private static string? s_account;
 
+    /// <summary>The account alone, before any instance suffix; see <see cref="BaseAccount"/>.</summary>
+    private static string? s_baseAccount;
+
+    private static string BaseAccount => s_baseAccount ??= BuildBaseAccount();
+
+    /// <summary>
+    /// The variable that gives a second, separate Shubbak its own pipe, mutexes and
+    /// stop events beside the account's: a short name, appended to every one of them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For the test that starts the real window manager, and for nobody else in the
+    /// ordinary way. Every name here is scoped to the account so that two accounts do
+    /// not collide; this scopes further, so that two sets of processes under one
+    /// account do not. A daemon started with <c>SHUBBAK_INSTANCE=e2e</c> listens on
+    /// <c>shubbak-v2-&lt;SID&gt;-e2e</c>, holds <c>Local\shubbak-wm-&lt;SID&gt;-e2e</c>,
+    /// and is found by a command line started with the same variable and by no other.
+    /// </para>
+    /// <para>
+    /// Read once with the account, so the suffix cannot change under a running
+    /// process. Letters, digits, dot and dash only, up to thirty-two of them; anything
+    /// else is ignored rather than put into a kernel object name.
+    /// </para>
+    /// </remarks>
+    public const string InstanceVariable = "SHUBBAK_INSTANCE";
+
+    /// <summary>
+    /// The pipe a process started with <see cref="InstanceVariable"/> set to
+    /// <paramref name="instance"/> listens on, worked out by a process that was not -
+    /// the test that started it, which then connects to it.
+    /// </summary>
+    public static string PipeNameForInstance(string instance)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instance);
+        return $"shubbak-v{ProtocolVersion}-{BaseAccount}-{instance}";
+    }
+
     private static string BuildPipeName() => $"shubbak-v{ProtocolVersion}-{Account}";
 
-    private static string BuildAccount()
+    private static string BuildAccount() =>
+        Instance() is { } instance ? $"{BaseAccount}-{instance}" : BaseAccount;
+
+    private static string BuildBaseAccount()
     {
         string account = Environment.UserName;
 
@@ -684,6 +724,23 @@ public static class IpcProtocol
         }
 
         return account;
+    }
+
+    /// <summary>The instance suffix from the environment, or null for the account's own names.</summary>
+    private static string? Instance()
+    {
+        string? wanted = Environment.GetEnvironmentVariable(InstanceVariable);
+
+        if (string.IsNullOrWhiteSpace(wanted)) return null;
+
+        wanted = wanted.Trim();
+
+        foreach (char c in wanted)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('.' or '-')) return null;
+        }
+
+        return wanted.Length <= 32 ? wanted : null;
     }
 
     /// <summary>

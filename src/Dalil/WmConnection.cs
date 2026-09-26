@@ -260,9 +260,7 @@ public sealed class WmConnection : IAsyncDisposable
                 return null;
             }
 
-            string folder = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Shubbak");
+            string folder = Shubbak.Core.ShubbakPaths.StateDirectory;
 
             Directory.CreateDirectory(folder);
 

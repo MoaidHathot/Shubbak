@@ -368,7 +368,7 @@ internal static class DoctorCommand
             lines.Add(new(Verdict.Info, "elevated", "a portable install: windows of elevated programs are seen but cannot be moved", "the MSI (winget install shubbak, without --scope user) can, from Program Files"));
 
         // A crash report waiting to be read is worth a line.
-        string state = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Shubbak");
+        string state = Shubbak.Core.ShubbakPaths.StateDirectory;
 
         if (Directory.Exists(state))
         {
