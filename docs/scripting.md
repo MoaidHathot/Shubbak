@@ -127,12 +127,36 @@ and leaves it able to say when a signal was raised with nobody listening.
 ## Supplying facts
 
 A [context](configuration.md#contexts) with no `when` is external: nothing on the
-desktop decides it, so a program does. `shubbak context --set meeting --ttl 10s` from
-any script pins it for ten seconds, so a poller that crashes leaves nothing behind. A
-program that holds a pipe connection open can say `context --set meeting --lease`
-instead, and the pin dies with the connection. That is exactly what Ayn does for
-everything it watches — the camera and the microphone, so far; Teams presence, OBS
-recording or a calendar are written the same way.
+desktop decides it, so a program does. Three ways, from the least to the most
+involved:
+
+```
+shubbak context --set meeting --ttl 10s      # for ten seconds; repeat from a poller
+shubbak context --set meeting --hold         # for as long as this process runs
+```
+
+`--ttl` from a poller pins the context for that long, so a poller that crashes leaves
+nothing behind. `--hold` is the one for a script that knows when something starts and
+when it ends: the command pins the context with a lease and *stays*, and the pin dies
+with the process — Ctrl+C, `Stop-Process`, or the script that started it ending. A
+window manager that restarts or reloads under it is holding the context again within
+a second, and `exit-all` ends the hold, since a process waiting to pin a context on a
+window manager that is not coming back is what a lease exists to avoid. Refused
+outright — a context the file does not declare — it exits 1 with the reason; started
+with no window manager running it exits 2 at once rather than waiting for one.
+
+```powershell
+$hold = Start-Process shubbak -PassThru -WindowStyle Hidden `
+          -ArgumentList 'context --set in-call --hold'
+try   { <# the call #> }
+finally { Stop-Process $hold }
+```
+
+The third way is what `--hold` is made of, for a program that has its own reasons to
+hold a pipe connection: send `context --set meeting --lease` and keep the connection
+open. That is exactly what Ayn does for everything it watches — the camera and the
+microphone, so far; Teams presence, OBS recording or a calendar are written the same
+way, and a script that can tell when they start needs nothing more than `--hold`.
 
 ## Security
 

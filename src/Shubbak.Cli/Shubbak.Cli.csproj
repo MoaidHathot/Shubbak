@@ -39,6 +39,15 @@
     <!-- And the watcher's, for the same reason again. Pure: a config record and a
          state machine, no registry and no pipe. -->
     <ProjectReference Include="..\Ayn.Core\Ayn.Core.csproj" />
+
+    <!--
+      For the hold flag on the context command: the one subcommand that stays
+      connected for as long as it runs, and re-asserts its pin when the window
+      manager comes back. That is the companions' reconnecting subscription exactly,
+      so it is the companions' code, rather than a fourth copy of it. Only EventPump
+      is reachable from here, so the rest of the assembly is trimmed away.
+    -->
+    <ProjectReference Include="..\Shubbak.Companion\Shubbak.Companion.csproj" />
   </ItemGroup>
 
   <ItemGroup>

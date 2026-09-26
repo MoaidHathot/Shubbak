@@ -442,6 +442,29 @@ internal static class Program
     /// </remarks>
     private static async Task<int> CommandAsync(string[] args)
     {
+        // `context ... --hold` stays for as long as this process runs, so the lease it
+        // makes holds; see HoldCommand. Judged before anything is sent, so a hold that
+        // cannot be honoured is refused with a reason rather than half-done.
+        HoldArguments? hold = HoldArguments.Parse(args, out string? cannotHold);
+
+        if (hold is not null || cannotHold is not null)
+        {
+            if (hold is null)
+            {
+                Console.Error.WriteLine($"shubbak: {cannotHold}");
+                return 1;
+            }
+
+            using var stop = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) =>
+            {
+                e.Cancel = true;
+                stop.Cancel();
+            };
+
+            return await HoldCommand.RunAsync(hold, Console.Out, Console.Error, pipeName: null, stop.Token).ConfigureAwait(false);
+        }
+
         string command = string.Join(' ', args.Select(a => CommandParser.CanQuote(a) ? CommandParser.Quote(a) : a));
 
         // A lease dies with the connection that made it, and this connection closes the
@@ -452,7 +475,7 @@ internal static class Program
             Array.Exists(args, a => string.Equals(a, "--lease", StringComparison.OrdinalIgnoreCase)))
         {
             Console.Error.WriteLine("shubbak: --lease needs a connection that stays open, and the command line's closes at once.");
-            Console.Error.WriteLine("hint: use --ttl 5s and repeat, or hold a pipe connection open from your own process.");
+            Console.Error.WriteLine("hint: add --hold to keep this command running and the pin held until it is stopped, or use --ttl 5s and repeat.");
             return 1;
         }
 
@@ -1262,9 +1285,18 @@ internal static class Program
             --ttl 5s                The pin comes off by itself after that long.
                                     500ms, 5s, 2m, 1h; a bare number is seconds.
             --lease                 The pin comes off when the connection that made
-                                    it closes. Not from the command line, whose
-                                    connection closes at once; for a process that
-                                    watches something Shubbak does not.
+                                    it closes. Not from the command line on its own,
+                                    whose connection closes at once - add --hold.
+            --hold                  Stay running, and hold the pin for as long as
+                                    this process lives: Ctrl+C, or ending the
+                                    process, lets go. A window manager that restarts
+                                    or reloads is holding it again within a second.
+                                    This is how a script becomes a provider:
+
+                                      $p = Start-Process shubbak -PassThru `
+                                             -ArgumentList 'context --set in-call --hold'
+                                      ...
+                                      Stop-Process $p
 
           A context with no `when` block is external: nothing on the desktop
           decides it, and setting it over the pipe is how another program tells

@@ -180,8 +180,9 @@ lines" is true of every device that would follow the camera, and is how a window
 manager grows a weather widget. Ayn is where those lines go: the next device is
 another subject in its section, not another thing the window manager knows. Anything
 with the same shape that Ayn does not watch — Teams presence, OBS recording, a
-calendar — is written the same way: hold a pipe connection open and say
-`context --set <name> --lease`. See [Scripting](scripting.md).
+calendar — is written the same way: `shubbak context --set <name> --hold` from a
+script that knows when it starts and ends, or a pipe connection of your own held open
+around `context --set <name> --lease`. See [Scripting](scripting.md#supplying-facts).
 
 ## Running it
 

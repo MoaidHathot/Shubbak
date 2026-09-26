@@ -17,6 +17,24 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **`shubbak context --set <name> --hold`: a script is a provider.** A lease dies with
+  the connection that made it, and the command line's closed the moment the reply
+  arrived - so `--lease` was refused with a hint to "hold a pipe connection open from
+  your own process", which meant working out the pipe's name from the SID, hand-writing
+  a line of JSON and keeping a stream open. `--hold` is that process: the command pins
+  the context with a lease and stays, and the pin dies with it - Ctrl+C, `Stop-Process`,
+  or the script that started it ending. `$p = Start-Process shubbak -PassThru
+  -ArgumentList 'context --set in-call --hold'` ... `Stop-Process $p` is the whole of a
+  provider now. Underneath it is the companions' reconnecting subscription, so a window
+  manager that restarts is holding the context again within a second of coming back
+  and a reload - which drops the pins of contexts the reloaded file no longer declares
+  and tells nobody - is followed by the pin asserted again; `exit-all` ends the hold,
+  since a process waiting to pin a context on a window manager that is not coming back
+  is what a lease exists to avoid. Refused outright it exits 1 with the reason; started
+  with no window manager it exits 2 at once rather than waiting for one; `--auto` with
+  `--hold` is refused, since one takes off what the other keeps. Verified live: the pin
+  released the instant the process was killed, and survived a `wm-exit` and restart with
+  the hold saying so at each step. `HoldArguments` and `HoldCommand` are the pieces.
 - **A program can answer a palette question.** `param "p" run="pwsh -File projects.ps1"`
   on an action names a program, and each line it prints is a choice - the palette's
   version of the bar's `kind="command"` source, and how a list the window manager knows

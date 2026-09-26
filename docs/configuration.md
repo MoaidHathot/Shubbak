@@ -426,8 +426,9 @@ it back after; and `on-enter` / `on-exit`, run once each way.
 **The line:** Shubbak observes the desktop, not the applications. Whether the camera
 is on, whether a call is up, what the calendar says — those come from *outside*, as a
 context with no `when` that another program sets: `shubbak context --set meeting
---ttl 10s` from any script, or a held pipe connection with `--lease` so the fact dies
-with the process that supplied it. The config says what a meeting *does*; the program
+--ttl 10s` from any script, or `shubbak context --set meeting --hold` from one that
+knows when the meeting ends — the command stays, and the fact dies with the process
+that supplied it. The config says what a meeting *does*; the program
 supplying the fact never needs to know. Pins beat detection (`--set`, `--clear`,
 `--toggle`); `--auto` hands a context back to its conditions. [Ayn](ayn.md) is the
 reference provider, and where facts about the machine rather than its windows live —
@@ -534,7 +535,7 @@ shubbak restore            # bring it back
 
 **Management** — `ignore` `manage` `no-focus` `toggle-managed`
 
-**Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`)
+**Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`; from the command line, `--hold` stays and holds the lease)
 
 **Arrangements** — `arrangement` (`--save` `--restore` `--delete`)
 
