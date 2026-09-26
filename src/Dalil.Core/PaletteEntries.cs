@@ -409,8 +409,10 @@ public static class PaletteEntries
             // Checked before the row is built rather than when it is opened. A prompt
             // whose list is empty would otherwise be a row that looks ordinary, stops
             // when chosen, and shows nothing - which reads as the palette having
-            // failed rather than as there being nothing to choose.
-            if (macro.Prompts.FirstOrDefault(p => ValuesFor(p, sources).Count == 0) is { } barren)
+            // failed rather than as there being nothing to choose. A script's list is
+            // not known until it runs, so it is not judged here; an empty answer is
+            // said in the frame it was asked in.
+            if (macro.Prompts.FirstOrDefault(p => p.Source != MacroParamSource.Script && ValuesFor(p, sources).Count == 0) is { } barren)
             {
                 entries.Add(new PaletteEntry(
                     macro.Name,
@@ -419,6 +421,23 @@ public static class PaletteEntries
                     string.Empty,
                     Rank: 10,
                     Unavailable: true));
+
+                continue;
+            }
+
+            // A first question answered by a program is asked of the host rather than
+            // built here: the row carries the question, and the host runs the program
+            // and pushes what it printed. Enter still asks, as it does for any prompt.
+            if (macro.Prompts[0].Source == MacroParamSource.Script)
+            {
+                entries.Add(new PaletteEntry(
+                    macro.Name,
+                    said,
+                    ["macro", Asked(macro)],
+                    string.Empty,
+                    Rank: 10,
+                    Runs: new ScriptPrompt(macro, 0, new Dictionary<string, string>(StringComparer.Ordinal)),
+                    Prompts: true));
 
                 continue;
             }
@@ -446,6 +465,118 @@ public static class PaletteEntries
         return entries;
     }
 
+    /// <summary>
+    /// The rows for a question a program has just answered: one per line it printed,
+    /// and one more level of them per question still outstanding - exactly what
+    /// <see cref="Choices"/> builds for a list the palette already had.
+    /// </summary>
+    /// <param name="prompt">The question, as the row that asked it carried it.</param>
+    /// <param name="lines">What the program printed, one choice per line.</param>
+    /// <param name="sources">The lists any later prompt draws from.</param>
+    /// <param name="labels">Workspace display names, for a later workspace prompt.</param>
+    /// <remarks>
+    /// A line is the value; a line with a tab in it is what to show, then the value -
+    /// <c>Shubbak&lt;TAB&gt;W:\Github\Shubbak</c> - so a path can be chosen by its
+    /// name and the row's dim half still says where it goes. A line with one field,
+    /// however a tab sits around it, is that field as both. Blank lines are skipped, a
+    /// value seen twice is offered once, and a program that printed nothing usable
+    /// yields one row saying so, where the frame would otherwise be refused for being
+    /// empty and Enter would appear to do nothing.
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ScriptChoices(
+        ScriptPrompt prompt,
+        IReadOnlyList<string> lines,
+        CompletionSources sources,
+        IReadOnlyDictionary<string, string>? labels)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(sources);
+
+        List<(string Label, string Value)> choices = ScriptLines(lines);
+
+        if (choices.Count == 0)
+        {
+            return
+            [
+                new PaletteEntry(
+                    $"nothing to offer for {prompt.Prompt.Placeholder}",
+                    $"the program printed no choices: {prompt.CommandLine}",
+                    ["cannot run"],
+                    string.Empty,
+                    Unavailable: true),
+            ];
+        }
+
+        return PaletteActions.AsEntries(Choices(prompt.Macro, prompt.Depth, prompt.Answers, sources, labels, choices));
+    }
+
+    /// <summary>The one row a frame shows while the program is still running.</summary>
+    /// <remarks>
+    /// A program takes longer than a keystroke - a PowerShell script is a few hundred
+    /// milliseconds before its first line - and a frame that opened empty for that long
+    /// would read as Enter having done nothing. So the frame opens at once with this in
+    /// it, and the rows replace it when they arrive.
+    /// </remarks>
+    public static IReadOnlyList<PaletteEntry> ScriptWaiting(ScriptPrompt prompt)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+
+        return
+        [
+            new PaletteEntry(
+                $"asking for a {prompt.Prompt.Name}\u2026",
+                prompt.CommandLine,
+                ["running"],
+                string.Empty,
+                Unavailable: true),
+        ];
+    }
+
+    /// <summary>Why the program's choices could not be had, where they would have been.</summary>
+    public static IReadOnlyList<PaletteEntry> ScriptFailure(ScriptPrompt prompt, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(reason);
+
+        return
+        [
+            new PaletteEntry(
+                $"could not ask for a {prompt.Prompt.Name}",
+                reason,
+                ["cannot run"],
+                string.Empty,
+                Unavailable: true,
+                Expands: $"{prompt.CommandLine}\n{reason}"),
+        ];
+    }
+
+    /// <summary>What a program printed, as choices: label and value per usable line.</summary>
+    public static List<(string Label, string Value)> ScriptLines(IReadOnlyList<string> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+        List<(string Label, string Value)> choices = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+
+        foreach (string raw in lines)
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+
+            int tab = line.IndexOf('\t');
+            string label = tab < 0 ? line : line[..tab].Trim();
+            string value = tab < 0 ? line : line[(tab + 1)..].Trim();
+
+            if (value.Length == 0) continue;
+            if (label.Length == 0) label = value;
+            if (!seen.Add(value)) continue;
+
+            choices.Add((label, value));
+        }
+
+        return choices;
+    }
+
     /// <summary>What the row's badge says it will want.</summary>
     private static string Asked(PaletteMacro macro) =>
         macro.Prompts.Count == 1
@@ -455,44 +586,72 @@ public static class PaletteEntries
     /// <summary>
     /// One row per value, and one more level of them per question still outstanding.
     /// </summary>
+    /// <param name="macro">The action being run.</param>
+    /// <param name="depth">Which of its prompts these rows answer.</param>
+    /// <param name="chosen">The values chosen for the prompts before it.</param>
+    /// <param name="sources">The lists a prompt draws from.</param>
+    /// <param name="labels">Workspace display names.</param>
+    /// <param name="printed">
+    /// The choices for this depth when a program printed them, or null to take them
+    /// from the prompt's own list.
+    /// </param>
     /// <remarks>
     /// Recursive because the frame stack already is. A row carrying children is pushed
     /// as the next frame by the same code that pushes a window's action list, Escape
     /// goes back one question rather than dismissing the palette, and none of that
     /// needed anything new - so a second question costs a recursion rather than a
-    /// mechanism.
+    /// mechanism. A later question answered by a program is the one place the
+    /// recursion stops: its row carries the question instead of children, and the host
+    /// runs the program when the row is chosen.
     /// </remarks>
     private static List<PaletteAction> Choices(
         PaletteMacro macro,
         int depth,
         IReadOnlyDictionary<string, string> chosen,
         CompletionSources sources,
-        IReadOnlyDictionary<string, string>? labels)
+        IReadOnlyDictionary<string, string>? labels,
+        IReadOnlyList<(string Label, string Value)>? printed = null)
     {
         MacroParam prompt = macro.Prompts[depth];
         bool last = depth == macro.Prompts.Count - 1;
 
         List<PaletteAction> choices = [];
 
-        foreach (string value in ValuesFor(prompt, sources))
+        IEnumerable<(string Label, string Value)> values = printed
+            ?? ValuesFor(prompt, sources).Select(value => (Label(prompt, value, labels), value));
+
+        foreach ((string label, string value) in values)
         {
             Dictionary<string, string> answers = new(chosen, StringComparer.Ordinal)
             {
                 [prompt.Name] = value,
             };
 
-            choices.Add(last
+            if (last)
+            {
+                choices.Add(new PaletteAction(label, Describe(macro, answers), Substitute(macro.Commands, answers)));
+                continue;
+            }
+
+            MacroParam next = macro.Prompts[depth + 1];
+
+            choices.Add(next.Source == MacroParamSource.Script
+
+                // The next question is a program's to answer. Nothing to run yet and
+                // no children to open: the row carries the question, and the host runs
+                // the program when it is chosen.
                 ? new PaletteAction(
-                    Label(prompt, value, labels),
-                    Describe(macro, answers),
-                    Substitute(macro.Commands, answers))
+                    label,
+                    $"then choose a {next.Name}",
+                    string.Empty,
+                    Runs: new ScriptPrompt(macro, depth + 1, answers))
 
                 // Nothing to run yet, and children to open instead. That combination
                 // is exactly what an action list row already means, so this needs no
                 // special case anywhere downstream.
                 : new PaletteAction(
-                    Label(prompt, value, labels),
-                    $"then choose a {macro.Prompts[depth + 1].Name}",
+                    label,
+                    $"then choose a {next.Name}",
                     string.Empty,
                     Children: Choices(macro, depth + 1, answers, sources, labels)));
         }
@@ -521,7 +680,7 @@ public static class PaletteEntries
         IReadOnlyList<string> commands, IReadOnlyDictionary<string, string> answers) =>
         string.Join('\n', commands.Select(c => MacroText.Fill(c, answers, quoted: true)));
 
-    /// <summary>The choices a prompt offers, from whichever list it named.</summary>
+    /// <summary>The choices a prompt offers, from whichever list it named. A script's are not known until it runs.</summary>
     private static IReadOnlyList<string> ValuesFor(MacroParam prompt, CompletionSources sources) =>
         prompt.Source switch
         {
@@ -532,6 +691,7 @@ public static class PaletteEntries
             MacroParamSource.Directions => ["left", "right", "up", "down"],
             MacroParamSource.Contexts => sources.Contexts ?? [],
             MacroParamSource.Arrangements => sources.Arrangements ?? [],
+            MacroParamSource.Script => [],
             _ => prompt.Literals,
         };
 
@@ -545,6 +705,7 @@ public static class PaletteEntries
         MacroParamSource.Directions => "directions",
         MacroParamSource.Contexts => "contexts",
         MacroParamSource.Arrangements => "saved arrangements",
+        MacroParamSource.Script => "lines from the program",
         _ => "values",
     };
 

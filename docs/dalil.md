@@ -173,9 +173,44 @@ dalil {
 
 Enter opens the picker; Escape goes back one question rather than dismissing. Choices
 come `from=` a list the palette already holds — `workspaces`, `layouts`,
-`binding-modes`, `scratchpads`, `directions`, `contexts` — or from `values="a b c"`
-when you want a set the window manager does not know. Workspaces are shown as
-`3 — Code`, because a picker reading `\` is not one anybody can choose from.
+`binding-modes`, `scratchpads`, `directions`, `contexts`, `arrangements` — or from
+`values="a b c"` when you want a set the window manager does not know. Workspaces are
+shown as `3 — Code`, because a picker reading `\` is not one anybody can choose from.
+
+**A program can answer the question.** `run=` on a `param` names a program, and each
+line it prints is a choice — the palette's version of the bar's `kind="command"`
+source, and how a list the window manager knows nothing about gets onto the palette:
+projects, notes, bookmarks, whatever a script can enumerate.
+
+```kdl
+general { allow-shell-exec-over-ipc #true }   // see below
+
+dalil {
+    action "Open a project..." description="Any folder under ~/Github" {
+        param "p" run="pwsh -NoProfile -File projects.ps1"
+        shell-exec code "{p}"
+    }
+}
+```
+
+The program runs when the question is asked, not when the palette opens, so a palette
+opened for a window pays nothing; the frame opens at once saying what it is asking and
+the rows replace that when the program has printed. A line is the value; a line with a
+tab in it is what to show, then what to substitute — `Shubbak<TAB>W:\Github\Shubbak`
+— so a path is chosen by its name and the row's dim half still says where it goes.
+Blank lines are skipped and a value seen twice is offered once. A program that prints
+nothing usable, cannot be started, or has not finished in ten seconds is said so in
+the frame, with what it wrote to standard error; one that outstays its welcome is
+stopped, along with anything it started. The first thousand lines are read. `run=`
+with nothing to run is an error (`DAL0019`); a later `param` may be a program too,
+and a program's answer may lead to another question.
+
+The example above runs `shell-exec`, which the window manager refuses over the pipe
+unless `general { allow-shell-exec-over-ipc #true }` — and every palette action
+travels over the pipe, which is why the example sets it. Without it, rather than close
+and do nothing, such a row is listed as unable to run with the setting named, and
+`check-config` says the same (`DAL0020`). The pipe is scoped to your account, not your
+integrity level, which is why the default is off; see [Scripting](scripting.md#security).
 
 The checking is real: a placeholder nothing declares is an error with a line and a
 caret, a question no command asks is a warning, and `move --direction "{d}"` is probed

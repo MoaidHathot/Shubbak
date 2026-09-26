@@ -104,7 +104,7 @@ public static class DalilConfigLoader
         if (parsed.HasErrors) return new DalilConfigLoad(new DalilConfig(), diagnostics, Usable: false);
 
         DalilConfig config = parsed.Document.Node("dalil") is { } node
-            ? Read(node, diagnostics)
+            ? Read(node, ShellExecAllowedOverIpc(parsed.Document), diagnostics)
             : new DalilConfig();
 
         bool usable = !diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
@@ -112,7 +112,25 @@ public static class DalilConfigLoader
         return new DalilConfigLoad(config, diagnostics, usable);
     }
 
-    private static DalilConfig Read(KdlNode node, List<Diagnostic>? diagnostics)
+    /// <summary>
+    /// Whether the same file lets <c>shell-exec</c> in over the pipe, which is the
+    /// only way a palette action reaches the window manager.
+    /// </summary>
+    /// <remarks>
+    /// Read from the <c>general</c> section the window manager reads, in both shapes
+    /// it accepts. The default is the window manager's default - refused - so a file
+    /// that says nothing is a file whose <c>shell-exec</c> actions cannot run.
+    /// </remarks>
+    private static bool ShellExecAllowedOverIpc(KdlDocument document)
+    {
+        KdlValue? value = document.Node("general") is { } general
+            ? general.Child("allow-shell-exec-over-ipc")?.Argument(0) ?? general.Property("allow-shell-exec-over-ipc")
+            : null;
+
+        return value is not null && value.TryAsBool(out bool allowed) && allowed;
+    }
+
+    private static DalilConfig Read(KdlNode node, bool shellExecOverIpc, List<Diagnostic>? diagnostics)
     {
         var defaults = new DalilConfig();
 
@@ -148,7 +166,7 @@ public static class DalilConfigLoader
             Placement = ParsePlacement(node, diagnostics) ?? defaults.Placement,
 
             Prefixes = ReadPrefixes(node, diagnostics),
-            Macros = ReadMacros(node, diagnostics),
+            Macros = ReadMacros(node, shellExecOverIpc, diagnostics),
 
             Background = Colour(node, "background", diagnostics) ?? defaults.Background,
             Foreground = Colour(node, "foreground", diagnostics) ?? defaults.Foreground,
@@ -377,8 +395,14 @@ public static class DalilConfigLoader
     /// the same reason: a mistake should be reported in the words the config file would
     /// have used, at the moment it can still be read, rather than as silence.
     /// </para>
+    /// <para>
+    /// The same goes for <c>shell-exec</c>: the window manager refuses it over the pipe
+    /// unless <c>general { allow-shell-exec-over-ipc #true }</c>, and every palette
+    /// action travels over the pipe. A row that would be refused is listed as unable to
+    /// run, with the setting named, rather than closing the palette and doing nothing.
+    /// </para>
     /// </remarks>
-    private static List<PaletteMacro> ReadMacros(KdlNode node, List<Diagnostic>? diagnostics)
+    private static List<PaletteMacro> ReadMacros(KdlNode node, bool shellExecOverIpc, List<Diagnostic>? diagnostics)
     {
         List<PaletteMacro> macros = [];
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
@@ -476,8 +500,24 @@ public static class DalilConfigLoader
 
                 if (CommandParser.TryParseTokens(
                         probed, string.Join(' ', probed), child.Span,
-                        out WmCommand? _, out Diagnostic? error))
+                        out WmCommand? parsedCommand, out Diagnostic? error))
                 {
+                    // Parses, but the window manager would refuse it at the far end of
+                    // the pipe, and the palette would have closed by then with nothing
+                    // to say. Said here, and on the row.
+                    if (parsedCommand is ShellExecCommand && !shellExecOverIpc)
+                    {
+                        const string refusal = "shell-exec is refused over the pipe unless general { allow-shell-exec-over-ipc #true }";
+
+                        diagnostics?.Add(Diagnostic.Warning(
+                            "DAL0020",
+                            $"Palette action '{name}' runs shell-exec, which the window manager refuses over the pipe; the row cannot run.",
+                            child.Span,
+                            "Set general { allow-shell-exec-over-ipc #true } to permit it. The pipe is scoped to your account, not your integrity level, which is why it is off."));
+
+                        problem ??= refusal;
+                    }
+
                     commands.Add(display);
                     continue;
                 }
@@ -602,6 +642,28 @@ public static class DalilConfigLoader
                 continue;
             }
 
+            // A program that prints the choices. Between the written-out values and
+            // the window manager's lists: more than the file could write, less than
+            // the window manager could know.
+            if ((child.Property("run") ?? child.Child("run")?.Argument(0)) is { } run)
+            {
+                string commandLine = run.AsString().Trim();
+
+                if (commandLine.Length == 0)
+                {
+                    diagnostics?.Add(Diagnostic.Error(
+                        "DAL0019",
+                        $"Palette action '{macro}': param '{name}' has run= with nothing to run.",
+                        run.Span,
+                        "Write run=\"pwsh -NoProfile -File choices.ps1\"; each line the program prints is a choice."));
+
+                    continue;
+                }
+
+                parameters.Add(new MacroParam(name, MacroParamSource.Script, []) { Run = commandLine });
+                continue;
+            }
+
             string from =
                 child.Property("from")?.AsString() ??
                 child.Child("from")?.Argument(0)?.AsString() ??
@@ -616,7 +678,7 @@ public static class DalilConfigLoader
                     Suggestion.Closest(from, s_paramSources) is { } guess
                         ? $"Did you mean '{guess}'?"
                         : $"Available: {string.Join(", ", s_paramSources)}. " +
-                          "Or write the choices out with values=\"a b c\"."));
+                          "Or write the choices out with values=\"a b c\", or have a program print them with run=\"...\"."));
 
                 continue;
             }

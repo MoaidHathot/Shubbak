@@ -17,6 +17,33 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **A program can answer a palette question.** `param "p" run="pwsh -File projects.ps1"`
+  on an action names a program, and each line it prints is a choice - the palette's
+  version of the bar's `kind="command"` source, and how a list the window manager knows
+  nothing about gets onto the palette: projects, notes, bookmarks, whatever a script can
+  enumerate. Run when the question is asked, not when the palette opens, so a palette
+  opened for a window pays nothing; the frame opens at once saying what it is asking
+  (`asking for a p…`, with the command line and a `running` badge) and the rows replace
+  it in place when the program has printed - or are dropped, if Escape or another
+  question got there first. A line is the value; a line with a tab in it is what to show,
+  then what to substitute, so a path is chosen by its name. Blank lines are skipped, a
+  value seen twice is offered once, the first thousand lines are read, and a program
+  that prints nothing usable, cannot be started, exits badly with nothing to show, or
+  has not finished in ten seconds says so in the frame, with what it wrote to standard
+  error; one that outstays its welcome is stopped with everything it started. A later
+  `param` may be a program too, and a program's answer may lead to another question.
+  `run=` with nothing to run is an error (`DAL0019`). `MacroParamSource.Script`,
+  `ScriptPrompt`, `ScriptList` and `PaletteEntries.ScriptChoices` are the pieces;
+  `PaletteEntry.Runs` is how a row carries the question, alongside `Composes` and the
+  rest. Verified live: three lines from a PowerShell script became three rows, the
+  tab-separated one showing its name with the path in its command.
+- **A palette action that runs `shell-exec` says it cannot, rather than doing nothing.**
+  The window manager refuses `shell-exec` over the pipe unless
+  `general { allow-shell-exec-over-ipc #true }`, and every palette action travels over
+  the pipe - so such a row closed the palette and did nothing, with the refusal in a log
+  nobody was reading. The loader now reads the same file's `general` section, and a row
+  that would be refused is listed as unable to run with the setting named; `check-config`
+  says the same (`DAL0020`). Setting the flag and saving is a reload, and the row is back.
 - **A program can put a value on the bar by raising a signal.** `source "battery"
   kind="signal"` in the `bar` section makes `{{ battery }}` read whatever
   `shubbak signal battery 41` last said - the signal's arguments joined by a space, or

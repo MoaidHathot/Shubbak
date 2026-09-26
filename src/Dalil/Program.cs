@@ -196,6 +196,29 @@ internal static class Program
             });
         });
 
+        // A question a program answers. Run off the loop, like a report is fetched off
+        // it: a script is a few hundred milliseconds the palette must not freeze for.
+        // The rows are built from what it printed, against the lists the palette holds
+        // now, and the frame that asked is the one that gets them - or drops them, if
+        // the person has moved on.
+        s_palette.ScriptRequested += (question, title) => _ = Task.Run(async () =>
+        {
+            ScriptList.Result result = await ScriptList.RunAsync(question.CommandLine).ConfigureAwait(false);
+
+            if (result.Failure is { } failure)
+                Log.Warn(LogCategory.Wm, $"action '{question.Macro.Name}': {question.CommandLine}: {failure}");
+
+            Post(() =>
+            {
+                if (s_palette is not { } palette) return;
+
+                if (result.Succeeded)
+                    palette.ShowScriptChoices(question, PaletteEntries.ScriptChoices(question, result.Lines, s_completions, s_sources.WorkspaceLabels));
+                else
+                    palette.ShowScriptFailure(question, result.Failure!);
+            });
+        });
+
         // The widened inspect list is a moment, not a preference.
         s_palette.Closed += () => s_everyWindow = false;
 

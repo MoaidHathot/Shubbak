@@ -37,6 +37,18 @@ public enum MacroParamSource
 
     /// <summary>Exactly what was written beside the parameter, and nothing else.</summary>
     Literals,
+
+    /// <summary>
+    /// Whatever a program prints, one line per choice, run when the question is asked.
+    /// </summary>
+    /// <remarks>
+    /// The palette's version of the bar's <c>kind="command"</c> source: a list the
+    /// window manager knows nothing about - projects, notes, bookmarks, virtual machines
+    /// - written in any language that can print. Run on demand rather than kept, since
+    /// a script per palette opening would be paid on every keystroke that opens it and
+    /// most openings are for a window.
+    /// </remarks>
+    Script,
 }
 
 /// <summary>
@@ -54,6 +66,8 @@ public enum MacroParamSource
 /// drawn from a list the palette already has, and a list can be searched, ranked and
 /// shown with what each value means - whereas a text box would have to be typed into
 /// blind and would accept a workspace that does not exist as readily as one that does.
+/// A script is the one list the palette does not have, and it is still a list: the
+/// program decides what is on it, and the palette searches it like any other.
 /// </para>
 /// </remarks>
 /// <param name="Name">What the placeholder is called, without the braces.</param>
@@ -70,6 +84,19 @@ public sealed record MacroParam(
     /// so there is one substitution syntax in this file rather than two.
     /// </remarks>
     public string Placeholder => $"{{{Name}}}";
+
+    /// <summary>
+    /// The program that prints the choices, for <see cref="MacroParamSource.Script"/>;
+    /// null for every other source.
+    /// </summary>
+    /// <remarks>
+    /// A command line as the bar's <c>command=</c> takes one: the program and its
+    /// arguments, the program quoted if its path has a space. Each non-empty line it
+    /// prints is a choice; a line with a tab in it is what to show, then what to
+    /// substitute - <c>Shubbak&lt;TAB&gt;W:\Github\Shubbak</c> - so a path can be chosen
+    /// by its name.
+    /// </remarks>
+    public string? Run { get; init; }
 }
 
 /// <summary>

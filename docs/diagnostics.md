@@ -176,6 +176,8 @@ code, not the page.
 | `DAL0016` | Warning | Palette action '{macro}' declares '{name}' more than once; the first will be used. |
 | `DAL0017` | Error | Palette action '{macro}': '{from}' is not a list to choose from. |
 | `DAL0018` | Warning | The prefix for '{child.Name}' is "{spelling}", a letter or digit; typing it into an empty palette will change mode instead of searching. |
+| `DAL0019` | Error | Palette action '{macro}': param '{name}' has run= with nothing to run. |
+| `DAL0020` | Warning | Palette action '{name}' runs shell-exec, which the window manager refuses over the pipe; the row cannot run. |
 
 ## AYN - The watcher
 

@@ -30,6 +30,9 @@ internal enum PaletteChoice
     /// <summary>Fetch the window's report and open the rules that could be written for it.</summary>
     Compose,
 
+    /// <summary>Run the program behind the row's question and open what it printed.</summary>
+    RunScript,
+
     /// <summary>Open the list the row carries.</summary>
     OpenChildren,
 
@@ -236,6 +239,10 @@ internal static class PaletteInput
         if (entry.Removes is not null) return PaletteChoice.Remove;
         if (entry.Composes is not null) return PaletteChoice.Compose;
 
+        // And some ask a program. The row is a question with no list yet; the host
+        // runs the program and the list is what it printed.
+        if (entry.Runs is not null) return PaletteChoice.RunScript;
+
         // Some rows are longer than a row. Opening one shows the whole thing rather
         // than the part that fit, which is the only way to read a path, the sentence
         // about elevation, or a composed rule without leaving the palette for a shell.
@@ -356,6 +363,7 @@ internal static class PaletteInput
         { Applies: not null } => "add it",
         { Removes: not null } => "remove it",
         { Composes: not null } => "choose",
+        { Runs: not null } => "ask",
         { Expands.Length: > 0 } => "read it",
         { HasActions: true, Command.Length: 0 } => "open",
         { Destructive: true, Command.Length: > 0 } => "ask first",

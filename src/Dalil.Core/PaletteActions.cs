@@ -58,6 +58,12 @@ namespace Dalil.Core;
 /// choices depend on things only the report knows: whether the filter could be
 /// overruled, and which rules already match.
 /// </param>
+/// <param name="Runs">
+/// When set, choosing this runs a program and opens what it printed as the next list
+/// of choices; see <see cref="ScriptPrompt"/>. Fetched like a report: the palette
+/// stays open, shows that it is waiting, and the host pushes the rows when the
+/// program has said its piece.
+/// </param>
 public sealed record PaletteAction(
     string Name,
     string Description,
@@ -70,7 +76,41 @@ public sealed record PaletteAction(
     string? Copies = null,
     RuleToAdd? Applies = null,
     RuleToRemove? Removes = null,
-    long? Composes = null);
+    long? Composes = null,
+    ScriptPrompt? Runs = null);
+
+/// <summary>
+/// A question whose choices a program prints: which macro is asking, which of its
+/// questions this is, and what has been answered so far.
+/// </summary>
+/// <param name="macro">The action being run.</param>
+/// <param name="depth">Which of its prompts this is, from zero.</param>
+/// <param name="answers">The values chosen for the prompts before it.</param>
+/// <remarks>
+/// Everything the host needs to run the program and everything the palette needs to
+/// turn its lines into rows, carried together so the answer can be matched to the
+/// question it was for: a frame opened for one script must not be filled by a slow
+/// answer to another, and a palette that has moved on drops the answer altogether.
+/// Compared by reference, deliberately - two identical questions asked twice are two
+/// requests.
+/// </remarks>
+public sealed class ScriptPrompt(PaletteMacro macro, int depth, IReadOnlyDictionary<string, string> answers)
+{
+    /// <summary>The action being run.</summary>
+    public PaletteMacro Macro { get; } = macro ?? throw new ArgumentNullException(nameof(macro));
+
+    /// <summary>Which of its prompts this is, from zero.</summary>
+    public int Depth { get; } = depth;
+
+    /// <summary>The values chosen for the prompts before it.</summary>
+    public IReadOnlyDictionary<string, string> Answers { get; } = answers ?? throw new ArgumentNullException(nameof(answers));
+
+    /// <summary>The prompt itself.</summary>
+    public MacroParam Prompt => Macro.Prompts[Depth];
+
+    /// <summary>The program to run, as the file wrote it.</summary>
+    public string CommandLine => Prompt.Run ?? string.Empty;
+}
 
 /// <summary>A rule to be added to the configuration file, when somebody chooses to.</summary>
 /// <param name="Kdl">The rule, as the palette showed it.</param>
@@ -816,7 +856,8 @@ public static class PaletteActions
                 Copies: action.Copies,
                 Applies: action.Applies,
                 Removes: action.Removes,
-                Composes: action.Composes));
+                Composes: action.Composes,
+                Runs: action.Runs));
         }
 
         return entries;

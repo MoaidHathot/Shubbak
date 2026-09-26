@@ -106,6 +106,12 @@ public sealed class PaletteWindow : CompanionWindow
     /// happen. Its "yes" row is itself destructive, so without knowing this the choice
     /// would be routed straight back into another confirmation, for ever.
     /// </param>
+    /// <param name="Pending">
+    /// The question this frame is waiting on a program to answer, while it shows the
+    /// waiting row. The answer replaces the frame only if it is still on top and still
+    /// this frame's - a slow answer to a question Escape has already dismissed, or to
+    /// another question asked since, is dropped.
+    /// </param>
     /// <remarks>
     /// The rows are held here rather than reached back through the row the frame was
     /// opened from. Most frames are a row's own children, but not all: an explanation
@@ -118,7 +124,8 @@ public sealed class PaletteWindow : CompanionWindow
         PaletteEntry? SavedSelection,
         IReadOnlyList<PaletteEntry> Entries,
         string? Whole = null,
-        bool Confirms = false);
+        bool Confirms = false,
+        ScriptPrompt? Pending = null);
 
     /// <summary>Lists opened from a row, innermost last.</summary>
     private readonly Stack<Overlay> _overlays = new();
@@ -191,6 +198,13 @@ public sealed class PaletteWindow : CompanionWindow
     /// stays open and the host calls <see cref="ShowRuleChoices"/> when it arrives.
     /// </remarks>
     public event Action<long, string>? ComposeRequested;
+
+    /// <summary>
+    /// Raised when a row's question is a program's to answer: the question, and the
+    /// title of the frame waiting for it. The host runs the program off this thread and
+    /// hands the rows back through <see cref="ShowScriptChoices"/>.
+    /// </summary>
+    public event Action<ScriptPrompt, string>? ScriptRequested;
 
     /// <summary>
     /// Raised when a row asks for its rule to be added to the configuration file.
@@ -813,7 +827,8 @@ public sealed class PaletteWindow : CompanionWindow
                 action.Name, action.Description, [], action.Command,
                 Explains: action.Explains, Expands: action.Expands,
                 Destructive: action.Destructive, Copies: action.Copies,
-                Applies: action.Applies, Removes: action.Removes, Composes: action.Composes),
+                Applies: action.Applies, Removes: action.Removes, Composes: action.Composes,
+                Runs: action.Runs),
             selected.Entry.Primary);
     }
 
@@ -857,6 +872,12 @@ public sealed class PaletteWindow : CompanionWindow
             return true;
         }
 
+        if (action.Runs is { } question)
+        {
+            AskScript(question, Breadcrumb(leaf));
+            return true;
+        }
+
         if (action.Expands is { Length: > 0 } whole)
         {
             Expand(whole, Breadcrumb(action.Primary));
@@ -888,11 +909,11 @@ public sealed class PaletteWindow : CompanionWindow
         Push(title, entries, whole: null, confirms: false);
 
     private void Push(
-        string title, IReadOnlyList<PaletteEntry> entries, string? whole, bool confirms)
+        string title, IReadOnlyList<PaletteEntry> entries, string? whole, bool confirms, ScriptPrompt? pending = null)
     {
         if (entries.Count == 0) return;
 
-        _overlays.Push(new Overlay(title, _model.Query, _model.Selected?.Entry, entries, whole, confirms));
+        _overlays.Push(new Overlay(title, _model.Query, _model.Selected?.Entry, entries, whole, confirms, pending));
 
         // Told before the rows are installed, so the derived rows for the list
         // underneath are not appended to this frame; see PaletteModel.Overlaid.
@@ -901,6 +922,53 @@ public sealed class PaletteWindow : CompanionWindow
         _model.SetEntries(entries);
 
         Refreshed();
+    }
+
+    /// <summary>
+    /// Opens a frame that is waiting on a program, and asks the host to run it.
+    /// </summary>
+    /// <remarks>
+    /// The frame opens at once with one row saying what is being asked, because a
+    /// program is a few hundred milliseconds away from its first line and a keystroke
+    /// that showed nothing for that long would read as having done nothing. The frame
+    /// remembers the question, so the answer can be matched to it when it comes.
+    /// </remarks>
+    private void AskScript(ScriptPrompt question, string title)
+    {
+        Push(title, PaletteEntries.ScriptWaiting(question), whole: null, confirms: false, pending: question);
+        ScriptRequested?.Invoke(question, title);
+    }
+
+    /// <summary>
+    /// Replaces the waiting frame with what the program printed, if that frame is
+    /// still the one on top; otherwise the answer is dropped, since the person has
+    /// moved on.
+    /// </summary>
+    public void ShowScriptChoices(ScriptPrompt question, IReadOnlyList<PaletteEntry> entries)
+    {
+        ArgumentNullException.ThrowIfNull(question);
+        ArgumentNullException.ThrowIfNull(entries);
+
+        if (!_open || entries.Count == 0) return;
+        if (_overlays.Count == 0 || !ReferenceEquals(_overlays.Peek().Pending, question)) return;
+
+        // The same frame, answered: the title, the query and the selection to go back
+        // to are the ones the waiting frame saved when it opened.
+        Overlay waiting = _overlays.Pop();
+        _overlays.Push(waiting with { Entries = entries, Pending = null });
+
+        _model.SetQuery(string.Empty);
+        _model.SetEntries(entries);
+
+        Refreshed();
+    }
+
+    /// <summary>Says why the program's choices could not be had, in the frame that waited for them.</summary>
+    public void ShowScriptFailure(ScriptPrompt question, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(question);
+
+        ShowScriptChoices(question, PaletteEntries.ScriptFailure(question, reason ?? "no reason was given"));
     }
 
     /// <summary>Asks whether something irreversible should really happen.</summary>
@@ -1267,6 +1335,12 @@ public sealed class PaletteWindow : CompanionWindow
 
             case PaletteChoice.Compose:
                 ComposeRequested?.Invoke(entry.Composes!.Value, Breadcrumb(entry.Primary));
+                return;
+
+            case PaletteChoice.RunScript:
+                // A program's to answer: the frame opens waiting, and the host fills
+                // it when the program has printed.
+                AskScript(entry.Runs!, Breadcrumb(entry.Primary));
                 return;
 
             case PaletteChoice.OpenChildren:

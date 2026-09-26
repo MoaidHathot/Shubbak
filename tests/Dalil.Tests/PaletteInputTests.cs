@@ -397,6 +397,22 @@ public class PaletteInputTests
     }
 
     [Fact]
+    public void ARowWhoseQuestionAProgramAnswersAsksTheHostWhereverItIs()
+    {
+        // At the top level and inside a frame alike: the row has no list of its own
+        // until the program has printed, so Enter cannot open anything and must ask.
+        var macro = new PaletteMacro("Open...", "", ["focus --workspace {p}"],
+            Parameters: [new MacroParam("p", MacroParamSource.Script, []) { Run = "list.exe" }]);
+        var question = new ScriptPrompt(macro, 0, new Dictionary<string, string>());
+
+        PaletteEntry entry = Entry(command: "", prompts: true) with { Runs = question };
+
+        Assert.Equal(PaletteChoice.RunScript, PaletteInput.Choose(entry, PaletteMode.Commands, insideOverlay: false));
+        Assert.Equal(PaletteChoice.RunScript, PaletteInput.Choose(entry, PaletteMode.Commands, insideOverlay: true));
+        Assert.Equal("ask", PaletteInput.VerbFor(entry));
+    }
+
+    [Fact]
     public void ARequestBeatsAListAndAText()
     {
         // A row that both applies and carries a list applies: the list is what

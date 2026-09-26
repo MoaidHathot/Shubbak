@@ -192,6 +192,11 @@ public enum PaletteMode
 /// The window choosing this row writes rules for, when that is what choosing it does.
 /// The report is fetched first, because the rules worth offering depend on it.
 /// </param>
+/// <param name="Runs">
+/// The program choosing this row runs for its next list of choices, when that is what
+/// choosing it does. Fetched like a report: the palette stays open until the program
+/// has printed, and shows that it is waiting.
+/// </param>
 public sealed record PaletteEntry(
     string Primary,
     string Secondary,
@@ -212,7 +217,8 @@ public sealed record PaletteEntry(
     string? Copies = null,
     RuleToAdd? Applies = null,
     RuleToRemove? Removes = null,
-    long? Composes = null)
+    long? Composes = null,
+    ScriptPrompt? Runs = null)
 {
     /// <summary>Whether there is anything Ctrl+Enter could show, without working out what.</summary>
     public bool HasActions => Actions is { Count: > 0 } || ActionsFactory is not null;
