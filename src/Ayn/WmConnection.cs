@@ -89,6 +89,26 @@ internal sealed class WmConnection : IAsyncDisposable
     public AutoResetEvent Signalled { get; } = new(false);
 
     /// <summary>
+    /// Somebody raised <c>signal "announce"</c>: a listener that wants every published
+    /// value said again. The loop answers by forgetting what it has said and flushing.
+    /// </summary>
+    /// <remarks>
+    /// A flag rather than a queue, because two announces in one wake - three bars
+    /// connecting within a moment of each other, each asking - want one answer, not
+    /// three. Read and cleared by the loop with <see cref="TakeAnnounceRequested"/>.
+    /// </remarks>
+    private volatile bool _announceRequested;
+
+    /// <summary>Whether an announce arrived since this was last asked; clears it.</summary>
+    public bool TakeAnnounceRequested()
+    {
+        if (!_announceRequested) return false;
+
+        _announceRequested = false;
+        return true;
+    }
+
+    /// <summary>
     /// What the signals asked for, in order. Queued by the pump, drained by the loop.
     /// </summary>
     /// <remarks>
@@ -201,10 +221,21 @@ internal sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    /// <summary>Reads a signal payload; ours are queued, everyone else's are ignored.</summary>
+    /// <summary>Reads a signal payload; ours are queued, an announce is noted, everyone else's are ignored.</summary>
     private void OnSignal(string json)
     {
-        if (SignalPayload.Parse(json) is not { } signal || !signal.IsFor(SignalName)) return;
+        if (SignalPayload.Parse(json) is not { } signal) return;
+
+        if (signal.IsFor(IpcProtocol.AnnounceSignal))
+        {
+            // The bar, most likely, having just connected with a signal source in its
+            // file. Whatever this watcher publishes is said again on the next wake.
+            _announceRequested = true;
+            Signalled.Set();
+            return;
+        }
+
+        if (!signal.IsFor(SignalName)) return;
 
         if (SignalRequest.Parse(signal.Arguments, out string? refusal) is { } request)
         {

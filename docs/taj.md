@@ -52,7 +52,8 @@ A `source` is a value the bar watches. `kind="time"` is a clock, with a `format`
 optional `timezone` (a Windows id or an IANA one) and an optional `culture` — a BCP 47
 name such as `de-DE` or `ar-SA` that decides what `dddd` and `MMMM` come out as;
 without one they are English. `kind="keyboard"` is the input language of the window in
-front, as a two-letter code. `kind="command"` runs a program, and comes in two shapes:
+front, as a two-letter code. `kind="signal"` is a value another program puts on the
+bar by raising a signal, described below. `kind="command"` runs a program, and comes in two shapes:
 without an `interval` the program is expected to stay running and every line it prints
 is the new value — a program that exits is started again, with a wait that doubles to
 a minute if it keeps exiting without printing; with an `interval` the program is
@@ -76,6 +77,39 @@ monitor plugged in — is given every value the sources already have. A source w
 `kind` the bar does not know, or a `command` with nothing to run, is pointed out at
 load (`TAJ0027`, `TAJ0028`), as is a `culture` the machine has never heard of
 (`TAJ0032`).
+
+`kind="signal"` is the fourth kind, for a program that already knows the value and
+would otherwise have to be started a second time by the bar to say it. It listens for
+a [signal](scripting.md#signals) — its own name unless `signal=` says otherwise — and
+the signal's arguments are the value, joined by a space; a signal with no arguments is
+the empty value, which hides the widget. `shubbak signal battery 87` from any script,
+a keybinding or another program makes `{{ battery }}` read `87`:
+
+```kdl
+bar {
+    source "battery" kind="signal"                     // shubbak signal battery 87
+    source "out" kind="signal" signal="speaker"        // the same signal under another name
+
+    profile "default" {
+        zone "right" justify="end" {
+            text template="{{ battery }}%"
+            text template="{{ out | truncate:24 }}"
+        }
+    }
+}
+```
+
+The watcher publishes three of its readings this way when its section names them —
+the battery's percentage and the names of the default speaker and microphone; see
+[Ayn](ayn.md#values). A signal source has no timer, no thread and no process, so it
+costs nothing while nobody is publishing; and a bar with no signal source never
+subscribes to the topic at all, so the window manager still says when a signal is
+raised with nobody listening. Because a signal is fire-and-forget and the window
+manager keeps none of it, the bar raises `signal "announce"` when it connects with a
+signal source in its file, and again after a reload, and a publisher that hears it
+says its values again — so a bar started after the value was last sent is not blank
+until it next changes. A publisher of your own honours that by re-sending on
+`announce`; one that does not is simply blank until its next change.
 
 Some values need no source at all, because they come from the window manager's event
 stream: `{{ window.title }}`, `{{ window.state }}`, `{{ layout }}`, `{{ workspace }}`

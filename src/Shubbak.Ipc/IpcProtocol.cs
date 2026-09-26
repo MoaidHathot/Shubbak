@@ -792,6 +792,30 @@ public static class IpcProtocol
     public const string SignalTopic = "signal";
 
     /// <summary>
+    /// The one signal name that is a convention between clients rather than one
+    /// program's own: <c>signal "announce"</c> asks every program that publishes
+    /// values over signals to send them again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A signal is fire-and-forget and the window manager keeps none of it, so a
+    /// program that started after a value was last sent - the bar, after a restart of
+    /// its own - would show nothing until the value next changed, which for a battery
+    /// percentage is minutes and for the name of the default speaker may be never. The
+    /// bar raises this when it connects with a <c>signal</c> source in its file, and
+    /// again on a reload; a publisher that hears it repeats what it last said. The
+    /// window manager carries the word without reading it, like every other signal.
+    /// </para>
+    /// <para>
+    /// Here rather than in either program, because a convention two programs must
+    /// spell identically wants one spelling - and because a script that publishes a
+    /// value of its own is invited to honour it too, so the name is documented with
+    /// the protocol.
+    /// </para>
+    /// </remarks>
+    public const string AnnounceSignal = "announce";
+
+    /// <summary>
     /// Every topic the window manager publishes.
     /// </summary>
     /// <remarks>

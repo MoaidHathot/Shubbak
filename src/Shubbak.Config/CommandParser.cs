@@ -999,7 +999,10 @@ public static class CommandParser
     /// name reads as it always did. Double quotes unless the value has one, single
     /// quotes otherwise. A value with both cannot be written in this command language
     /// - the tokeniser has no escape - and <see cref="CanQuote"/> says so ahead of time;
-    /// the loader refuses such a name (SHB0454) so it never reaches here.
+    /// the loader refuses such a name (SHB0454) so it never reaches here. Nor can the
+    /// empty string: it is spelled <c>""</c> for want of anything better, and the
+    /// tokeniser reads that back as no token at all, so a caller that means "one
+    /// empty argument" must find another way to say it.
     /// </para>
     /// </remarks>
     /// <exception cref="ArgumentException">The value contains both kinds of quote.</exception>

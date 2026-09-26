@@ -257,6 +257,22 @@ public sealed class IpcServer : IAsyncDisposable
     }
 
     /// <summary>
+    /// How many clients are subscribed to each topic, by name, and how many asked
+    /// for everything; a snapshot, for the diagnostic report.
+    /// </summary>
+    /// <remarks>
+    /// The question this answers is "who is listening": a palette key that does
+    /// nothing is a <c>signal</c> with no subscriber, and a bar that should not be
+    /// paying for a topic is one that appears here when it should not. Read from the
+    /// same counts <see cref="HasSubscribers"/> reads, so the two cannot disagree.
+    /// </remarks>
+    public (IReadOnlyDictionary<string, int> ByTopic, int ToEverything) SubscriberCounts()
+    {
+        lock (_gate)
+            return (new Dictionary<string, int>(_topicSubscribers, StringComparer.Ordinal), _subscribedToAll);
+    }
+
+    /// <summary>
     /// The pipe handles of every client subscribed to a topic.
     /// </summary>
     /// <remarks>

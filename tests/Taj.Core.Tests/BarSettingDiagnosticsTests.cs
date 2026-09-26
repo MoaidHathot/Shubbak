@@ -86,6 +86,7 @@ public sealed class BarSettingDiagnosticsTests
                 source "a" kind="time" format="HH:mm"
                 source "b" kind="command" command="x.exe"
                 source "c" kind="keyboard"
+                source "d" kind="signal"
                 profile "default" { height 30 }
             }
             """);

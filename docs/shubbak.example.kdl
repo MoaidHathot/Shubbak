@@ -1144,4 +1144,15 @@ ayn {
     // call opens and closes the devices several times while it is setting up. The
     // mute is never settled: a person who pressed the key wants the icon now.
     settle 500
+
+    // Three readings can go to the bar as words rather than as contexts, each as a
+    // signal the window manager carries without reading: the battery's percentage
+    // and the names of the default speaker and microphone. The bar shows one with
+    // `source "battery" kind="signal"` and `{{ battery }}`, and asks for them again
+    // when it connects, so a bar started after the watcher is not blank. Off until
+    // named:
+    //
+    //     power      { battery-percent "battery" }
+    //     speaker    { device-name "speaker" }
+    //     microphone { device-name "microphone" }
 }

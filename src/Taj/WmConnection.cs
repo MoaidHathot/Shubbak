@@ -148,6 +148,37 @@ public sealed class WmConnection : IAsyncDisposable
     ]);
 
     /// <summary>
+    /// The list above with the <c>signal</c> topic as well, for a bar whose file has a
+    /// <c>kind="signal"</c> source.
+    /// </summary>
+    /// <remarks>
+    /// Two lists rather than one, because the topic is only asked for when something
+    /// reads it. Every subscriber to <c>signal</c> costs the window manager two calls on
+    /// its own thread per signal raised - the palette's key is a signal, so that is
+    /// every time the palette opens - and takes from it the line that says a signal was
+    /// raised with nobody listening, which is how a palette key that does nothing gets
+    /// diagnosed. A bar with no signal source has no business paying either.
+    /// </remarks>
+    private static readonly string SubscribedWithSignals = Subscribed + "," + IpcProtocol.SignalTopic;
+
+    /// <summary>
+    /// Raised for every <c>signal</c> the window manager carries, with its name and
+    /// arguments, when this connection was started listening for them.
+    /// </summary>
+    /// <remarks>
+    /// Raised, not routed: which sources take the value is the hub's to decide, and
+    /// the hub is shared by every bar while this connection belongs to one. Runs on
+    /// the pump's task, which is the thread the sources have always published from.
+    /// </remarks>
+    public event Action<string, IReadOnlyList<string>>? SignalReceived;
+
+    /// <summary>
+    /// Whether this connection is subscribed to the <c>signal</c> topic. Decided when it
+    /// is started, and changed by <see cref="Restart"/>.
+    /// </summary>
+    public bool ListensForSignals { get; private set; }
+
+    /// <summary>
     /// Raised when the contexts the window manager holds differ from the last time
     /// this connection looked, so profiles can switch.
     /// </summary>
@@ -213,6 +244,9 @@ public sealed class WmConnection : IAsyncDisposable
     /// <summary>The display this connection filters for.</summary>
     public string DeviceId => _deviceId;
 
+    /// <summary>Which pipe to connect to. The window manager's, unless a test says otherwise.</summary>
+    public string PipeName { get; init; } = IpcProtocol.PipeName;
+
     /// <summary>
     /// Whether to show only this monitor's workspaces.
     /// </summary>
@@ -245,14 +279,48 @@ public sealed class WmConnection : IAsyncDisposable
     /// Connects and begins consuming events, retrying until the window manager
     /// appears.
     /// </summary>
+    /// <param name="listenForSignals">
+    /// Whether to subscribe to the <c>signal</c> topic as well; see
+    /// <see cref="SubscribedWithSignals"/>.
+    /// </param>
     /// <remarks>
     /// Retrying rather than failing matters because the bar is usually launched by
     /// the window manager's own startup command, and can therefore win the race.
     /// </remarks>
-    public void Start()
+    public void Start(bool listenForSignals = false)
     {
+        ListensForSignals = listenForSignals;
         _pump = BuildPump();
         _pump.Start();
+    }
+
+    /// <summary>
+    /// Drops the subscription and makes it again with or without the <c>signal</c>
+    /// topic, for a reload that added the file's first signal source or removed its
+    /// last.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A subscription's topics are fixed for its life - the protocol lets a subscribed
+    /// connection send nothing more - so changing them is a new connection. Invisible
+    /// on the bar: stopping the pump does not raise <c>Disconnected</c>, so the
+    /// connection pill is not touched, and the snapshot the new round reads on
+    /// connecting republishes the values the model already holds, which it drops as
+    /// unchanged.
+    /// </para>
+    /// <para>
+    /// Blocks the caller - the message loop, as <c>DestroyBar</c> does when it stops a
+    /// connection - for as long as the old pump takes to notice its cancellation,
+    /// which is at most the one call that does not take the token.
+    /// </para>
+    /// </remarks>
+    public void Restart(bool listenForSignals)
+    {
+        if (_pump is { } pump) pump.DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+        _client = null;
+        IsConnected = false;
+        Start(listenForSignals);
     }
 
     /// <summary>Sends a command, for widget clicks.</summary>
@@ -297,19 +365,28 @@ public sealed class WmConnection : IAsyncDisposable
     /// events stream; a snapshot read once the subscription is in place; and a
     /// give-up clock against a window manager that has gone, which closes the bar.
     /// </summary>
-    private EventPump BuildPump() => new(Subscribed)
+    private EventPump BuildPump() => new(ListensForSignals ? SubscribedWithSignals : Subscribed)
     {
         ProgramName = "taj",
+        PipeName = PipeName,
         ConnectTimeout = TimeSpan.FromSeconds(2),
         OpensCommandsConnection = true,
 
-        Subscribed = (connection, _) =>
+        Subscribed = async (connection, _) =>
         {
             _client = connection.Commands;
             IsConnected = true;
             _everConnected = true;
             _model.SetValue(WindowManagerStatus.ConnectionKey, WindowManagerStatus.ConnectionLabel(connected: true, _everConnected));
-            return RefreshAsync(connection.Commands!);
+            await RefreshAsync(connection.Commands!).ConfigureAwait(false);
+
+            // After the subscription is in place, so the values a publisher says again
+            // arrive on this very connection. Only when something is listening: a bar
+            // with no signal source has nothing to be told, and a signal nobody
+            // subscribes to is a line in the window manager's log about a key that does
+            // nothing.
+            if (ListensForSignals)
+                await SendCommandAsync(SignalSource.AnnounceCommand).ConfigureAwait(false);
         },
 
         Event = (connection, notification, _) => HandleEventAsync(connection.Commands!, notification),
@@ -436,6 +513,14 @@ public sealed class WmConnection : IAsyncDisposable
                 // objects belonging to the thread running the message loop, and this
                 // is not that thread.
                 ConfigReloaded?.Invoke();
+                break;
+
+            case IpcProtocol.SignalTopic:
+                // Only ever arrives when this connection asked for the topic. Parsed
+                // here, once per bar, and handed up as words: the hub decides which
+                // sources want them. A payload that is not a signal is nothing.
+                if (SignalReceived is { } onSignal && SignalPayload.Parse(notification.Data) is { } signal)
+                    onSignal(signal.Name, signal.Arguments);
                 break;
 
             case IpcProtocol.ShutdownTopic:

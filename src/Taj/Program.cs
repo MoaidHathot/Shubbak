@@ -5,6 +5,7 @@ using Shubbak.Core.Geometry;
 using Shubbak.Ipc;
 using Shubbak.Native;
 using Taj.Core;
+using Taj.Core.Sources;
 
 namespace Taj;
 
@@ -373,6 +374,10 @@ internal static class Program
 
         connection.ConfigReloaded += RequestReloadIfSaved;
 
+        // Every bar's connection hears every signal; the hub is one, and its sources
+        // drop a value equal to the last, so the second bar's copy costs a lookup.
+        connection.SignalReceived += s_sources.Signal;
+
         // The window manager going away takes the bar with it. Signalled rather
         // than acted on, for the same reason a reload is: this runs on the
         // connection's pump thread, and the windows belong to the message loop.
@@ -422,7 +427,8 @@ internal static class Program
         // so far, so a bar for a display plugged in later shows the clock at once.
         s_sources.Attach(model);
 
-        connection.Start();
+        // Subscribed to signals only when a source reads them; see WmConnection.
+        connection.Start(listenForSignals: s_sources.ListensForSignals);
 
         s_bars.Add(bar);
         return bar;
@@ -596,6 +602,26 @@ internal static class Program
         // disposed rather than dropped; this used to happen per bar, which for a
         // command source meant its script killed and restarted once per display.
         s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
+
+        // A reload that added the file's first signal source, or removed its last,
+        // changes what each bar's connection should be subscribed to; the subscription
+        // is remade with the new list. One that changed neither leaves the connections
+        // alone, and if it changed which signals are listened for, the bar asks for the
+        // values again itself - a publisher answers on the connections that exist.
+        bool listen = s_sources.ListensForSignals;
+        bool announced = false;
+
+        foreach (Bar bar in s_bars)
+        {
+            if (bar.Connection.ListensForSignals != listen)
+            {
+                bar.Connection.Restart(listen);
+                announced |= listen;
+            }
+        }
+
+        if (listen && !announced && s_bars.Find(b => b.Connection.IsConnected) is { } connected)
+            _ = connected.Connection.SendCommandAsync(SignalSource.AnnounceCommand);
 
         foreach (Bar bar in s_bars)
         {

@@ -43,6 +43,7 @@ foreach ($file in $files) {
 # Codes whose message is assembled by a helper, described here instead.
 $described = @{
     'AYN0002' = @('Warning', "'<device> <key>' names no context; the default is used, or the fact is not reported.")
+    'AYN0012' = @('Warning', "'<subject> <key>' names no signal, or one with both kinds of quote in it; the value is not published.")
     'SHB0427' = @('Warning', 'Unknown top-level section; it will be ignored.')
     'SHB0428' = @('Warning', "Unknown setting in a section ('general', 'gaps', 'window-effects' and the like); it will be ignored.")
     'TAJ0013' = @('Warning', "Unknown setting in 'bar'; it will be ignored.")

@@ -116,6 +116,50 @@ public sealed class WmConnectionTests
     }
 
     [Fact]
+    public async Task AnAnnounceIsNotedOnceHoweverManyArrive()
+    {
+        // Three bars connecting within a moment of each other each ask; the loop
+        // answers once, on its next wake, by saying every value again. Somebody else's
+        // signal, and our own mute request, leave the flag alone.
+        string pipe = IsolatedPipe();
+
+        (IpcServer server, List<string> _) = await StartServerAsync(pipe);
+        await using IpcServer keep = server;
+
+        await using var connection = new WmConnection(pipe);
+        connection.Start();
+
+        Assert.True(SpinWait.SpinUntil(() => server.HasSubscribers(IpcProtocol.SignalTopic), Timeout));
+
+        Assert.False(connection.TakeAnnounceRequested());
+
+        server.Publish(IpcProtocol.SignalTopic, """{"name":"palette","arguments":[]}""");
+        server.Publish(IpcProtocol.SignalTopic, """{"name":"ayn","arguments":["microphone","mute"]}""");
+        Assert.True(connection.Signalled.WaitOne(Timeout), "Signalled was not raised for the mute request");
+        Assert.False(connection.TakeAnnounceRequested());
+
+        server.Publish(IpcProtocol.SignalTopic, $$$"""{"name":"{{{IpcProtocol.AnnounceSignal}}}","arguments":[]}""");
+        server.Publish(IpcProtocol.SignalTopic, """{"name":"Announce","arguments":[]}""");
+        server.Publish(IpcProtocol.SignalTopic, $$$"""{"name":"{{{IpcProtocol.AnnounceSignal}}}","arguments":[]}""");
+
+        // A request behind them, so that its arrival proves all three announces have
+        // been read: one connection delivers in order.
+        server.Publish(IpcProtocol.SignalTopic, """{"name":"ayn","arguments":["microphone","unmute"]}""");
+        Assert.True(SpinWait.SpinUntil(() => connection.Requests.Count == 2, Timeout), "the sentinel request never arrived");
+
+        // Noted once, however many were published; the second look finds nothing.
+        Assert.True(connection.TakeAnnounceRequested());
+        Assert.False(connection.TakeAnnounceRequested());
+
+        // And it queued no request of its own, so the mute is not touched by an announce.
+        Assert.True(connection.Requests.TryDequeue(out SignalRequest? mute));
+        Assert.Equal("mute", mute!.Verb);
+        Assert.True(connection.Requests.TryDequeue(out SignalRequest? unmute));
+        Assert.Equal("unmute", unmute!.Verb);
+        Assert.False(connection.Requests.TryDequeue(out _));
+    }
+
+    [Fact]
     public async Task ExitAllDismissesRatherThanLoses()
     {
         string pipe = IsolatedPipe();
@@ -149,6 +193,11 @@ public sealed class DescriptionTests
             Program.Describe(new AynConfig(CameraInUse: "on-camera", MicrophoneInUse: null)));
 
         Assert.Equal("nothing", Program.Describe(new AynConfig(null, null, null)));
+
+        // A value is said as the signal it goes out as, after the facts.
+        Assert.Equal(
+            "microphone-muted, battery-percent as signal \"battery\", speaker device-name as signal \"speaker\"",
+            Program.Describe(new AynConfig(null, null, BatteryPercentSignal: "battery", SpeakerDeviceSignal: "speaker")));
     }
 
     [Fact]

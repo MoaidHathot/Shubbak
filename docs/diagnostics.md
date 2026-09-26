@@ -192,3 +192,4 @@ code, not the page.
 | `AYN0009` | Warning | 'renew' should be a whole number of seconds, not '{value.AsString()}'; renewal is off. |
 | `AYN0010` | Warning | '{key}' should be a percentage from 1 to 100, not '{value.AsString()}'; {fallback} is used. |
 | `AYN0011` | Warning | '{word} device' needs a device name and a context; this rule is ignored. |
+| `AYN0012` | Warning | '<subject> <key>' names no signal, or one with both kinds of quote in it; the value is not published. |

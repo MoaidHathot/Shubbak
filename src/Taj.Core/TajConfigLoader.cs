@@ -55,8 +55,11 @@ public sealed record TajConfig(
 
 /// <summary>A source declared in config.</summary>
 /// <param name="Name">Name templates refer to.</param>
-/// <param name="Kind">time, command, or wm.</param>
-/// <param name="Argument">Format string or command line.</param>
+/// <param name="Kind">time, command, keyboard or signal.</param>
+/// <param name="Argument">
+/// Format string for a clock, command line for a program, or the signal's name for a
+/// signal source.
+/// </param>
 /// <param name="Interval">How often to poll, for pull sources.</param>
 /// <param name="TimeZone">Timezone id for a clock, or null for local time.</param>
 public sealed record SourceSpec(
@@ -310,20 +313,25 @@ public static class TajConfigLoader
         WarnAboutUnknown(node, KnownSourceKeys, "setting on a source", "TAJ0018", diagnostics);
 
         string kind = SettingText(node, "kind") ?? "time";
-        string argument = SettingText(node, "format") ?? SettingText(node, "command") ?? string.Empty;
+
+        // A signal source's argument is the signal it listens for, its own name unless
+        // said; every other kind's is a format or a command line.
+        string argument = kind == "signal"
+            ? SettingText(node, "signal") ?? name
+            : SettingText(node, "format") ?? SettingText(node, "command") ?? string.Empty;
 
         int? explicitInterval = SettingInt(node, "interval");
         int intervalMs = explicitInterval ?? 1000;
 
         // An unknown kind was a warning in the log at startup and nothing at load, so
         // shubbak check-config said a file with kind=\"cmmand\" was fine.
-        if (kind is not ("time" or "command" or "keyboard"))
+        if (kind is not ("time" or "command" or "keyboard" or "signal"))
         {
             diagnostics.Add(Diagnostic.Warning(
                 "TAJ0027",
                 $"Source '{name}' has kind=\"{kind}\", which is not one the bar knows; it will produce nothing.",
                 Setting(node, "kind")?.Span ?? node.Span,
-                Suggestion.Closest(kind, ["time", "command", "keyboard"]) is { } guess ? $"Did you mean '{guess}'?" : "One of: time, command, keyboard."));
+                Suggestion.Closest(kind, ["time", "command", "keyboard", "signal"]) is { } guess ? $"Did you mean '{guess}'?" : "One of: time, command, keyboard, signal."));
         }
 
         string? culture = SettingText(node, "culture");
@@ -421,7 +429,7 @@ public static class TajConfigLoader
         ["value", "not", "of", "font", "font-size", "bold", "italic", "colour", "color", "background"];
 
     private static readonly string[] KnownSourceKeys =
-        ["kind", "format", "command", "interval", "timezone", "culture"];
+        ["kind", "format", "command", "interval", "timezone", "culture", "signal"];
 
     private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor", "context"];
 
@@ -1235,6 +1243,12 @@ public static class TajConfigLoader
                     }
 
                     yield return new IntervalSource(spec.Name, spec.Interval, keyboardLanguage);
+                    break;
+
+                case "signal":
+                    // No timer and no process: a slot the host fills when the signal
+                    // arrives, and the reason the bar subscribes to that topic at all.
+                    yield return new SignalSource(spec.Name, spec.Argument);
                     break;
 
                 default:

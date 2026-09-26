@@ -60,5 +60,7 @@ public sealed class ShutdownNoticeTests
     public void AFieldAddedBesideItIsNotInTheWay()
     {
         Assert.True(ShutdownNotice.IsForEveryone("{\"reason\":\"tray\",\"everything\":true}"));
+        Assert.True(ShutdownNotice.IsForEveryone("{\"detail\":{\"a\":[1,{\"b\":2}]},\"everything\":true}"));
+        Assert.False(ShutdownNotice.IsForEveryone("{\"detail\":{\"everything\":true},\"everything\":false}"));
     }
 }

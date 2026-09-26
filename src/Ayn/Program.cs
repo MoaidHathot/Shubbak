@@ -162,6 +162,7 @@ internal static class Program
     private static void Run(AynConfig config, Sources sources, WmConnection connection, WaitHandle stop)
     {
         var provider = new Provider(config);
+        var values = new ValuePublisher(config);
         RegistryConsentStore store = sources.Store;
         AudioEndpoint endpoint = sources.Endpoint;
 
@@ -192,7 +193,7 @@ internal static class Program
         WaitHandle[] handles = Handles();
 
         store.Arm();
-        provider.Observe(sources.Read(), Environment.TickCount64);
+        Observe(provider, values, sources.Read(), Environment.TickCount64);
 
         // While the window manager cannot be reached and there is something to tell it,
         // try again about once a second; otherwise sleep until the registry speaks.
@@ -204,6 +205,10 @@ internal static class Program
             long now = Environment.TickCount64;
 
             retrying = Flush(provider, connection, now);
+
+            // The values after the facts, and not at all on a pass that has already
+            // found nobody to send to; a second look for the pipe would find the same.
+            if (!retrying) retrying = FlushValues(values, connection);
 
             TimeSpan wait = Provider.NextWait(retrying, provider.Pending(now), retry);
 
@@ -223,15 +228,17 @@ internal static class Program
                 case LostIndex:
                     // Every lease died with the connection that held it. Nothing is
                     // asserted any more; the next flush holds again whatever is still
-                    // in use, on the window manager that comes back.
+                    // in use, on the window manager that comes back - and says every
+                    // value again, since the one that comes back has heard none.
                     Log.Info(LogCategory.Ipc, "the window manager went away; holding nothing until it is back");
                     connection.Drop();
                     provider.Forget();
+                    values.Forget();
                     break;
 
                 case ReloadedIndex:
-                    if (Reconfigure(provider, connection, sources)) handles = Handles();
-                    provider.Observe(sources.Read(), now);
+                    if (Reconfigure(provider, values, connection, sources)) handles = Handles();
+                    Observe(provider, values, sources.Read(), now);
                     break;
 
                 case SignalledIndex:
@@ -242,6 +249,10 @@ internal static class Program
                     // path and there is one copy of the truth.
                     while (connection.Requests.TryDequeue(out SignalRequest? request))
                         Act(request, endpoint);
+
+                    // Or asked for the values again: a bar that has just connected. The
+                    // next flush, at the top of the loop, says them all.
+                    if (connection.TakeAnnounceRequested()) values.Forget();
                     break;
 
                 case AudioIndex:
@@ -251,16 +262,16 @@ internal static class Program
                         endpoint.Resolve();
                     }
 
-                    provider.Observe(sources.Read(), now);
+                    Observe(provider, values, sources.Read(), now);
                     break;
 
                 case PowerIndex:
-                    provider.Observe(sources.Read(), now);
+                    Observe(provider, values, sources.Read(), now);
                     break;
 
                 case ThemeIndex:
                     sources.Theme.Arm();
-                    provider.Observe(sources.Read(), now);
+                    Observe(provider, values, sources.Read(), now);
                     break;
 
                 case WaitHandle.WaitTimeout:
@@ -268,10 +279,17 @@ internal static class Program
 
                 default:
                     store.Arm(woke - FirstRegistryIndex);
-                    provider.Observe(sources.Read(), now);
+                    Observe(provider, values, sources.Read(), now);
                     break;
             }
         }
+    }
+
+    /// <summary>One reading, told to both: the facts and the values are read from the same moment.</summary>
+    private static void Observe(Provider provider, ValuePublisher values, Reading reading, long now)
+    {
+        provider.Observe(reading, now);
+        values.Observe(reading);
     }
 
     /// <summary>Does what a signal asked: mutes, unmutes or flips the microphone or the speaker.</summary>
@@ -352,6 +370,34 @@ internal static class Program
         return false;
     }
 
+    /// <summary>Sends every value that changed, or every value after a <c>Forget</c>. True if the window manager could not be reached.</summary>
+    /// <remarks>
+    /// A refusal is logged by the connection, once per distinct message, and not
+    /// retried by the publisher: the same words would be refused the same way. It
+    /// cannot happen for a well-formed signal, so one is a bug here rather than a
+    /// state of the desk.
+    /// </remarks>
+    private static bool FlushValues(ValuePublisher values, WmConnection connection)
+    {
+        foreach (ValueAction action in values.Due())
+        {
+            SendOutcome outcome = connection.Send(action.Command);
+            values.Sent(action, outcome);
+
+            switch (outcome)
+            {
+                case SendOutcome.Accepted:
+                    Log.Info(LogCategory.Wm, $"{action.Value.Wire()}: {action.Command}");
+                    break;
+
+                case SendOutcome.Unreachable:
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// The file was reloaded: re-read the section, release what is no longer wanted
     /// under its old name, and open the sources the new settings need.
@@ -363,7 +409,7 @@ internal static class Program
     /// in the caller is what turns a newly opened endpoint into a reported fact.
     /// </remarks>
     /// <returns>Whether the store watches a device it did not before, so the loop re-reads its handles.</returns>
-    private static bool Reconfigure(Provider provider, WmConnection connection, Sources sources)
+    private static bool Reconfigure(Provider provider, ValuePublisher values, WmConnection connection, Sources sources)
     {
         AynConfig config = LoadConfig();
 
@@ -374,6 +420,17 @@ internal static class Program
 
             if (outcome == SendOutcome.Accepted)
                 Log.Info(LogCategory.Wm, $"{release.Because}: {release.Command}");
+        }
+
+        // A value the new file no longer names, or names differently, is cleared under
+        // its old name so no bar goes on showing the last number it heard.
+        foreach (ValueAction cleared in values.Reconfigure(config))
+        {
+            SendOutcome outcome = connection.Send(cleared.Command);
+            values.Sent(cleared, outcome);
+
+            if (outcome == SendOutcome.Accepted)
+                Log.Info(LogCategory.Wm, $"{cleared.Value.Wire()} is no longer published as \"{cleared.Signal}\": {cleared.Command}");
         }
 
         AudioEndpoint endpoint = sources.Endpoint;
@@ -543,6 +600,12 @@ internal static class Program
         foreach (DeviceRule rule in config.DeviceRules)
             parts.Add($"{(rule.Fact == Fact.SpeakerDevice ? "speaker" : "microphone")} device {rule.Pattern} as \"{rule.Context}\"");
 
+        foreach (Value value in ValueNames.All)
+        {
+            if (config.SignalFor(value) is { } signal)
+                parts.Add($"{value.Wire()} as signal \"{signal}\"");
+        }
+
         return parts.Count == 0 ? "nothing" : string.Join(", ", parts);
     }
 
@@ -573,6 +636,13 @@ internal static class Program
         It also answers `signal "ayn" "microphone" "mute" | "unmute" | "toggle-mute"`
         - and the same for "speaker" - from a keybinding, the bar or the palette,
         by flipping the system mute.
+
+        Three readings can be published as words for the bar rather than as
+        facts, each as a signal the file names: the battery's percentage
+        (`power { battery-percent "battery" }`) and the names of the default
+        speaker and microphone (`speaker { device-name "speaker" }`). The bar
+        shows one with `source "battery" kind="signal"` and `{{ battery }}`, and
+        asks for them again when it connects.
 
         USAGE
           ayn [options]

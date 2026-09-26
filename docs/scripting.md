@@ -102,6 +102,28 @@ and the palette is what is listening — and how Ayn is told to flip the mute. I
 you would wire in your own tools: bind a key to a signal, subscribe to it from your
 program, and Shubbak never has to learn what it means.
 
+It also runs the other way: a signal is how a program puts a **value on the bar**. A
+`source "battery" kind="signal"` in the [bar's section](taj.md#sources) reads
+`{{ battery }}` from whatever `signal "battery" "41"` last said, so a script that knows
+something is one command away from showing it:
+
+```
+shubbak signal battery 41              # {{ battery }} reads 41
+shubbak signal weather Sunny 21C       # several words are joined: "Sunny 21C"
+shubbak signal battery                 # nothing after the name clears the readout
+```
+
+One signal name is a convention rather than any program's own: **`announce`**. A
+signal is fire-and-forget and the window manager keeps none of it, so a bar that
+starts after a value was last sent would be blank until the value next changed. The
+bar therefore raises `signal "announce"` when it connects with a signal source in its
+file, and again after a reload, and a publisher that hears it says its values again.
+Ayn does; a script of yours that publishes a value should too — subscribe to `signal`,
+and on `announce` repeat what you last said. One that does not is simply blank on the
+bar until its next change. The bar subscribes to the topic only when its file has a
+signal source, so a bar that shows none costs the window manager nothing per signal
+and leaves it able to say when a signal was raised with nobody listening.
+
 ## Supplying facts
 
 A [context](configuration.md#contexts) with no `when` is external: nothing on the

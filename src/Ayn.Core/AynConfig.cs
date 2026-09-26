@@ -69,12 +69,18 @@ public sealed record DeviceRule(Fact Fact, string Pattern, string Context);
 /// <param name="ScreenIgnores">Programs whose capture of the screen does not count.</param>
 /// <param name="AppRules">The <c>by</c> rules; see <see cref="AppRule"/>.</param>
 /// <param name="DeviceRules">The <c>device</c> rules; see <see cref="DeviceRule"/>.</param>
+/// <param name="BatteryPercentSignal">The signal the battery's percentage is published as, or null to say nothing about it; see <see cref="Value"/>.</param>
+/// <param name="SpeakerDeviceSignal">The signal the default speaker's name is published as, or null.</param>
+/// <param name="MicrophoneDeviceSignal">The signal the default microphone's name is published as, or null.</param>
 /// <remarks>
 /// Facts are named <c>subject-state</c> - <c>camera-in-use</c>, <c>microphone-muted</c>
 /// - so that the ones about one device sort together and the next device slots in
 /// without anything being renamed. The first three default to those names; every fact
 /// added since is off until the file names it, so a file that never mentioned the
-/// watcher does not wake up holding contexts it never declared.
+/// watcher does not wake up holding contexts it never declared. A value is named the
+/// same way and is off until named for the same reason; its name is a signal's, not a
+/// context's, and is checked against nothing, since a signal is whatever the bar
+/// declares a source for.
 /// </remarks>
 public sealed record AynConfig(
     string? CameraInUse = "camera-in-use",
@@ -94,7 +100,10 @@ public sealed record AynConfig(
     IReadOnlyList<string>? MicrophoneIgnores = null,
     IReadOnlyList<string>? ScreenIgnores = null,
     IReadOnlyList<AppRule>? AppRules = null,
-    IReadOnlyList<DeviceRule>? DeviceRules = null)
+    IReadOnlyList<DeviceRule>? DeviceRules = null,
+    string? BatteryPercentSignal = null,
+    string? SpeakerDeviceSignal = null,
+    string? MicrophoneDeviceSignal = null)
 {
     /// <summary>What <see cref="Settle"/> is when the file does not say.</summary>
     public static TimeSpan DefaultSettle { get; } = TimeSpan.FromMilliseconds(500);
@@ -174,22 +183,37 @@ public sealed record AynConfig(
     public bool Watches(DeviceKind device) =>
         ContextFor(device.InUseFact()) is not null || AppRules.Any(rule => rule.Device == device);
 
-    /// <summary>Whether anything is reported at all.</summary>
+    /// <summary>The signal a value is published as, or null when that value is not published.</summary>
+    public string? SignalFor(Value value) => value switch
+    {
+        Value.BatteryPercent => BatteryPercentSignal,
+        Value.SpeakerDeviceName => SpeakerDeviceSignal,
+        Value.MicrophoneDeviceName => MicrophoneDeviceSignal,
+        _ => null,
+    };
+
+    /// <summary>Whether any value is published; see <see cref="Value"/>.</summary>
+    public bool PublishesAnyValue =>
+        BatteryPercentSignal is not null || SpeakerDeviceSignal is not null || MicrophoneDeviceSignal is not null;
+
+    /// <summary>Whether anything is reported at all: a fact, a rule, or a value.</summary>
     public bool WatchesAnything =>
-        FactNames.All.Any(fact => ContextFor(fact) is not null) || AppRules.Count > 0 || DeviceRules.Count > 0;
+        FactNames.All.Any(fact => ContextFor(fact) is not null) || AppRules.Count > 0 || DeviceRules.Count > 0 || PublishesAnyValue;
 
     /// <summary>Whether the consent store needs watching: some device's use is reported.</summary>
     public bool NeedsConsentStore => DeviceKinds.All.Any(Watches);
 
-    /// <summary>Whether the audio endpoint needs watching: the microphone's mute is reported.</summary>
-    public bool NeedsAudioEndpoint => MicrophoneMuted is not null || DeviceRules.Any(rule => rule.Fact == Fact.MicrophoneDevice);
+    /// <summary>Whether the audio endpoint needs watching: the microphone's mute, its name, or a rule about it is reported.</summary>
+    public bool NeedsAudioEndpoint =>
+        MicrophoneMuted is not null || MicrophoneDeviceSignal is not null || DeviceRules.Any(rule => rule.Fact == Fact.MicrophoneDevice);
 
-    /// <summary>Whether the speaker is followed: its mute is reported, or a rule names a speaker.</summary>
-    public bool NeedsSpeakerEndpoint => SpeakerMuted is not null || DeviceRules.Any(rule => rule.Fact == Fact.SpeakerDevice);
+    /// <summary>Whether the speaker is followed: its mute or its name is reported, or a rule names a speaker.</summary>
+    public bool NeedsSpeakerEndpoint =>
+        SpeakerMuted is not null || SpeakerDeviceSignal is not null || DeviceRules.Any(rule => rule.Fact == Fact.SpeakerDevice);
 
-    /// <summary>Whether any power fact is reported.</summary>
+    /// <summary>Whether any power fact or value is reported.</summary>
     public bool NeedsPower =>
-        OnBattery is not null || BatteryLow is not null || LidClosed is not null || UserAway is not null;
+        OnBattery is not null || BatteryLow is not null || LidClosed is not null || UserAway is not null || BatteryPercentSignal is not null;
 
     /// <summary>Whether the theme is reported.</summary>
     public bool NeedsTheme => DarkTheme is not null;
@@ -222,10 +246,10 @@ public sealed record AynConfigLoad(AynConfig Config, IReadOnlyList<Diagnostic> D
 /// <code>
 /// ayn {
 ///     camera     { in-use "camera-in-use"; ignore "obs64.exe"; by "ms-teams.exe" "in-a-call" }
-///     microphone { in-use "microphone-in-use"; muted "microphone-muted" }
+///     microphone { in-use "microphone-in-use"; muted "microphone-muted"; device-name "microphone" }
 ///     screen     { captured "screen-captured" }
-///     speaker    { muted "speaker-muted" }
-///     power      { on-battery "on-battery"; battery-low "battery-low"; battery-low-at 20; lid-closed "lid-closed"; user-away "user-away" }
+///     speaker    { muted "speaker-muted"; device-name "speaker" }
+///     power      { on-battery "on-battery"; battery-low "battery-low"; battery-low-at 20; lid-closed "lid-closed"; user-away "user-away"; battery-percent "battery" }
 ///     theme      { dark "dark-theme" }
 ///     settle 500
 ///     renew 60
@@ -233,9 +257,11 @@ public sealed record AynConfigLoad(AynConfig Config, IReadOnlyList<Diagnostic> D
 /// </code>
 /// <para>
 /// <c>camera #false</c> turns a whole device off; <c>muted #false</c> turns one fact
-/// off. The KDL parser's own diagnostics are not repeated here: the window manager's
-/// loader reports them, and <c>shubbak check-config</c> runs both. A missing section
-/// means the defaults, which report the first three facts under their own names.
+/// off. <c>battery-percent</c> and the two <c>device-name</c>s are values rather than
+/// facts - words the bar shows, published as signals; see <see cref="Value"/>. The KDL
+/// parser's own diagnostics are not repeated here: the window manager's loader
+/// reports them, and <c>shubbak check-config</c> runs both. A missing section means
+/// the defaults, which report the first three facts under their own names.
 /// </para>
 /// </remarks>
 public static class AynConfigLoader
@@ -248,17 +274,17 @@ public static class AynConfigLoader
     public static IReadOnlyList<string> KnownCameraKeys { get; } = ["in-use", "ignore", "by"];
 
     /// <summary>What a <c>microphone</c> block accepts.</summary>
-    public static IReadOnlyList<string> KnownMicrophoneKeys { get; } = ["in-use", "muted", "ignore", "by", "device"];
+    public static IReadOnlyList<string> KnownMicrophoneKeys { get; } = ["in-use", "muted", "ignore", "by", "device", "device-name"];
 
     /// <summary>What a <c>screen</c> block accepts.</summary>
     public static IReadOnlyList<string> KnownScreenKeys { get; } = ["captured", "ignore", "by"];
 
     /// <summary>What a <c>speaker</c> block accepts.</summary>
-    public static IReadOnlyList<string> KnownSpeakerKeys { get; } = ["muted", "device"];
+    public static IReadOnlyList<string> KnownSpeakerKeys { get; } = ["muted", "device", "device-name"];
 
     /// <summary>What a <c>power</c> block accepts.</summary>
     public static IReadOnlyList<string> KnownPowerKeys { get; } =
-        ["on-battery", "battery-low", "battery-low-at", "lid-closed", "user-away"];
+        ["on-battery", "battery-low", "battery-low-at", "lid-closed", "user-away", "battery-percent"];
 
     /// <summary>What a <c>theme</c> block accepts.</summary>
     public static IReadOnlyList<string> KnownThemeKeys { get; } = ["dark"];
@@ -302,18 +328,25 @@ public static class AynConfigLoader
 
         // The microphone's device rules, read from the same block Device() read. Not
         // from within it: the camera and the screen have no default device to name.
+        string? microphoneDeviceSignal = null;
+
         if (Block(node, "microphone", KnownMicrophoneKeys, null) is { } microphoneBlock)
+        {
             DeviceRules(microphoneBlock, Fact.MicrophoneDevice, "microphone", names, deviceRules);
+            microphoneDeviceSignal = SignalName(microphoneBlock, "device-name", "microphone", "microphone", diagnostics);
+        }
 
         string? speakerMuted = null;
+        string? speakerDeviceSignal = null;
 
         if (Block(node, "speaker", KnownSpeakerKeys, diagnostics) is { } speaker)
         {
             speakerMuted = names.Context(speaker, "muted", null, "speaker");
             DeviceRules(speaker, Fact.SpeakerDevice, "speaker", names, deviceRules);
+            speakerDeviceSignal = SignalName(speaker, "device-name", "speaker", "speaker", diagnostics);
         }
 
-        string? onBattery = null, batteryLow = null, lidClosed = null, userAway = null;
+        string? onBattery = null, batteryLow = null, lidClosed = null, userAway = null, batteryPercentSignal = null;
         int batteryLowPercent = defaults.BatteryLowPercent;
 
         if (Block(node, "power", KnownPowerKeys, diagnostics) is { } power)
@@ -323,6 +356,7 @@ public static class AynConfigLoader
             lidClosed = names.Context(power, "lid-closed", null, "power");
             userAway = names.Context(power, "user-away", null, "power");
             batteryLowPercent = Percent(power, "battery-low-at", defaults.BatteryLowPercent, diagnostics);
+            batteryPercentSignal = SignalName(power, "battery-percent", "power", "battery", diagnostics);
         }
 
         string? darkTheme = null;
@@ -334,7 +368,8 @@ public static class AynConfigLoader
             camera.InUse, microphone.InUse, microphone.Muted, Settle(node, diagnostics),
             screen.InUse, speakerMuted, onBattery, batteryLow, lidClosed, userAway, darkTheme,
             batteryLowPercent, Renew(node, diagnostics),
-            camera.Ignores, microphone.Ignores, screen.Ignores, rules, deviceRules);
+            camera.Ignores, microphone.Ignores, screen.Ignores, rules, deviceRules,
+            batteryPercentSignal, speakerDeviceSignal, microphoneDeviceSignal);
 
         WarnAboutSharedContexts(config, names, diagnostics);
 
@@ -651,6 +686,39 @@ public static class AynConfigLoader
         }
 
         return percent;
+    }
+
+    /// <summary>
+    /// The signal a value is published as: <c>battery-percent "battery"</c>. Off when
+    /// unsaid or <c>#false</c>; <c>#true</c> is the subject's own name - <c>battery</c>,
+    /// <c>speaker</c>, <c>microphone</c> - which is what the bar's source would be
+    /// called anyway.
+    /// </summary>
+    /// <remarks>
+    /// Not a context, so not checked against the <c>contexts</c> section: the name is
+    /// whatever the bar's <c>source ... kind="signal"</c> listens for, and the bar's
+    /// own loader is where a mismatch would show. An empty string is refused rather
+    /// than read as off, for the same reason an empty context name is.
+    /// </remarks>
+    private static string? SignalName(KdlNode node, string key, string where, string fallback, List<Diagnostic> diagnostics)
+    {
+        if (Setting(node, key) is not { } value) return null;
+
+        if (value.TryAsBool(out bool enabled)) return enabled ? fallback : null;
+
+        string name = value.AsString();
+
+        if (name.Length > 0 && CommandParser.CanQuote(name)) return name;
+
+        diagnostics.Add(Diagnostic.Warning(
+            "AYN0012",
+            name.Length == 0
+                ? $"'{where} {key}' names no signal; the value is not published."
+                : $"'{where} {key}' names a signal with both kinds of quote in it, which no command can spell; the value is not published.",
+            value.Span,
+            $"Write {key} \"{fallback}\" to publish it as signal \"{fallback}\", and source \"{fallback}\" kind=\"signal\" in the bar section to show it."));
+
+        return null;
     }
 
     /// <summary>The names the <c>contexts</c> section declares, from the same document.</summary>

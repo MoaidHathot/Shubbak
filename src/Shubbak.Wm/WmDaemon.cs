@@ -2045,6 +2045,40 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>
+    /// Who is listening to what, for the report: <c>(signal: 3, window.focused: 2, ...)</c>.
+    /// </summary>
+    /// <remarks>
+    /// The one line that answers "why does my palette key do nothing" - no subscriber
+    /// to <c>signal</c> - and "is the bar paying for a topic it does not read". Topics
+    /// nobody asked for are left out, and a client that asked for everything is
+    /// counted once as such rather than under every topic.
+    /// </remarks>
+    private string DescribeSubscribers()
+    {
+        if (_ipc is null) return string.Empty;
+
+        (IReadOnlyDictionary<string, int> byTopic, int toEverything) = _ipc.SubscriberCounts();
+
+        if (byTopic.Count == 0 && toEverything == 0) return string.Empty;
+
+        // Sorted by name so two reports read alike; a plain loop rather than LINQ,
+        // since this is the only place these generic shapes would be instantiated
+        // and NativeAOT pays for each one in the binary.
+        string[] topics = [.. byTopic.Keys];
+        Array.Sort(topics, StringComparer.Ordinal);
+
+        var text = new System.Text.StringBuilder(" (subscribed - ");
+
+        foreach (string topic in topics)
+            text.Append(topic).Append(": ").Append(byTopic[topic]).Append(", ");
+
+        if (toEverything > 0) text.Append("everything: ").Append(toEverything).Append(", ");
+
+        text.Length -= 2;
+        return text.Append(')').ToString();
+    }
+
+    /// <summary>
     /// Builds a diagnostic report describing the live window manager.
     /// </summary>
     /// <remarks>
@@ -2095,7 +2129,7 @@ public sealed class WmDaemon : IDisposable
 
             $"- **Keybindings**: {_config.Keybindings.Count}",
             $"- **Rules**: {_config.Rules.Count}",
-            $"- **IPC clients**: {_ipc?.ClientCount ?? 0}",
+            $"- **IPC clients**: {_ipc?.ClientCount ?? 0}" + DescribeSubscribers(),
         }));
 
         report.AddSection("Performance", string.Join('\n', new[]

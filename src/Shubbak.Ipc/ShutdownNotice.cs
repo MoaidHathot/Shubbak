@@ -41,11 +41,19 @@ public static class ShutdownNotice
     /// Whether a shutdown payload asks every program to leave.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// False for anything that is not plainly <c>"everything": true</c> - an empty
     /// object, a payload from an older window manager, or one that does not parse.
     /// Staying is the safe misreading: a palette that stayed when it was asked to go
     /// is a stray process, and one that went when it was asked to stay is a desktop
     /// with no palette and nothing to say why.
+    /// </para>
+    /// <para>
+    /// Read with <see cref="Utf8JsonReader"/> rather than a document, for the same
+    /// reason the signal payload is: the reader is in every client already, under the
+    /// generated serialiser, and the document was fifty kilobytes of binary for one
+    /// boolean.
+    /// </para>
     /// </remarks>
     public static bool IsForEveryone(string? payload)
     {
@@ -53,11 +61,19 @@ public static class ShutdownNotice
 
         try
         {
-            using JsonDocument document = JsonDocument.Parse(payload);
+            var reader = new Utf8JsonReader(System.Text.Encoding.UTF8.GetBytes(payload));
 
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty(EverythingProperty, out JsonElement everything)
-                && everything.ValueKind == JsonValueKind.True;
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject) return false;
+
+            while (reader.Read() && reader.TokenType == JsonTokenType.PropertyName)
+            {
+                if (reader.ValueTextEquals(EverythingProperty))
+                    return reader.Read() && reader.TokenType == JsonTokenType.True;
+
+                reader.Skip();
+            }
+
+            return false;
         }
         catch (JsonException)
         {

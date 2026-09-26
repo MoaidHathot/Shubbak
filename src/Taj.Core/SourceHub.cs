@@ -1,3 +1,4 @@
+using Shubbak.Core.Diagnostics;
 using Taj.Core.Sources;
 
 namespace Taj.Core;
@@ -35,10 +36,63 @@ public sealed class SourceHub : IDisposable
     private bool _stoodDown;
     private bool _disposed;
 
+    /// <summary>
+    /// The signal sources by the signal each listens for, so a signal arriving is one
+    /// lookup rather than a walk. Rebuilt with the set; several sources may listen for
+    /// one signal under different names.
+    /// </summary>
+    /// <remarks>
+    /// Case-insensitive, as <c>SignalPayload.IsFor</c> is: a signal is a word typed
+    /// into a keybinding or a script, and <c>Battery</c> and <c>battery</c> are the
+    /// same word to the person who typed them.
+    /// </remarks>
+    private readonly Dictionary<string, SignalSource[]> _bySignal = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether any source is fed by a signal; see <see cref="ListensForSignals"/>.</summary>
+    private volatile bool _listensForSignals;
+
     /// <summary>The sources by name.</summary>
     public IReadOnlyCollection<string> Names
     {
         get { lock (_gate) return [.. _sources.Keys]; }
+    }
+
+    /// <summary>
+    /// Whether any source in the set is a <see cref="SignalSource"/>, which is what
+    /// decides whether the bar subscribes to the <c>signal</c> topic at all.
+    /// </summary>
+    /// <remarks>
+    /// Asked without the lock, from the connection's thread as well as the loop's. A
+    /// bar that has no signal source must not subscribe: every subscriber costs the
+    /// window manager two calls per signal on its own thread, and takes from it the
+    /// one line that says a signal was raised with nobody listening - which is how a
+    /// palette key that does nothing is diagnosed.
+    /// </remarks>
+    public bool ListensForSignals => _listensForSignals;
+
+    /// <summary>
+    /// A signal arrived; every source listening for it takes the arguments as its
+    /// value. Nothing happens for a name no source listens for.
+    /// </summary>
+    /// <remarks>
+    /// Called once per bar per signal, since each bar's connection hears it; the
+    /// sources publish through <see cref="SourceBase.Publish"/>, which drops a value
+    /// equal to the last, so the second and third arrivals of one signal cost a lookup
+    /// and a string comparison and wake nothing.
+    /// </remarks>
+    public void Signal(string name, IReadOnlyList<string> arguments)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        SignalSource[]? listening;
+        lock (_gate) _bySignal.TryGetValue(name, out listening);
+
+        if (listening is null) return;
+
+        Log.Debug(LogCategory.Wm, $"signal \"{name}\" -> {listening.Length} source(s)");
+
+        foreach (SignalSource source in listening) source.Receive(arguments);
     }
 
     /// <summary>Starts feeding a model, and gives it every value the sources have so far.</summary>
@@ -100,6 +154,7 @@ public sealed class SourceHub : IDisposable
                 else shadowed.Add(source);
             }
 
+            IndexSignals();
             stoodDown = _stoodDown;
         }
 
@@ -160,6 +215,34 @@ public sealed class SourceHub : IDisposable
         foreach (BarModel model in models) model.SetValue(source.Name, value);
     }
 
+    /// <summary>Rebuilds <see cref="_bySignal"/> from <see cref="_sources"/>. Under the lock.</summary>
+    private void IndexSignals()
+    {
+        _bySignal.Clear();
+
+        Dictionary<string, List<SignalSource>>? grouped = null;
+
+        foreach (ISource source in _sources.Values)
+        {
+            if (source is not SignalSource signal) continue;
+
+            grouped ??= new Dictionary<string, List<SignalSource>>(StringComparer.OrdinalIgnoreCase);
+
+            if (!grouped.TryGetValue(signal.Signal, out List<SignalSource>? list))
+                grouped[signal.Signal] = list = [];
+
+            list.Add(signal);
+        }
+
+        if (grouped is not null)
+        {
+            foreach ((string name, List<SignalSource> list) in grouped)
+                _bySignal[name] = [.. list];
+        }
+
+        _listensForSignals = _bySignal.Count > 0;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
@@ -172,6 +255,8 @@ public sealed class SourceHub : IDisposable
             sources = [.. _sources.Values];
             _sources.Clear();
             _models.Clear();
+            _bySignal.Clear();
+            _listensForSignals = false;
         }
 
         foreach (ISource source in sources)

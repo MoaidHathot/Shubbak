@@ -91,6 +91,41 @@ public sealed class SignalPayloadTests
         Assert.Equal(["run", "3"], signal!.Arguments);
     }
 
+    [Fact]
+    public void ANestedValueArrivesAsItsJson()
+    {
+        // Nothing the window manager sends today; kept so a hand-written publisher on
+        // the pipe is read the way the document-based parser read it.
+        SignalPayload? signal = SignalPayload.Parse("""{"name":"x","arguments":[{"a":[1,2]},true,null,"s"]}""");
+
+        Assert.Equal(["""{"a":[1,2]}""", "true", "null", "s"], signal!.Arguments);
+    }
+
+    [Fact]
+    public void UnknownPropertiesAndAnOrderOfTheirOwnAreTolerated()
+    {
+        SignalPayload? signal = SignalPayload.Parse("""{"extra":{"deep":[1,{"x":2}]},"arguments":["a"],"name":"ayn","later":5}""");
+
+        Assert.NotNull(signal);
+        Assert.Equal("ayn", signal.Name);
+        Assert.Equal(["a"], signal.Arguments);
+    }
+
+    [Fact]
+    public void ArgumentsThatAreNotAListAreNoArguments()
+    {
+        Assert.Empty(SignalPayload.Parse("""{"name":"palette","arguments":"run"}""")!.Arguments);
+        Assert.Empty(SignalPayload.Parse("""{"name":"palette","arguments":{"a":1}}""")!.Arguments);
+    }
+
+    [Fact]
+    public void EscapesInAWordAreDecoded()
+    {
+        SignalPayload? signal = SignalPayload.Parse("""{"name":"speaker","arguments":["Speakers (Realtek\u0028R\u0029 Audio) \"quoted\""]}""");
+
+        Assert.Equal(["Speakers (Realtek(R) Audio) \"quoted\""], signal!.Arguments);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -100,6 +135,8 @@ public sealed class SignalPayloadTests
     [InlineData("{}")]
     [InlineData("""{"name":""}""")]
     [InlineData("""{"name":7}""")]
+    [InlineData("""{"name":"x","arguments":[1,2""")]
+    [InlineData("{\"name\":\"x\"")]
     public void WhatIsNotASignalIsNullNotAnException(string? json)
     {
         Assert.Null(SignalPayload.Parse(json));

@@ -18,7 +18,9 @@ is sharing or recording the screen, from the same record), `speaker-muted`,
 `on-battery`, `battery-low`, `lid-closed`, `user-away` (Windows's own judgement that
 nobody is at the keyboard — the one that dims the display) and `dark-theme`. Facts are
 named `subject-state`, so the ones about one device sit together and the next device
-slots in beside them.
+slots in beside them. Three readings can also go to the bar as words rather than as
+facts — the battery's percentage and the names of the default speaker and microphone;
+see [Values](#values).
 
 It is its own program, `ayn`, started by the window manager from the config
 (`startup-command "ayn"`), and it reads the `ayn` section of the same file.
@@ -112,6 +114,48 @@ Two facts naming one context are pointed out (`AYN0006`), because each hands the
 context back when it goes false and takes the other's pin with it; the file wants two
 contexts and a third composed from them. `camera "meeting"` is read as
 `camera { in-use "meeting" }` and said so (`AYN0007`).
+
+## Values
+
+A fact is a yes or a no, and a context is what the file can hang behaviour on. The
+battery's percentage is not that — nothing should change at 41 percent that did not
+change at 42 — and yet the number is worth showing, and the watcher already read it
+for `battery-low` and threw it away. Three readings can therefore go out as **values**:
+words for the bar rather than contexts for the window manager, published as a
+[signal](scripting.md#signals) the window manager carries without reading, and shown
+by a `source ... kind="signal"` in the [bar's section](taj.md#sources).
+
+```kdl
+ayn {
+    power      { battery-percent "battery" }     // signal "battery" "41"; empty when there is none
+    speaker    { device-name "speaker" }         // signal "speaker" "Speakers (Realtek(R) Audio)"
+    microphone { device-name "microphone" }      // the default microphone's name
+}
+
+bar {
+    source "battery" kind="signal"
+    source "speaker" kind="signal"
+    profile "default" {
+        zone "right" justify="end" {
+            text template="{{ battery }}%"
+            text template="{{ speaker | truncate:24 }}"
+        }
+    }
+}
+```
+
+Each is off until named, like every fact added since the first three; `#true` names it
+after its subject — `battery`, `speaker`, `microphone` — which is what the bar's source
+would be called anyway. The name is a signal's, not a context's, so it is checked
+against nothing; an empty one is pointed out and off (`AYN0012`). A value is said when
+it changes and not otherwise, and said again whenever a bar asks with
+`signal "announce"`, which a bar does when it connects with a signal source in its
+file — so a bar that starts after the watcher is not blank until the battery next
+moves. A value the file stops naming, or renames, is cleared once under its old name,
+so no bar goes on showing the last number it heard. A device name that Windows spells
+with a quote in it arrives as it is unless it holds both kinds, which the command
+language cannot write; then its double quotes become the typographic kind rather
+than the value being dropped.
 
 ## What it acts on
 

@@ -17,6 +17,37 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **A program can put a value on the bar by raising a signal.** `source "battery"
+  kind="signal"` in the `bar` section makes `{{ battery }}` read whatever
+  `shubbak signal battery 41` last said - the signal's arguments joined by a space, or
+  the empty value when there are none, which hides the widget. The third way onto the
+  bar beside a clock and a program the bar runs itself, for a program that already
+  knows the value and would otherwise have to be started a second time to say it. A
+  signal source has no timer, no thread and no process; and a bar with no signal
+  source never subscribes to the topic, so it costs the window manager nothing per
+  signal and leaves it able to say when a signal was raised with nobody listening -
+  `shubbak diagnose` now lists who is subscribed to what, so that can be seen. A reload
+  that adds the first signal source or removes the last remakes each bar's
+  subscription without the connection pill noticing. `signal=` on the source names a
+  signal other than the source's own name. Because a signal is fire-and-forget and the
+  window manager keeps none of it, the bar raises `signal "announce"` when it connects
+  with a signal source in its file, and after a reload, and a publisher that hears it
+  says its values again; the name is the protocol's (`IpcProtocol.AnnounceSignal`) so
+  a script of your own can honour it too. `SignalSource` and `SourceHub.Signal` are the
+  pieces underneath.
+- **The watcher publishes three of its readings as values, not facts.** A context is a
+  boolean by design, and the battery's percentage is not one; the watcher read it for
+  `battery-low` and threw the number away. `power { battery-percent "battery" }`,
+  `speaker { device-name "speaker" }` and `microphone { device-name "microphone" }`
+  each publish a signal the bar shows - `41`, `Speakers (Realtek(R) Audio)` - said when
+  it changes and not otherwise, said again when a bar asks with `announce`, and cleared
+  once under its old name when the file drops or renames it. Each is off until named;
+  `#true` names it after its subject. The name is a signal's, not a context's, so it is
+  checked against nothing; an empty one is pointed out (`AYN0012`). `ValuePublisher` in
+  `Ayn.Core` is the decision, pure and tested beside `Provider`; the loop flushes both
+  from one reading. Verified live: the speaker's name was on the bar within a moment of
+  the watcher starting, survived the bar being restarted and reloaded, and cost the
+  idle watcher no CPU at all over thirty seconds.
 - **The bar scales with the display.** Every size in the `bar` section - `height`,
   `font-size`, `padding`, `margin`, `radius`, `size`, `gap`, `min-width` - is now in
   device-independent pixels and scaled to each display's DPI just before layout, so a
@@ -893,6 +924,15 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **The signal and shutdown payloads are read with `Utf8JsonReader`, not a document.**
+  Both were two fields parsed through `JsonDocument`, which the bar had never linked;
+  reading a signal there would have pulled the document machinery into a binary that
+  had done without it, and measured at fifty kilobytes for two fields. The reader is in
+  every companion already, underneath the generated serialiser. The palette shrank by
+  twenty kilobytes for losing the document; a number written bare in a signal still
+  arrives as a word, and a nested value as its JSON, as before. `CommandParser.Quote`'s
+  remark now admits the one value it cannot spell: the empty string, which the
+  tokeniser reads back as no token at all.
 - **CI authenticates the WinGet client update.** `tools/ensure-winget.ps1` updates the
   runner's client through Microsoft's module, which asks GitHub's API for the release
   and its assets - anonymously unless a token is in the environment, and anonymous
