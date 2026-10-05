@@ -127,10 +127,16 @@ public sealed class WindowManagerSmokeTests : IDisposable
         // gives rather than for the window to appear in the list. Before the rule fix
         // this is where the test stopped: managed, floating, and a refusal in the log
         // about whatever unmanaged window had the foreground.
+        //
+        // And for the layout pass after the verdict, which is what gives the window its
+        // rectangle: the state says "tiling" the moment the rule has spoken, a tick
+        // before the window is placed, and on a fast machine the list was read in
+        // between - a tiled window of width zero, one run in three.
         WindowInfo tiled = WaitForWindow(
             w => string.Equals(w.ProcessName, "winver", StringComparison.OrdinalIgnoreCase) &&
-                 string.Equals(w.State, "tiling", StringComparison.OrdinalIgnoreCase),
-            "winver's window to be managed and tiled by the rule");
+                 string.Equals(w.State, "tiling", StringComparison.OrdinalIgnoreCase) &&
+                 w.Width > 0 && w.Height > 0,
+            "winver's window to be managed, tiled by the rule, and placed");
 
         // One tiled window on a workspace fills the work area, less the gaps: its
         // rectangle lies inside whichever monitor it landed on and is most of it.
@@ -205,6 +211,50 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         string log = ReadShared(Path.Combine(_state, "shubbak.log"));
         Assert.Contains("SHB", log, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheDaemonNamesItsOwnConfigFileAndSaysWhenTheDiskHasMovedOn()
+    {
+        // The daemon was started with --config, pointing at a file no search order
+        // finds - which is exactly the case a client resolving the path for itself gets
+        // wrong, and the reason the daemon is the one to ask.
+        Process daemon = StartDaemon();
+        WaitFor(() => IpcClient.IsServerRunning(_pipe), StartupTimeout, "the window manager's pipe to appear", daemon);
+
+        ConfigFileInfo file = Query("config-path", IpcJsonContext.Default.ConfigFileInfo);
+        Assert.Equal(_config, file.Path);
+        Assert.False(file.Stale, "a file just loaded is reported as changed since");
+
+        // And its text: the whole file, as it is on disk.
+        IpcResponse text = Send("query", "config");
+        Assert.True(text.Ok, $"query config was refused: {text.Error}");
+        Assert.Equal(TestConfig, text.Data);
+
+        // A save the daemon did not follow - reload-on-save is off in this file - is
+        // what stale is for: the file and the running configuration no longer agree.
+        File.WriteAllText(_config, TestConfig + "\n// a comment the daemon has not read\n");
+        Assert.True(Query("config-path", IpcJsonContext.Default.ConfigFileInfo).Stale, "an edited file is not reported as changed");
+
+        // A reload the daemon refuses is announced as one. The file stays stale,
+        // because what is running is still the file before it.
+        File.WriteAllText(_config, "general { default-layout \"splith\" \n");
+        ConfigReloadNotice refused = ReloadAndHear();
+        Assert.Equal(_config, refused.Path);
+        Assert.False(refused.Accepted, "a reload of a file that does not parse was announced as accepted");
+        Assert.True(Query("config-path", IpcJsonContext.Default.ConfigFileInfo).Stale, "a refused file is not reported as changed");
+        Assert.Equal("pong", Send("ping", string.Empty).Data);
+
+        // A good file, reloaded, lands - and the two agree again.
+        File.WriteAllText(_config, TestConfig);
+        ConfigReloadNotice landed = ReloadAndHear();
+        Assert.Equal(_config, landed.Path);
+        Assert.True(landed.Accepted, "a reload of a file that parses was announced as refused");
+        Assert.False(Query("config-path", IpcJsonContext.Default.ConfigFileInfo).Stale, "a reloaded file is reported as changed since");
+
+        (int exit, string output) = RunCli("stop", StopTimeout);
+        Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
+        WaitFor(() => daemon.HasExited, StopTimeout, "the window manager to exit", null);
     }
 
     // ---- starting things -------------------------------------------------------------
@@ -338,6 +388,46 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         return JsonSerializer.Deserialize(response.Data!, type)
             ?? throw new InvalidOperationException($"query {what} answered null");
+    }
+
+    /// <summary>
+    /// Asks the daemon to re-read its file, as the key does, and returns what it
+    /// announced about the outcome.
+    /// </summary>
+    /// <remarks>
+    /// Subscribed before the command is sent, so the announcement cannot slip past in
+    /// between; the command goes over a second connection, since a subscribed one
+    /// carries nothing else.
+    /// </remarks>
+    private ConfigReloadNotice ReloadAndHear()
+    {
+        using var cancel = new CancellationTokenSource(RequestTimeout);
+
+        try
+        {
+            return ReloadAndHearAsync(cancel.Token).GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            throw new TimeoutException($"the daemon did not announce config.reloaded within {RequestTimeout.TotalSeconds:F0}s. It printed: {_daemonOutput}");
+        }
+    }
+
+    private async Task<ConfigReloadNotice> ReloadAndHearAsync(CancellationToken token)
+    {
+        await using var listener = new IpcClient { PipeName = _pipe };
+        await listener.ConnectAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+        await listener.BeginSubscriptionAsync("config.reloaded", token).ConfigureAwait(false);
+
+        IpcResponse sent = await SendAsync("command", "wm-reload-config", token).ConfigureAwait(false);
+        Assert.True(sent.Ok, $"wm-reload-config was refused: {sent.Error}");
+
+        await foreach (IpcEvent raised in listener.ReadEventsAsync(token).ConfigureAwait(false))
+        {
+            if (raised.Topic == "config.reloaded") return ConfigReloadNotice.Parse(raised.Data);
+        }
+
+        throw new InvalidOperationException("the event stream ended before config.reloaded was announced");
     }
 
     private WindowInfo WaitForWindow(Func<WindowInfo, bool> wanted, string what)

@@ -200,6 +200,18 @@ internal sealed class WmConnection : IAsyncDisposable
         switch (raised.Topic)
         {
             case "config.reloaded":
+                // A reload the window manager refused - the file had errors and it kept
+                // what it had - is not followed either. Following it meant re-reading a
+                // file that does not parse and running on the defaults it yields, which
+                // for a watcher is letting go of every context it holds: a stray brace
+                // saved mid-call dropped `microphone-in-use`, and with it whatever the
+                // config disarms during a call. The loop is not woken; nothing changed.
+                if (!ConfigReloadNotice.Parse(raised.Data).Accepted)
+                {
+                    Log.Info(LogCategory.Config, "the window manager refused the saved file and kept its configuration; so does the watcher");
+                    break;
+                }
+
                 Reloaded.Set();
                 break;
 

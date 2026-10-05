@@ -413,6 +413,13 @@ internal sealed partial class WmDaemonIpc
                 JsonSerializer.Serialize(Describe(), IpcJsonContext.Default.IReadOnlyListCommandInfo)));
         }
 
+        // The file as it is on disk, off the loop: the path is fixed for the life of
+        // the process, and a read of the file is the one thing the tick must not wait
+        // on. Disk rather than memory, on purpose - the daemon keeps the parsed result
+        // and not the text, and the whole file is what a client wants, including the
+        // sections the daemon does not parse. `config-path` says whether the two agree.
+        if (what is "config") return Task.FromResult(ReadConfigFile(request));
+
         return _daemon.InvokeAsync<IpcResponse>(() =>
         {
             Core.Wm.WindowManager wm = _daemon.Manager;
@@ -457,6 +464,11 @@ internal sealed partial class WmDaemonIpc
                 "rules" => JsonSerializer.Serialize(
                     _daemon.DescribeRules(), IpcJsonContext.Default.IReadOnlyListRuleInfo),
 
+                // On the loop because the stamp of the last load lives there. The
+                // path alone would not need it; whether the disk has moved on does.
+                "config-path" => JsonSerializer.Serialize(
+                    _daemon.DescribeConfigFile(), IpcJsonContext.Default.ConfigFileInfo),
+
                 // Plain text rather than JSON: the same rendering shubbak diagnose puts
                 // in its report, for reading the tree as it is rather than reconstructing
                 // it from the windows list.
@@ -468,9 +480,32 @@ internal sealed partial class WmDaemonIpc
             return json.Length == 0
                 ? new IpcResponse(request.Id, false, null,
                     $"unknown query '{what}'. Try: state, tree, windows, all-windows, every-window, workspaces, " +
-                    "monitors, focused, layouts, commands, bindings, contexts, arrangements, rules")
+                    "monitors, focused, layouts, commands, bindings, contexts, arrangements, rules, config, config-path")
                 : new IpcResponse(request.Id, true, json);
         });
+    }
+
+    /// <summary>
+    /// Answers <c>query config</c> with the file's text, or says why not.
+    /// </summary>
+    /// <remarks>
+    /// An error rather than an empty answer when there is no file, because a file can
+    /// be empty and the two must not read alike. The text is returned as it is, byte
+    /// order mark aside - <c>tree</c> is the precedent for an answer that is not JSON.
+    /// </remarks>
+    private IpcResponse ReadConfigFile(IpcRequest request)
+    {
+        if (_daemon.ConfigPath is not { } path)
+            return new IpcResponse(request.Id, false, null, "the window manager is running on defaults; there is no configuration file");
+
+        try
+        {
+            return new IpcResponse(request.Id, true, ConfigFile.Read(path).Text);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return new IpcResponse(request.Id, false, null, $"the configuration file could not be read: {ex.Message}");
+        }
     }
 
     /// <summary>The command set, so a client need not hard-code it.</summary>

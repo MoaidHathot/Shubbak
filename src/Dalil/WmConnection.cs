@@ -576,6 +576,18 @@ public sealed class WmConnection : IAsyncDisposable
             }
 
             case "config.reloaded":
+                // A reload the window manager refused is not followed. The palette
+                // already keeps itself when its own section has errors; this is the
+                // same rule for a mistake anywhere else in the file, which the palette's
+                // loader cannot see and which used to leave it re-reading a file the
+                // window manager would not - running on settings the window manager was
+                // not, and the only one who did not know.
+                if (!ConfigReloadNotice.Parse(raised.Data).Accepted)
+                {
+                    Log.Info(LogCategory.Config, "the window manager refused the saved file and kept its configuration; so does the palette");
+                    break;
+                }
+
                 Reloaded?.Invoke();
                 break;
 

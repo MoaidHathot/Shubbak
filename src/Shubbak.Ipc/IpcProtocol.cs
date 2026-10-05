@@ -468,6 +468,30 @@ public sealed record AppReport(
 public sealed record ArrangementInfo(string Name, string Workspace, int Windows, long SavedAtUnixMs);
 
 /// <summary>
+/// The configuration file the window manager is running, as <c>query config-path</c>
+/// reports it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The daemon's answer rather than the client's guess. Every program resolves the
+/// same search order, so they agree - until the daemon is started with
+/// <c>--config</c>, after which the file in effect is one the search order never
+/// finds. A client that wants the file the window manager is actually reading asks
+/// for it here; the palette's "open the config" and the bar's reload both should.
+/// </para>
+/// <para>
+/// <see cref="Stale"/> is the one thing about the file only the daemon can say: the
+/// file on disk is not what was last loaded. That is the state after a save with
+/// <c>reload-on-save</c> off, and after a reload the daemon refused because the file
+/// had errors - which a client reading the same file cannot otherwise tell from a
+/// reload that landed.
+/// </para>
+/// </remarks>
+/// <param name="Path">The file, or null when the window manager is running on defaults.</param>
+/// <param name="Stale">Whether the file has changed since the daemon last loaded it.</param>
+public sealed record ConfigFileInfo(string? Path, bool Stale);
+
+/// <summary>
 /// One context, as <c>query contexts</c> and <c>shubbak contexts</c> describe it: whether
 /// it holds, why, and who decided.
 /// </summary>
@@ -580,6 +604,7 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(ConditionReport))]
 [JsonSerializable(typeof(IReadOnlyList<ContextReport>))]
 [JsonSerializable(typeof(IReadOnlyList<ArrangementInfo>))]
+[JsonSerializable(typeof(ConfigFileInfo))]
 [JsonSerializable(typeof(IReadOnlyList<WindowInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<WorkspaceInfo>))]
 [JsonSerializable(typeof(IReadOnlyList<MonitorInfoDto>))]

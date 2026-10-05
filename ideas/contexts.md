@@ -670,8 +670,12 @@ booleans per device, a registry reader, and one connection that sends two comman
   an empty name is far more likely a mistake than a decision.
 - **Ayn stays when the window manager leaves**, as the palette does, and says so at
   Info. The restarted window manager's startup command finds it already running.
-- **No live re-read of the file except on `config.reloaded`.** The daemon only
-  publishes that when it accepted the file, which is the right gate.
+- **No live re-read of the file except on `config.reloaded`.** The daemon publishes
+  that whatever the outcome - the file moved either way - and the payload says
+  whether it accepted the file; the watcher follows only a reload that landed,
+  which is the right gate. (For a while this note believed the daemon published
+  only accepted reloads. It did not, and the watcher re-read a file that would not
+  parse, ran on its defaults, and let go of every context it held.)
 - **Not started on this desk yet.** The real configuration declares no `camera`
   context; adding one and the `startup-command` is the user's call.
 

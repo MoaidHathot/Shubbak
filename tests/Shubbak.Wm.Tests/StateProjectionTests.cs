@@ -281,6 +281,46 @@ public sealed class StateProjectionTests
         Assert.Contains("arrangement.restored", IpcProtocol.Topics);
     }
 
+    // ---- config.reloaded ------------------------------------------------------
+
+    [Fact]
+    public void AReloadIsAnnouncedWithThePathAndWhetherItLanded()
+    {
+        WindowManager wm = WithOneWorkspace(out _);
+
+        // The path is the daemon's, escaped as JSON escapes a Windows path; accepted
+        // is spelled out even when true, so a reader need not know the default.
+        Assert.Equal(
+            "{\"path\":\"C:\\\\x\\\\shubbak.kdl\",\"accepted\":true}",
+            StateProjection.Payload(new ConfigReloaded(@"C:\x\shubbak.kdl"), wm));
+
+        Assert.Equal(
+            "{\"path\":\"C:\\\\x\\\\shubbak.kdl\",\"accepted\":false}",
+            StateProjection.Payload(new ConfigReloaded(@"C:\x\shubbak.kdl", Accepted: false), wm));
+
+        // Running on defaults: no file, and nothing to refuse.
+        Assert.Equal("{\"path\":null,\"accepted\":true}", StateProjection.Payload(new ConfigReloaded(null), wm));
+
+        Assert.Equal("config.reloaded", new ConfigReloaded(null).Topic);
+        Assert.Contains("config.reloaded", IpcProtocol.Topics);
+    }
+
+    [Fact]
+    public void WhatTheDaemonWritesForAReloadIsWhatTheCompanionsRead()
+    {
+        WindowManager wm = WithOneWorkspace(out _);
+
+        ConfigReloadNotice landed = ConfigReloadNotice.Parse(
+            StateProjection.Payload(new ConfigReloaded(@"C:\x\shubbak.kdl"), wm));
+        Assert.Equal(@"C:\x\shubbak.kdl", landed.Path);
+        Assert.True(landed.Accepted);
+
+        ConfigReloadNotice refused = ConfigReloadNotice.Parse(
+            StateProjection.Payload(new ConfigReloaded(@"C:\x\shubbak.kdl", Accepted: false), wm));
+        Assert.Equal(@"C:\x\shubbak.kdl", refused.Path);
+        Assert.False(refused.Accepted);
+    }
+
     [Fact]
     public void TheSnapshotCarriesTheActiveContextsWhenGivenThem()
     {

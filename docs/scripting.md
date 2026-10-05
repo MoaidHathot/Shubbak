@@ -12,7 +12,22 @@ shubbak query state          # the whole window manager, as JSON
 shubbak query windows        # or: all-windows, workspaces, monitors, focused,
                              #     layouts, commands, bindings, contexts, arrangements, rules
 shubbak query tree           # the tree as text: monitors, workspaces, containers, windows
+shubbak query config-path    # {"path":"C:\\...\\shubbak.kdl","stale":false}
+shubbak query config         # the file's text, as it is on disk
 ```
+
+The last two are about the file rather than the desktop, and exist because the
+window manager is the only one who knows the answer. Every program resolves the same
+search order, so they agree about which file is loaded — until the window manager is
+started with `--config`, after which the file it reads is one the search order never
+finds. `config-path` is the window manager's own answer; `path` is null when it is
+running on defaults because no file could be found or written. `stale` says the file
+on disk is not what was last loaded: a save with `reload-on-save` off, or a reload the
+window manager refused because the file had errors, which a program reading the same
+file cannot otherwise tell from one that landed. `config` is the whole file, every
+section — the bar's and the palette's included, which the window manager does not
+parse but does return — and is refused rather than empty when there is no file, since
+a file can be empty.
 
 One more thing can be asked over the pipe that the CLI has no subcommand for, because
 its answer is a picture: **`window-icon`**. Send the method `window-icon` with the
@@ -92,6 +107,16 @@ the daemon is leaving on purpose, and its payload says how much is going with it
 `{}` after `wm-exit`, when the palette and the watcher stay for its return, and
 `{"everything":true}` after `exit-all`, when they leave too. A client of your own that
 outlives the window manager should read that field the same way.
+
+`config.reloaded` is raised whenever the window manager re-reads its file — by the
+key, by a save with `reload-on-save` on, or after `add-rule` — and whatever the
+outcome, because the file moved either way. Its payload says which file and whether
+it landed: `{"path":"C:\\...\\shubbak.kdl","accepted":true}`, or `"accepted":false`
+when the file had errors and the window manager kept what it had. A program that
+reads the same file should follow only an accepted reload, as the palette and the
+watcher do; following a refused one means re-reading a file that does not parse and
+running on whatever that yields, while the window manager runs on the file before it.
+An older window manager sends `{}`, which reads as accepted with no path.
 
 ## Signals
 

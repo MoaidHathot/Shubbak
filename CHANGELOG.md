@@ -17,6 +17,28 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **The window manager says which file it is running, and whether the disk agrees.**
+  Every program resolves the same search order, so they agreed about the config file -
+  until the window manager was started with `--config`, after which it read a file the
+  search order never finds, and `shubbak config-path`, the palette's "open config" and
+  the bar's reload each named a different one with confidence; the daemon's own code
+  said as much, in a comment. `query config-path` is now the daemon's answer:
+  `{"path":...,"stale":...}`, where `stale` is the one thing only the daemon can say -
+  the file on disk is not what was last loaded, which is the state after a save with
+  `reload-on-save` off and after a reload the daemon refused. `query config` is the
+  file's text, every section, as it is on disk. `shubbak config-path` asks the daemon
+  first and falls back to the search order when nothing is running. And
+  `config.reloaded`, which went out as `{}`, now carries `{"path":...,"accepted":...}`:
+  it was always raised whether or not the file was accepted - the file moved either
+  way - but nothing said which, so the palette re-read a file the daemon had refused
+  and ran on settings the daemon was not, and the watcher did worse: it ran on its
+  defaults, which for a watcher is letting go of every context it holds, so a stray
+  brace saved mid-call dropped `microphone-in-use` and whatever the config disarms
+  during a call. Both now follow only a reload that landed, as the daemon does; the
+  palette's "reload palette" row remains the way round that. Two comments in the repo
+  that believed the daemon only announced accepted reloads are corrected.
+  `ConfigReloadNotice` is the shared reader and writer, so an older daemon's `{}` reads
+  as it always did; tested at both ends, and the end-to-end test asks a real daemon.
 - **`shubbak diagnose` works with the window manager dead.** A report is most wanted
   after a crash, and that was the one case it refused: "a report needs the running
   window manager to describe its state". True of the live tree and the log ring, and of

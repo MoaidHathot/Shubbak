@@ -367,13 +367,27 @@ public sealed record ArrangementRestored(string Name, string Workspace, int Plac
 /// <summary>
 /// The configuration was re-read from disk.
 /// </summary>
+/// <param name="Path">The file that was read, or null when running on defaults.</param>
+/// <param name="Accepted">
+/// Whether the file is now the configuration in force. False when it had errors and
+/// the previous configuration was kept.
+/// </param>
 /// <remarks>
+/// <para>
 /// Announced so that everything reading the same file can reload together. The bar is
 /// a separate process reading the same config, and without this it kept whatever it
 /// started with: reloading the window manager left the bar showing settings from
 /// however long ago it was launched, with nothing to say so.
+/// </para>
+/// <para>
+/// Announced whatever the outcome, because the file moved either way and a client
+/// that reads it wants to know. <paramref name="Accepted"/> is what lets such a client
+/// tell a reload that landed from one the window manager refused: a palette that
+/// re-read a file the window manager would not would be running on settings the
+/// window manager is not, and would be the only one who did not know.
+/// </para>
 /// </remarks>
-public sealed record ConfigReloaded(string? Path) : WmEvent
+public sealed record ConfigReloaded(string? Path, bool Accepted = true) : WmEvent
 {
     public override string Topic => "config.reloaded";
 }

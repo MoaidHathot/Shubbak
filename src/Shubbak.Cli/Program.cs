@@ -64,7 +64,7 @@ internal static class Program
                 "query" => await QueryAsync(args).ConfigureAwait(false),
                 "sub" or "subscribe" => await SubscribeAsync(args).ConfigureAwait(false),
             "check-config" => CheckConfig(args),
-            "config-path" => ShowConfigPath(args),
+            "config-path" => await ShowConfigPathAsync(args).ConfigureAwait(false),
             "config" => ConfigCommand.Run(args),
             "setup" => SetupCommand.Run(args),
             "doctor" => DoctorCommand.Run(args),
@@ -1081,8 +1081,41 @@ internal static class Program
     }
 
     /// <summary>Reports where the config was found, and everywhere that was tried.</summary>
-    private static int ShowConfigPath(string[] args)
+    /// <remarks>
+    /// <para>
+    /// The window manager is asked first, when one is running and no path was given,
+    /// because its answer is the one that matters: every program resolves the same
+    /// search order, so they agree - until the window manager is started with
+    /// <c>--config</c>, after which the file it reads is one the search order never
+    /// finds, and this command would name the wrong file with confidence. With no
+    /// window manager to ask, the search order is the best anybody can do, and is
+    /// what the window manager will do when it starts.
+    /// </para>
+    /// <para>
+    /// Whether the file has changed since it was loaded rides along, because the
+    /// window manager is the only one who knows, and a user asking which file is in
+    /// effect is often about to wonder why an edit did nothing.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> ShowConfigPathAsync(string[] args)
     {
+        if (args.Length < 2 && await AskDaemonForConfigAsync().ConfigureAwait(false) is { } running)
+        {
+            if (running.Path is null)
+            {
+                Console.Error.WriteLine("the window manager is running on defaults; it found no configuration file.");
+                Console.Error.Write(ConfigPathResolver.Resolve().DescribeSearch());
+                return 1;
+            }
+
+            Console.WriteLine(running.Path);
+            Console.Error.WriteLine(running.Stale
+                ? "(the window manager's; the file has changed since it was loaded)"
+                : "(the window manager's)");
+
+            return 0;
+        }
+
         ConfigLocation location = ConfigPathResolver.Resolve(args.Length > 1 ? args[1] : null);
 
         if (!location.Found)
@@ -1095,6 +1128,31 @@ internal static class Program
         Console.Error.WriteLine($"(found via {location.Origin})");
 
         return 0;
+    }
+
+    /// <summary>
+    /// The window manager's account of its configuration file, or null when there is
+    /// no window manager to ask or it is one that predates the question.
+    /// </summary>
+    private static async Task<ConfigFileInfo?> AskDaemonForConfigAsync()
+    {
+        if (!IpcClient.IsServerRunning()) return null;
+
+        try
+        {
+            await using IpcClient client = await ConnectAsync().ConfigureAwait(false);
+            IpcResponse response = await client.SendAsync("query", "config-path").ConfigureAwait(false);
+
+            return response is { Ok: true, Data: { } data }
+                ? JsonSerializer.Deserialize(data, IpcJsonContext.Default.ConfigFileInfo)
+                : null;
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException or JsonException)
+        {
+            // A window manager that is there but not answering is not one to wait for
+            // over a question the search order can answer nearly as well.
+            return null;
+        }
     }
 
     private static void PrintUsage() => Console.WriteLine("""
@@ -1248,8 +1306,9 @@ internal static class Program
           setup                Config, autostart and start, in one. See GETTING STARTED.
           doctor               A checklist of the install. See GETTING STARTED.
 
-          config-path          Print which config file is in effect, or list
-                               everywhere that was searched if none was found.
+          config-path          Print which config file is in effect: the window
+                               manager's, when one is running, else the one the
+                               search order finds, or everywhere it looked.
 
           rule list            The rules in force, with the line each is on and
                                what each does.
@@ -1278,7 +1337,9 @@ internal static class Program
                                what: state (default), windows, all-windows,
                                      every-window, workspaces, monitors, focused,
                                      layouts, commands, bindings, contexts,
-                                     arrangements, rules
+                                     arrangements, rules, config-path
+                               config: the configuration file's text, as it is on
+                                     disk - the whole file, every section.
           layouts              List the available layouts.
           monitors             Describe each display, with a `monitor` definition
                                ready to paste into the config. Displays are named

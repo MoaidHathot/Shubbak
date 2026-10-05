@@ -3167,7 +3167,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case HostAction.ReloadConfig:
-                _ = LoadConfig(_configPath, initial: false);
+                bool accepted = LoadConfig(_configPath, initial: false);
                 _layoutDirty = true;
 
                 // Announced so the bar, which is a separate process reading the same
@@ -3179,7 +3179,7 @@ public sealed class WmDaemon : IDisposable
                 // which announced it to nothing at all - that event never had a single
                 // subscriber. The bar carried on with its old configuration and said
                 // nothing, which looked exactly like a reload that had worked.
-                Publish(new WmResult(true, [new ConfigReloaded(_configPath)]));
+                Publish(new WmResult(true, [new ConfigReloaded(_configPath, accepted)]));
                 break;
 
             case HostAction.Redraw:
@@ -6263,12 +6263,13 @@ public sealed class WmDaemon : IDisposable
 
         Log.Info(LogCategory.Config, "config saved; reloading");
 
-        _ = LoadConfig(_configPath, initial: false);
+        bool accepted = LoadConfig(_configPath, initial: false);
         _layoutDirty = true;
 
         // Announced as the key's reload is, and whatever the outcome, for the same
         // reason: the bar and the palette read the same file and want to know it moved.
-        Publish(new WmResult(true, [new ConfigReloaded(_configPath)]));
+        // The outcome rides along, so that they can also know whether to follow it.
+        Publish(new WmResult(true, [new ConfigReloaded(_configPath, accepted)]));
 
         return true;
     }
@@ -6278,6 +6279,20 @@ public sealed class WmDaemon : IDisposable
 
     /// <summary>The configuration file in effect, or null when running on defaults.</summary>
     internal string? ConfigPath => _configPath;
+
+    /// <summary>
+    /// The configuration file as <c>query config-path</c> reports it: which one, and
+    /// whether the disk has moved on from what was loaded.
+    /// </summary>
+    /// <remarks>
+    /// On the message loop, because the stamp of the last load lives there. One stat
+    /// of the file, which is what the save watcher does for every save; nothing is
+    /// read. Stale after a save the daemon did not follow - <c>reload-on-save</c> off,
+    /// or a reload it refused - and after the file is gone, which is also not what was
+    /// loaded.
+    /// </remarks>
+    internal ConfigFileInfo DescribeConfigFile() =>
+        new(_configPath, _configPath is { } path && ConfigStamp.Of(path) != _loadedConfigStamp);
 
     /// <summary>
     /// Adds rules to the configuration file and reloads it.
@@ -6398,7 +6413,7 @@ public sealed class WmDaemon : IDisposable
         // and the palette re-read the file at the same moment they would for the key.
         bool reloaded = LoadConfig(path, initial: false);
         _layoutDirty = true;
-        Publish(new WmResult(true, [new ConfigReloaded(path)]));
+        Publish(new WmResult(true, [new ConfigReloaded(path, reloaded)]));
 
         refusal = null;
 

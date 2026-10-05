@@ -23,8 +23,15 @@ repo and symlink them per machine, you already have `XDG_CONFIG_HOME` set — an
 every tool that ignores it makes you learn one more bespoke environment variable.
 
 The window manager, the CLI, the bar, the palette and the watcher all share one
-resolver, so they cannot disagree about which file is loaded. `shubbak config-path`
-prints the file in effect and how it was found, or lists everywhere it looked.
+resolver, so left to the search order they cannot disagree about which file is loaded.
+`--config` is the exception: it names a file the search order never finds, and only
+the program given it knows. So `shubbak config-path` asks the window manager first,
+when one is running, and prints the file *it* is reading — and says if the file has
+changed since it was loaded, which is what a save with `reload-on-save` off or a
+reload the window manager refused both leave behind. With no window manager to ask,
+it prints the file the search order finds and how, or lists everywhere it looked.
+Over the pipe the same answer is `query config-path`, and `query config` is the file's
+text; see [Scripting](scripting.md#asking).
 
 Without a config anywhere, the window manager writes the starter to the first of the
 user locations above - `$XDG_CONFIG_HOME/shubbak/shubbak.kdl` if that is set,

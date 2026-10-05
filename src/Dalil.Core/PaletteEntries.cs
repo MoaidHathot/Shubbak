@@ -799,9 +799,10 @@ public static class PaletteEntries
 
             // Not the same as reloading the window manager, and worth having precisely
             // when it is not. The palette re-reads its section when the manager
-            // announces a reload - and the manager announces one only when it accepted
-            // it, so a mistake anywhere else in the file leaves the palette running on
-            // settings the file no longer contains, with nothing to say so.
+            // announces a reload it accepted, and stays as it is when the manager says
+            // it refused the file - matching the manager, which kept what it had. This
+            // row is the way round that: a mistake elsewhere in the file need not keep
+            // the palette's own section from being tried.
             new PaletteEntry(
                 "reload palette",
                 "Re-read the dalil section on its own, even if the window manager refused the file",

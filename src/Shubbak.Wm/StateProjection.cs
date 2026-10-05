@@ -191,6 +191,13 @@ internal static class StateProjection
                 $"{{\"command\":{JsonString(e.Command)}," +
                 $"\"reason\":{JsonString(e.Reason)}}}",
 
+            // Described rather than left to the fallback, for the same reason as the
+            // tags above: this went out as an empty object to every program reading the
+            // same file, which then each resolved the path for themselves - and a
+            // daemon started with --config is reading a file their resolution never
+            // finds. Written by the notice both ends share, so the reader cannot drift.
+            ConfigReloaded e => ConfigReloadNotice.Payload(e.Path, e.Accepted),
+
             _ => "{}",
         };
     }
