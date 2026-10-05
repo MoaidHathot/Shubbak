@@ -1,8 +1,8 @@
 <#
 .SYNOPSIS
-    Builds everything a release ships: the portable zips, the MSIs, their hashes, and
-    the winget and Scoop manifests with the real values filled in - for every
-    architecture Shubbak targets.
+    Builds everything a release ships: the portable zips, the MSIs, their hashes, the
+    winget and Scoop manifests with the real values filled in - for every
+    architecture Shubbak targets - and the NuGet package of the pipe's client.
 
 .DESCRIPTION
     One script for the release workflow and for a maintainer's machine, so that
@@ -19,9 +19,12 @@
                   artifacts\stage\<rid> and artifacts\stage-msi\<rid> from the
                   published (by then signed) binaries.
       -Pack       Compress the zips and the symbols archives; build the MSIs.
-      -Manifests  Hash the (by then signed) zips and MSIs, write the .sha256 files and
-                  SHA256SUMS.txt, and fill the winget and Scoop manifests into
-                  artifacts\winget and artifacts\bucket.
+      -Nuget      Pack Shubbak.Ipc - the protocol and its client, architecture-neutral
+                  and dependency-free - into artifacts\nuget, from the (by then
+                  signed) assembly in its Release bin.
+      -Manifests  Hash the (by then signed) zips, MSIs and package, write the .sha256
+                  files and SHA256SUMS.txt, and fill the winget and Scoop manifests
+                  into artifacts\winget and artifacts\bucket.
 
     The version comes from Directory.Build.props and nowhere else. Nothing here
     signs anything: signing is the workflow's job, because the credentials live
@@ -46,13 +49,14 @@
 .EXAMPLE
     .\tools\build-release.ps1
     .\tools\build-release.ps1 -Publish -Rids win-x64
-    .\tools\build-release.ps1 -Stage -Pack -Manifests -PortableWm
+    .\tools\build-release.ps1 -Stage -Pack -Nuget -Manifests -PortableWm
 #>
 [CmdletBinding()]
 param(
     [switch] $Publish,
     [switch] $Stage,
     [switch] $Pack,
+    [switch] $Nuget,
     [switch] $Manifests,
     [switch] $PortableWm,
     [switch] $SkipTests,
@@ -68,8 +72,8 @@ $root = Split-Path -Parent $PSScriptRoot
 $artifacts = Join-Path $root 'artifacts'
 $inActions = $env:GITHUB_ACTIONS -eq 'true'
 
-if (-not ($Publish -or $Stage -or $Pack -or $Manifests)) {
-    $Publish = $Stage = $Pack = $Manifests = $true
+if (-not ($Publish -or $Stage -or $Pack -or $Nuget -or $Manifests)) {
+    $Publish = $Stage = $Pack = $Nuget = $Manifests = $true
 }
 
 # The executables, by project. The order matters nowhere except in the output.
@@ -184,6 +188,12 @@ function Get-SymbolsDir([string] $rid) { Join-Path $artifacts "symbols\$rid" }
 function Get-ZipPath([string] $rid) { Join-Path $artifacts "shubbak-$version-$rid.zip" }
 function Get-SymbolZipPath([string] $rid) { Join-Path $artifacts "shubbak-$version-$rid-symbols.zip" }
 function Get-MsiPath([string] $rid) { Join-Path $artifacts "shubbak-$version-$rid.msi" }
+function Get-NugetDir { Join-Path $artifacts 'nuget' }
+function Get-NupkgPath { Join-Path (Get-NugetDir) "Shubbak.Ipc.$version.nupkg" }
+
+# The assembly dotnet pack puts in the package, where the workflow signs it before
+# packing. Architecture-neutral, so one copy under the plain target framework.
+function Get-IpcAssemblyDir { Join-Path $root "src\Shubbak.Ipc\bin\$Configuration\net10.0" }
 
 $version = Get-Version
 Write-Output "Shubbak $version for $($Rids -join ', ')"
@@ -390,6 +400,69 @@ if ($Pack) {
     }
 }
 
+# ---- Nuget -----------------------------------------------------------------------
+
+if ($Nuget) {
+    Group-Begin 'Pack Shubbak.Ipc'
+
+    # Built here when it has not been - a maintainer running this stage alone - and
+    # packed from that build rather than rebuilt by pack, so that the assembly the
+    # workflow signed between the build and this stage is the one in the package. A
+    # pack that rebuilt would overwrite the signature with an unsigned assembly and
+    # nothing would say so.
+    $assembly = Join-Path (Get-IpcAssemblyDir) 'Shubbak.Ipc.dll'
+    if (-not (Test-Path $assembly)) {
+        Invoke-Checked 'build Shubbak.Ipc' {
+            dotnet build (Join-Path $root 'src\Shubbak.Ipc') --configuration $Configuration --nologo -v q
+        }
+    }
+
+    $nugetDir = Get-NugetDir
+    if (Test-Path $nugetDir) { Remove-Item $nugetDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $nugetDir | Out-Null
+
+    Invoke-Checked 'dotnet pack Shubbak.Ipc' {
+        dotnet pack (Join-Path $root 'src\Shubbak.Ipc') `
+            --configuration $Configuration `
+            --no-build `
+            --output $nugetDir `
+            --nologo -v q
+    }
+
+    $nupkg = Get-NupkgPath
+    if (-not (Test-Path $nupkg)) { throw "The package did not build to $nupkg." }
+
+    # The package's own account of itself, checked against the tree's: the id, the
+    # version, no dependency on anything, and the assembly inside it the one that
+    # was built here. A package that said a different version would be a release
+    # whose parts disagree, which the version check on the tag cannot see.
+    $inspect = Join-Path ([System.IO.Path]::GetTempPath()) ("shubbak-nupkg-" + [guid]::NewGuid().ToString('N'))
+    try {
+        Expand-Archive $nupkg -DestinationPath $inspect
+        $nuspec = [xml](Get-Content (Join-Path $inspect 'Shubbak.Ipc.nuspec'))
+        $namespaces = New-Object System.Xml.XmlNamespaceManager($nuspec.NameTable)
+        $namespaces.AddNamespace('n', $nuspec.DocumentElement.NamespaceURI)
+        $id = $nuspec.SelectSingleNode('/n:package/n:metadata/n:id', $namespaces).InnerText
+        $packageVersion = $nuspec.SelectSingleNode('/n:package/n:metadata/n:version', $namespaces).InnerText
+        if ($id -ne 'Shubbak.Ipc') { throw "The package calls itself '$id'." }
+        if ($packageVersion -ne $version) { throw "The package says it is version $packageVersion; the tree says $version." }
+        $dependencies = $nuspec.SelectNodes('//n:dependency', $namespaces)
+        if ($dependencies.Count -gt 0) { throw "The package depends on $($dependencies.Count) package(s); it is meant to depend on nothing." }
+        if (-not (Test-Path (Join-Path $inspect 'lib\net10.0\Shubbak.Ipc.dll'))) { throw 'The package has no assembly in it.' }
+        if (-not (Test-Path (Join-Path $inspect 'lib\net10.0\Shubbak.Ipc.xml'))) { throw 'The package has no XML documentation in it.' }
+        if (-not (Test-Path (Join-Path $inspect 'README.md'))) { throw 'The package has no README in it.' }
+    }
+    finally {
+        Remove-Item $inspect -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    foreach ($file in Get-ChildItem $nugetDir -File) {
+        Write-Output ("  {0}  {1:N0} KB" -f $file.Name, ($file.Length / 1KB))
+    }
+
+    Group-End
+}
+
 # ---- Manifests -------------------------------------------------------------------
 
 if ($Manifests) {
@@ -424,6 +497,22 @@ if ($Manifests) {
         $msiVersion = Get-MsiProperty -Path $msi -Name 'ProductVersion'
         if ($msiVersion -ne $version) { throw "The $rid MSI says it is version $msiVersion; the tree says $version." }
         Write-Output ("  {0,-34} ProductCode {1}" -f (Split-Path $msi -Leaf), $productCodes[$arch])
+    }
+
+    # The package, once: it has no architecture. Hashed beside the rest so the sums
+    # file accounts for everything the release attaches, and skipped rather than
+    # failed when this run did not pack it - a maintainer checking the manifests on
+    # a machine that only built the installers.
+    $nupkg = Get-NupkgPath
+    if (Test-Path $nupkg) {
+        $hash = (Get-FileHash $nupkg -Algorithm SHA256).Hash
+        $leaf = Split-Path $nupkg -Leaf
+        Set-Content "$nupkg.sha256" "$hash  $leaf"
+        $sums.Add("$hash  $leaf")
+        Write-Output ("  {0,-34} {1}" -f $leaf, $hash)
+    }
+    else {
+        Write-Warning "No package at $nupkg; it is left out of SHA256SUMS.txt. Run with -Nuget to pack it."
     }
 
     Set-Content (Join-Path $artifacts 'SHA256SUMS.txt') ($sums -join "`n")

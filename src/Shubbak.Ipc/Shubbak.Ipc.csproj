@@ -2,13 +2,37 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <!--
+    The one project that is a NuGet package. It is the protocol and its client, has
+    no dependency on anything - not on the rest of Shubbak and not on Win32, which is
+    a promise the files in it repeat - and is what a program of somebody else's
+    references to talk to the window manager: connect, send a request, subscribe,
+    read a signal. The server is in the same assembly, because a test that fakes a
+    window manager wants the real one, and it is small.
+
+    The version is the product's, from Directory.Build.props: a package and a window
+    manager with the same number were built from the same tree. Compatibility is a
+    separate thing and is the pipe's own: IpcProtocol.ProtocolVersion, in the pipe
+    name, so a client and a daemon that disagree about the wire fail to find each
+    other rather than misread each other. See IpcProtocol for the rule on raising it.
+  -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Shubbak.Ipc</PackageId>
+    <Title>Shubbak IPC client</Title>
+    <Description>Talk to the Shubbak tiling window manager over its named pipe: send commands and queries, subscribe to its events, hold a context, read a signal. The protocol and its client, with no other dependency.</Description>
+    <PackageTags>shubbak;window-manager;tiling;ipc;named-pipe;windows</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Shubbak.Wm.Tests" />
-    <InternalsVisibleTo Include="Shubbak.Ipc.Tests" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../docs/assets/shubbak-wm.png" Pack="true" PackagePath="/icon.png" Visible="false" />
   </ItemGroup>
 
 </Project>

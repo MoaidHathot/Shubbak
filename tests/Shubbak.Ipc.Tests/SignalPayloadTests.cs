@@ -1,63 +1,8 @@
-using Shubbak.Companion;
+using Shubbak.Ipc;
 
-namespace Shubbak.Companion.Tests;
+namespace Shubbak.Ipc.Tests;
 
-/// <summary>The command line as the companions read it.</summary>
-public sealed class ArgumentsTests
-{
-    [Fact]
-    public void AFlagsValueIsTheArgumentAfterIt()
-    {
-        Assert.Equal("debug", Arguments.Value(["--log-level", "debug"], "--log-level"));
-        Assert.Equal("C:\\x.kdl", Arguments.Value(["--quiet", "--config", "C:\\x.kdl"], "--config"));
-    }
-
-    [Fact]
-    public void AFlagWithNothingAfterItHasNoValue()
-    {
-        // Two of the four copies this replaced read past the end here.
-        Assert.Null(Arguments.Value(["--log-file"], "--log-file"));
-        Assert.Null(Arguments.Value([], "--log-file"));
-    }
-
-    [Fact]
-    public void AnotherFlagIsNeverReadAsAValue()
-    {
-        // `taj --log-file --quiet`: the file has no path, and --quiet is still a switch.
-        Assert.Null(Arguments.Value(["--log-file", "--quiet"], "--log-file"));
-        Assert.True(Arguments.Has(["--log-file", "--quiet"], "--quiet"));
-    }
-
-    [Fact]
-    public void FlagsAreMatchedExactly()
-    {
-        Assert.Null(Arguments.Value(["--Config", "x"], "--config"));
-        Assert.False(Arguments.Has(["--Quiet"], "--quiet"));
-    }
-
-    [Theory]
-    [InlineData(new[] { "--help" }, true)]
-    [InlineData(new[] { "-h" }, true)]
-    [InlineData(new[] { "help" }, true)]
-    [InlineData(new[] { "--config", "x", "--help" }, false)]
-    [InlineData(new string[0], false)]
-    public void HelpIsAskedForFirstOrNotAtAll(string[] args, bool asks)
-    {
-        Assert.Equal(asks, Arguments.AsksForHelp(args));
-    }
-
-    [Theory]
-    [InlineData(new[] { "--version" }, true)]
-    [InlineData(new[] { "-v" }, true)]
-    [InlineData(new[] { "--config", "x", "version" }, true)]
-    [InlineData(new[] { "--quiet" }, false)]
-    public void VersionIsAskedForAnywhere(string[] args, bool asks)
-    {
-        Assert.Equal(asks, Arguments.AsksForVersion(args));
-    }
-}
-
-/// <summary>What a signal event carries.</summary>
+/// <summary>What a signal event carries, read and written by the one type both ends share.</summary>
 public sealed class SignalPayloadTests
 {
     [Fact]
@@ -70,6 +15,27 @@ public sealed class SignalPayloadTests
         Assert.Equal(["microphone", "mute"], signal.Arguments);
         Assert.True(signal.IsFor("AYN"));
         Assert.False(signal.IsFor("palette"));
+    }
+
+    [Fact]
+    public void WhatTheWindowManagerWritesIsWhatAClientReads()
+    {
+        // The daemon publishes through Payload; every companion reads through Parse.
+        // The exact text is the contract a hand-written publisher on the pipe can
+        // rely on: both keys always present, the arguments a JSON array of strings.
+        Assert.Equal(
+            """{"name":"battery","arguments":["41"]}""",
+            SignalPayload.Payload("battery", ["41"]));
+
+        Assert.Equal(
+            """{"name":"announce","arguments":[]}""",
+            SignalPayload.Payload("announce", []));
+
+        SignalPayload? back = SignalPayload.Parse(SignalPayload.Payload("weather", ["Sunny 21C", "say \"hi\"", "tab\there"]));
+
+        Assert.NotNull(back);
+        Assert.Equal("weather", back.Name);
+        Assert.Equal(["Sunny 21C", "say \"hi\"", "tab\there"], back.Arguments);
     }
 
     [Fact]

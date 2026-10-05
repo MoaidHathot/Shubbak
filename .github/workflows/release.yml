@@ -159,13 +159,37 @@ jobs:
         shell: pwsh
         run: ./tools/check-signatures.ps1 (Get-ChildItem artifacts/publish, artifacts/publish-uiaccess -Recurse -Filter *.exe).FullName
 
+      # The one assembly that ships as a NuGet package, signed where it was built so
+      # the package carries a signed assembly. Only this one: the other libraries are
+      # linked into the executables above and have no life of their own.
+      - name: Sign the Shubbak.Ipc assembly
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\src\Shubbak.Ipc\bin\Release\net10.0
+          files-folder-filter: dll
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+
+      - name: Check the signature on the Shubbak.Ipc assembly
+        if: env.SIGNING_ENABLED == 'true'
+        shell: pwsh
+        run: ./tools/check-signatures.ps1 (Get-ChildItem src/Shubbak.Ipc/bin/Release/net10.0 -Filter Shubbak.Ipc.dll).FullName
+
       # The zips are packed from the signed binaries, and the MSIs are built from them,
       # so all of them contain exactly what was checked above. ICE validation runs on
       # the x64 MSI; Windows Installer on this runner cannot open the ARM64 one, and the
-      # authoring is the same.
+      # authoring is the same. The NuGet package is packed from the signed assembly
+      # without rebuilding it, for the same reason.
       - name: Stage and pack
         shell: pwsh
-        run: ./tools/build-release.ps1 -Stage -Pack
+        run: ./tools/build-release.ps1 -Stage -Pack -Nuget
 
       # The MSIs themselves, as files. Only the copies at the top of artifacts/, which
       # are the ones that ship; the build output under artifacts/msi is not recursed
@@ -214,12 +238,16 @@ jobs:
             artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
             artifacts/SHA256SUMS.txt
+            artifacts/nuget/
             artifacts/winget/
             artifacts/bucket/
           if-no-files-found: error
 
       # A draft, on purpose. Read the generated notes, check the artefacts, then publish
-      # by hand. Publishing is what triggers the winget and Scoop update workflow.
+      # by hand. Publishing is what triggers the winget and Scoop update workflow - and
+      # the push of the NuGet package, which that workflow does once the release is
+      # public, so the package on nuget.org and the release it came from are the same
+      # thing published in the same act.
       - name: Publish the release
         if: env.IS_TAG == 'true'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -231,6 +259,9 @@ jobs:
             artifacts/shubbak-*.msi
             artifacts/shubbak-*.sha256
             artifacts/SHA256SUMS.txt
+            artifacts/nuget/*.nupkg
+            artifacts/nuget/*.snupkg
+            artifacts/nuget/*.sha256
           body: |
             ## Install
 
@@ -272,3 +303,7 @@ jobs:
             Every executable and the MSI are Authenticode signed. The certificate is new,
             so SmartScreen may still warn the first time you run something downloaded by
             hand until it has seen enough installs; `winget` installs are not affected.
+
+            `Shubbak.Ipc` is the pipe's client as a NuGet package, for a program of your
+            own that talks to the window manager; the same build is on nuget.org. See
+            [docs/extending.md](https://github.com/${{ github.repository }}/blob/v${{ steps.version.outputs.version }}/docs/extending.md).

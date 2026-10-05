@@ -3764,17 +3764,8 @@ public sealed class WmDaemon : IDisposable
 
         Log.Debug(LogCategory.Ipc, $"signal \"{name}\" -> {ipc.ClientCount} client(s)");
 
-        ipc.Publish(IpcProtocol.SignalTopic, SignalPayload(name, parts));
-    }
-
-    private static string SignalPayload(string name, string[] parts)
-    {
-        string arguments = parts.Length > 1
-            ? string.Join(',', parts.Skip(1).Select(a => JsonSerializer.Serialize(a, IpcJsonContext.Default.String)))
-            : string.Empty;
-
-        return $"{{\"name\":{JsonSerializer.Serialize(name, IpcJsonContext.Default.String)}," +
-               $"\"arguments\":[{arguments}]}}";
+        // Written by the type the clients read it with, so the two cannot drift.
+        ipc.Publish(IpcProtocol.SignalTopic, SignalPayload.Payload(name, parts.Skip(1)));
     }
 
     /// <summary>Runs a command, detached.</summary>

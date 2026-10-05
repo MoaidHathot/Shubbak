@@ -35,6 +35,28 @@
   </PropertyGroup>
 
   <!--
+    Nothing is a NuGet package unless it says so. The SDK's default is that every
+    library is packable, which made `dotnet pack` at the solution level try to pack
+    fifteen projects, fourteen of which are Win32-bound executables and their
+    innards. One project opts in: Shubbak.Ipc, the protocol and its client, which is
+    what a program of somebody else's needs to talk to the window manager. The
+    identity a package carries beyond the assembly's is here, once, so a second
+    package would say the same things.
+  -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <Authors>Moaid Hathot</Authors>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/MoaidHathot/Shubbak</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/MoaidHathot/Shubbak</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <!-- Set by CI so a package built there is reproducible from its source link. -->
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <!--
     The architecture the executables and the test hosts are built for when nothing
     says otherwise: x64, which is what every developer machine so far has been.
 

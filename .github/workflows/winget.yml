@@ -1,13 +1,15 @@
 name: package managers
 
-# Runs when a release is published, and does the two things that depend on the
-# release being public: it fills the package manifests from the assets people will
-# actually download, and it tells the package managers.
+# Runs when a release is published, and does the things that depend on the release
+# being public: it fills the package manifests from the assets people will actually
+# download, it tells the package managers, and it pushes the NuGet package.
 #
 # For Scoop, committing the filled manifest to main *is* the release - Scoop reads the
 # bucket straight from this repository. For winget, the pull request against
 # microsoft/winget-pkgs is opened here too, with the manifests this run has just
-# committed: the first version the same way as every one after it.
+# committed: the first version the same way as every one after it. For NuGet, the
+# package attached to the release is the one pushed, so nuget.org and the release
+# agree byte for byte.
 #
 # The hashes are recomputed from the published assets rather than copied from the
 # build that made them, so what the manifests promise is what a download produces.
@@ -193,3 +195,104 @@ jobs:
           if ($pullRequest) {
             "winget-pkgs pull request: $pullRequest" >> $env:GITHUB_STEP_SUMMARY
           }
+
+  # The NuGet package, pushed from the release's own asset rather than rebuilt, so
+  # what is on nuget.org is what the release attached and what the sums file names.
+  # Trusted Publishing rather than an API key: the job's OpenID Connect token is
+  # exchanged for a key that lives an hour, against a policy on nuget.org naming
+  # this repository, this workflow file and this environment - so there is no
+  # long-lived secret to leak, and a run that is not this workflow on this
+  # repository cannot publish as this project. Until the policy exists on nuget.org
+  # the login step fails and says so; the manifests job above is unaffected. See
+  # RELEASING.md for the setup.
+  #
+  # A job of its own, so that id-token: write is granted to the one job that
+  # exchanges it and a package that will not push does not hold up the manifests.
+  nuget:
+    runs-on: ubuntu-latest
+    environment: package-managers
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      HAS_NUGET_USER: ${{ vars.NUGET_USER != '' }}
+
+    steps:
+      - name: Download the published package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir artifacts `
+            --pattern 'Shubbak.Ipc.*.nupkg' --pattern 'Shubbak.Ipc.*.snupkg' --pattern 'Shubbak.Ipc.*.sha256'
+          Get-ChildItem artifacts
+
+          # The package named by the tag, and no other: a release that attached two
+          # would be a mistake worth stopping on rather than pushing both.
+          $version = $env:TAG -replace '^v', ''
+          $nupkg = Get-ChildItem artifacts -Filter "Shubbak.Ipc.$version.nupkg"
+          if (-not $nupkg) { throw "The release $env:TAG has no Shubbak.Ipc.$version.nupkg attached." }
+
+          # And the bytes the release said it attached.
+          $expected = (Get-Content "artifacts/Shubbak.Ipc.$version.nupkg.sha256" -Raw).Split(' ')[0].Trim()
+          $actual = (Get-FileHash $nupkg.FullName -Algorithm SHA256).Hash
+          if ($expected -ne $actual) { throw "Shubbak.Ipc.$version.nupkg hashes to $actual; the release says $expected." }
+          Write-Output "Shubbak.Ipc.$version.nupkg matches its published hash."
+
+      - name: Is this version already on nuget.org?
+        id: upstream
+        shell: pwsh
+        run: |
+          $version = $env:TAG -replace '^v', ''
+
+          try {
+            Invoke-RestMethod -Uri "https://api.nuget.org/v3-flatcontainer/shubbak.ipc/$version/shubbak.ipc.nuspec" | Out-Null
+            Write-Output "Shubbak.Ipc $version is already on nuget.org; nothing to push."
+            "exists=true" >> $env:GITHUB_OUTPUT
+          }
+          catch {
+            "exists=false" >> $env:GITHUB_OUTPUT
+
+            if ($env:HAS_NUGET_USER -eq 'true') {
+              Write-Output "Shubbak.Ipc $version is not on nuget.org yet; it will be pushed."
+            }
+            else {
+              Write-Output "Shubbak.Ipc $version is not on nuget.org, and NUGET_USER is not set on the package-managers environment, so it will not be pushed."
+              Write-Output 'Set the variable to the nuget.org profile name that owns the Trusted Publishing policy (see RELEASING.md) and run this workflow again with the same tag, or push by hand:'
+              Write-Output "  dotnet nuget push artifacts/Shubbak.Ipc.$version.nupkg --api-key <key> --source https://api.nuget.org/v3/index.json"
+            }
+          }
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
+        with:
+          dotnet-version: '10.0.x'
+
+      # The exchange: this job's OIDC token for a one-hour nuget.org key. The user is
+      # the nuget.org profile name that owns the policy - not an email address - and
+      # is a variable rather than a secret because it is public on nuget.org anyway.
+      - name: Log in to nuget.org
+        if: vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      # The symbols go with it: nuget.org takes the .snupkg beside the .nupkg from the
+      # same push and serves it from its symbol server.
+      - name: Push the package
+        if: vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          $version = $env:TAG -replace '^v', ''
+          dotnet nuget push "artifacts/Shubbak.Ipc.$version.nupkg" `
+            --api-key $env:NUGET_API_KEY `
+            --source https://api.nuget.org/v3/index.json `
+            --skip-duplicate
+          if ($LASTEXITCODE -ne 0) { throw "dotnet nuget push exited $LASTEXITCODE." }
+
+          "Shubbak.Ipc $version pushed to nuget.org: https://www.nuget.org/packages/Shubbak.Ipc/$version" >> $env:GITHUB_STEP_SUMMARY

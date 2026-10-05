@@ -17,6 +17,7 @@ One tag, `v<version>`, and from it one workflow run that produces:
 | `shubbak-<v>-win-<arch>.zip` | The portable build, one per architecture: five executables plus the readme, licence, example config and docs, flat. What Scoop and `winget --scope user` install. Signed executables. |
 | `*.sha256`, `SHA256SUMS.txt` | One per package, and all of them in one file. What the manifests carry and what a person downloading by hand can check. |
 | `shubbak-<v>-win-<arch>-symbols.zip` | The `.pdb` files, for reading a crash report's stack. |
+| `Shubbak.Ipc.<v>.nupkg`, `.snupkg` | The pipe's protocol and client as a NuGet package, for a program of somebody else's that talks to the window manager; architecture-neutral, so one of each. The assembly inside is signed; the symbols package goes with it. Pushed to nuget.org once the release is published - the same file, so nuget.org and the release agree. |
 | `winget/`, `bucket/` | The package manifests with the real hashes, `ProductCode`s and date filled in. Only in the workflow's uploaded artefact, not on the release page. |
 
 winget serves all four packages under one identifier, `MoaidHathot.Shubbak`. It
@@ -121,6 +122,34 @@ belongs to an account that owns nothing else:
    as the ref, which is what admits it.
 
 Nothing else: no username to configure, because the tool takes it from the token.
+
+Also once, for the NuGet package: nuget.org's
+[Trusted Publishing](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing),
+which is to nuget.org what the federated credential above is to Azure - the
+workflow's OpenID Connect token is exchanged for a key that lives an hour, against a
+policy that names this repository, this workflow file and this environment, so there
+is no long-lived key to leak and no run that is not this workflow on this repository
+can publish as this project.
+
+1. **nuget.org**: sign in as the account that is to own `Shubbak.Ipc` → the profile
+   menu → **Trusted Publishing** → add a policy: owner `MoaidHathot`, repository
+   `Shubbak`, workflow file `winget.yml` (the file name alone, not the path - the push
+   lives in the package-managers workflow because it runs when the release is
+   published, which is when the package it pushes becomes public), environment
+   `package-managers`. A policy on a repository nuget.org has not seen publish before
+   is active for seven days and goes inactive if nothing is published in them; the
+   first release after the policy is made has to land inside that window, or the
+   window has to be restarted on nuget.org first.
+2. **This repository.** Settings → Environments → `package-managers` → variable
+   `NUGET_USER`: the nuget.org **profile name** that owns the policy - not an email
+   address. A variable rather than a secret, because it is public on nuget.org
+   anyway. Until it is set the `nuget` job stops after checking the package and says
+   so; setting it and dispatching the workflow again with the same tag pushes.
+
+The package id is claimed by the first push. Reserving it on nuget.org beforehand
+(Manage Packages → an ID prefix reservation, or simply the first push being yours) is
+worth doing before the first release that carries it, since an id taken by somebody
+else is a different package forever.
 
 Every action in `.github/workflows` is pinned to a commit rather than a version tag,
 because a tag can be moved by whoever controls the action's repository and two of the
@@ -254,9 +283,10 @@ The workflow then, in order: **waits for the `release` environment's reviewer** 
 job does not start, and no token is minted, until the run is approved; checks the tag
 against `<Version>` and runs the consistency check; refuses if signing is not
 configured; builds and tests; publishes;
-signs the executables and checks the signatures; stages and packs; builds the MSI;
-signs it; hashes everything and fills the manifests; uploads the artefact; opens a
-**draft** release with the packages and their hashes attached.
+signs the executables and the `Shubbak.Ipc` assembly and checks the signatures;
+stages and packs, the NuGet package from the signed assembly without rebuilding it;
+builds the MSI; signs it; hashes everything and fills the manifests; uploads the
+artefact; opens a **draft** release with the packages and their hashes attached.
 
 If it fails, delete the tag from both places before retrying - the version check runs
 before the build, but the test and publish steps run after, so a tag can outlive the
@@ -313,6 +343,14 @@ the publisher, the URLs or the licence, and that has taken anywhere from a day t
 couple of weeks. Questions arrive as comments addressed to the account that opened the
 pull request, which is the bot, so its mailbox is one to watch. Once it is merged,
 `winget search shubbak` finds it within a day.
+
+The same workflow's second job pushes `Shubbak.Ipc` to nuget.org, from the package
+attached to the release - downloaded, checked against its published hash, and pushed
+as it is, so what nuget.org serves is byte for byte what the release attached. It
+logs in by Trusted Publishing, which needs the policy and `NUGET_USER` from the setup
+above; without the variable it stops after checking the package and says so, and a
+version already on nuget.org is left alone. The package is listed within minutes and
+indexed for search within an hour or so; the symbols package goes with it.
 
 ### The icon winget will not show
 

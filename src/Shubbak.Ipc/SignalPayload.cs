@@ -1,20 +1,22 @@
 using System.Text;
 using System.Text.Json;
 
-namespace Shubbak.Companion;
+namespace Shubbak.Ipc;
 
 /// <summary>
 /// What a <c>signal</c> event carries: a name, and the words after it.
 /// </summary>
-/// <param name="Name">Who the signal is for: <c>palette</c>, <c>ayn</c>.</param>
+/// <param name="Name">Who the signal is for: <c>palette</c>, <c>ayn</c>, <c>announce</c>, or a name of your own.</param>
 /// <param name="Arguments">Everything after the name, in order; empty when there was nothing.</param>
 /// <remarks>
 /// <para>
 /// The window manager carries a signal without reading it, which is how the palette
-/// and the watcher get verbs of their own without the window manager learning them.
-/// Both parsed the same two fields by hand; this is the one copy. A payload that is
-/// not a signal - not JSON, no name - is null rather than an exception, because the
-/// stream it arrived on carries on either way.
+/// and the watcher get verbs of their own without the window manager learning them -
+/// and how a program of yours does. Both parsed the same two fields by hand; this is
+/// the one copy, and it lives beside the protocol so that anything built against the
+/// pipe can read a signal without first finding out how. A payload that is not a
+/// signal - not JSON, no name - is null rather than an exception, because the stream
+/// it arrived on carries on either way.
 /// </para>
 /// <para>
 /// Read with <see cref="Utf8JsonReader"/> rather than through a document. The reader
@@ -26,6 +28,35 @@ namespace Shubbak.Companion;
 /// </remarks>
 public sealed record SignalPayload(string Name, IReadOnlyList<string> Arguments)
 {
+    /// <summary>
+    /// The payload for a signal, as the window manager publishes it:
+    /// <c>{"name":"...","arguments":["...", ...]}</c>, both keys always present.
+    /// </summary>
+    /// <remarks>
+    /// The writer beside the reader, so the two cannot drift; a program of your own
+    /// that fakes a window manager in a test wants the real shape.
+    /// </remarks>
+    public static string Payload(string name, IEnumerable<string> arguments)
+    {
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        var text = new StringBuilder("{\"name\":");
+        text.Append(JsonSerializer.Serialize(name, IpcJsonContext.Default.String));
+        text.Append(",\"arguments\":[");
+
+        bool first = true;
+
+        foreach (string argument in arguments)
+        {
+            if (!first) text.Append(',');
+            first = false;
+            text.Append(JsonSerializer.Serialize(argument, IpcJsonContext.Default.String));
+        }
+
+        return text.Append("]}").ToString();
+    }
+
     /// <summary>Reads a signal's payload, or null when it is not one.</summary>
     public static SignalPayload? Parse(string? json)
     {

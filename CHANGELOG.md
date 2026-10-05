@@ -17,6 +17,26 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **`Shubbak.Ipc` is a NuGet package.** The pipe's protocol and client - connect, send,
+  subscribe, the payload records, the three hand-read notices - as a package a program
+  of somebody else's references, rather than a project to copy out of this
+  repository. It was already the one assembly with no dependency on anything: not on
+  the rest of Shubbak, not on Win32, plain `net10.0`, every type public, with XML
+  documentation generated and SourceLink pointing back here. What it lacked was the
+  signal: `SignalPayload`, the reader for a `signal` event, lived in the companions'
+  shared library, which is Windows-bound, so a package consumer would have parsed
+  `{"name","arguments"}` by hand. It has moved beside the protocol, gained the writer
+  the daemon now publishes through - one definition, both ends - and its tests moved
+  with it. `dotnet pack` at the solution level used to try to pack all fifteen
+  projects; nothing is packable now but the one that says so. The release attaches
+  the package and its symbols, signs the assembly inside it, hashes it into
+  `SHA256SUMS.txt` beside the installers, and - once the release is published - pushes
+  the attached file to nuget.org by Trusted Publishing, so there is no API key to
+  keep and nuget.org serves byte for byte what the release attached. The version is
+  the product's; compatibility is the protocol's and stays in the pipe name.
+  `RELEASING.md` has the one-time setup; `tools/build-release.ps1 -Nuget` is the
+  stage, and checks the package it made says the right id and version and depends on
+  nothing.
 - **One pipe connection can both stream events and carry requests.** It always could,
   on the wire: the window manager reads the next request from a subscribed connection
   and writes the reply between the events, each a whole line. It was the client

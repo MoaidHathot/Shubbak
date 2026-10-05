@@ -23,7 +23,9 @@ to carry its own copy of all four, and no two copies agreed.
 
 Everything talks over one named pipe, `shubbak-v2-<SID>`, newline-delimited JSON,
 with the protocol version in the name so a new client and an old daemon fail to find
-each other rather than misunderstand each other. See [Scripting](scripting.md).
+each other rather than misunderstand each other. See [Scripting](scripting.md). The
+protocol and its client ship as the `Shubbak.Ipc` NuGet package, for a program of
+somebody else's; see [Extending](extending.md).
 
 ## Layout of the repo
 
@@ -32,7 +34,7 @@ src/
   Shubbak.Core/     tree, layouts, animation, state machine, logging  — zero Win32
   Shubbak.Native/   Win32: hooks, window control, monitors, tray, DPI
   Shubbak.Config/   KDL parser, schema, diagnostics
-  Shubbak.Ipc/      protocol, named-pipe server and client
+  Shubbak.Ipc/      protocol, named-pipe server and client, the signal and the notices — zero Win32, zero dependencies; the NuGet package
   Shubbak.Companion/ bootstrap, window base, message loop, reconnecting pump — shared by taj, dalil, ayn
   Shubbak.Ui/       visual tree, flex layout, IRenderer            — no drawing code
   Shubbak.Ui.Gdi/   the GDI renderer
@@ -44,7 +46,7 @@ src/
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the watcher: the rest of the machine, as contexts
-tests/              2528 test methods across 15 projects
+tests/              2529 test methods across 15 projects
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests: one package, the MSI and the portable zip
@@ -59,7 +61,7 @@ replaced behind the `Shubbak.Native` boundary without touching any of the logic.
 
 ## Tests
 
-**2528 test methods**, around a second to run. Everything except the platform layer and
+**2529 test methods**, around a second to run. Everything except the platform layer and
 the renderer runs headless, so the entire behavioural surface — tree, layout, focus,
 animation, tags, sessions, the state machine, the config diagnostics, the palette's
 matching, the bar's model — is testable in milliseconds with no window manager
