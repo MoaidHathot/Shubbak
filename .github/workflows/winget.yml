@@ -21,8 +21,13 @@ on:
     inputs:
       tag:
         description: 'The release tag to publish manifests for, e.g. v0.10.0'
-        required: true
+        required: false
         type: string
+      verify-nuget-login:
+        description: 'Only prove that the nuget.org Trusted Publishing policy matches this repository, workflow and environment: exchange the OIDC token for a key and throw it away. Downloads and pushes nothing; the manifests job does not run.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -34,6 +39,9 @@ env:
 jobs:
   manifests:
     runs-on: windows-latest
+
+    # Not for a verification run, which is about the NuGet job alone.
+    if: ${{ !inputs.verify-nuget-login }}
 
     # The environment holds the winget token, and it is what makes the token
     # unreadable to any run a maintainer has not approved - a repository secret is
@@ -66,6 +74,7 @@ jobs:
           $version = $props.SelectSingleNode('/Project/PropertyGroup/Version').InnerText.Trim()
           $tag = $env:TAG
 
+          if (-not $tag) { throw "No release tag: a dispatch that is not a verification run needs the 'tag' input, e.g. v$version." }
           if ($tag -ne "v$version") {
             throw "The release is $tag but main is at $version. The manifests for $tag have to be filled and committed by hand: " +
                   "download the release assets into artifacts/, check out $tag, run tools/build-release.ps1 -Manifests, and commit the results."
@@ -208,6 +217,12 @@ jobs:
   #
   # A job of its own, so that id-token: write is granted to the one job that
   # exchanges it and a package that will not push does not hold up the manifests.
+  #
+  # Dispatched with verify-nuget-login, it does the exchange and nothing else: no
+  # download, no push, the key discarded unused. The policy on nuget.org can be read
+  # by nobody but its owner and by no API at all, so exercising it is the one way to
+  # know it names the right repository, workflow file and environment before the
+  # first release depends on it. The run still waits for the environment's reviewer.
   nuget:
     runs-on: ubuntu-latest
     environment: package-managers
@@ -219,11 +234,15 @@ jobs:
       TAG: ${{ github.event.release.tag_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
       HAS_NUGET_USER: ${{ vars.NUGET_USER != '' }}
+      VERIFY_ONLY: ${{ inputs.verify-nuget-login == true }}
 
     steps:
       - name: Download the published package
+        if: env.VERIFY_ONLY != 'true'
         shell: pwsh
         run: |
+          if (-not $env:TAG) { throw "No release tag: a dispatch that is not a verification run needs the 'tag' input." }
+
           New-Item -ItemType Directory -Path artifacts -Force | Out-Null
           gh release download $env:TAG --repo $env:GITHUB_REPOSITORY --dir artifacts `
             --pattern 'Shubbak.Ipc.*.nupkg' --pattern 'Shubbak.Ipc.*.snupkg' --pattern 'Shubbak.Ipc.*.sha256'
@@ -242,6 +261,7 @@ jobs:
           Write-Output "Shubbak.Ipc.$version.nupkg matches its published hash."
 
       - name: Is this version already on nuget.org?
+        if: env.VERIFY_ONLY != 'true'
         id: upstream
         shell: pwsh
         run: |
@@ -265,25 +285,60 @@ jobs:
             }
           }
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        if: vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
-        with:
-          dotnet-version: '10.0.x'
+      # A verification run with nothing to verify against is a mistake worth saying.
+      - name: Refuse to verify without a user
+        if: env.VERIFY_ONLY == 'true' && vars.NUGET_USER == ''
+        shell: pwsh
+        run: throw "NUGET_USER is not set on the package-managers environment; there is no nuget.org account to verify the policy against. See RELEASING.md."
 
       # The exchange: this job's OIDC token for a one-hour nuget.org key. The user is
       # the nuget.org profile name that owns the policy - not an email address - and
       # is a variable rather than a secret because it is public on nuget.org anyway.
+      # The action marks the key it receives as a secret, so it cannot reach the log.
       - name: Log in to nuget.org
-        if: vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
+        if: vars.NUGET_USER != '' && (env.VERIFY_ONLY == 'true' || steps.upstream.outputs.exists != 'true')
         id: login
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: ${{ vars.NUGET_USER }}
 
+      # What a successful exchange proves, spelled out: nuget.org accepted a token
+      # carrying exactly these claims, so a policy naming them exists under this user.
+      # The key itself is not touched; it expires within the hour.
+      - name: Report the verification
+        if: env.VERIFY_ONLY == 'true'
+        shell: pwsh
+        env:
+          NUGET_USER: ${{ vars.NUGET_USER }}
+        run: |
+          $lines = @(
+            '## nuget.org Trusted Publishing: the policy matches',
+            '',
+            'nuget.org exchanged this run''s OpenID Connect token for a publishing key, which means a',
+            "policy owned by the nuget.org account **$env:NUGET_USER** names this identity:",
+            '',
+            '| Claim | Value |',
+            '|---|---|',
+            "| repository owner | ``$env:GITHUB_REPOSITORY_OWNER`` |",
+            "| repository | ``$($env:GITHUB_REPOSITORY -replace '^[^/]+/', '')`` |",
+            "| workflow file | ``$([System.IO.Path]::GetFileName(($env:GITHUB_WORKFLOW_REF -split '@')[0]))`` |",
+            '| environment | `package-managers` |',
+            "| ref | ``$env:GITHUB_REF`` |",
+            '',
+            'The key was not used and expires within the hour. Nothing was downloaded or pushed.'
+          )
+          $lines | ForEach-Object { Write-Output $_ }
+          $lines >> $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: env.VERIFY_ONLY != 'true' && vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
+        with:
+          dotnet-version: '10.0.x'
+
       # The symbols go with it: nuget.org takes the .snupkg beside the .nupkg from the
       # same push and serves it from its symbol server.
       - name: Push the package
-        if: vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
+        if: env.VERIFY_ONLY != 'true' && vars.NUGET_USER != '' && steps.upstream.outputs.exists != 'true'
         shell: pwsh
         env:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}

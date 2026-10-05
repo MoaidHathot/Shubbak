@@ -145,6 +145,14 @@ can publish as this project.
    address. A variable rather than a secret, because it is public on nuget.org
    anyway. Until it is set the `nuget` job stops after checking the package and says
    so; setting it and dispatching the workflow again with the same tag pushes.
+3. **Prove it, before a release depends on it.** The policy can be read by nobody but
+   its owner and by no API, so the one way to know its four fields are right is to
+   exercise it: Actions → *package managers* → *Run workflow* → tick
+   *verify-nuget-login*, leave the tag empty. Approve the deployment when asked. The
+   `nuget` job then exchanges its token with nuget.org and does nothing else - no
+   download, no push, the key discarded unused - and its summary names the claims
+   nuget.org accepted. A policy that names the wrong file or environment fails here,
+   in a minute, instead of at the end of a release.
 
 The package id is claimed by the first push. Reserving it on nuget.org beforehand
 (Manage Packages → an ID prefix reservation, or simply the first push being yours) is
