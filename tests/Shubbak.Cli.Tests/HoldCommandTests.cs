@@ -136,15 +136,18 @@ public sealed class HoldCommandTests
         Assert.Equal("context --set meeting --lease", commands[0]);
         Assert.True(SpinWait.SpinUntil(() => output.ToString().Contains("holding \"meeting\"", StringComparison.Ordinal), Timeout));
 
-        // Two connections while holding - the subscription and the one the lease lives on.
-        Assert.True(SpinWait.SpinUntil(() => server.ClientCount == 2, Timeout), $"expected 2 clients, saw {server.ClientCount}");
+        // One connection while holding: the subscription, which is also the one the
+        // lease lives on. There used to be two, because a subscribed connection would
+        // not carry requests.
+        Assert.True(SpinWait.SpinUntil(() => server.ClientCount == 1, Timeout), $"expected 1 client, saw {server.ClientCount}");
+        Assert.True(server.HasSubscribers("config.reloaded"), "the one connection is not the subscribed one");
 
         stop.Cancel();
 
         Assert.Equal(0, await running.WaitAsync(Timeout));
 
         // Letting go is the connection closing, which is what releases the lease.
-        Assert.True(SpinWait.SpinUntil(() => server.ClientCount == 0, Timeout), "the connections did not close when the hold ended");
+        Assert.True(SpinWait.SpinUntil(() => server.ClientCount == 0, Timeout), "the connection did not close when the hold ended");
         Assert.Equal(string.Empty, error.ToString());
     }
 
@@ -220,9 +223,22 @@ public sealed class HoldCommandTests
         Assert.True(SpinWait.SpinUntil(() => CommandCount(commands) == 1, Timeout));
         Assert.True(SpinWait.SpinUntil(() => server.HasSubscribers("config.reloaded"), Timeout));
 
-        server.Publish("config.reloaded", "{}");
+        // A reload the window manager refused touched no pin; nothing is sent for it.
+        server.Publish("config.reloaded", ConfigReloadNotice.Payload(@"C:\x\shubbak.kdl", accepted: false));
+
+        // A reload that landed may have dropped the pin; it is asserted again.
+        server.Publish("config.reloaded", ConfigReloadNotice.Payload(@"C:\x\shubbak.kdl", accepted: true));
 
         Assert.True(SpinWait.SpinUntil(() => CommandCount(commands) == 2, Timeout), "the pin was not asserted again after the reload");
+
+        // One connection delivers in order, so the second count is also the proof the
+        // refused reload sent nothing: it was read before the accepted one.
+        await Task.Delay(100);
+        Assert.Equal(2, CommandCount(commands));
+
+        // And the plain {} an older window manager sends is a reload that landed.
+        server.Publish("config.reloaded", "{}");
+        Assert.True(SpinWait.SpinUntil(() => CommandCount(commands) == 3, Timeout), "the pin was not asserted again after an older window manager's reload");
 
         stop.Cancel();
         Assert.Equal(0, await running.WaitAsync(Timeout));

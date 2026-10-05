@@ -169,12 +169,13 @@ internal static class Program
         const int StopIndex = 0;
         const int DismissedIndex = 1;
         const int LostIndex = 2;
-        const int ReloadedIndex = 3;
-        const int SignalledIndex = 4;
-        const int AudioIndex = 5;
-        const int PowerIndex = 6;
-        const int ThemeIndex = 7;
-        const int FirstRegistryIndex = 8;
+        const int FoundIndex = 3;
+        const int ReloadedIndex = 4;
+        const int SignalledIndex = 5;
+        const int AudioIndex = 6;
+        const int PowerIndex = 7;
+        const int ThemeIndex = 8;
+        const int FirstRegistryIndex = 9;
 
         // Dismissed sits before Lost on purpose. WaitAny answers with the lowest
         // index that is set, and exit-all raises both within a moment of each other -
@@ -185,7 +186,7 @@ internal static class Program
         // registry's events are whatever the store has now.
         WaitHandle[] Handles() =>
         [
-            stop, connection.Dismissed, connection.Lost, connection.Reloaded, connection.Signalled,
+            stop, connection.Dismissed, connection.Lost, connection.Found, connection.Reloaded, connection.Signalled,
             AudioEndpoint.Changed, sources.Power.Changed, sources.Theme.Changed,
             .. store.Changed,
         ];
@@ -231,9 +232,14 @@ internal static class Program
                     // in use, on the window manager that comes back - and says every
                     // value again, since the one that comes back has heard none.
                     Log.Info(LogCategory.Ipc, "the window manager went away; holding nothing until it is back");
-                    connection.Drop();
                     provider.Forget();
                     values.Forget();
+                    break;
+
+                case FoundIndex:
+                    // The window manager is back, or here for the first time. Nothing to
+                    // do but go round: the flush at the top of the loop sends whatever
+                    // is due, which after a loss is everything that is still true.
                     break;
 
                 case ReloadedIndex:

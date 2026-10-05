@@ -69,7 +69,11 @@ inspect` prints), `window-icon`, `add-rule` and `remove-rule` (what the palette'
 `diagnose` (the report `shubbak diagnose` prints), `log-level` (`trace` to `none`,
 for the life of the process) and `ping`, which answers `pong` and is the cheapest way
 to ask whether the window manager is there. `subscribe` opens the event stream
-described below and is the one method whose connection is expected to stay open.
+described below and is the one method whose connection is expected to stay open. A
+subscribed connection still answers requests: a reply is written between the events,
+each a whole line, and carries the `id` you sent, so one connection can hold a
+context with a lease and hear that the file was reloaded. The watcher and
+`shubbak context --hold` do exactly that.
 
 ## Listening
 
@@ -179,9 +183,12 @@ finally { Stop-Process $hold }
 
 The third way is what `--hold` is made of, for a program that has its own reasons to
 hold a pipe connection: send `context --set meeting --lease` and keep the connection
-open. That is exactly what Ayn does for everything it watches — the camera and the
-microphone, so far; Teams presence, OBS recording or a calendar are written the same
-way, and a script that can tell when they start needs nothing more than `--hold`.
+open. Subscribe on the same connection — to `config.reloaded`, so you can pin again
+after a reload that dropped it, and to `wm.shutdown`, so you know whether to wait —
+and one connection is the whole provider. That is exactly what Ayn does for
+everything it watches — the camera and the microphone, so far; Teams presence, OBS
+recording or a calendar are written the same way, and a script that can tell when
+they start needs nothing more than `--hold`.
 
 ## Security
 

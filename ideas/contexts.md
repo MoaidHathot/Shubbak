@@ -631,20 +631,23 @@ booleans per device, a registry reader, and one connection that sends two comman
   harmless. Handing back with `--auto` rather than `--clear` leaves no pin, so the
   report says `nothing has set it` and a context somebody else also sets is theirs
   again rather than held off by us.
-- **Two connections, because one cannot do both jobs.** A subscribed connection
-  carries nothing else, by the protocol's rule, and the connection that holds a lease
-  must stay open. So commands go over one client, opened on first use and kept, and
-  `config.reloaded` and `wm.shutdown` arrive over a second that reconnects for as
-  long as the process runs - the palette's pump, minus the payloads. **This is the
-  pipe's one rough edge for a provider:** the second connection exists only to learn
-  that the file was reloaded and that the window manager left. A protocol that let a
-  subscribed connection also send would make a provider one connection, and that
-  would be a v3 change or an appended capability; noted, not done.
-- **The lost lease is a state, not an event.** When the events connection ends the
-  loop is told, drops the commands client, and tells the provider to forget what was
-  asserted. The next flush holds again whatever is still in use, at once - the settle
-  time was served the first time round - and nothing for a device that went quiet,
-  since there is no pin left on the new window manager to hand back. A daemon
+- **One connection, because one can now do both jobs.** A subscribed connection
+  carried nothing else - by the client library's rule, as it turned out, and not the
+  protocol's: the server always read the next request from a subscribed connection
+  and wrote the reply between the events. The client's subscription read the stream
+  directly and refused to let a request read beside it. It now reads through one
+  loop that hands each line to whoever it is for, and the commands go over the
+  connection the events arrive on, so the lease lives exactly as long as the
+  subscription and a reconnect is the pin being made again. **This was the pipe's
+  one rough edge for a provider**, and it was done as an appended capability with no
+  change on the wire - the protocol version stays at 2.
+- **The lost lease is a state, not an event.** When the connection ends the loop is
+  told and tells the provider to forget what was asserted - every lease was on that
+  connection and went with it, nothing to infer. The next flush holds again whatever
+  is still in use, at once - the settle time was served the first time round - and
+  nothing for a device that went quiet, since there is no pin left on the new window
+  manager to hand back. The pump wakes the loop the moment it has reconnected, so the
+  hold follows the pump's own retry rather than the loop's next look. A daemon
   restart with the camera on was measured at 400 ms from the shutdown notice to the
   new pin.
 - **Refusals are said once and treated as sent.** The likeliest one - a context the
@@ -875,7 +878,7 @@ pieces compose without new ones.
 - **A signal is how the bar mutes.** `signal "ayn" "microphone" "mute" | "unmute" |
   "toggle-mute"`: subject then verb, so the next subject slots in and the line reads
   as a sentence. The window manager carries the words without reading them, exactly
-  as it carries the palette's; Ayn subscribes to `signal` on its events connection,
+  as it carries the palette's; Ayn subscribes to `signal` on its one connection,
   parses the arguments in Core where a test can see, and the loop does the deed. It
   does not then update the provider: the endpoint's own change notification is the
   next wake, so a request from the bar and a change made in the Sound settings take

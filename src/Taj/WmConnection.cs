@@ -361,9 +361,12 @@ public sealed class WmConnection : IAsyncDisposable
 
     /// <summary>
     /// The subscription, reconnecting for as long as the bar lives. What is the bar's
-    /// about it: two connections, so the commands channel stays free to respond while
-    /// events stream; a snapshot read once the subscription is in place; and a
-    /// give-up clock against a window manager that has gone, which closes the bar.
+    /// about it: two connections, kept by choice now that one would do - the bar
+    /// re-reads the whole state on nearly every event and sends a command on every
+    /// click, and a connection of their own keeps a burst of events and a reply from
+    /// ever waiting on each other; a snapshot read once the subscription is in place;
+    /// and a give-up clock against a window manager that has gone, which closes the
+    /// bar.
     /// </summary>
     private EventPump BuildPump() => new(ListensForSignals ? SubscribedWithSignals : Subscribed)
     {

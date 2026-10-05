@@ -5,12 +5,18 @@ using Shubbak.Ipc;
 namespace Shubbak.Companion;
 
 /// <summary>The connections one round of the pump holds while it is connected.</summary>
-/// <param name="Events">The subscribed connection, which carries nothing but events.</param>
+/// <param name="Events">
+/// The subscribed connection. It carries requests too - a provider pins its context
+/// on it, so the lease lives exactly as long as the subscription - and is the one to
+/// use unless there is a reason for a second.
+/// </param>
 /// <param name="Commands">
-/// A second connection for requests, when the pump was asked to open one. A
-/// subscribed connection cannot carry requests - the protocol's rule - so a client
-/// that reads a snapshot or asks the window manager things while events stream
-/// needs this one.
+/// A second connection for requests, when the pump was asked to open one. Not
+/// needed for correctness since a subscribed connection carries requests; a client
+/// that asks the window manager a great deal while events stream - the bar, which
+/// re-reads the whole state on every event - may still want its requests on a
+/// connection of their own, so a burst of events and a reply never wait on each
+/// other.
 /// </param>
 public sealed record PumpConnection(IpcClient Events, IpcClient? Commands);
 

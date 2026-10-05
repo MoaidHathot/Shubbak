@@ -17,6 +17,33 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **One pipe connection can both stream events and carry requests.** It always could,
+  on the wire: the window manager reads the next request from a subscribed connection
+  and writes the reply between the events, each a whole line. It was the client
+  library that refused - its subscription read the stream directly and a request
+  reading beside it would have raced it for lines - and the refusal had been written
+  up, in three places, as the protocol's rule. The pipe's one rough edge for a
+  provider followed from it: a watcher that held its leases on one connection and
+  learned that the file was reloaded on a second, opened for nothing else. The
+  client's subscription now reads through one loop that hands each line to whoever
+  it is for - an event to the queue, a reply to the request waiting for it - and a
+  request on a subscribed connection is answered. The watcher and `shubbak context
+  --hold` are one connection each: the pin lives exactly as long as the subscription,
+  the stream ending is the leases ending with nothing to infer, and the watcher is
+  woken the moment it has reconnected rather than on its next look, so a window
+  manager that restarts is holding the watcher's contexts within the pump's own
+  retry. Paid for only when used: a connection that has not subscribed reads its
+  replies in line as before, with no task and no read pending while nothing is asked.
+  A consumer that falls behind the loop is handed a `wm.resync` in place of its
+  backlog - the window manager's own policy, and the notice a client already reads -
+  so a reply is never stuck behind an event the consumer has not got to, and a
+  request that times out on a subscribed connection costs the caller its answer and
+  the connection nothing. The bar keeps its second connection by choice: it re-reads
+  the whole state on nearly every event, and a connection of its own keeps a burst of
+  events and a reply from waiting on each other. Nothing changed on the wire; the
+  protocol version stays at 2, and an older window manager is served exactly as
+  before. Five new tests hold the loop to its promises while events and replies flow
+  at once, and the design note's "noted, not done" is now done.
 - **The window manager says which file it is running, and whether the disk agrees.**
   Every program resolves the same search order, so they agreed about the config file -
   until the window manager was started with `--config`, after which it read a file the

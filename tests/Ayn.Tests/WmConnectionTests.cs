@@ -4,7 +4,7 @@ using Shubbak.Ipc;
 namespace Ayn.Tests;
 
 /// <summary>
-/// The watcher's two connections, against a real pipe.
+/// The watcher's connection, against a real pipe: one connection, holding and hearing.
 /// </summary>
 public sealed class WmConnectionTests
 {
@@ -52,10 +52,20 @@ public sealed class WmConnectionTests
         (IpcServer server, List<string> commands) = await StartServerAsync(pipe, refuse: "undeclared");
         await using IpcServer keep = server;
 
+        // Still unreachable until the pump has connected: the commands go over the
+        // subscribed connection, and there is none before it.
+        Assert.Equal(SendOutcome.Unreachable, connection.Send("context --set \"camera-in-use\" --lease"));
+
+        connection.Start();
+        Assert.True(connection.Found.WaitOne(Timeout), "Found was not raised when the pump connected");
+
         Assert.Equal(SendOutcome.Accepted, connection.Send("context --set \"camera-in-use\" --lease"));
         Assert.Equal(SendOutcome.Refused, connection.Send("context --set \"undeclared\" --lease"));
 
         lock (commands) Assert.Equal(2, commands.Count);
+
+        // One connection: the server has exactly one client, subscribed and sending.
+        Assert.Equal(1, server.ClientCount);
     }
 
     [Fact]
@@ -68,8 +78,8 @@ public sealed class WmConnectionTests
         await using var connection = new WmConnection(pipe);
         connection.Start();
 
-        // Wait until the pump is subscribed: the server sees the subscription.
-        Assert.True(SpinWait.SpinUntil(() => first.HasSubscribers("config.reloaded"), Timeout), "the pump never subscribed");
+        Assert.True(connection.Found.WaitOne(Timeout), "the pump never connected");
+        Assert.True(first.HasSubscribers("config.reloaded"), "Found was raised before the subscription was in place");
 
         Assert.Equal(SendOutcome.Accepted, connection.Send("context --set \"camera-in-use\" --lease"));
 
@@ -77,13 +87,14 @@ public sealed class WmConnectionTests
 
         Assert.True(connection.Lost.WaitOne(Timeout), "Lost was not raised when the window manager went");
 
-        // The loop does this on Lost; here, so the next send opens a new connection.
-        connection.Drop();
+        // Gone with it: a send between window managers reaches nothing, and the loop
+        // forgets what it held so the next one is told everything again.
+        Assert.Equal(SendOutcome.Unreachable, connection.Send("context --set \"camera-in-use\" --lease"));
 
         (IpcServer second, List<string> commands) = await StartServerAsync(pipe);
         await using IpcServer keep = second;
 
-        Assert.True(SpinWait.SpinUntil(() => second.HasSubscribers("config.reloaded"), Timeout), "the pump never reconnected");
+        Assert.True(connection.Found.WaitOne(Timeout), "the pump never reconnected");
         Assert.Equal(SendOutcome.Accepted, connection.Send("context --set \"camera-in-use\" --lease"));
 
         lock (commands) Assert.Single(commands);

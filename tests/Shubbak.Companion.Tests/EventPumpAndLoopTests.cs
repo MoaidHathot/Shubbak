@@ -199,8 +199,9 @@ public sealed class EventPumpTests
     [Fact]
     public async Task ACommandsConnectionIsOpenedAlongsideWhenAskedFor()
     {
-        // The bar's shape: a second connection for requests, since a subscribed one
-        // carries nothing else.
+        // The bar's shape: a second connection for requests, so a burst of events and
+        // a reply never wait on each other. Optional since a subscribed connection
+        // carries requests too, which the second half of this proves.
         string pipe = IsolatedPipe();
         string topic = IpcProtocol.Topics.First();
 
@@ -221,8 +222,49 @@ public sealed class EventPumpTests
 
         Assert.Equal("\"answered query\"", await answered.Task.WaitAsync(Timeout));
 
-        // And the events connection is still the events connection: asking it is refused.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => pump.Current!.Events.SendAsync("query", "state"));
+        // And the events connection answers too: one connection can do both jobs.
+        IpcResponse onEvents = await pump.Current!.Events.SendAsync("query", "state");
+        Assert.Equal("\"answered query\"", onEvents.Data);
+        Assert.True(pump.Current.Events.IsSubscribed);
+    }
+
+    [Fact]
+    public async Task TheSubscribedConnectionCarriesRequestsWhenNoSecondIsAskedFor()
+    {
+        // A provider's shape: one connection, holding and hearing. The request goes
+        // out from Subscribed - before any event has been read, which is where a
+        // client that read its own replies would have waited for a reader that was
+        // waiting for it - and from inside an event handler, for the same reason.
+        string pipe = IsolatedPipe();
+        string topic = IpcProtocol.Topics.First();
+
+        await using IpcServer server = await StartServerAsync(pipe,
+            request => Task.FromResult(new IpcResponse(request.Id, Ok: true, Data: $"\"answered {request.Payload}\"")));
+
+        var fromSubscribed = new TaskCompletionSource<string?>();
+        var fromEvent = new TaskCompletionSource<string?>();
+
+        await using EventPump pump = Pump(pipe, topic, commands: false);
+        pump.Subscribed = async (connection, token) =>
+        {
+            Assert.Null(connection.Commands);
+            IpcResponse response = await connection.Events.SendAsync("command", "on-subscribed", token);
+            fromSubscribed.TrySetResult(response.Data);
+        };
+        pump.Event = async (connection, _, token) =>
+        {
+            IpcResponse response = await connection.Events.SendAsync("command", "on-event", token);
+            fromEvent.TrySetResult(response.Data);
+        };
+
+        pump.Start();
+
+        Assert.Equal("\"answered on-subscribed\"", await fromSubscribed.Task.WaitAsync(Timeout));
+
+        server.Publish(topic, "{}");
+        Assert.Equal("\"answered on-event\"", await fromEvent.Task.WaitAsync(Timeout));
+
+        Assert.Equal(1, server.ClientCount);
     }
 
     [Fact]

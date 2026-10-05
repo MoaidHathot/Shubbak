@@ -4,7 +4,8 @@ using Shubbak.Ipc;
 namespace Shubbak.Ipc.Tests;
 
 /// <summary>
-/// One connection used by two threads at once.
+/// One connection used by two threads at once, and by a subscription and requests at
+/// once.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -26,6 +27,13 @@ namespace Shubbak.Ipc.Tests;
 /// read-modify-write, and a reply that does not match is discarded rather than handed
 /// to the caller it belongs to, leaving that caller waiting out the ten-second
 /// timeout for an answer that has already been thrown away.
+/// </para>
+/// <para>
+/// A subscribed connection used to refuse requests, for the same reason: its reader
+/// read the stream directly. It now reads through one loop that hands each line to
+/// whoever it is for, and the second half of these tests holds that loop to its two
+/// promises - every reply to its request, every event to the consumer, in order -
+/// while both flow at once.
 /// </para>
 /// </remarks>
 public sealed class IpcClientConcurrencyTests
@@ -173,71 +181,280 @@ public sealed class IpcClientConcurrencyTests
     }
 
     [Fact]
-    public async Task ASubscribedConnectionRefusesRequestsRatherThanRacingItsOwnEventLoop()
+    public async Task ASubscribedConnectionAnswersRequestsAndKeepsStreaming()
     {
-        // The one case the turnstile cannot cover: a subscription reads the stream
-        // directly and forever, so a request sent on the same connection would compete
-        // with the event loop for lines. Refusing says so; the alternative is the two
-        // of them quietly stealing each other's.
+        // One connection, both jobs. The server always interleaved replies between
+        // events, whole lines each; it was the client that refused to send on a
+        // subscribed connection, because its subscription read the stream directly and
+        // a request reading beside it would have raced it for lines. The one loop now
+        // hands each line to whoever it is for - which is what lets a provider hold a
+        // lease on the connection it also hears the file was reloaded on.
         string pipe = IsolatedPipe();
 
-        await using IpcServer server = StartServer(pipe, request =>
-            Task.FromResult(new IpcResponse(request.Id, Ok: true)));
+        await using IpcServer server = StartServer(pipe, request => Task.FromResult(
+            new IpcResponse(request.Id, Ok: true, Data: $"\"{request.Payload}\"")));
 
         await using IpcClient client = await ConnectAsync(pipe);
-        using var stop = new CancellationTokenSource();
+        using var stop = new CancellationTokenSource(Budget);
 
-        IAsyncEnumerator<IpcEvent> events = client.SubscribeAsync("*", stop.Token).GetAsyncEnumerator();
+        await client.BeginSubscriptionAsync("*", stop.Token);
+        Assert.True(client.IsSubscribed);
 
-        // The subscription only registers once it is enumerated: SubscribeAsync is an
-        // async iterator, so its body does not run until something asks for an element.
-        ValueTask<bool> pending = events.MoveNextAsync();
+        // A request on the subscribed connection is answered, with its own answer.
+        IpcResponse answered = await client.SendAsync("query", "first", stop.Token);
+        Assert.True(answered.Ok);
+        Assert.Equal("\"first\"", answered.Data);
 
-        Assert.True(
-            SpinWait.SpinUntil(() => server.HasSubscribers(IpcProtocol.Topics.First()), Timeout),
-            "the server never registered the subscription");
+        // And the subscription is intact: an event published after it arrives.
+        IAsyncEnumerator<IpcEvent> events = client.ReadEventsAsync(stop.Token).GetAsyncEnumerator(stop.Token);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync("ping"));
+        server.Publish("window.focused", "{\"id\":1}");
+
+        Assert.True(await events.MoveNextAsync());
+        Assert.Equal("window.focused", events.Current.Topic);
+        Assert.Equal("{\"id\":1}", events.Current.Data);
+
+        // As is a second request, after events have flowed.
+        IpcResponse again = await client.SendAsync("query", "second", stop.Token);
+        Assert.Equal("\"second\"", again.Data);
 
         await stop.CancelAsync();
-
-        try { await pending; } catch (OperationCanceledException) { }
+        try { await events.DisposeAsync(); } catch (OperationCanceledException) { }
     }
 
     [Fact]
-    public async Task ARequestQueuedBehindTheSubscriptionHandshakeIsRefusedToo()
+    public async Task ARequestQueuedBehindTheSubscriptionHandshakeIsAnsweredByTheLoop()
     {
         // The window the check on the way in cannot see. The handshake is itself a
-        // request and holds the turn; a request arriving meanwhile finds the connection
-        // not yet streaming and queues behind it; the handshake completes and the
-        // subscription starts reading; the queued request's turn comes. It used to be
-        // let through - onto a stream the subscription was already reading - and the
-        // two raced each other for lines. Whichever lost threw "the stream is currently
-        // in use", which is the right exception type for the wrong reason, or read the
-        // other's answer. Now the handshake claims the stream before letting go of the
-        // turn, and the request is refused for the reason it should be.
+        // request and holds the turn; a request arriving meanwhile queues behind it;
+        // the handshake completes and starts the loop; the queued request's turn
+        // comes. It used to be refused here - and before that, let onto a stream the
+        // subscription was already reading, where the two raced each other for lines.
+        // Now it finds the loop reading and leaves its reply to it.
         string pipe = IsolatedPipe();
 
-        await using IpcServer server = StartServer(pipe, request =>
-            Task.FromResult(new IpcResponse(request.Id, Ok: true)));
+        await using IpcServer server = StartServer(pipe, request => Task.FromResult(
+            new IpcResponse(request.Id, Ok: true, Data: $"\"{request.Payload}\"")));
 
         await using IpcClient client = await ConnectAsync(pipe);
-        using var stop = new CancellationTokenSource();
-
-        IAsyncEnumerator<IpcEvent> events = client.SubscribeAsync("*", stop.Token).GetAsyncEnumerator();
+        using var stop = new CancellationTokenSource(Budget);
 
         // Starts the handshake, which takes the turn and holds it until the server
         // answers. The request below is sent before that answer can have arrived.
-        ValueTask<bool> pending = events.MoveNextAsync();
+        Task handshake = client.BeginSubscriptionAsync("*", stop.Token);
+        Task<IpcResponse> queued = client.SendAsync("ping", "behind", stop.Token);
 
-        InvalidOperationException refusal =
-            await Assert.ThrowsAsync<InvalidOperationException>(() => client.SendAsync("ping"));
+        await handshake;
+        IpcResponse answer = await queued;
 
-        // The refusal, and not StreamReader's complaint about a concurrent read.
-        Assert.Contains("subscription", refusal.Message, StringComparison.Ordinal);
+        Assert.True(answer.Ok);
+        Assert.Equal("\"behind\"", answer.Data);
+        Assert.True(client.IsSubscribed);
+
+        // And the subscription it queued behind still delivers.
+        IAsyncEnumerator<IpcEvent> events = client.ReadEventsAsync(stop.Token).GetAsyncEnumerator(stop.Token);
+        server.Publish("layout.changed", "{\"layout\":\"splith\"}");
+        Assert.True(await events.MoveNextAsync());
+        Assert.Equal("layout.changed", events.Current.Topic);
 
         await stop.CancelAsync();
+        try { await events.DisposeAsync(); } catch (OperationCanceledException) { }
+    }
 
-        try { await pending; } catch (OperationCanceledException) { }
+    [Fact]
+    public async Task RepliesReachTheirRequestsAndNoEventIsLostWhileBothFlow()
+    {
+        // Events and replies on the same stream at once, from two sides: a thread
+        // sending requests back to back while the server publishes between every
+        // answer. Every reply must be the reply to its request, and every event must
+        // arrive, in order - a loop that handed a line to the wrong party would show
+        // up as either a crossed answer or a hole in the sequence.
+        string pipe = IsolatedPipe();
+
+        const int Events = 300;
+        const int Requests = 100;
+
+        await using IpcServer server = StartServer(pipe, request => Task.FromResult(
+            new IpcResponse(request.Id, Ok: true, Data: $"\"{request.Payload}\"")));
+
+        await using IpcClient client = await ConnectAsync(pipe);
+        using var budget = new CancellationTokenSource(Budget);
+
+        await client.BeginSubscriptionAsync("*", budget.Token);
+
+        ConcurrentBag<string> failures = [];
+
+        async Task AskAsync()
+        {
+            for (int i = 0; i < Requests && !budget.IsCancellationRequested; i++)
+            {
+                string payload = $"ask-{i}";
+
+                try
+                {
+                    IpcResponse response = await client.SendAsync("query", payload, budget.Token);
+                    if (response.Data?.Trim('"') != payload)
+                        failures.Add($"sent '{payload}' and was answered '{response.Data}'");
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"'{payload}' threw {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+        }
+
+        void PublishAll()
+        {
+            for (int i = 0; i < Events; i++)
+                server.Publish("container.resized", $"{{\"id\":{i}}}");
+        }
+
+        var heard = new List<IpcEvent>();
+
+        async Task ListenAsync()
+        {
+            await foreach (IpcEvent raised in client.ReadEventsAsync(budget.Token))
+            {
+                heard.Add(raised);
+                if (heard.Count == Events) return;
+            }
+        }
+
+        Task listening = ListenAsync();
+        Task asking = Task.Run(AskAsync);
+        Task publishing = Task.Run(PublishAll);
+
+        await Task.WhenAll(asking, publishing);
+
+        try { await listening.WaitAsync(budget.Token); }
+        catch (OperationCanceledException) { }
+
+        Assert.False(budget.IsCancellationRequested, $"did not finish within {Budget.TotalSeconds:F0} s; heard {heard.Count} of {Events} events");
+        Assert.True(failures.IsEmpty, $"{failures.Count} requests were mishandled; first few: {string.Join("; ", failures.Take(5))}");
+
+        Assert.Equal(Events, heard.Count);
+        Assert.All(heard, e => Assert.Equal("container.resized", e.Topic));
+
+        for (int i = 0; i < Events; i++)
+            Assert.Equal($"{{\"id\":{i}}}", heard[i].Data);
+    }
+
+    [Fact]
+    public async Task AConsumerThatFallsBehindIsHandedAResyncInPlaceOfTheBacklog()
+    {
+        // The loop never waits on the consumer, because the consumer may be waiting
+        // on a reply that is behind the event the loop holds. A consumer that has not
+        // read in a while finds its backlog gone and a resync in its place - the
+        // server's own policy, and the notice a client already knows how to read -
+        // followed by everything since, so nothing after the resync is missing.
+        //
+        // Fed from a bare pipe rather than an IpcServer, because the server has an
+        // outbox with the same limit and drops first when published to this fast; the
+        // point here is the client's queue, so every line goes straight to it.
+        string pipe = IsolatedPipe();
+
+        const int Published = 700;
+
+        await using var server = new System.IO.Pipes.NamedPipeServerStream(
+            pipe, System.IO.Pipes.PipeDirection.InOut, 1, System.IO.Pipes.PipeTransmissionMode.Byte,
+            System.IO.Pipes.PipeOptions.Asynchronous | System.IO.Pipes.PipeOptions.CurrentUserOnly);
+
+        Task serving = Task.Run(async () =>
+        {
+            await server.WaitForConnectionAsync();
+
+            using var reader = new StreamReader(server, System.Text.Encoding.UTF8, leaveOpen: true);
+            await using var writer = new StreamWriter(server, new System.Text.UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+
+            // The handshake: whatever id the client used, say yes to it.
+            string? subscribe = await reader.ReadLineAsync();
+            IpcRequest handshake = System.Text.Json.JsonSerializer.Deserialize(subscribe!, IpcJsonContext.Default.IpcRequest)!;
+            await writer.WriteLineAsync(System.Text.Json.JsonSerializer.Serialize(new IpcResponse(handshake.Id, true), IpcJsonContext.Default.IpcResponse));
+
+            for (int i = 0; i < Published; i++)
+            {
+                await writer.WriteLineAsync(System.Text.Json.JsonSerializer.Serialize(
+                    new IpcEvent("container.resized", $"{{\"id\":{i}}}"), IpcJsonContext.Default.IpcEvent));
+            }
+
+            // Then one request, answered after every event is on the wire - so when
+            // its answer is in hand, the loop has read every event above.
+            string? ping = await reader.ReadLineAsync();
+            IpcRequest asked = System.Text.Json.JsonSerializer.Deserialize(ping!, IpcJsonContext.Default.IpcRequest)!;
+            await writer.WriteLineAsync(System.Text.Json.JsonSerializer.Serialize(new IpcResponse(asked.Id, true, "pong"), IpcJsonContext.Default.IpcResponse));
+
+            // Held open until the client is done.
+            await reader.ReadLineAsync();
+        });
+
+        await using IpcClient client = await ConnectAsync(pipe);
+        using var budget = new CancellationTokenSource(Budget);
+
+        await client.BeginSubscriptionAsync("*", budget.Token);
+
+        // Answered, which is the proof the loop did not stop to wait for the consumer,
+        // and that every event has been through it.
+        Assert.Equal("pong", (await client.SendAsync("ping", null, budget.Token)).Data);
+
+        var heard = new List<IpcEvent>();
+
+        await foreach (IpcEvent raised in client.ReadEventsAsync(budget.Token))
+        {
+            heard.Add(raised);
+            if (raised.Data == $"{{\"id\":{Published - 1}}}") break;
+        }
+
+        int resync = heard.FindIndex(e => e.Topic == IpcProtocol.ResyncTopic);
+
+        Assert.True(resync >= 0, $"no resync was delivered to a consumer that fell behind; heard {heard.Count}");
+        Assert.True(heard.Count < Published, "the whole backlog was kept, which is not bounded");
+
+        // Everything after the resync is contiguous and ends on the last event.
+        for (int i = resync + 1; i < heard.Count - 1; i++)
+        {
+            int here = int.Parse(heard[i].Data.AsSpan(6, heard[i].Data.Length - 7), System.Globalization.CultureInfo.InvariantCulture);
+            int next = int.Parse(heard[i + 1].Data.AsSpan(6, heard[i + 1].Data.Length - 7), System.Globalization.CultureInfo.InvariantCulture);
+            Assert.Equal(here + 1, next);
+        }
+
+        await client.DisposeAsync();
+        try { await serving.WaitAsync(budget.Token); } catch (Exception) { /* the pipe closing under the server's last read is the end it waits for */ }
+    }
+
+    [Fact]
+    public async Task TheServerLeavingFailsTheWaitingRequestAndEndsTheStream()
+    {
+        // A request waiting on a subscribed connection must not wait out its timeout
+        // to learn what the loop already knows. The server answers the handshake and
+        // nothing after it; then it leaves. The request fails where it is awaited and
+        // the event stream ends, both promptly.
+        string pipe = IsolatedPipe();
+
+        var neverAnswers = new TaskCompletionSource<IpcResponse>();
+
+        IpcServer server = StartServer(pipe, request =>
+            request.Method == "subscribe"
+                ? Task.FromResult(new IpcResponse(request.Id, Ok: true))
+                : neverAnswers.Task);
+
+        await using IpcClient client = await ConnectAsync(pipe);
+        using var budget = new CancellationTokenSource(Budget);
+
+        await client.BeginSubscriptionAsync("*", budget.Token);
+
+        IAsyncEnumerator<IpcEvent> events = client.ReadEventsAsync(budget.Token).GetAsyncEnumerator(budget.Token);
+        ValueTask<bool> nextEvent = events.MoveNextAsync();
+
+        Task<IpcResponse> waiting = client.SendAsync("query", "stalls", budget.Token);
+        await Task.Delay(50, budget.Token);
+        Assert.False(waiting.IsCompleted, "the stalled request completed before the server left");
+
+        await server.DisposeAsync();
+
+        await Assert.ThrowsAsync<IOException>(() => waiting.WaitAsync(budget.Token));
+        Assert.False(await nextEvent.AsTask().WaitAsync(budget.Token), "the event stream did not end when the server left");
+
+        // The handler is still holding its task; let it go so nothing is left pending.
+        neverAnswers.TrySetCanceled();
     }
 }

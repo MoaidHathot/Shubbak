@@ -7,23 +7,25 @@ using System.Collections.Concurrent;
 namespace Ayn;
 
 /// <summary>
-/// The watcher's two connections to the window manager.
+/// The watcher's connection to the window manager.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Two, because one cannot do both jobs. A connection that has subscribed to events
-/// carries nothing else, by the protocol's rule; and the connection that sets a
-/// context with a lease has to stay open for as long as the pin should hold, since
-/// the lease is the connection. So the commands go over one client that is opened on
-/// first use and kept, and the events - a reload of the file, the window manager
-/// leaving - arrive over the shared <see cref="EventPump"/>, which reconnects for as
-/// long as this process runs.
+/// One connection, for both jobs. The events - a reload of the file, a signal, the
+/// window manager leaving - arrive over the shared <see cref="EventPump"/>, which
+/// reconnects for as long as this process runs; and the commands go over the same
+/// connection, which is what a lease wants: the pin lives exactly as long as the
+/// subscription does, and the stream ending is the leases ending, with nothing to
+/// infer. There used to be two, because a subscribed connection refused to carry
+/// requests - the pipe's one rough edge for a provider, and the reason a watcher
+/// held a connection it only ever learned two things on.
 /// </para>
 /// <para>
 /// Used from one thread. The watcher has no message loop and no reason for
 /// concurrency: it sleeps until the registry or the window manager says something,
 /// then does a few hundred microseconds of work. The pump runs on its own task and
-/// only ever sets events for the loop to find.
+/// only ever sets events for the loop to find; the client it holds is safe to send
+/// on from the loop while the pump reads it.
 /// </para>
 /// </remarks>
 internal sealed class WmConnection : IAsyncDisposable
@@ -37,20 +39,24 @@ internal sealed class WmConnection : IAsyncDisposable
 
     private readonly CancellationTokenSource _stopping = new();
     private readonly EventPump _pump;
-    private readonly string _pipeName;
-    private IpcClient? _commands;
     private string? _lastRefusal;
 
     /// <param name="pipeName">The window manager's pipe, unless a test says otherwise.</param>
     public WmConnection(string? pipeName = null)
     {
-        _pipeName = pipeName ?? IpcProtocol.PipeName;
-
         _pump = new EventPump(Topics)
         {
             ProgramName = "ayn",
-            PipeName = _pipeName,
+            PipeName = pipeName ?? IpcProtocol.PipeName,
             ConnectTimeout = ConnectTimeout,
+            Subscribed = (_, _) =>
+            {
+                // The loop is asleep between polls; woken, it holds again at once
+                // rather than on its next look, so a window manager that restarts is
+                // holding the watcher's contexts within the pump's own retry.
+                Found.Set();
+                return Task.CompletedTask;
+            },
             Event = (_, raised, _) =>
             {
                 OnEvent(raised);
@@ -58,18 +64,21 @@ internal sealed class WmConnection : IAsyncDisposable
             },
             Disconnected = reason =>
             {
-                // The stream ending is the signal. Whatever leases the commands
-                // connection held died with the window manager that granted them, and
-                // the loop needs to know so it can hold them again on the next one. A
-                // refusal is not that: the window manager is there and disagrees, and
-                // the leases on the other connection are fine.
+                // The stream ending is the signal. Every lease was on this connection
+                // and died with the window manager that granted it, and the loop
+                // needs to know so it can hold them again on the next one. A refusal
+                // is not that: the window manager is there and disagrees, and nothing
+                // was held on a connection that never subscribed.
                 if (reason != DisconnectReason.Refused) Lost.Set();
             },
         };
     }
 
-    /// <summary>The events connection ended, which means the window manager is gone or restarting.</summary>
+    /// <summary>The connection ended, which means the window manager is gone or restarting, and every lease with it.</summary>
     public AutoResetEvent Lost { get; } = new(false);
+
+    /// <summary>The connection is up and subscribed; whatever is due can be sent.</summary>
+    public AutoResetEvent Found { get; } = new(false);
 
     /// <summary>
     /// The window manager left and asked everything to leave with it, which is
@@ -122,37 +131,23 @@ internal sealed class WmConnection : IAsyncDisposable
     public void Start() => _pump.Start();
 
     /// <summary>
-    /// Sends one command over the held connection, opening it first if need be.
+    /// Sends one command over the connection, if there is one.
     /// </summary>
     /// <remarks>
-    /// Synchronous by design; see the type's remarks. A refusal is logged once per
-    /// distinct message, because the likeliest one - a context the file does not
-    /// declare - will be repeated on every change until somebody declares it, and one
-    /// line saying so is worth more than a hundred.
+    /// Synchronous by design; see the type's remarks. Unreachable between the pump's
+    /// rounds, which the loop answers by trying again on <see cref="Found"/> or on its
+    /// next look, whichever is first. A refusal is logged once per distinct message,
+    /// because the likeliest one - a context the file does not declare - will be
+    /// repeated on every change until somebody declares it, and one line saying so is
+    /// worth more than a hundred.
     /// </remarks>
     public SendOutcome Send(string command)
     {
-        if (_commands is null)
-        {
-            if (!IpcClient.IsServerRunning(_pipeName)) return SendOutcome.Unreachable;
-
-            try
-            {
-                var client = new IpcClient { PipeName = _pipeName };
-                client.ConnectAsync(ConnectTimeout, _stopping.Token).GetAwaiter().GetResult();
-                _commands = client;
-                Log.Info(LogCategory.Ipc, "connected to the window manager");
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Log.Debug(LogCategory.Ipc, $"could not connect: {ex.Message}");
-                return SendOutcome.Unreachable;
-            }
-        }
+        if (_pump.Current is not { Events: { } client }) return SendOutcome.Unreachable;
 
         try
         {
-            IpcResponse response = _commands.SendAsync("command", command, _stopping.Token).GetAwaiter().GetResult();
+            IpcResponse response = client.SendAsync("command", command, _stopping.Token).GetAwaiter().GetResult();
 
             if (response.Ok)
             {
@@ -172,26 +167,10 @@ internal sealed class WmConnection : IAsyncDisposable
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            // The connection went under the request; the pump notices the same end and
+            // raises Lost, which is where the loop learns to forget and hold again.
             Log.Info(LogCategory.Ipc, $"lost the window manager while sending '{command}': {ex.Message}");
-            Drop();
             return SendOutcome.Unreachable;
-        }
-    }
-
-    /// <summary>Lets go of the commands connection, and with it every lease it held.</summary>
-    public void Drop()
-    {
-        if (_commands is not { } client) return;
-
-        _commands = null;
-
-        try
-        {
-            client.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException)
-        {
-            // Already gone, which is what dropping it was for.
         }
     }
 
@@ -263,14 +242,14 @@ internal sealed class WmConnection : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
-        await _pump.DisposeAsync().ConfigureAwait(false);
 
-        // Closing the commands connection is what releases the leases. Nothing needs
-        // to be sent for it; that is the point of a lease.
-        Drop();
+        // Closing the pump closes the connection, and that is what releases the
+        // leases. Nothing needs to be sent for it; that is the point of a lease.
+        await _pump.DisposeAsync().ConfigureAwait(false);
 
         _stopping.Dispose();
         Lost.Dispose();
+        Found.Dispose();
         Dismissed.Dispose();
         Reloaded.Dispose();
         Signalled.Dispose();

@@ -95,10 +95,12 @@ public sealed record HoldArguments(string Command, string Context)
 /// process lives, and the pin sent again each time it connects, so a window manager
 /// that restarts is holding the context again within a second of coming back - and a
 /// reload, which drops every pin on a context the reloaded file no longer declares
-/// and tells nobody, is followed by the pin being asserted again. <c>exit-all</c> is
-/// the one shutdown this leaves on: the user is done with Shubbak, and a process
-/// waiting to pin a context on a window manager that is not coming back is exactly
-/// what a leased pin exists to avoid.
+/// and tells nobody, is followed by the pin being asserted again. One connection does
+/// both: the pin is made on the connection the events arrive on, so the lease lives
+/// exactly as long as the subscription, and a reconnect is the pin being made again.
+/// <c>exit-all</c> is the one shutdown this leaves on: the user is done with Shubbak,
+/// and a process waiting to pin a context on a window manager that is not coming back
+/// is exactly what a leased pin exists to avoid.
 /// </para>
 /// </remarks>
 public static class HoldCommand
@@ -137,11 +139,10 @@ public static class HoldCommand
             ProgramName = "shubbak",
             PipeName = pipe,
             ConnectTimeout = TimeSpan.FromSeconds(2),
-            OpensCommandsConnection = true,
 
             Subscribed = async (connection, token) =>
             {
-                IpcResponse response = await connection.Commands!.SendAsync("command", hold.Command, token).ConfigureAwait(false);
+                IpcResponse response = await connection.Events.SendAsync("command", hold.Command, token).ConfigureAwait(false);
 
                 if (response.Ok)
                 {
@@ -175,8 +176,11 @@ public static class HoldCommand
                         // The window manager drops the pins of contexts the reloaded
                         // file no longer declares and says nothing; asserting again is
                         // one command, and replaces the pin with itself when it is still
-                        // there.
-                        IpcResponse response = await connection.Commands!.SendAsync("command", hold.Command, token).ConfigureAwait(false);
+                        // there. A reload the window manager refused touched no pin and
+                        // needs nothing.
+                        if (!ConfigReloadNotice.Parse(notification.Data).Accepted) break;
+
+                        IpcResponse response = await connection.Events.SendAsync("command", hold.Command, token).ConfigureAwait(false);
 
                         if (!response.Ok)
                             await error.WriteLineAsync($"shubbak: after a reload, \"{hold.Context}\" was refused: {response.Error}").ConfigureAwait(false);
