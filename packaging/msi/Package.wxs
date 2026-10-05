@@ -162,6 +162,9 @@
         <File Id="DocScripting" Source="$(var.StageDir)\docs\scripting.md" />
       </Component>
       <Component Directory="DocsFolder">
+        <File Id="DocExtending" Source="$(var.StageDir)\docs\extending.md" />
+      </Component>
+      <Component Directory="DocsFolder">
         <File Id="DocFaq" Source="$(var.StageDir)\docs\faq.md" />
       </Component>
       <Component Directory="DocsFolder">

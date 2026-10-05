@@ -17,6 +17,26 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **A page on extending Shubbak, and a worked example twice over.** The pipe has been
+  the plugin architecture since the bar and the palette were written against it, and
+  the scripting page has been its reference - but nothing showed the shape of a
+  program built on it, and the question "can I write my own widget" had no answer in
+  the FAQ. [`docs/extending.md`](docs/extending.md) is that page: what a program of
+  yours can do over one connection, the three idioms the shipped companions are made
+  of - a provider that supplies a fact as a context, a publisher that puts a value on
+  the bar, a listener that is told what to do by a signal - and what to expect of the
+  window manager on the other end. The example is a focus timer, which nothing shipped
+  does: start it from a key for twenty-five minutes, and while it runs a context holds
+  and the bar counts down. Once in `examples/focus-timer.ps1`, built entirely from
+  `shubbak` commands - `sub signal` for ears, `signal focus mm:ss` for a voice,
+  `context --set focusing --hold` for the context - which is the proof that a shell
+  script is a complete extension; and once in `examples/Shubbak.Example.FocusTimer`,
+  C# on the `Shubbak.Ipc` package over one connection, which is what the watcher looks
+  like with everything but the pipe taken out. Both were run against a real window
+  manager, through a restart of it. The FAQ answers the question; the end-to-end test
+  gains the first case that raises a signal from one client and hears it on another,
+  pins a context with a lease on a subscribed connection, and sees it let go when
+  that connection closes.
 - **`Shubbak.Ipc` is a NuGet package.** The pipe's protocol and client - connect, send,
   subscribe, the payload records, the three hand-read notices - as a package a program
   of somebody else's references, rather than a project to copy out of this
@@ -635,6 +655,24 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **The native and end-to-end test suites no longer fail each other.** Both create
+  real windows on the desktop: the native tests spawn a `winver` and assert what the
+  shell does with it, and the end-to-end test starts a window manager of its own that
+  manages every `winver` it can see. `dotnet test` runs the two hosts at the same time,
+  so the native tests' guard against a running window manager - right, when it is the
+  user's - found the end-to-end daemon instead, one full run in three on the machine
+  that measured it and every run on a faster one, and refused nine to twenty-five tests
+  with a message blaming a window manager the user had not started. Each suite now
+  takes a named mutex for the desktop before it touches it - the native host for the
+  length of its run, the end-to-end test around each daemon - and whichever gets there
+  second waits. The guard against the user's window manager is unchanged; the only
+  thing that moved is the overlap, which was never meant to exist. A host that dies
+  holding the mutex abandons it, and the next waiter is told and goes on, which is why
+  it is a mutex and not a semaphore.
+- **The end-to-end smoke test read a tiled window's rectangle a tick early.** It waited
+  for the rule's verdict - "tiling" - and read the rectangle, and the layout pass that
+  places the window runs a tick after the verdict, so on a fast machine it read a
+  window of width zero, one run in three. It waits to be placed.
 - **A rule's `tile`, `float` or `move` was refused when an unmanaged window held the
   foreground.** A rule acts on the window it matched, and the daemon puts the tree's
   focus there before running the rule's commands - but the commands then went through

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    A focus timer for Shubbak: the worked example in docs/extending.md, in C#.
+
+    Everything a program of somebody else's needs is one reference, Shubbak.Ipc. In
+    this repository that is the project; from outside it is the package of the same
+    name on nuget.org, and the line to swap is marked below. Nothing else is referenced
+    on purpose - not the companions' shared library, not the config loader - because
+    the point of the example is what the pipe alone affords.
+
+    A console program, because it is an example: `dotnet run` and watch it talk. A
+    program meant to live at logon would be WinExe, as the watcher is, and would be
+    started from the config with `startup-command`.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Shubbak.Example.FocusTimer</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- From outside this repository: <PackageReference Include="Shubbak.Ipc" Version="0.10.0" /> -->
+    <ProjectReference Include="..\..\src\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -54,7 +54,7 @@ The build workflow fails on things a local build does not, and each is one comma
 |---|---|
 | Every `[Fact]`/`[Theory]` is counted in `docs/architecture.md` | `pwsh -File tools/check-test-count.ps1 -Fix` |
 | `docs/diagnostics.md` matches the codes in the source | `pwsh -File tools/list-diagnostics.ps1` and commit the result |
-| Every KDL snippet in the docs loads without a diagnostic | `pwsh -File tools/check-doc-snippets.ps1` (needs a Release build of the CLI) |
+| Every KDL snippet in the docs loads without a diagnostic | `pwsh -File tools/check-doc-snippets.ps1` (needs a Release build of the CLI; a new docs page goes in its `$Files` list) |
 | The example config loads clean | `shubbak check-config docs/shubbak.example.kdl` |
 | Version numbers agree | `pwsh -File tools/check-release-consistency.ps1` |
 

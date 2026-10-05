@@ -8,6 +8,17 @@ something else, the CLI and the pipe are right there.
 No. Taj ships with Shubbak and is configured in the same file. If you would rather
 use something else, the event stream is public; see [Scripting](scripting.md).
 
+**Can I write my own widget, watcher or plugin?**
+Yes, and not as a plugin: as a program. There is no in-process plugin model - the
+window manager is compiled to native code and loads nothing - and there does not need
+to be, because the bar, the palette and the watcher are themselves just programs on
+the pipe anything can connect to. Bind a key to a `signal` the window manager has
+never heard of and subscribe to it; supply a fact as a `context` the config then acts
+on; put a value on the bar with `signal <name> <value>`. Any language that can open a
+named pipe and write a line of JSON will do, as will a shell script made of `shubbak`
+commands, and for .NET the client is the `Shubbak.Ipc` package. [Extending](extending.md)
+is the worked example, both ways.
+
 **Can I run it alongside GlazeWM or komorebi?**
 Please don't — two window managers fighting over the same windows goes exactly how
 you would expect. Shubbak refuses to start if another copy of *itself* is already

@@ -25,7 +25,7 @@
 [CmdletBinding()]
 param(
     [string] $Cli,
-    [string[]] $Files = @('README.md', 'docs\getting-started.md', 'docs\configuration.md', 'docs\taj.md', 'docs\dalil.md', 'docs\ayn.md', 'docs\scripting.md')
+    [string[]] $Files = @('README.md', 'docs\getting-started.md', 'docs\configuration.md', 'docs\taj.md', 'docs\dalil.md', 'docs\ayn.md', 'docs\scripting.md', 'docs\extending.md')
 )
 
 Set-StrictMode -Version Latest

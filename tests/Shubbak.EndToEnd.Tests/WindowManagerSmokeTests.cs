@@ -59,10 +59,23 @@ public sealed class WindowManagerSmokeTests : IDisposable
     private readonly string _pipe;
     private readonly List<Process> _started = [];
     private readonly StringBuilder _daemonOutput = new();
+    private readonly DesktopLease _desktop;
 
     public WindowManagerSmokeTests()
     {
-        FailIfAWindowManagerIsRunning();
+        // The desktop first, from the native tests' host if it has it; then the check
+        // for a window manager that is really the user's. See DesktopLease.
+        _desktop = DesktopLease.Take();
+
+        try
+        {
+            FailIfAWindowManagerIsRunning();
+        }
+        catch
+        {
+            _desktop.Dispose();
+            throw;
+        }
 
         _state = Path.Combine(Path.GetTempPath(), $"shubbak-{_instance}");
         Directory.CreateDirectory(_state);
@@ -79,7 +92,8 @@ public sealed class WindowManagerSmokeTests : IDisposable
     /// the test window - a dialog, which the filter would float - and a rule that leaves
     /// every other window alone, so a developer's desktop is not rearranged for the
     /// duration. No keybindings, so the hook forwards every key; no startup commands, so
-    /// no bar, palette or watcher is started.
+    /// no bar, palette or watcher is started. One external context, for the program
+    /// that stands in for a provider.
     /// </summary>
     private const string TestConfig = """
         general {
@@ -91,6 +105,10 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         workspaces {
             workspace "e2e"
+        }
+
+        contexts {
+            context "focusing" { }
         }
 
         rules {
@@ -255,6 +273,130 @@ public sealed class WindowManagerSmokeTests : IDisposable
         (int exit, string output) = RunCli("stop", StopTimeout);
         Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
         WaitFor(() => daemon.HasExited, StopTimeout, "the window manager to exit", null);
+    }
+
+    [Fact]
+    public async Task AProgramOfSomebodyElsesHoldsAContextAndHearsASignalOverOneConnection()
+    {
+        // The shape every extension is made of - docs/extending.md - against a real
+        // daemon: one connection that is subscribed, pins a context with a lease, and
+        // is told things by signal, while a second client watches what the window
+        // manager says about it. Three things are proved at once: a signal raised by
+        // one client reaches another, a lease is attributed to the connection that made
+        // it and announced as a context change, and closing that connection is what
+        // lets go.
+        Process daemon = StartDaemon();
+        WaitFor(() => IpcClient.IsServerRunning(_pipe), StartupTimeout, "the window manager's pipe to appear", daemon);
+
+        using var cancel = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await ProviderRoundTripAsync(cancel.Token).ConfigureAwait(true);
+
+        (int exit, string output) = RunCli("stop", StopTimeout);
+        Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
+        WaitFor(() => daemon.HasExited, StopTimeout, "the window manager to exit", null);
+    }
+
+    private async Task ProviderRoundTripAsync(CancellationToken token)
+    {
+        // The watcher: subscribed to the signal and the context topics, sending on the
+        // same connection.
+        await using var watcher = new IpcClient { PipeName = _pipe };
+        await watcher.ConnectAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+        await watcher.BeginSubscriptionAsync("signal,context.changed", token).ConfigureAwait(false);
+
+        // The provider: subscribed to the signal, holding the context on this very
+        // connection, publishing a value on it.
+        var provider = new IpcClient { PipeName = _pipe };
+        await provider.ConnectAsync(TimeSpan.FromSeconds(5), token).ConfigureAwait(false);
+        await provider.BeginSubscriptionAsync("signal", token).ConfigureAwait(false);
+
+        IAsyncEnumerator<IpcEvent> heardByWatcher = watcher.ReadEventsAsync(token).GetAsyncEnumerator(token);
+        IAsyncEnumerator<IpcEvent> heardByProvider = provider.ReadEventsAsync(token).GetAsyncEnumerator(token);
+
+        try
+        {
+            // A key would raise this; a third client does here. The provider hears it
+            // on its subscribed connection, name and words intact.
+            IpcResponse raised = await SendAsync("command", "signal focus start 25", token).ConfigureAwait(false);
+            Assert.True(raised.Ok, $"the signal was refused: {raised.Error}");
+
+            SignalPayload heard = await NextSignalAsync(heardByProvider, "focus", token).ConfigureAwait(false);
+            Assert.Equal(["start", "25"], heard.Arguments);
+
+            // The provider acts: holds the context with a lease on its own connection,
+            // and puts a value on the bar - both while that connection streams.
+            IpcResponse pinned = await provider.SendAsync("command", "context --set focusing --lease", token).ConfigureAwait(false);
+            Assert.True(pinned.Ok, $"the lease was refused: {pinned.Error}");
+
+            IpcEvent change = await NextOnTopicAsync(heardByWatcher, "context.changed", token).ConfigureAwait(false);
+            Assert.Contains("\"name\":\"focusing\"", change.Data, StringComparison.Ordinal);
+            Assert.Contains("\"active\":true", change.Data, StringComparison.Ordinal);
+            Assert.Contains("\"source\":\"pinned\"", change.Data, StringComparison.Ordinal);
+
+            IpcResponse said = await provider.SendAsync("command", "signal focus \"24:59\"", token).ConfigureAwait(false);
+            Assert.True(said.Ok, $"the value was refused: {said.Error}");
+
+            SignalPayload value = await NextSignalAsync(heardByWatcher, "focus", token).ConfigureAwait(false);
+            Assert.Equal(["24:59"], value.Arguments);
+
+            // The daemon attributes the pin to the provider's process and says it is
+            // leased to that connection.
+            IReadOnlyList<ContextReport> contexts = Query("contexts", IpcJsonContext.Default.IReadOnlyListContextReport);
+            ContextReport focusing = Assert.Single(contexts, c => c.Name == "focusing");
+            Assert.True(focusing.Active, "the context is not active while leased");
+            Assert.True(focusing.Leased, "the pin is not reported as leased");
+            Assert.Contains("testhost", focusing.SetBy ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+            // The bar connects and asks; the provider says the value again, on the same
+            // connection it is holding the lease on.
+            Assert.True((await SendAsync("command", "signal announce", token).ConfigureAwait(false)).Ok);
+            SignalPayload announce = await NextSignalAsync(heardByProvider, IpcProtocol.AnnounceSignal, token).ConfigureAwait(false);
+            Assert.Empty(announce.Arguments);
+            Assert.True((await provider.SendAsync("command", "signal focus \"24:58\"", token).ConfigureAwait(false)).Ok);
+            Assert.Equal(["24:58"], (await NextSignalAsync(heardByWatcher, "focus", token).ConfigureAwait(false)).Arguments);
+        }
+        finally
+        {
+            await heardByProvider.DisposeAsync().ConfigureAwait(false);
+        }
+
+        // Letting go is closing the connection - nothing is sent for it. The watcher
+        // hears the context go off, and the daemon reports nothing holds it.
+        await provider.DisposeAsync().ConfigureAwait(false);
+
+        IpcEvent released = await NextOnTopicAsync(heardByWatcher, "context.changed", token).ConfigureAwait(false);
+        Assert.Contains("\"name\":\"focusing\"", released.Data, StringComparison.Ordinal);
+        Assert.Contains("\"active\":false", released.Data, StringComparison.Ordinal);
+
+        await heardByWatcher.DisposeAsync().ConfigureAwait(false);
+
+        ContextReport after = Assert.Single(Query("contexts", IpcJsonContext.Default.IReadOnlyListContextReport), c => c.Name == "focusing");
+        Assert.False(after.Active, "the context is still active after the connection that leased it closed");
+        Assert.Null(after.Pin);
+    }
+
+    /// <summary>The next signal with the given name, skipping any other topic or name.</summary>
+    private static async Task<SignalPayload> NextSignalAsync(IAsyncEnumerator<IpcEvent> events, string name, CancellationToken token)
+    {
+        while (await events.MoveNextAsync().AsTask().WaitAsync(token).ConfigureAwait(false))
+        {
+            if (events.Current.Topic == IpcProtocol.SignalTopic &&
+                SignalPayload.Parse(events.Current.Data) is { } signal && signal.IsFor(name))
+                return signal;
+        }
+
+        throw new InvalidOperationException($"the event stream ended before signal \"{name}\" arrived");
+    }
+
+    /// <summary>The next event on the given topic, skipping the rest.</summary>
+    private static async Task<IpcEvent> NextOnTopicAsync(IAsyncEnumerator<IpcEvent> events, string topic, CancellationToken token)
+    {
+        while (await events.MoveNextAsync().AsTask().WaitAsync(token).ConfigureAwait(false))
+        {
+            if (events.Current.Topic == topic) return events.Current;
+        }
+
+        throw new InvalidOperationException($"the event stream ended before {topic} arrived");
     }
 
     // ---- starting things -------------------------------------------------------------
@@ -558,6 +700,10 @@ public sealed class WindowManagerSmokeTests : IDisposable
         try { Directory.Delete(_state, recursive: true); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }
+
+        // Last, once the daemon is gone and the desktop is as it was: the native tests
+        // may be waiting for it.
+        _desktop.Dispose();
     }
 }
 

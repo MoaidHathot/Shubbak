@@ -17,6 +17,7 @@
 [Dalil](docs/dalil.md) ·
 [Ayn](docs/ayn.md) ·
 [Scripting](docs/scripting.md) ·
+[Extending](docs/extending.md) ·
 [FAQ](docs/faq.md)
 
 </div>
@@ -73,7 +74,8 @@ I liked about them and changes what kept getting in my way:
   workspace bound to a display leaves when it is unplugged and comes back with it.
 - **Scriptable.** One named pipe, JSON, 30 event topics, and a `signal` verb the window
   manager carries without reading. The bar and the palette are ordinary clients of it,
-  and so can anything you write.
+  and so can anything you write - the client ships as a NuGet package, `Shubbak.Ipc`,
+  and [Extending](docs/extending.md) is the worked example.
 
 ## Install
 
@@ -201,6 +203,7 @@ config to read and borrow from.
 | [Dalil](docs/dalil.md) | The palette: modes, actions, questions |
 | [Ayn](docs/ayn.md) | The watcher: the rest of the machine as contexts - camera, microphone, screen, speaker, power, theme |
 | [Scripting](docs/scripting.md) | The pipe, the events, signals, security |
+| [Extending](docs/extending.md) | Writing a program of your own against the pipe: the three idioms, a worked example, the NuGet package |
 | [Troubleshooting](docs/troubleshooting.md) | Organised by symptom |
 | [Diagnostics](docs/diagnostics.md) | Every SHB, TAJ, DAL and AYN code `check-config` can print, and what each means |
 | [FAQ](docs/faq.md) | The questions that come up first |

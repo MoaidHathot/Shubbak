@@ -219,6 +219,10 @@ internal sealed class ForeignWindow : IDisposable
     /// </remarks>
     public static ForeignWindow? Acquire(ITestOutputHelper output)
     {
+        // A winver of this test's own is exactly what the end-to-end daemon tiles; the
+        // desktop is taken from it first. See DesktopLease.
+        DesktopLease.Acquire();
+
         ForeignWindow? spawned = TrySpawn();
         if (spawned is not null)
         {

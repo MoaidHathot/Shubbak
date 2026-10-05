@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/examples/">
+    <Project Path="examples/Shubbak.Example.FocusTimer/Shubbak.Example.FocusTimer.csproj" />
+  </Folder>
   <Folder Name="/spikes/">
     <Project Path="spikes/Shubbak.Spike/Shubbak.Spike.csproj" />
   </Folder>

@@ -119,6 +119,11 @@ internal sealed class TestWindow : IDisposable
     /// </remarks>
     private static void FailIfAWindowManagerIsRunning()
     {
+        // First the desktop is taken from the end-to-end tests, whose daemon would
+        // otherwise be the window manager found below; then the check is for the
+        // user's, which is the one to refuse.
+        DesktopLease.Acquire();
+
         if (Process.GetProcessesByName("shubbak-wm").Length == 0) return;
 
         throw new InvalidOperationException(
