@@ -5,12 +5,69 @@ separate program that connects to the same named pipe anything else can, and the
 window manager knows none of them by name: it carries a `signal` without reading it,
 holds a `context` without asking who set it, and answers a `query` the same whoever
 asks. **The pipe is the plugin architecture.** This page is how to write the fourth
-program — what it can do, the three idioms the shipped ones are made of, and a worked
-example in PowerShell and in C#.
+program — seven hello-worlds, one per direction the pipe has; what a program can do;
+the three idioms the shipped ones are made of; and a worked example in PowerShell and
+in C#.
 
 [Scripting](scripting.md) is the reference for the pipe itself: every method, every
 topic, the wire format, the security gates. This page assumes it and shows the shape
 of a program built on it.
+
+## Hello, world
+
+Seven scripts in [`examples/hello/`](../examples/hello/), one idea each, in the order
+to read them. Each runs against the Shubbak you have in under a minute; none needs
+anything built. Read them in order and you have met every direction the pipe has.
+
+| | Script | One line | Needs |
+|---|---|---|---|
+| 1 | [`1-ask.ps1`](../examples/hello/1-ask.ps1) | `shubbak query focused` — the window manager answers questions in JSON | — |
+| 2 | [`2-tell.ps1`](../examples/hello/2-tell.ps1) | `shubbak toggle-floating` — anything a key can do, a command can; ask, tell, ask | — |
+| 3 | [`3-listen.ps1`](../examples/hello/3-listen.ps1) | `shubbak sub window.focused` — events arrive; you never poll | — |
+| 4 | [`4-signal.ps1`](../examples/hello/4-signal.ps1) | `bind "alt+h" { signal "hello" }` — a key the window manager has never heard of reaches your program | a `bind` |
+| 5 | [`5-bar.ps1`](../examples/hello/5-bar.ps1) | `shubbak signal hello "Hello, world"` — your program puts a value on the bar | a `source` |
+| 6 | [`6-context.ps1`](../examples/hello/6-context.ps1) | `shubbak context --set hello --hold` — your program supplies a fact; the config decides what it means | a `context` |
+| 7 | [`7-raw-pipe.ps1`](../examples/hello/7-raw-pipe.ps1) | a named pipe and three shapes of JSON — no `shubbak`, no package, nothing but the wire | — |
+
+The three that want something in the config want this, together:
+
+```kdl
+keybindings {
+    bind "alt+h" { signal "hello" }
+}
+
+bar {
+    source "hello" kind="signal"
+
+    profile "default" {
+        zone "left"  justify="start" { workspaces }
+        zone "right" justify="end"   { text template="{{ hello }}" }
+    }
+}
+
+contexts {
+    context "hello" {
+        gaps { inner 24 }
+        bindings { bind "alt+shift+q" { } }
+    }
+}
+```
+
+Then [`Shubbak.Example.Hello`](../examples/Shubbak.Example.Hello/) is 1, 3 and 4
+again in forty lines of C# on the `Shubbak.Ipc` package — ask, listen, be told, on one
+connection — which is the shape every program in this repository's `src/` starts from:
+
+```
+dotnet run --project examples/Shubbak.Example.Hello
+```
+
+Three things the scripts show that are worth saying once. **Your own signals come
+back to you**: a program subscribed to `signal` hears the values it publishes, so it
+acts on the words that are requests and ignores the rest. **A lease is a connection**:
+`--hold` is a process that stays connected, and ending it is letting go; nothing is
+ever left behind by a program that crashed. **One connection does both**: script 7
+sends a `ping` after subscribing and reads the reply between the events, which is what
+lets a program hold a context on the connection it listens on.
 
 ## What a program of yours can do
 
@@ -98,11 +155,12 @@ signal focus start 25` from a terminal raises exactly the same signal.
 
 ## A worked example: a focus timer
 
-Something none of the shipped programs do, that uses all three idioms. Start it from a
-key for twenty-five minutes; while it runs, a context holds — so the config can disarm
-the close key, drop the borders, or pick a quieter bar profile — and the bar shows the
-time left; stopping it, or the time running out, lets go of both. Two versions, the
-same design, in [`examples/`](../examples/):
+All seven hello-worlds at once, in one small program that is something none of the
+shipped ones do - a Pomodoro. Start it from a key for twenty-five minutes; while it
+runs, a context holds — so the config can disarm the close key, drop the borders, or
+pick a quieter bar profile — and the bar shows the time left; stopping it, or the time
+running out, lets go of both. Two versions, the same design, in
+[`examples/`](../examples/):
 
 **[`focus-timer.ps1`](../examples/focus-timer.ps1)** is built entirely from the
 command line and never opens the pipe itself. `shubbak sub signal` is its ears,

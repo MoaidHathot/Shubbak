@@ -17,7 +17,8 @@ never heard of and subscribe to it; supply a fact as a `context` the config then
 on; put a value on the bar with `signal <name> <value>`. Any language that can open a
 named pipe and write a line of JSON will do, as will a shell script made of `shubbak`
 commands, and for .NET the client is the `Shubbak.Ipc` package. [Extending](extending.md)
-is the worked example, both ways.
+starts with seven hello-worlds, one per direction the pipe has, and ends with a
+worked example, both ways.
 
 **Can I run it alongside GlazeWM or komorebi?**
 Please don't — two window managers fighting over the same windows goes exactly how

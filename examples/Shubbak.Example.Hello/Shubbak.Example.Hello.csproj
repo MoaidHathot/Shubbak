@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Hello, world, in C#: examples/hello/1-ask, 3-listen and 4-signal again, in forty
+    lines on the Shubbak.Ipc package. One reference and nothing else; from outside
+    this repository it is the PackageReference below instead of the ProjectReference.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Shubbak.Example.Hello</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- From outside this repository: <PackageReference Include="Shubbak.Ipc" Version="0.10.0" /> -->
+    <ProjectReference Include="..\..\src\Shubbak.Ipc\Shubbak.Ipc.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -133,6 +133,15 @@ jobs:
         shell: pwsh
         run: ./tools/check-doc-snippets.ps1
 
+      # The example scripts are run by people against a live window manager, which CI
+      # has no way to do; what it can do is put each through PowerShell's parser, so a
+      # typo cannot ship as "the example is broken" - the worst bug there is in the
+      # one thing a newcomer tries first - and check that every path the docs link to
+      # under examples/ exists. The C# examples are in the solution and built above.
+      - name: Check the examples
+        shell: pwsh
+        run: ./tools/check-examples.ps1
+
       # The architecture page quotes a test count in two places. It has been corrected
       # by hand four times and was wrong on each of the four occasions somebody looked -
       # the last time within the same commit that added this check, because the count

@@ -47,7 +47,7 @@ src/
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the watcher: the rest of the machine, as contexts
 tests/              2530 test methods across 15 projects
-examples/           a program of somebody else's, twice: a focus timer as a script of shubbak commands, and as C# on the Shubbak.Ipc package
+examples/           programs of somebody else's: seven hello-worlds, one per direction the pipe has, in PowerShell; a forty-line C# hello on the Shubbak.Ipc package; and a focus timer that is all of them at once, as a script of shubbak commands and as C#
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
 packaging/winget/   the winget manifests: one package, the MSI and the portable zip

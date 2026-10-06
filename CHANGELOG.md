@@ -17,6 +17,26 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **Seven hello-worlds, one per direction the pipe has.** The extending page opened on
+  a 170-line script and a 311-line program, which is the wrong first thing to read; a
+  newcomer wants each feature in ten lines before any of them together.
+  `examples/hello/` is that: `1-ask` (`shubbak query` answers in JSON), `2-tell`
+  (anything a key can do, a command can), `3-listen` (`shubbak sub` streams events;
+  nothing polls), `4-signal` (a key bound to a `signal` the window manager has never
+  heard of reaches your program), `5-bar` (the same `signal` the other way puts a
+  value on the bar and clears it), `6-context` (your program supplies a fact with
+  `--hold`; the config decides what it means; the lease dies with the process) and
+  `7-raw-pipe` (no `shubbak`, no package: a named pipe, three shapes of JSON, a reply
+  read between the events on the one connection). Each carries the one or two config
+  lines it wants in its header; the readme has them together. `Shubbak.Example.Hello`
+  is 1, 3 and 4 again in forty lines of C# on the `Shubbak.Ipc` package, in the
+  solution so CI builds it under the analyzers. Every script was run against a real
+  window manager with nothing, something and no window manager at all in front of it;
+  the focus timer is now the capstone, "all of them at once". A new check,
+  `tools/check-examples.ps1`, puts every example script through PowerShell's parser
+  and resolves every link into `examples/` from the docs, so a typo or a renamed
+  script cannot ship as "the example is broken" - the worst bug there is in the one
+  thing a newcomer tries first - and `build.yml` runs it beside the snippet check.
 - **A page on extending Shubbak, and a worked example twice over.** The pipe has been
   the plugin architecture since the bar and the palette were written against it, and
   the scripting page has been its reference - but nothing showed the shape of a
