@@ -770,6 +770,21 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **The end-to-end suite's refusal to run beside a window manager now says which one
+  it found.** The x64 job once refused with "shubbak-wm is running" in a run where the
+  only window managers to have existed were the ones the three tests before it had
+  started, stopped with `shubbak stop`, and seen exit - and nothing in the message said
+  whether the process it found was one of those or something else, so the failure
+  could not be explained and was not. The guard now names every process it found: the
+  id, how long ago it started, where it was started from, and whether this test host
+  started it; and the one case that is certainly harmless - a daemon of the suite's own
+  that has already reported its exit and is somehow still listed - is waited for, for
+  up to five seconds, rather than refused. A stranger, or a daemon of ours that has not
+  exited, is refused as before. The cause of the one refusal seen is not established:
+  a terminated process is not listed by name while a handle to it stays open, nor
+  between its exit code being set and its teardown finishing, on any machine this was
+  tried on, under load or not - so whatever it was, the next time it happens the
+  message will say.
 - **Two palette tests raced a timer against a two-second ping, and on a loaded runner
   the ping won.** `CancellingTheWaitStopsTheProgram` and
   `AProgramThatOutstaysItsWelcomeIsStoppedAndSaidSo` ran `ping -n 3` and expected a

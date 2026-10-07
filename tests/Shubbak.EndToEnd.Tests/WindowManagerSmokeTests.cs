@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Shubbak.Ipc;
@@ -186,7 +187,7 @@ public sealed class WindowManagerSmokeTests : IDisposable
         Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
         Assert.Contains("the window manager has stopped", output, StringComparison.Ordinal);
 
-        WaitFor(() => daemon.HasExited, StopTimeout, "the window manager process to exit after stop", null);
+        WaitForExit(daemon, "the window manager process to exit after stop");
         Assert.True(daemon.ExitCode == 0, $"the daemon exited with {daemon.ExitCode}; it printed: {_daemonOutput}");
 
         // The window was given back: still there, still visible, not cloaked.
@@ -225,7 +226,7 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         (int exit, string output) = RunCli("stop", StopTimeout);
         Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
-        WaitFor(() => daemon.HasExited, StopTimeout, "the window manager to exit", null);
+        WaitForExit(daemon, "the window manager to exit");
 
         string log = ReadShared(Path.Combine(_state, "shubbak.log"));
         Assert.Contains("SHB", log, StringComparison.Ordinal);
@@ -272,7 +273,7 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         (int exit, string output) = RunCli("stop", StopTimeout);
         Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
-        WaitFor(() => daemon.HasExited, StopTimeout, "the window manager to exit", null);
+        WaitForExit(daemon, "the window manager to exit");
     }
 
     [Fact]
@@ -293,7 +294,7 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         (int exit, string output) = RunCli("stop", StopTimeout);
         Assert.True(exit == 0, $"shubbak stop exited {exit}: {output}");
-        WaitFor(() => daemon.HasExited, StopTimeout, "the window manager to exit", null);
+        WaitForExit(daemon, "the window manager to exit");
     }
 
     private async Task ProviderRoundTripAsync(CancellationToken token)
@@ -426,6 +427,8 @@ public sealed class WindowManagerSmokeTests : IDisposable
         Isolate(info);
 
         Process daemon = Process.Start(info) ?? throw new InvalidOperationException("could not start shubbak-wm.exe");
+
+        Remember(daemon);
 
         daemon.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (_daemonOutput) _daemonOutput.AppendLine(e.Data); };
         daemon.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (_daemonOutput) _daemonOutput.AppendLine(e.Data); };
@@ -631,16 +634,134 @@ public sealed class WindowManagerSmokeTests : IDisposable
         throw new TimeoutException($"gave up after {timeout.TotalSeconds:F0}s waiting for {what}.{extra}");
     }
 
+    /// <summary>Waits for a daemon this test started to exit, and notes that it has, for the guard.</summary>
+    private void WaitForExit(Process daemon, string what)
+    {
+        WaitFor(() => daemon.HasExited, StopTimeout, what, null);
+        RememberExited(daemon);
+    }
+
     // ---- guards and cleanup ----------------------------------------------------------
 
+    /// <summary>
+    /// The daemons this host has started, by process id, and whether each was seen to
+    /// exit - so the guard can tell one of its own from one that is really the user's.
+    /// </summary>
+    /// <remarks>
+    /// Static, because the guard runs in the constructor of the next test and the
+    /// daemons belong to the instances before it. One of ours that has already reported
+    /// its exit is not a window manager that will fight over anything; a stranger, or
+    /// one of ours that has not exited, is exactly what the guard is for.
+    /// </remarks>
+    private static readonly Dictionary<int, bool> s_ownDaemons = [];
+
+    /// <summary>How long a daemon of our own that has exited is given to leave the process list.</summary>
+    private static readonly TimeSpan LeavingGrace = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Refuses to run beside a window manager, and says which one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The refusal used to say only that one was running. The x64 job once refused with
+    /// exactly that, in a run where the only window managers to have existed were the
+    /// ones the three tests before it had started and seen exit - and nothing in the
+    /// message said whether the process it found was one of those or something else,
+    /// which left the failure unexplained. Now it names every process it found: the id,
+    /// when it started, where it was started from, and whether this host started it.
+    /// </para>
+    /// <para>
+    /// One of ours that has already reported its exit is waited for, briefly, rather than
+    /// refused: whatever is keeping it in the list, it is not managing windows. Anything
+    /// else is refused as before, with the detail that was missing.
+    /// </para>
+    /// </remarks>
     private static void FailIfAWindowManagerIsRunning()
     {
-        if (Process.GetProcessesByName("shubbak-wm").Length == 0) return;
+        long deadline = Environment.TickCount64 + (long)LeavingGrace.TotalMilliseconds;
 
-        throw new InvalidOperationException(
-            "shubbak-wm is running. This test starts a window manager of its own, and two " +
-            "would fight over every window on the desktop - any result would be measuring the " +
-            "fight. Stop it (shubbak stop) and run again.");
+        while (true)
+        {
+            Process[] found = Process.GetProcessesByName("shubbak-wm");
+            if (found.Length == 0) return;
+
+            List<string> strangers = [];
+            List<string> leaving = [];
+
+            foreach (Process process in found)
+            {
+                string description = Describe(process);
+
+                bool ours;
+                bool exited;
+
+                lock (s_ownDaemons) ours = s_ownDaemons.TryGetValue(process.Id, out exited);
+
+                if (ours && exited) leaving.Add(description);
+                else strangers.Add(description + (ours ? " (started by this test host, and not yet seen to exit)" : string.Empty));
+
+                process.Dispose();
+            }
+
+            if (strangers.Count == 0)
+            {
+                if (Environment.TickCount64 >= deadline) return;
+
+                Thread.Sleep(50);
+                continue;
+            }
+
+            throw new InvalidOperationException(
+                "shubbak-wm is running. This test starts a window manager of its own, and two " +
+                "would fight over every window on the desktop - any result would be measuring the " +
+                "fight. Stop it (shubbak stop) and run again. Found: " +
+                string.Join("; ", strangers) +
+                (leaving.Count > 0 ? ". Also still listed, but exited: " + string.Join("; ", leaving) : string.Empty) + ".");
+        }
+    }
+
+    /// <summary>A process as the guard reports it: id, age, and where it came from, as far as it can be read.</summary>
+    private static string Describe(Process process)
+    {
+        var text = new StringBuilder($"pid {process.Id}");
+
+        try
+        {
+            DateTime started = process.StartTime;
+            text.Append(CultureInfo.InvariantCulture, $", started {(DateTime.Now - started).TotalSeconds:F1}s ago");
+        }
+        catch (Exception)
+        {
+            // Gone between the listing and the question, or not ours to ask about.
+            text.Append(", start time unavailable");
+        }
+
+        try
+        {
+            if (process.HasExited) text.Append(", exited");
+            if (process.MainModule?.FileName is { } path) text.Append(CultureInfo.InvariantCulture, $", from {path}");
+        }
+        catch (Exception)
+        {
+            // The same two reasons.
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>Notes a daemon this host started, for the guard.</summary>
+    private static void Remember(Process daemon)
+    {
+        lock (s_ownDaemons) s_ownDaemons[daemon.Id] = false;
+    }
+
+    /// <summary>Notes that a daemon this host started has reported its exit.</summary>
+    private static void RememberExited(Process daemon)
+    {
+        lock (s_ownDaemons)
+        {
+            if (s_ownDaemons.ContainsKey(daemon.Id)) s_ownDaemons[daemon.Id] = true;
+        }
     }
 
     /// <summary>Ends a process and everything it started, and never throws: cleanup has nowhere to put an exception.</summary>
@@ -682,6 +803,11 @@ public sealed class WindowManagerSmokeTests : IDisposable
         foreach (Process process in _started)
         {
             End(process);
+
+            // Ended or already gone, the guard is told either way; see s_ownDaemons.
+            try { if (process.HasExited) RememberExited(process); }
+            catch (InvalidOperationException) { }
+
             process.Dispose();
         }
 
