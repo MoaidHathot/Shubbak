@@ -558,12 +558,11 @@ bar {
             text id="lang" template="{{ keyboard }}" colour="#ffffff73" \
                  bold=#true on-click="keyboard next"
 
-            // The layout as a glyph that looks like the arrangement. Dim while it
-            // is the ordinary split, green the moment it is anything else. Click to
-            // cycle.
-            text id="layout" template="{{ layout | icon }}" colour="#ffffff73" \
-                 bold=#true font-size=17 on-click="layout --cycle" {
-                when of="layout" not="splith" colour="#1dfb8d"
+            // The layout as a picture of itself: the workspace drawn small, a pane
+            // per window. Dim while it is the ordinary split, green the moment it is
+            // anything else. Click to cycle.
+            layout id="layout" colour="#ffffff73" on-click="layout --cycle" {
+                when not="splith" colour="#1dfb8d"
             }
 
             // `accent` is the colour Windows is set to, so the clock follows the

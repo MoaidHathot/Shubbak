@@ -875,15 +875,23 @@ bar {
             text id="contexts" template="{{ contexts }}" colour="#1e1e2e" \
                  background="#8dbcff" on-click="signal palette commands"
 
-            // `of` matters here: the icon filter has already turned the layout's name
-            // into a glyph, so matching the drawn text would mean writing box-drawing
-            // characters and keeping them in step with whichever glyph the filter
-            // picks. Matching the source means writing the layout's name.
+            // The layout as a picture of itself: the workspace drawn sixteen pixels
+            // across, with a pane for each window the layout would place - the big
+            // pane and the dwindling rest is the spiral, a column of equal strips is
+            // the master layout, four squares the grid, one solid square monocle. The
+            // arithmetic is the window manager's own, so the picture is right by
+            // construction. Four panes, since three cannot tell a spiral from a master
+            // layout; `panes="windows"` follows the workspace instead. `main-colour`
+            // picks out the first window's pane, where the main window goes.
             //
-            // Clicking it steps the focused workspace to the next layout - the same
-            // `layout --cycle` a keybinding sends; `--cycle-back` goes the other way.
-            text id="layout"  template="{{ layout | icon }}" colour="#7f849c" on-click="layout --cycle" {
-                when of="layout" not="splith" colour="#a6e3a1"
+            // Dim while it is the ordinary split, green the moment it is anything
+            // else. Clicking it steps the focused workspace to the next layout - the
+            // same `layout --cycle` a keybinding sends; `--cycle-back` goes the other
+            // way. `{{ layout | icon }}` in a text widget is the older indicator, a
+            // box-drawing glyph per layout, for a bar that wants text.
+            layout id="layout" colour="#7f849c" main-colour="#a6adc8" \
+                   on-click="layout --cycle" on-right-click="layout --cycle-back" {
+                when not="splith" colour="#a6e3a1"
             }
 
             // A level rather than a figure: the battery as a bar a quarter full is a

@@ -11,12 +11,14 @@ namespace Taj.Core;
 /// <param name="MonitorIndex">Where this display sits in the window manager's list, or -1.</param>
 /// <param name="MonitorNames">What the window manager's configuration calls this display.</param>
 /// <param name="Layout">The layout of the workspace this display is showing, or empty.</param>
+/// <param name="WindowCount">How many windows the workspace this display is showing holds, or 0.</param>
 public sealed record BarReading(
     string Workspaces,
     string ActiveWorkspace,
     int MonitorIndex,
     IReadOnlyList<string> MonitorNames,
-    string Layout);
+    string Layout,
+    int WindowCount = 0);
 
 /// <summary>
 /// Turns a state snapshot into what a bar on one display shows.
@@ -91,12 +93,15 @@ public static class SnapshotProjection
                 w.Name, w.DisplayName, w.Active, w.HasWindows, w.Focused)),
         ];
 
+        WorkspaceInfo? shown = ActiveWorkspaceOn(state, deviceId);
+
         return new BarReading(
             WorkspacesWidget.Encode(entries),
             active,
             monitorIndex,
             monitorNames,
-            ActiveLayout(state, deviceId));
+            shown?.Layout ?? string.Empty,
+            shown?.WindowCount ?? 0);
     }
 
     /// <summary>Where a display sits in the window manager's list, or -1.</summary>
@@ -119,7 +124,15 @@ public static class SnapshotProjection
     /// every bar on every monitor showed the first monitor's layout, so the indicator
     /// was wrong on all but one display and changed when the user was not looking.
     /// </remarks>
-    public static string ActiveLayout(StateSnapshot state, string deviceId)
+    public static string ActiveLayout(StateSnapshot state, string deviceId) =>
+        ActiveWorkspaceOn(state, deviceId)?.Layout ?? string.Empty;
+
+    /// <summary>The workspace displayed on one monitor, or null when the snapshot names none.</summary>
+    /// <remarks>
+    /// Where the layout and the window count come from, and anything else that is
+    /// about what this display is showing rather than about the list.
+    /// </remarks>
+    public static WorkspaceInfo? ActiveWorkspaceOn(StateSnapshot state, string deviceId)
     {
         ArgumentNullException.ThrowIfNull(state);
 
@@ -128,10 +141,10 @@ public static class SnapshotProjection
             if (!workspace.Active) continue;
             if (!string.Equals(workspace.Monitor, deviceId, StringComparison.OrdinalIgnoreCase)) continue;
 
-            return workspace.Layout;
+            return workspace;
         }
 
-        return string.Empty;
+        return null;
     }
 
     /// <summary>

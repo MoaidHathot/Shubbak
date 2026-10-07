@@ -17,6 +17,31 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **The bar draws the layout as a picture of itself.** The layout indicator was a
+  box-drawing glyph per layout - `┤` for the spiral, `▌` for master-left - chosen
+  because they need no font installed, and that is all they could be: a character
+  says nothing until it has been learnt, and three spirals and four master layouts are
+  more than a character each can tell apart at a glance. The new `layout` widget draws
+  the workspace sixteen pixels across with a pane for each window the layout would
+  place: the big pane on the left and the rest dwindling into a corner is the spiral,
+  a column of equal strips beside it is the master layout, four squares are the grid,
+  one solid square is monocle. The picture is the window manager's own arithmetic -
+  the bar arranges a handful of placeholder windows with the same `ILayout` code the
+  desktop is arranged by, so a grid of five is three over two with the two stretched,
+  exactly as yours is, and a layout added to the window manager is drawn by the bar
+  the day it exists. Four panes by default, because that is the fewest that tell every
+  layout apart (a spiral of three is precisely a master layout of three, which a test
+  now pins); `panes="windows"` follows the workspace instead, growing a pane as each
+  window opens, which is where the new `{{ windows }}` value comes from - the window
+  manager always sent the count, and the bar always threw it away. `main-colour` picks
+  out the first window's pane, where the main window goes; `when` recolours the panes
+  by the layout's name; the usual gestures make it a control. Underneath, the visual
+  tree gains a `RectShape`, a filled rectangle in the unit square - the one shape every
+  renderer already draws, so unlike a line or an arc it needs no capability and a node
+  made of them is drawn whole by a renderer that has never heard of shapes. The
+  example and starter configs use the widget; `{{ layout | icon }}` is unchanged for a
+  bar that wants text. A `panes` that is neither a count from 1 to 9 nor the word
+  `windows` is `TAJ0040`.
 - **The bar draws numbers as well as printing them: a `sparkline` and a `meter`.** A
   bar that reads `23%` is a figure to read; a bar a quarter full is a shape to see.
   `meter source="battery"` is a track with a fill along it, sized to where the value

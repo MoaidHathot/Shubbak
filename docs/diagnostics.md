@@ -160,6 +160,7 @@ code, not the page.
 | `TAJ0037` | Error | '{id}' is a {kind} with no source= to read. |
 | `TAJ0038` | Warning | 'max' is not above 'min' ({written}); the defaults are used. |
 | `TAJ0039` | Warning | This sparkline reads '{source}', which is one reading at a time; its history is '{history}'. |
+| `TAJ0040` | Warning | 'panes' is "{written}", which is not a count from 1 to {most} or the word windows; four are drawn. |
 
 ## DAL - The palette
 

@@ -115,17 +115,20 @@ public static class VisualPainter
             if (!imageRect.IsEmpty) images.DrawImage(image, imageRect);
         }
 
-        // The same bargain for lines and arcs.
-        if (node.Kind == VisualKind.Shape && node.Shapes.Count > 0 && renderer is IShapeRenderer shapes)
+        // The same bargain for lines and arcs. A filled rectangle needs no capability -
+        // every renderer fills them - so a node made of those is drawn by any renderer.
+        if (node.Kind == VisualKind.Shape && node.Shapes.Count > 0)
         {
             Rect content = Deflate(node.Rect, node.Box.Padding);
 
             if (!content.IsEmpty)
             {
+                IShapeRenderer? shapes = renderer as IShapeRenderer;
+
                 // Indexed: enumerating the list through its interface allocates the
                 // enumerator, once per shape node per paint.
                 IReadOnlyList<Shape> list = node.Shapes;
-                for (int i = 0; i < list.Count; i++) PaintShape(shapes, list[i], content);
+                for (int i = 0; i < list.Count; i++) PaintShape(renderer, shapes, list[i], content);
             }
         }
 
@@ -151,6 +154,10 @@ public static class VisualPainter
     /// box - which is where a gauge sized <c>size=18</c> expects to end.
     /// </para>
     /// <para>
+    /// A rectangle's four edges are each rounded to the nearest pixel on their own, so
+    /// two that meet in the unit square meet on screen; see <see cref="RectShape"/>.
+    /// </para>
+    /// <para>
     /// The resolved points live on the stack: this is called once per shape per
     /// paint, and a sparkline's sixty points and the sixty-two of the area under them
     /// are two kilobytes that were otherwise two arrays of garbage per frame. Its own
@@ -158,7 +165,11 @@ public static class VisualPainter
     /// back before the next shape's is taken.
     /// </para>
     /// </remarks>
-    private static void PaintShape(IShapeRenderer renderer, Shape shape, Rect content)
+    /// <param name="renderer">The renderer, for what every renderer draws.</param>
+    /// <param name="shapes">The same renderer as a shape renderer, or null when it is not one.</param>
+    /// <param name="shape">What to draw.</param>
+    /// <param name="content">The node's content rectangle, in pixels.</param>
+    private static void PaintShape(IRenderer renderer, IShapeRenderer? shapes, Shape shape, Rect content)
     {
         // Past this many points the stack is left alone; a graph that wide is not a
         // sparkline anyway.
@@ -166,7 +177,20 @@ public static class VisualPainter
 
         switch (shape)
         {
-            case PolylineShape line when line.Points.Count > 0:
+            case RectShape box when !box.Fill.IsTransparent:
+            {
+                int left = Pixel(content.Left + (Math.Clamp(box.Rect.X, 0, 1) * content.Width));
+                int top = Pixel(content.Top + (Math.Clamp(box.Rect.Y, 0, 1) * content.Height));
+                int right = Pixel(content.Left + (Math.Clamp(box.Rect.Right, 0, 1) * content.Width));
+                int bottom = Pixel(content.Top + (Math.Clamp(box.Rect.Bottom, 0, 1) * content.Height));
+
+                Rect rect = Rect.FromEdges(left, top, right, bottom);
+                if (!rect.IsEmpty) renderer.FillRectangle(rect, box.Fill, box.CornerRadius);
+
+                break;
+            }
+
+            case PolylineShape line when shapes is not null && line.Points.Count > 0:
             {
                 double inset = Math.Min(line.Thickness / 2.0, Math.Min(content.Width, content.Height) / 2.0);
 
@@ -196,16 +220,16 @@ public static class VisualPainter
                     points[count] = new PointD(points[count - 1].X, content.Bottom);
                     points[count + 1] = new PointD(points[0].X, content.Bottom);
 
-                    renderer.FillPolygon(points, line.Fill);
+                    shapes.FillPolygon(points, line.Fill);
                 }
 
                 if (!line.Stroke.IsTransparent && line.Thickness > 0 && count >= 2)
-                    renderer.DrawPolyline(points[..count], line.Stroke, line.Thickness);
+                    shapes.DrawPolyline(points[..count], line.Stroke, line.Thickness);
 
                 break;
             }
 
-            case ArcShape arc when !arc.Stroke.IsTransparent && arc.Thickness > 0 && arc.SweepDegrees != 0:
+            case ArcShape arc when shapes is not null && !arc.Stroke.IsTransparent && arc.Thickness > 0 && arc.SweepDegrees != 0:
             {
                 double side = Math.Min(content.Width, content.Height);
                 double radius = (side / 2.0) - (arc.Thickness / 2.0);
@@ -213,7 +237,7 @@ public static class VisualPainter
 
                 var centre = new PointD(content.Left + (content.Width / 2.0), content.Top + (content.Height / 2.0));
 
-                renderer.DrawArc(centre, radius, arc.StartDegrees, arc.SweepDegrees, arc.Stroke, arc.Thickness);
+                shapes.DrawArc(centre, radius, arc.StartDegrees, arc.SweepDegrees, arc.Stroke, arc.Thickness);
                 break;
             }
 
@@ -221,6 +245,9 @@ public static class VisualPainter
                 break;
         }
     }
+
+    /// <summary>The nearest pixel edge, half away from zero.</summary>
+    private static int Pixel(double coordinate) => (int)Math.Round(coordinate, MidpointRounding.AwayFromZero);
 
     /// <summary>
     /// An outline, or a straight strip along each edge the style names.

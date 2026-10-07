@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Shubbak.Companion;
 using Shubbak.Core.Diagnostics;
@@ -732,6 +733,12 @@ public sealed class WmConnection : IAsyncDisposable
             _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
             _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
             _model.SetValue("layout", reading.Layout);
+
+            // How many windows the shown workspace holds, for the layout thumbnail
+            // that follows it and for a template that wants the number. Refreshed by
+            // the same events as the rest, since a window opening or closing already
+            // asks for the state again.
+            _model.SetValue(LayoutWidget.WindowsKey, reading.WindowCount.ToString(CultureInfo.InvariantCulture));
 
             // The icon too, from the snapshot as well as from the events, or a bar
             // started with a window already in front would show its title alone until

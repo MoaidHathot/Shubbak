@@ -79,6 +79,26 @@ public sealed class SnapshotProjectionTests
     }
 
     [Fact]
+    public void TheWindowCountIsTheShownWorkspacesAndZeroWhenNoneIsShown()
+    {
+        // What the layout thumbnail follows with panes="windows", and what a template
+        // reads as {{ windows }}: this display's active workspace, not the other's and
+        // not the sum.
+        StateSnapshot state = Snapshot(
+            [Monitor(1, Left), Monitor(2, Right)],
+            [
+                new WorkspaceInfo(1, "1", "1", Active: true, HasWindows: true, Left, "fibonacci", WindowCount: 3, SortIndex: 0, MonitorIndex: 0),
+                new WorkspaceInfo(2, "2", "2", Active: false, HasWindows: true, Left, "grid", WindowCount: 7, SortIndex: 1, MonitorIndex: 0),
+                new WorkspaceInfo(3, "3", "3", Active: true, HasWindows: true, Right, "grid", WindowCount: 5, SortIndex: 2, MonitorIndex: 1),
+            ]);
+
+        Assert.Equal(3, SnapshotProjection.Read(state, Left, true).WindowCount);
+        Assert.Equal(5, SnapshotProjection.Read(state, Right, true).WindowCount);
+        Assert.Equal(0, SnapshotProjection.Read(state, @"\\.\DISPLAY9", true).WindowCount);
+        Assert.Null(SnapshotProjection.ActiveWorkspaceOn(state, @"\\.\DISPLAY9"));
+    }
+
+    [Fact]
     public void ADisplayTheWindowManagerDoesNotListHasNoIndexAndNoNames()
     {
         StateSnapshot state = Snapshot([Monitor(1, Left, "dell-left")], [Workspace("1", Left, 0, active: true)]);

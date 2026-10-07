@@ -15,6 +15,16 @@ namespace Shubbak.Ui.Layout;
 public readonly record struct UnitPoint(double X, double Y);
 
 /// <summary>
+/// A rectangle in the unit square of a node's content rectangle; see <see cref="UnitPoint"/>.
+/// </summary>
+public readonly record struct UnitRect(double X, double Y, double Width, double Height)
+{
+    public double Right => X + Width;
+
+    public double Bottom => Y + Height;
+}
+
+/// <summary>
 /// Something a <see cref="VisualKind.Shape"/> node draws, described in the unit
 /// square of its content rectangle.
 /// </summary>
@@ -29,13 +39,41 @@ public readonly record struct UnitPoint(double X, double Y);
 /// <para>
 /// Drawn through <see cref="Rendering.IShapeRenderer"/>, which a renderer offers or
 /// does not; one that does not draws the node's background and border and leaves the
-/// shape out, exactly as a renderer without pictures treats an image.
+/// shape out, exactly as a renderer without pictures treats an image. The one
+/// exception is <see cref="RectShape"/>, which every renderer can fill and so is
+/// never left out.
 /// </para>
 /// </remarks>
 public abstract record Shape
 {
     /// <summary>The same shape with its pixel sizes multiplied, for a display whose pixels are smaller.</summary>
     public abstract Shape Scaled(double factor);
+}
+
+/// <summary>
+/// A filled rectangle in the unit square, optionally rounded.
+/// </summary>
+/// <param name="Rect">Where, as fractions of the node's content rectangle.</param>
+/// <param name="Fill">The colour.</param>
+/// <param name="CornerRadius">Corner rounding in pixels, before scaling.</param>
+/// <remarks>
+/// <para>
+/// The primitive a layout thumbnail is made of: a workspace drawn small, with one of
+/// these per pane. A filled rectangle is the one thing every renderer already draws -
+/// it is what a pill is - so unlike a line or an arc this needs no capability, and a
+/// node made only of these is drawn whole by a renderer that has never heard of
+/// shapes.
+/// </para>
+/// <para>
+/// Edges are rounded to pixels independently, so two rectangles that share an edge
+/// in the unit square share a pixel edge on screen - which is what lets panes tile a
+/// box exactly, with the gaps between them the only gaps.
+/// </para>
+/// </remarks>
+public sealed record RectShape(UnitRect Rect, Colour Fill, int CornerRadius = 0) : Shape
+{
+    public override Shape Scaled(double factor) =>
+        CornerRadius == 0 ? this : this with { CornerRadius = VisualScaling.Scale(CornerRadius, factor) };
 }
 
 /// <summary>

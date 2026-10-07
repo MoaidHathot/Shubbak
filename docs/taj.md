@@ -27,7 +27,7 @@ bar {
             text template="{{ window.title | truncate:90 }}"
         }
         zone "right" justify="end" gap=12 {
-            text template="{{ layout | icon }}" colour="#7f849c"
+            layout colour="#7f849c" on-click="layout --cycle"
             text template="{{ clock }}" colour="#8dbcff"
         }
     }
@@ -36,10 +36,10 @@ bar {
 
 ## Widgets without code
 
-**Adding a widget usually needs no code at all.** There are six widget primitives
-— `text`, `workspaces`, `icon`, `spacer`, `sparkline`, `meter` — and the breadth
-comes from templates, filters and sources rather than from a catalogue you have to
-wait for someone to grow:
+**Adding a widget usually needs no code at all.** There are seven widget primitives
+— `text`, `workspaces`, `icon`, `layout`, `spacer`, `sparkline`, `meter` — and the
+breadth comes from templates, filters and sources rather than from a catalogue you
+have to wait for someone to grow:
 
 | What you want | What it costs |
 |---|---|
@@ -114,7 +114,8 @@ until it next changes. A publisher of your own honours that by re-sending on
 
 Some values need no source at all, because they come from the window manager's event
 stream: `{{ window.title }}`, `{{ window.state }}`, `{{ layout }}`, `{{ workspace }}`
-(the active workspace's name on this bar's display), `{{ paused }}`,
+(the active workspace's name on this bar's display), `{{ windows }}` (how many windows
+that workspace holds), `{{ paused }}`,
 `{{ suspended }}`, `{{ binding_mode }}`, `{{ config }}`, `{{ contexts }}`,
 `{{ context.<name> }}` and `{{ connection }}`. The last seven are empty almost all of
 the time, and a widget whose template renders empty hides itself — so they cost no
@@ -153,7 +154,8 @@ indicator a switch as well as a readout; see [Clicking](#clicking).
 going to know: `{{ state | map:on=\u{E720},off=\u{E74F} }}` turns a script's `on` and
 `off` into two glyphs, matched without regard to case, and `*=` is the entry for
 anything the table does not name. A value the table does not name, and no `*`, passes
-through unchanged.
+through unchanged. For the layout itself there is a better indicator than a glyph; see
+[The layout](#the-layout).
 
 ### Numbers
 
@@ -286,6 +288,47 @@ the pipe like the title does: the bar asks the window manager, which asks the wi
 and the window manager for half of one, so switching between the same windows all day
 costs one read per window, not one per focus change. `source=` reads another source
 that publishes the same shape, for anything else that wants to draw a picture.
+
+### The layout
+
+```kdl
+bar {
+    profile "default" {
+        zone "right" justify="end" {
+            layout colour="#7f849c" main-colour="#8dbcff" on-click="layout --cycle" on-right-click="layout --cycle-back" {
+                when value="monocle" colour="#f9e2af"
+            }
+        }
+    }
+}
+```
+
+`layout` draws the active layout as a picture of itself: the workspace, sixteen
+pixels across, with a pane for each window the layout would place — the big pane on
+the left and the rest dwindling into a corner is the spiral, a column of equal strips
+beside it is the master layout, four squares are the grid, one solid square is
+monocle. Nothing has to be learnt, which is the difference from
+`{{ layout | icon }}`, the older indicator that names each layout with a box-drawing
+character: `┤` is a spiral once you know, and three spirals and four master layouts
+are more than a character each can tell apart at a glance. The filter is still there
+for a bar that wants text.
+
+The picture is the window manager's own arithmetic, not a drawing of it: the bar
+arranges a handful of placeholder windows with the same code the desktop is arranged
+by, so a grid of five is three over two with the two stretched, exactly as yours is,
+and a layout added to the window manager is drawn the day it exists. Four panes by
+default, because that is the fewest that tell every layout apart — a spiral of three
+is precisely a master layout of three — and a picture that is always the same for a
+layout is one the eye comes to recognise. `panes="windows"` follows the workspace
+instead, growing a pane as each window opens; `panes=6` is any other fixed count up
+to nine. `size` is the square, or `width` and `height` for a box the shape of your
+monitor; `gap` is the pixel between panes; `colour` is the panes and `main-colour`,
+when written, the first window's — the main one in a master layout, the large one in
+a spiral — so the shape has a focal point. `background` and `radius` put a pill behind
+it and `on-click` makes it a control like any other; a `when` block recolours the
+panes by the layout's name. It hides while the window manager has not said what the
+layout is, and when it names one the bar does not know. A `panes` that is neither a
+count from 1 to 9 nor the word `windows` is pointed out (`TAJ0040`).
 
 ### Colours
 
@@ -424,7 +467,7 @@ like a shrinking zone does.
 
 Every size in the `bar` section — `height`, `font-size`, `padding`, `margin`,
 `radius`, `size`, `gap`, `min-width`, a graph's `width` and `height`, a stroke's
-`thickness` — is written in device-independent pixels and
+`thickness`, the layout picture's `gap` — is written in device-independent pixels and
 scaled to each display's own, so one `height 34` is the same fraction of a 4K display
 at 150 percent and a 1080p one at 100 percent, and a bar dragged between them by a
 change of scaling in Settings follows without a restart. A display's scale is read

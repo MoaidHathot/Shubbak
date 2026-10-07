@@ -427,7 +427,7 @@ public static class TajConfigLoader
 
     /// <summary>What may appear inside a <c>zone</c>: its settings, and the widgets.</summary>
     private static readonly string[] KnownZoneKeys =
-        ["justify", "grow", "gap", "workspaces", "spacer", "text", "icon", "sparkline", "meter"];
+        ["justify", "grow", "gap", "workspaces", "spacer", "text", "icon", "sparkline", "meter", "layout"];
 
     /// <summary>Styling every widget accepts, whatever kind it is.</summary>
     /// <remarks>
@@ -468,6 +468,13 @@ public static class TajConfigLoader
     [
         .. CommonWidgetKeys, .. PointerActions.Keys,
         "source", "shape", "width", "height", "direction", "size", "thickness", "start", "sweep", "min", "max", "when", "hover-background",
+    ];
+
+    /// <summary>What a <c>layout</c> widget accepts: the box, the gap, how many panes, and the main pane's colour.</summary>
+    private static readonly string[] KnownLayoutKeys =
+    [
+        .. CommonWidgetKeys, .. PointerActions.Keys,
+        "source", "size", "width", "height", "gap", "panes", "main-colour", "main-color", "when", "hover-background",
     ];
 
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
@@ -628,6 +635,7 @@ public static class TajConfigLoader
         "icon" => KnownIconKeys,
         "sparkline" => KnownSparklineKeys,
         "meter" => KnownMeterKeys,
+        "layout" => KnownLayoutKeys,
         _ => null,
     };
 
@@ -1336,11 +1344,64 @@ public static class TajConfigLoader
                 };
             }
 
+            case "layout":
+            {
+                // Square unless told otherwise, and the size of the text beside it: a
+                // workspace drawn sixteen pixels across is the smallest at which four
+                // panes with a pixel between them are still four panes.
+                int size = Positive(node, "size", diagnostics) ?? 16;
+                int width = Positive(node, "width", diagnostics) ?? size;
+                int height = Positive(node, "height", diagnostics) ?? size;
+
+                PointerActions actions = ParsePointerActions(node, id, diagnostics);
+                Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
+
+                // Padded evenly, as an icon is, so the pill a clickable one gains on
+                // hover is a square around it.
+                return new LayoutWidget(id, width, height, style, box with { Padding = Edges.All(4) })
+                {
+                    Source = SettingText(node, "source") ?? LayoutWidget.DefaultSource,
+                    Gap = NonNegative(node, "gap", diagnostics) ?? 1,
+                    Panes = ParsePanes(node, diagnostics),
+                    MainColour = ParseColour(SettingText(node, "main-colour") ?? SettingText(node, "main-color")),
+                    Actions = actions,
+                    Conditions = ParseConditions(node, style, widgetFont, diagnostics),
+                    HoverStyle = hoverBackground is null
+                        ? null
+                        : VisualStyle.Default with { Background = hoverBackground.Value },
+                };
+            }
+
             default:
                 // Unknown nodes are ignored rather than fatal, so a config written
                 // for a newer Taj still produces a working bar.
                 return null;
         }
+    }
+
+    /// <summary>
+    /// Reads a layout widget's <c>panes</c>: a count from 1 to 9, the word
+    /// <c>windows</c> to follow the workspace, or four when nothing is written.
+    /// </summary>
+    private static int? ParsePanes(KdlNode node, List<Diagnostic> diagnostics)
+    {
+        if (Setting(node, "panes") is not { } value) return 4;
+
+        if (value.TryAsInt(out int count) && count >= 1 && count <= LayoutThumbnail.MaxPanes) return count;
+
+        string written = value.AsString();
+
+        if (string.Equals(written, LayoutWidget.WindowsKey, StringComparison.OrdinalIgnoreCase)) return null;
+
+        int most = LayoutThumbnail.MaxPanes;
+
+        diagnostics.Add(Diagnostic.Warning(
+            "TAJ0040",
+            $"'panes' is \"{written}\", which is not a count from 1 to {most} or the word windows; four are drawn.",
+            value.Span,
+            "Write panes=4 for the same picture whatever the workspace holds, or panes=\"windows\" to follow it."));
+
+        return 4;
     }
 
     /// <summary>
@@ -1416,6 +1477,7 @@ public static class TajConfigLoader
     private static readonly string[] ColourKeys =
     [
         "background", "foreground", "colour", "color", "border", "fill",
+        "main-colour", "main-color",
         "active-background", "active-colour", "active-color",
         "focused-background", "focused-colour", "focused-color",
         "empty-colour", "empty-color",

@@ -236,6 +236,106 @@ public sealed class ShapeTests
         Assert.DoesNotContain(renderer.Calls, c => c.StartsWith("line", StringComparison.Ordinal));
     }
 
+    // ---- rectangles ----------------------------------------------------------
+
+    [Fact]
+    public void ARectangleIsMappedOntoTheBoxAndFilled()
+    {
+        // The left half of a 16x16 box, as a layout thumbnail's big pane would be.
+        List<string> calls = Paint(ShapeNode(new RectShape(new UnitRect(0, 0, 0.5, 1), Ink), 16, 16), 16, 16);
+
+        Assert.Contains($"fill (0,0 8x16) {Ink} r0", calls);
+    }
+
+    [Fact]
+    public void RectanglesThatMeetInTheSquareMeetOnScreen()
+    {
+        // Each edge rounds to a pixel on its own, so a shared edge lands on the same
+        // pixel from both sides: panes tile the box with no seam and no overlap.
+        var node = new VisualNode
+        {
+            Kind = VisualKind.Shape,
+            Shapes =
+            [
+                new RectShape(new UnitRect(0, 0, 0.5, 1), Ink),
+                new RectShape(new UnitRect(0.5, 0, 0.5, 1), Wash),
+            ],
+            Box = new BoxStyle(Width: 15, Height: 10),
+        };
+
+        List<string> calls = Paint(node, 15, 10);
+
+        // 7.5 rounds away from zero to 8 for both the first's right edge and the
+        // second's left edge.
+        Assert.Contains($"fill (0,0 8x10) {Ink} r0", calls);
+        Assert.Contains($"fill (8,0 7x10) {Wash} r0", calls);
+    }
+
+    [Fact]
+    public void ARectangleNeedsNoShapeRenderer()
+    {
+        // A filled rectangle is what every renderer draws already; the plain renderer
+        // is asked for it where it would be asked for nothing by a line.
+        var node = new VisualNode
+        {
+            Kind = VisualKind.Shape,
+            Shapes = [new RectShape(new UnitRect(0, 0, 1, 0.5), Ink), new PolylineShape([new(0, 0), new(1, 1)], Ink)],
+            Box = new BoxStyle(Width: 10, Height: 10),
+        };
+
+        new FlexLayout(new FixedTextMeasurer()).Arrange(node, new Rect(0, 0, 10, 10));
+
+        var renderer = new RecordingRenderer();
+        VisualPainter.Paint(renderer, node, new Rect(0, 0, 10, 10), Colour.Transparent);
+
+        Assert.Contains($"fill (0,0 10x5) {Ink} r0", renderer.Calls);
+        Assert.DoesNotContain(renderer.Calls, c => c.StartsWith("line", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ARectangleHonoursPaddingAndItsCorners()
+    {
+        List<string> calls = Paint(
+            ShapeNode(new RectShape(new UnitRect(0, 0, 1, 1), Ink, CornerRadius: 2), 20, 12, Edges.All(2)),
+            20, 12);
+
+        Assert.Contains($"fill (2,2 16x8) {Ink} r2", calls);
+    }
+
+    [Fact]
+    public void ATransparentOrEmptyRectangleDrawsNothing()
+    {
+        var node = new VisualNode
+        {
+            Kind = VisualKind.Shape,
+            Shapes = [new RectShape(new UnitRect(0, 0, 1, 1), Colour.Transparent), new RectShape(new UnitRect(0.5, 0.5, 0, 0), Ink)],
+            Box = new BoxStyle(Width: 10, Height: 10),
+        };
+
+        Assert.DoesNotContain(Paint(node, 10, 10), c => c.StartsWith("fill", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ScalingARectangleScalesOnlyItsCorners()
+    {
+        var node = new VisualNode
+        {
+            Kind = VisualKind.Shape,
+            Shapes = [new RectShape(new UnitRect(0.25, 0, 0.5, 1), Ink, CornerRadius: 2), new RectShape(new UnitRect(0, 0, 1, 1), Ink)],
+            Box = new BoxStyle(Width: 16, Height: 16),
+        };
+
+        VisualScaling.Scale(node, 2.0);
+
+        var rounded = Assert.IsType<RectShape>(node.Shapes[0]);
+        Assert.Equal(4, rounded.CornerRadius);
+        Assert.Equal(new UnitRect(0.25, 0, 0.5, 1), rounded.Rect);
+
+        // A square-cornered rectangle has nothing in pixels, and stays the same object.
+        Assert.Same(node.Shapes[1], node.Shapes[1].Scaled(2.0));
+        Assert.Equal(32, node.Box.Width);
+    }
+
     [Fact]
     public void ScalingThickensTheStrokeAndLeavesThePointsAlone()
     {
