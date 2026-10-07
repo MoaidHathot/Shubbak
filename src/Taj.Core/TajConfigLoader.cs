@@ -474,7 +474,7 @@ public static class TajConfigLoader
     private static readonly string[] KnownLayoutKeys =
     [
         .. CommonWidgetKeys, .. PointerActions.Keys,
-        "source", "size", "width", "height", "gap", "panes", "main-colour", "main-color", "when", "hover-background",
+        "source", "size", "width", "height", "gap", "panes", "min-panes", "main-colour", "main-color", "when", "hover-background",
     ];
 
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
@@ -1355,14 +1355,15 @@ public static class TajConfigLoader
 
                 PointerActions actions = ParsePointerActions(node, id, diagnostics);
                 Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
+                int? panes = ParsePanes(node, diagnostics);
 
                 // Padded evenly, as an icon is, so the pill a clickable one gains on
                 // hover is a square around it.
-                return new LayoutWidget(id, width, height, style, box with { Padding = Edges.All(4) })
+                var widget = new LayoutWidget(id, width, height, style, box with { Padding = Edges.All(4) })
                 {
                     Source = SettingText(node, "source") ?? LayoutWidget.DefaultSource,
                     Gap = NonNegative(node, "gap", diagnostics) ?? 1,
-                    Panes = ParsePanes(node, diagnostics),
+                    Panes = panes,
                     MainColour = ParseColour(SettingText(node, "main-colour") ?? SettingText(node, "main-color")),
                     Actions = actions,
                     Conditions = ParseConditions(node, style, widgetFont, diagnostics),
@@ -1370,6 +1371,11 @@ public static class TajConfigLoader
                         ? null
                         : VisualStyle.Default with { Background = hoverBackground.Value },
                 };
+
+                // Only when written and usable, so the widget's own default stands otherwise.
+                if (ParseMinPanes(node, panes, diagnostics) is { } minPanes) widget.MinPanes = minPanes;
+
+                return widget;
             }
 
             default:
@@ -1377,6 +1383,44 @@ public static class TajConfigLoader
                 // for a newer Taj still produces a working bar.
                 return null;
         }
+    }
+
+    /// <summary>
+    /// Reads a layout widget's <c>min-panes</c>: the fewest panes drawn while the count
+    /// follows the workspace. Null when it was not written, or could not be used.
+    /// </summary>
+    /// <param name="node">The widget's node.</param>
+    /// <param name="panes">What <c>panes</c> resolved to: a fixed count, or null for <c>windows</c>.</param>
+    /// <param name="diagnostics">Where a setting that cannot be used is said.</param>
+    private static int? ParseMinPanes(KdlNode node, int? panes, List<Diagnostic> diagnostics)
+    {
+        if (Setting(node, "min-panes") is not { } value) return null;
+
+        // A floor under a fixed count holds nothing up. Said, because a setting that
+        // parses and does nothing is the failure this loader exists to prevent.
+        if (panes is not null)
+        {
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0042",
+                "'min-panes' only applies when panes=\"windows\"; with a fixed count it does nothing.",
+                value.Span,
+                "Write panes=\"windows\" min-panes=4 to follow the workspace with a floor, or drop min-panes."));
+
+            return null;
+        }
+
+        if (value.TryAsInt(out int count) && count >= 1 && count <= LayoutThumbnail.MaxPanes) return count;
+
+        string written = value.AsString();
+        int most = LayoutThumbnail.MaxPanes;
+
+        diagnostics.Add(Diagnostic.Warning(
+            "TAJ0041",
+            $"'min-panes' is \"{written}\", which is not a count from 1 to {most}; four is used.",
+            value.Span,
+            "Write min-panes=4, the fewest that tell every layout apart, or min-panes=1 for the workspace's own count."));
+
+        return null;
     }
 
     /// <summary>

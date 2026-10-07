@@ -161,6 +161,8 @@ code, not the page.
 | `TAJ0038` | Warning | 'max' is not above 'min' ({written}); the defaults are used. |
 | `TAJ0039` | Warning | This sparkline reads '{source}', which is one reading at a time; its history is '{history}'. |
 | `TAJ0040` | Warning | 'panes' is "{written}", which is not a count from 1 to {most} or the word windows; four are drawn. |
+| `TAJ0041` | Warning | 'min-panes' is "{written}", which is not a count from 1 to {most}; four is used. |
+| `TAJ0042` | Warning | 'min-panes' only applies when panes="windows"; with a fixed count it does nothing. |
 
 ## DAL - The palette
 

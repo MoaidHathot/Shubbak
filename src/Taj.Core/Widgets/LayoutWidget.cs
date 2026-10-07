@@ -22,7 +22,13 @@ namespace Taj.Core.Widgets;
 /// a spiral of three is exactly a master layout of three - and a schematic that is
 /// always the same picture for a layout is one the eye comes to recognise. With
 /// <c>panes="windows"</c> the picture follows the workspace instead, growing a pane as
-/// each window opens, which is the more informative and the less constant of the two.
+/// each window opens - but never below <see cref="MinPanes"/>, four unless said, and
+/// the panes the workspace does not yet have are drawn faint. Without the floor, one
+/// window was one square in every layout and the indicator had stopped indicating;
+/// without the fading, the floor would have been a lie about the count. With both,
+/// one window in a spiral is the large pane solid and the three it would dwindle into
+/// faint, which says the layout and the count at once - the one thing a fixed four
+/// cannot.
 /// </para>
 /// <para>
 /// Hidden while the window manager has not said what the layout is, and when it names
@@ -37,8 +43,12 @@ public sealed class LayoutWidget : IWidget
     /// <summary>The value that says how many windows the active workspace holds.</summary>
     public const string WindowsKey = "windows";
 
+    /// <summary>The fewest panes that tell every layout apart; the default for <see cref="Panes"/> and <see cref="MinPanes"/>.</summary>
+    public const int DistinguishingPanes = 4;
+
     private IReadOnlyList<WidgetCondition> _conditions = [];
-    private int? _panes = 4;
+    private int? _panes = DistinguishingPanes;
+    private int _minPanes = DistinguishingPanes;
     private string _source = DefaultSource;
 
     /// <param name="id">The widget's id, for styling and hit testing.</param>
@@ -83,7 +93,7 @@ public sealed class LayoutWidget : IWidget
 
     /// <summary>
     /// How many windows to draw, or null to draw as many as the workspace holds -
-    /// at least one, at most <see cref="LayoutThumbnail.MaxPanes"/>.
+    /// never fewer than <see cref="MinPanes"/>, at most <see cref="LayoutThumbnail.MaxPanes"/>.
     /// </summary>
     public int? Panes
     {
@@ -93,6 +103,23 @@ public sealed class LayoutWidget : IWidget
             _panes = value is { } count ? Math.Clamp(count, 1, LayoutThumbnail.MaxPanes) : null;
             RecomputeDependencies();
         }
+    }
+
+    /// <summary>
+    /// The fewest panes drawn while <see cref="Panes"/> follows the workspace; the
+    /// panes beyond the workspace's own windows are drawn <see cref="Faint"/>.
+    /// </summary>
+    /// <remarks>
+    /// Four unless said, for the reason four is the fixed default: below it the
+    /// layouts cannot be told apart, and a picture that cannot say which layout it
+    /// shows has stopped being a layout indicator. One draws the workspace's own count,
+    /// faint when it is empty. Clamped to 1..<see cref="LayoutThumbnail.MaxPanes"/>, and
+    /// nothing to a fixed count, which is both the floor and the ceiling already.
+    /// </remarks>
+    public int MinPanes
+    {
+        get => _minPanes;
+        set => _minPanes = Math.Clamp(value, 1, LayoutThumbnail.MaxPanes);
     }
 
     public IReadOnlyList<string> Dependencies { get; private set; }
@@ -131,12 +158,27 @@ public sealed class LayoutWidget : IWidget
 
         string? layout = values.GetValueOrDefault(Source);
 
-        int panes = Panes ?? Math.Clamp(
-            Numbers.TryParseFirst(values.GetValueOrDefault(WindowsKey), out double windows) ? (int)windows : 1,
-            1, LayoutThumbnail.MaxPanes);
+        // How many panes to draw, and how many of them the workspace actually has. A
+        // fixed count is both. Following the workspace, the count is its windows but
+        // never fewer than the floor, and the panes past its windows are the faint ones.
+        int shown;
+        int real;
+
+        if (Panes is { } fixedCount)
+        {
+            shown = real = fixedCount;
+        }
+        else
+        {
+            real = Numbers.TryParseFirst(values.GetValueOrDefault(WindowsKey), out double windows)
+                ? (int)Math.Clamp(windows, 0, LayoutThumbnail.MaxPanes)
+                : 0;
+
+            shown = Math.Max(real, MinPanes);
+        }
 
         VisualStyle style = StyleFor(layout, values);
-        IReadOnlyList<Shape>? shapes = Shapes(layout, panes, style.Foreground);
+        IReadOnlyList<Shape>? shapes = Shapes(layout, shown, real, style.Foreground);
 
         var node = new VisualNode
         {
@@ -157,14 +199,21 @@ public sealed class LayoutWidget : IWidget
         return node;
     }
 
+    /// <summary>
+    /// A pane the workspace does not yet have: the colour at a third of its own
+    /// opacity, so a dim colour fades further and a bright one to a tint.
+    /// </summary>
+    public static Colour Faint(Colour colour) => colour.WithAlpha((byte)Math.Round(colour.A / 3.0));
+
     private string? _lastLayout;
-    private int _lastPanes;
+    private int _lastShown;
+    private int _lastReal;
     private Colour _lastColour;
     private Colour? _lastMain;
     private IReadOnlyList<Shape>? _lastShapes;
 
     /// <summary>
-    /// The panes as shapes, worked out once per distinct layout, count and colour.
+    /// The panes as shapes, worked out once per distinct layout, counts and colour.
     /// </summary>
     /// <remarks>
     /// The tree is rebuilt whenever any value on the bar changes - a seconds clock,
@@ -172,15 +221,15 @@ public sealed class LayoutWidget : IWidget
     /// container of placeholders is cheap, but it is work and a handful of allocations
     /// that would otherwise be done sixty times a minute for the same picture.
     /// </remarks>
-    private IReadOnlyList<Shape>? Shapes(string? layout, int panes, Colour colour)
+    private IReadOnlyList<Shape>? Shapes(string? layout, int shown, int real, Colour colour)
     {
         if (string.Equals(layout, _lastLayout, StringComparison.Ordinal) &&
-            panes == _lastPanes && colour == _lastColour && MainColour == _lastMain)
+            shown == _lastShown && real == _lastReal && colour == _lastColour && MainColour == _lastMain)
         {
             return _lastShapes;
         }
 
-        UnitRect[]? rects = LayoutThumbnail.Panes(layout, panes, Width, Height, Gap);
+        UnitRect[]? rects = LayoutThumbnail.Panes(layout, shown, Width, Height, Gap);
         Shape[]? shapes = null;
 
         if (rects is not null)
@@ -188,11 +237,17 @@ public sealed class LayoutWidget : IWidget
             shapes = new Shape[rects.Length];
 
             for (int i = 0; i < rects.Length; i++)
-                shapes[i] = new RectShape(rects[i], i == 0 && MainColour is { } main ? main : colour);
+            {
+                Colour pane = i == 0 && MainColour is { } main ? main : colour;
+                if (i >= real) pane = Faint(pane);
+
+                shapes[i] = new RectShape(rects[i], pane);
+            }
         }
 
         _lastLayout = layout;
-        _lastPanes = panes;
+        _lastShown = shown;
+        _lastReal = real;
         _lastColour = colour;
         _lastMain = MainColour;
         _lastShapes = shapes;

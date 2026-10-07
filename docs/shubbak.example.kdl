@@ -881,8 +881,11 @@ bar {
             // the master layout, four squares the grid, one solid square monocle. The
             // arithmetic is the window manager's own, so the picture is right by
             // construction. Four panes, since three cannot tell a spiral from a master
-            // layout; `panes="windows"` follows the workspace instead. `main-colour`
-            // picks out the first window's pane, where the main window goes.
+            // layout; `panes="windows"` follows the workspace instead - never below
+            // four, with the panes it does not yet have drawn faint, so one window in
+            // a spiral is the large pane solid and the rest a ghost of where they would
+            // go. `main-colour` picks out the first window's pane, where the main
+            // window goes.
             //
             // Dim while it is the ordinary split, green the moment it is anything
             // else. Clicking it steps the focused workspace to the next layout - the

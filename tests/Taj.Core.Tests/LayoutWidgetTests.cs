@@ -76,19 +76,127 @@ public sealed class LayoutWidgetTests
     }
 
     [Fact]
-    public void PanesCanFollowTheWorkspace()
+    public void FollowingTheWorkspaceNeverDrawsFewerThanTheFloor()
     {
+        // One window is one square in every layout, and so is two rectangles in most:
+        // a picture that follows the workspace literally stops saying which layout it
+        // is exactly when the workspace is quiet. The floor is what keeps it an
+        // indicator, and it is four for the reason four is the fixed default.
         LayoutWidget widget = Widget();
         widget.Panes = null;
 
-        Assert.Equal(2, Panes(Build(widget, "splith", windows: "2")).Count);
-        Assert.Equal(6, Panes(Build(widget, "grid", windows: "6")).Count);
+        Assert.Equal(4, Panes(Build(widget, "fibonacci", windows: "1")).Count);
+        Assert.Equal(4, Panes(Build(widget, "fibonacci", windows: "2")).Count);
+        Assert.Equal(4, Panes(Build(widget, "fibonacci", windows: "0")).Count);
+        Assert.Equal(4, Panes(Build(widget, "fibonacci", windows: null)).Count);
 
-        // At least one, at most nine: an empty workspace is one pane, a crowded one
-        // is not a smear.
-        Assert.Single(Panes(Build(widget, "splith", windows: "0")));
-        Assert.Single(Panes(Build(widget, "splith", windows: null)));
+        // Above the floor the workspace is followed, up to the most a thumbnail draws.
+        Assert.Equal(6, Panes(Build(widget, "grid", windows: "6")).Count);
         Assert.Equal(LayoutThumbnail.MaxPanes, Panes(Build(widget, "grid", windows: "40")).Count);
+    }
+
+    [Fact]
+    public void ThePanesTheWorkspaceDoesNotHaveAreFaint()
+    {
+        // So the floor is not a lie about the count: one window in a spiral is the
+        // large pane solid and the three it would dwindle into faint, which says the
+        // layout and the count at once - the one thing a fixed four cannot.
+        LayoutWidget widget = Widget();
+        widget.Panes = null;
+
+        IReadOnlyList<RectShape> one = Panes(Build(widget, "fibonacci", windows: "1"));
+        Assert.Equal(Ink, one[0].Fill);
+        Assert.All(one.Skip(1), p => Assert.Equal(LayoutWidget.Faint(Ink), p.Fill));
+
+        IReadOnlyList<RectShape> three = Panes(Build(widget, "fibonacci", windows: "3"));
+        Assert.All(three.Take(3), p => Assert.Equal(Ink, p.Fill));
+        Assert.Equal(LayoutWidget.Faint(Ink), three[3].Fill);
+
+        // Every pane solid once the workspace has caught up with the floor.
+        Assert.All(Panes(Build(widget, "fibonacci", windows: "4")), p => Assert.Equal(Ink, p.Fill));
+        Assert.All(Panes(Build(widget, "grid", windows: "6")), p => Assert.Equal(Ink, p.Fill));
+
+        // And all faint on an empty workspace: the shape of what would be, and nothing yet.
+        Assert.All(Panes(Build(widget, "grid", windows: "0")), p => Assert.Equal(LayoutWidget.Faint(Ink), p.Fill));
+    }
+
+    [Fact]
+    public void TheMainPaneFadesLikeTheRestWhenTheWorkspaceIsEmpty()
+    {
+        LayoutWidget widget = Widget();
+        widget.Panes = null;
+        widget.MainColour = Green;
+
+        IReadOnlyList<RectShape> empty = Panes(Build(widget, "master-left", windows: "0"));
+        Assert.Equal(LayoutWidget.Faint(Green), empty[0].Fill);
+        Assert.Equal(LayoutWidget.Faint(Ink), empty[1].Fill);
+
+        IReadOnlyList<RectShape> one = Panes(Build(widget, "master-left", windows: "1"));
+        Assert.Equal(Green, one[0].Fill);
+        Assert.Equal(LayoutWidget.Faint(Ink), one[1].Fill);
+    }
+
+    [Fact]
+    public void FaintIsAThirdOfTheColoursOwnOpacity()
+    {
+        // Multiplicative, so a dim colour fades further and a bright one to a tint,
+        // and a `when` that recolours the panes recolours the faint ones with them.
+        Assert.Equal((byte)38, LayoutWidget.Faint(new Colour(0xFF, 0xFF, 0xFF, 0x73)).A);
+        Assert.Equal((byte)85, LayoutWidget.Faint(Green).A);
+        Assert.Equal(Green.R, LayoutWidget.Faint(Green).R);
+        Assert.Equal(Colour.Transparent, LayoutWidget.Faint(Colour.Transparent));
+    }
+
+    [Fact]
+    public void TheFloorCanBeLoweredToTheWorkspacesOwnCount()
+    {
+        LayoutWidget widget = Widget();
+        widget.Panes = null;
+        widget.MinPanes = 1;
+
+        Assert.Single(Panes(Build(widget, "fibonacci", windows: "1")));
+        Assert.Equal(2, Panes(Build(widget, "splith", windows: "2")).Count);
+
+        // An empty workspace is one faint pane: a workspace, with nothing in it.
+        RectShape only = Assert.Single(Panes(Build(widget, "splith", windows: "0")));
+        Assert.Equal(LayoutWidget.Faint(Ink), only.Fill);
+    }
+
+    [Fact]
+    public void TheFloorIsClampedAndMeansNothingToAFixedCount()
+    {
+        LayoutWidget widget = Widget();
+
+        widget.MinPanes = 0;
+        Assert.Equal(1, widget.MinPanes);
+
+        widget.MinPanes = 50;
+        Assert.Equal(LayoutThumbnail.MaxPanes, widget.MinPanes);
+
+        // A fixed count is both floor and ceiling already, and every pane of it is real.
+        widget.MinPanes = 9;
+        widget.Panes = 2;
+
+        IReadOnlyList<RectShape> panes = Panes(Build(widget, "splith", windows: "7"));
+        Assert.Equal(2, panes.Count);
+        Assert.All(panes, p => Assert.Equal(Ink, p.Fill));
+    }
+
+    [Fact]
+    public void TheCountOfRealPanesIsPartOfWhatIsCached()
+    {
+        // The same layout and the same number of panes, with one more of them real: a
+        // different picture, which the cache has to notice or a window opening would
+        // not light its pane.
+        LayoutWidget widget = Widget();
+        widget.Panes = null;
+
+        IReadOnlyList<Shape> one = Build(widget, "fibonacci", windows: "1").Shapes;
+        IReadOnlyList<Shape> two = Build(widget, "fibonacci", windows: "2").Shapes;
+        IReadOnlyList<Shape> twoAgain = Build(widget, "fibonacci", windows: "2").Shapes;
+
+        Assert.NotSame(one, two);
+        Assert.Same(two, twoAgain);
     }
 
     [Fact]
@@ -230,6 +338,7 @@ public sealed class LayoutWidgetTests
         Assert.Equal(16, widget.Height);
         Assert.Equal(1, widget.Gap);
         Assert.Equal(4, widget.Panes);
+        Assert.Equal(4, widget.MinPanes);
         Assert.Null(widget.MainColour);
         Assert.Equal("layout", widget.Source);
         Assert.Equal(Edges.All(4), widget.Box.Padding);
@@ -272,10 +381,51 @@ public sealed class LayoutWidgetTests
     }
 
     [Fact]
+    public void MinPanesIsReadBesideWindows()
+    {
+        (LayoutWidget widget, IReadOnlyList<Diagnostic> diagnostics) = Load("""layout panes="windows" min-panes=2 """);
+
+        Assert.Empty(diagnostics);
+        Assert.Null(widget.Panes);
+        Assert.Equal(2, widget.MinPanes);
+    }
+
+    [Theory]
+    [InlineData("min-panes=0")]
+    [InlineData("min-panes=10")]
+    [InlineData("min-panes=\"some\"")]
+    public void AMinPanesThatIsNotACountIsReportedAndFourIsUsed(string setting)
+    {
+        (LayoutWidget widget, IReadOnlyList<Diagnostic> diagnostics) = Load($"layout panes=\"windows\" {setting}");
+
+        Diagnostic warning = Assert.Single(diagnostics, d => d.Code == "TAJ0041");
+        Assert.Contains("min-panes=1", warning.Hint!, StringComparison.Ordinal);
+        Assert.Equal(4, widget.MinPanes);
+    }
+
+    [Fact]
+    public void MinPanesUnderAFixedCountIsReportedAsDoingNothing()
+    {
+        // A setting that parses and does nothing is the failure the loader exists to
+        // prevent; and the default count is fixed too, so writing the floor alone is
+        // the same mistake.
+        (LayoutWidget widget, IReadOnlyList<Diagnostic> diagnostics) = Load("""layout panes=6 min-panes=2 """);
+
+        Diagnostic warning = Assert.Single(diagnostics, d => d.Code == "TAJ0042");
+        Assert.Contains("panes=\"windows\"", warning.Hint!, StringComparison.Ordinal);
+        Assert.Equal(6, widget.Panes);
+        Assert.Equal(4, widget.MinPanes);
+
+        (_, diagnostics) = Load("""layout min-panes=2 """);
+        Assert.Single(diagnostics, d => d.Code == "TAJ0042");
+        Assert.DoesNotContain(diagnostics, d => d.Code == "TAJ0041");
+    }
+
+    [Fact]
     public void ItsSettingsAreNotUnknownSettingsAndItIsNotAnUnknownWidget()
     {
         (_, IReadOnlyList<Diagnostic> diagnostics) = Load("""
-            layout size=18 gap=1 panes=4 main-color="#fff" hover-background="#fff" on-scroll-up="layout --cycle" on-scroll-down="layout --cycle-back"
+            layout size=18 gap=1 panes="windows" min-panes=3 main-color="#fff" hover-background="#fff" on-scroll-up="layout --cycle" on-scroll-down="layout --cycle-back"
             """);
 
         Assert.DoesNotContain(diagnostics, d => d.Code is "TAJ0015" or "TAJ0016");

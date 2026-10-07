@@ -320,15 +320,23 @@ and a layout added to the window manager is drawn the day it exists. Four panes 
 default, because that is the fewest that tell every layout apart — a spiral of three
 is precisely a master layout of three — and a picture that is always the same for a
 layout is one the eye comes to recognise. `panes="windows"` follows the workspace
-instead, growing a pane as each window opens; `panes=6` is any other fixed count up
-to nine. `size` is the square, or `width` and `height` for a box the shape of your
-monitor; `gap` is the pixel between panes; `colour` is the panes and `main-colour`,
-when written, the first window's — the main one in a master layout, the large one in
-a spiral — so the shape has a focal point. `background` and `radius` put a pill behind
-it and `on-click` makes it a control like any other; a `when` block recolours the
-panes by the layout's name. It hides while the window manager has not said what the
-layout is, and when it names one the bar does not know. A `panes` that is neither a
-count from 1 to 9 nor the word `windows` is pointed out (`TAJ0040`).
+instead, growing a pane as each window opens — but never below `min-panes`, four
+unless said, and the panes the workspace does not yet have are drawn faint, at a third
+of the colour's opacity. Without the floor, one window was one square in every layout
+and the indicator had stopped indicating; without the fading, the floor would be a lie
+about the count. With both, one window in a spiral is the large pane solid and the
+three it would dwindle into faint, which says the layout and the count at once — the
+one thing a fixed four cannot. `min-panes=1` draws the workspace's own count, a single
+faint pane when it is empty. `panes=6` is any other fixed count up to nine. `size` is
+the square, or `width` and `height` for a box the shape of your monitor; `gap` is the
+pixel between panes; `colour` is the panes and `main-colour`, when written, the first
+window's — the main one in a master layout, the large one in a spiral — so the shape
+has a focal point. `background` and `radius` put a pill behind it and `on-click` makes
+it a control like any other; a `when` block recolours the panes by the layout's name.
+It hides while the window manager has not said what the layout is, and when it names
+one the bar does not know. A `panes` that is neither a count from 1 to 9 nor the word
+`windows` is pointed out (`TAJ0040`); so is a `min-panes` that is not a count
+(`TAJ0041`), or one written under a fixed count, where it does nothing (`TAJ0042`).
 
 ### Colours
 

@@ -33,7 +33,15 @@ schedule and breaking either is a different kind of event:
   layout apart (a spiral of three is precisely a master layout of three, which a test
   now pins); `panes="windows"` follows the workspace instead, growing a pane as each
   window opens, which is where the new `{{ windows }}` value comes from - the window
-  manager always sent the count, and the bar always threw it away. `main-colour` picks
+  manager always sent the count, and the bar always threw it away. Following the
+  workspace literally turned out to defeat the widget: one window is one square in
+  every layout, two windows are two rectangles in most, and the indicator stopped
+  indicating exactly when the workspace was quiet. So it never draws fewer than
+  `min-panes` - four unless said - and the panes the workspace does not yet have are
+  drawn faint, at a third of the colour's opacity: one window in a spiral is the large
+  pane solid and the three it would dwindle into faint, which says the layout and the
+  count at once, the one thing a fixed four cannot. `min-panes=1` is the literal
+  count. `main-colour` picks
   out the first window's pane, where the main window goes; `when` recolours the panes
   by the layout's name; the usual gestures make it a control. Underneath, the visual
   tree gains a `RectShape`, a filled rectangle in the unit square - the one shape every
@@ -41,7 +49,8 @@ schedule and breaking either is a different kind of event:
   made of them is drawn whole by a renderer that has never heard of shapes. The
   example and starter configs use the widget; `{{ layout | icon }}` is unchanged for a
   bar that wants text. A `panes` that is neither a count from 1 to 9 nor the word
-  `windows` is `TAJ0040`.
+  `windows` is `TAJ0040`; a `min-panes` that is not a count is `TAJ0041`, and one
+  written under a fixed count, where it does nothing, is `TAJ0042`.
 - **The bar draws numbers as well as printing them: a `sparkline` and a `meter`.** A
   bar that reads `23%` is a figure to read; a bar a quarter full is a shape to see.
   `meter source="battery"` is a track with a fill along it, sized to where the value
