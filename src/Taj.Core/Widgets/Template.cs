@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace Taj.Core.Widgets;
@@ -14,6 +15,14 @@ namespace Taj.Core.Widgets;
 /// <para>
 /// Supported: <c>{{ name }}</c>, and <c>{{ name | filter }}</c> with a small set of
 /// filters. Filters chain left to right.
+/// </para>
+/// <para>
+/// The arithmetic filters - <c>round</c>, <c>add</c>, <c>sub</c>, <c>mul</c>, <c>div</c>,
+/// <c>percent</c> - read the first number in the value and write a number back, so
+/// <c>{{ mem | div:1024 | round:1 }} GB</c> turns megabytes into gigabytes without a
+/// script in between. A value with no number in it, or an argument that is not one,
+/// passes through unchanged for the same reason an unknown filter does: a bar that
+/// shows the raw value is better than one that shows nothing.
 /// </para>
 /// </remarks>
 public static class Template
@@ -157,11 +166,95 @@ public static class Template
             case "state-icon":
                 return StateIcon(input);
 
+            case "round":
+            {
+                // No argument is whole numbers. Fixed decimals rather than "up to", so a
+                // value that happens to land on .0 is as wide as the one before it and
+                // the widget beside it does not jitter.
+                if (!Numbers.TryParseFirst(input, out double n)) return input;
+                int decimals = argument.Length == 0 ? 0 : int.TryParse(argument, NumberStyles.Integer, CultureInfo.InvariantCulture, out int d) ? d : -1;
+                return decimals < 0 ? input : Numbers.Format(n, decimals);
+            }
+
+            case "add" or "sub" or "mul" or "div":
+            {
+                if (!Numbers.TryParseFirst(input, out double n) || !Numbers.TryParseFirst(argument, out double by)) return input;
+
+                // Dividing by nothing is not a number anyone wants on a bar; the value
+                // stays as it was, which at least says what it is.
+                if (name == "div" && by == 0) return input;
+
+                return Numbers.Format(name switch
+                {
+                    "add" => n + by,
+                    "sub" => n - by,
+                    "mul" => n * by,
+                    _ => n / by,
+                });
+            }
+
+            case "percent":
+            {
+                // Of the argument, or of one: `used | percent:total` for a share and
+                // `ratio | percent` for a fraction already between nought and one. Whole
+                // numbers, because a percentage with decimals is a readout nobody asked for.
+                if (!Numbers.TryParseFirst(input, out double n)) return input;
+
+                double of = 1;
+                if (argument.Length > 0 && (!Numbers.TryParseFirst(argument, out of) || of == 0)) return input;
+
+                return Numbers.Format(n / of * 100, 0);
+            }
+
+            case "map":
+                return Map(input, argument);
+
             default:
                 // An unknown filter passes the value through unchanged rather than
                 // blanking the widget, so a typo degrades gracefully.
                 return input;
         }
+    }
+
+    /// <summary>
+    /// Replaces a value with what a table says: <c>map:splith=H,splitv=V</c>, matched
+    /// without regard to case, with <c>*</c> as the entry for anything the table does
+    /// not name. A value the table does not name, and no <c>*</c>, passes through.
+    /// </summary>
+    /// <remarks>
+    /// The general shape of <c>icon</c> and <c>state-icon</c>, for the values those two
+    /// were never going to know about: a script's <c>on</c> and <c>off</c> into two
+    /// glyphs, a layout name of the user's own into a character. Pairs are split at the
+    /// comma and the first equals sign, so a glyph may not contain either - which no
+    /// glyph does.
+    /// </remarks>
+    private static string Map(string input, string table)
+    {
+        ReadOnlySpan<char> subject = input.AsSpan().Trim();
+        ReadOnlySpan<char> fallback = default;
+        bool hasFallback = false;
+
+        foreach (Range range in table.AsSpan().Split(','))
+        {
+            ReadOnlySpan<char> pair = table.AsSpan()[range];
+            int equals = pair.IndexOf('=');
+            if (equals < 0) continue;
+
+            ReadOnlySpan<char> key = pair[..equals].Trim();
+            ReadOnlySpan<char> value = pair[(equals + 1)..].Trim();
+
+            // Only the entry that is used becomes a string; the table is walked on
+            // every render, and most of its entries are not the one.
+            if (key.Equals(subject, StringComparison.OrdinalIgnoreCase)) return value.ToString();
+
+            if (!hasFallback && key.Length == 1 && key[0] == '*')
+            {
+                fallback = value;
+                hasFallback = true;
+            }
+        }
+
+        return hasFallback ? fallback.ToString() : input;
     }
 
     /// <summary>

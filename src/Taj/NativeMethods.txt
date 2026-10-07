@@ -62,6 +62,13 @@ SetCursor
 IDC_ARROW
 IDC_HAND
 
+// A single click on a widget that also takes a double click waits the system's
+// double-click time before it runs; the timer is the wait, and WM_TIMER its end.
+SetTimer
+KillTimer
+GetDoubleClickTime
+WM_TIMER
+
 // Reading the input language of the window in front, and asking it to change.
 GetKeyboardLayout
 GetKeyboardLayoutList
@@ -70,3 +77,10 @@ GetWindowThreadProcessId
 GetForegroundWindow
 PostMessage
 WM_INPUTLANGCHANGEREQUEST
+
+// Pressing a media key - play, next, volume - as the keyboard would.
+SendInput
+INPUT
+INPUT_TYPE
+KEYBD_EVENT_FLAGS
+VIRTUAL_KEY

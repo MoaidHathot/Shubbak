@@ -52,12 +52,52 @@ public interface IWidget
 /// them in step with the glyph the filter happens to choose; matching the source means
 /// writing the layout's name.
 /// </para>
+/// <para>
+/// A condition may be numeric instead: <see cref="Above"/>, <see cref="Below"/>, or
+/// both for a band. Then the subject is read as a number - its first one, so <c>87%</c>
+/// is eighty-seven - and compared, and <see cref="Value"/> is not consulted. A
+/// subject with no number in it fails a numeric condition, since a battery that has
+/// not reported yet is not below ten percent.
+/// </para>
 /// </remarks>
 public readonly record struct WidgetCondition(
     string Value,
     VisualStyle Style,
     bool Negate = false,
-    string? Source = null);
+    string? Source = null)
+{
+    /// <summary>The number the subject has to be strictly greater than, if any.</summary>
+    public double? Above { get; init; }
+
+    /// <summary>The number the subject has to be strictly less than, if any.</summary>
+    public double? Below { get; init; }
+
+    /// <summary>Whether this compares a number rather than a text.</summary>
+    public bool IsNumeric => Above is not null || Below is not null;
+
+    /// <summary>Whether the condition holds for what the widget is showing or reading.</summary>
+    public bool Holds(string? subject)
+    {
+        if (IsNumeric)
+        {
+            if (!Numbers.TryParseFirst(subject, out double number)) return false;
+
+            return HoldsNumber(number);
+        }
+
+        bool matches = string.Equals(Value, subject ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        return matches != Negate;
+    }
+
+    /// <summary>
+    /// Whether a numeric condition holds for a number already in hand, so a widget
+    /// that has the number need not write it out as text to be read back in.
+    /// </summary>
+    /// <remarks>False for a textual condition: a number is not a word.</remarks>
+    public bool HoldsNumber(double number) =>
+        IsNumeric && (Above is not { } above || number > above) && (Below is not { } below || number < below);
+}
 
 /// <summary>
 /// A widget that renders a template into a single text node.
@@ -205,8 +245,16 @@ public sealed class TemplateWidget : IWidget
 
     private VisualStyle StyleFor(string text, IReadOnlyDictionary<string, string?> values)
     {
-        foreach (WidgetCondition condition in Conditions)
+        IReadOnlyList<WidgetCondition> conditions = _conditions;
+
+        // Indexed rather than foreach: enumerating the list through its interface
+        // boxes the enumerator, once per widget with a condition on every rebuild of
+        // the tree. Measured at a hundred bytes a build on the example bar - small,
+        // and the whole of what this method allocated.
+        for (int i = 0; i < conditions.Count; i++)
         {
+            WidgetCondition condition = conditions[i];
+
             // The rendered text unless the condition names a source. A filter may have
             // transformed the value out of recognition - the layout widget renders a
             // name as a glyph - and a condition should be able to test what the value
@@ -215,9 +263,7 @@ public sealed class TemplateWidget : IWidget
                 ? text
                 : values.GetValueOrDefault(condition.Source) ?? string.Empty;
 
-            bool matches = string.Equals(condition.Value, subject, StringComparison.OrdinalIgnoreCase);
-
-            if (matches != condition.Negate) return condition.Style;
+            if (condition.Holds(subject)) return condition.Style;
         }
 
         return Style;

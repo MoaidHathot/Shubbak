@@ -36,9 +36,10 @@ bar {
 
 ## Widgets without code
 
-**Adding a widget usually needs no code at all.** There are four widget primitives
-— `text`, `workspaces`, `icon`, `spacer` — and the breadth comes from templates,
-filters and sources rather than from a catalogue you have to wait for someone to grow:
+**Adding a widget usually needs no code at all.** There are six widget primitives
+— `text`, `workspaces`, `icon`, `spacer`, `sparkline`, `meter` — and the breadth
+comes from templates, filters and sources rather than from a catalogue you have to
+wait for someone to grow:
 
 | What you want | What it costs |
 |---|---|
@@ -125,9 +126,9 @@ missing.
 ### Templates and filters
 
 Templates get filters — `truncate:N` `upper` `lower` `trim` `default:X` `then:X`
-`pad:N` `replace:from,to` `icon` `state-icon` — and a `when { }` block for conditional
-styling, so "colour the keyboard indicator red when I'm in the wrong language" is a
-line, not a plugin:
+`pad:N` `replace:from,to` `icon` `state-icon` `map:a=b,c=d` — and a `when { }` block
+for conditional styling, so "colour the keyboard indicator red when I'm in the wrong
+language" is a line, not a plugin:
 
 ```kdl
 bar {
@@ -147,6 +148,110 @@ bar {
 `when of="source"` tests a source instead of the text — useful after a filter has
 already turned the value into a glyph. First match wins. The `on-click` makes the
 indicator a switch as well as a readout; see [Clicking](#clicking).
+
+`map` is the general shape of `icon` and `state-icon`, for values those two were never
+going to know: `{{ state | map:on=\u{E720},off=\u{E74F} }}` turns a script's `on` and
+`off` into two glyphs, matched without regard to case, and `*=` is the entry for
+anything the table does not name. A value the table does not name, and no `*`, passes
+through unchanged.
+
+### Numbers
+
+A source carries text, and a template can do arithmetic on the number in it: `round`
+and `round:N`, `add:N`, `sub:N`, `mul:N`, `div:N`, and `percent` or `percent:of`. Each
+reads the first number in the value — so `87%` is eighty-seven and `load: 1.75 avg` is
+one and three quarters — and writes a number back, which the rest of the template then
+wraps in whatever unit it likes. A value with no number in it, or a division by nought,
+passes through untouched for the same reason an unknown filter does: a bar that shows
+the raw value is better than one that shows nothing.
+
+```kdl
+bar {
+    source "mem" kind="command" command="pwsh -NoProfile -File mem-bytes.ps1" interval=5000
+
+    profile "default" {
+        zone "right" justify="end" {
+            text template="{{ mem | div:1073741824 | round:1 }} GB"
+        }
+    }
+}
+```
+
+A `when` block can compare a number too: `when above=80` holds while the value — its
+first number, from the drawn text or from the source `of=` names — is strictly greater,
+`when below=10` while it is strictly less, and the two together are a band. A value
+with no number in it fails a numeric condition, since a battery that has not reported
+yet is not below ten percent. Writing `value=` and `above=` or `below=` in one block is
+pointed out (`TAJ0034`); a block that names nothing to match is too (`TAJ0033`), as is
+a threshold that is not a number (`TAJ0035`).
+
+```kdl
+bar {
+    source "battery" kind="signal"
+
+    profile "default" {
+        zone "right" justify="end" {
+            text template="{{ battery }}%" {
+                when below=10 colour="#f38ba8" bold=#true
+                when above=89 colour="#a6e3a1"
+            }
+        }
+    }
+}
+```
+
+### Graphs and meters
+
+Two widgets draw a number rather than print it. **`meter`** shows how much of a range a
+value is — a bar with a fill along it, or `shape="ring"` for a gauge — and **`sparkline`**
+draws a list of numbers as a line, oldest at the left. A bar that reads `23%` is a
+figure to read; a bar a quarter full is a shape to see.
+
+```kdl
+bar {
+    source "cpu" kind="command" command="pwsh -NoProfile -File cpu.ps1" interval=1000 history=60
+    source "battery" kind="signal"
+
+    profile "default" {
+        zone "right" justify="end" gap=10 {
+            sparkline source="cpu.history" width=60 height=14 colour="#8dbcff" fill="#8dbcff40" min=0 max=100 {
+                when above=80 colour="#f38ba8"
+            }
+            meter source="battery" width=40 height=4 colour="#a6e3a1" {
+                when below=20 colour="#f38ba8"
+            }
+            meter source="cpu" shape="ring" size=18 thickness=3 colour="accent"
+        }
+    }
+}
+```
+
+A `meter` reads the first number in its `source` and places it between `min` and `max`
+— nought to a hundred unless told otherwise — clamped, so a reading past the end fills
+the meter rather than spilling out of it. `colour` is the fill and `background` the
+track, with a faint track when none is written; `radius` rounds both. A bar is `width`
+by `height`, and `direction="vertical"` fills it upward. A ring is `size` across with a
+`thickness` stroke, running clockwise from the top; `start=225 sweep=270` is a dial. A
+`when` block recolours the fill by the value and leaves the track alone. The meter hides
+while the source has no number in it, as a text widget with nothing to say does.
+
+A `sparkline` draws every number in its `source`, which is a list — `12 15 50 50 48`,
+spaces or commas between. Where the list comes from is not its business. The usual
+answer is `history=N` on the source it graphs: the source then publishes its last `N`
+readings as `<name>.history`, including the repeats, so a CPU at a steady fifty is a
+flat line and not a line that has stopped. A script that already keeps a history prints
+the same shape itself. `colour` is the line, `thickness` its width, `fill` washes the
+area under it; `min` and `max` pin the scale, which a percentage should — a CPU graph
+scaled to its own range makes a quiet minute look like a storm — and without them the
+data is its own. A sparkline on a history takes the history's count as its `points`
+unless one is written, so the line fills in from the right over its first minute rather
+than two readings being stretched across the whole width. A `when` block tests the
+newest reading. A sparkline on `cpu` where `cpu` keeps a history is pointed out
+(`TAJ0039`), since it would show one reading for ever; one with no `source=` is an error
+(`TAJ0037`), as is a meter's; a scale the wrong way round is dropped (`TAJ0038`), and a
+`history` that is not a count from 2 to 1000 keeps none (`TAJ0036`).
+
+Both take the same gestures a text widget does, and hover the same way when they do.
 
 A widget can have a `font=` of its own, which is how one widget draws a glyph from
 Segoe Fluent Icons beside text in the profile's face. `{{ contexts }}` names the
@@ -206,8 +311,9 @@ way back that does not need the keyboard.
 
 The other gestures are settings of the same shape: `on-right-click`,
 `on-middle-click` (the wheel pressed), `on-scroll-up` and `on-scroll-down` (the wheel
-turned away from you and towards you). A widget with any of the five is a control and
-gets the hand and the hover, so a volume pill that only scrolls still looks like
+turned away from you and towards you), and `on-double-click` (the left button twice,
+within the time set in the mouse settings). A widget with any of the six is a control
+and gets the hand and the hover, so a volume pill that only scrolls still looks like
 something to touch:
 
 ```kdl
@@ -220,19 +326,46 @@ bar {
 }
 ```
 
+A widget with both `on-click` and `on-double-click` holds its single click for the
+double-click time and runs it only if no second press arrives, so the two cannot both
+fire — open the mixer, then also mute. A widget with only `on-click` is not made to
+wait: its click runs at once, as it always did, and two quick clicks are two clicks.
+
 The `workspaces` widget scrolls on its own: the wheel over it moves to the previous or
 next workspace, wrapping at the ends and stepping through the ones `hide-empty` hides
 as well as the ones drawn, so a scroll is a step through the display's workspaces and
 not only through its pills. `scroll=#false` on the widget turns that off.
 
-One verb is the bar's own and never reaches the window manager: `keyboard`. Put
-`on-click="keyboard next"` on the language indicator and clicking it switches the
-window in front to its next installed layout — `keyboard previous` goes the other
-way, `keyboard he` picks a language by its two-letter code — and the indicator follows
-on its next poll. The bar already reads the layout of the window in front, and
-changing it is a message posted to that same window, so there is nothing for the
-window manager to add. A `keyboard` command the bar cannot perform is pointed out at
-load (`TAJ0023`), naming the gesture it was written on.
+Two verbs are the bar's own and never reach the window manager. The first is
+`keyboard`: put `on-click="keyboard next"` on the language indicator and clicking it
+switches the window in front to its next installed layout — `keyboard previous` goes
+the other way, `keyboard he` picks a language by its two-letter code — and the
+indicator follows on its next poll. The bar already reads the layout of the window in
+front, and changing it is a message posted to that same window, so there is nothing
+for the window manager to add.
+
+The second is `media`: `media play-pause`, `media next`, `media previous`,
+`media stop`, `media mute`, `media volume-up` and `media volume-down` press the
+keyboard's media key of that name, and Windows routes it to whichever player is current
+— the one with the transport, be it a player or a browser tab — and to the system
+volume, with the same flyout the key gets. Pressing the key rather than running a
+program is what makes one pill serve every player. The keybinding spellings
+(`media_play_pause`, `volume_up`) are accepted too. A media pill is a few lines:
+
+```kdl
+bar {
+    source "track" kind="signal"
+
+    profile "default" {
+        zone "right" justify="end" {
+            text template="{{ track | truncate:30 }}" on-click="media play-pause" on-double-click="media next" on-right-click="media previous" on-scroll-up="media volume-up" on-scroll-down="media volume-down" on-middle-click="media mute"
+        }
+    }
+}
+```
+
+A `keyboard` or `media` command the bar cannot perform is pointed out at load
+(`TAJ0023`), naming the gesture it was written on.
 
 ## Appearance
 
@@ -290,7 +423,8 @@ like a shrinking zone does.
 ### Sizes and displays
 
 Every size in the `bar` section — `height`, `font-size`, `padding`, `margin`,
-`radius`, `size`, `gap`, `min-width` — is written in device-independent pixels and
+`radius`, `size`, `gap`, `min-width`, a graph's `width` and `height`, a stroke's
+`thickness` — is written in device-independent pixels and
 scaled to each display's own, so one `height 34` is the same fraction of a 4K display
 at 150 percent and a 1080p one at 100 percent, and a bar dragged between them by a
 change of scaling in Settings follows without a restart. A display's scale is read
@@ -397,10 +531,12 @@ race.
 
 ```
 L1 transport    Shubbak's IPC
-L2 sources      reactive values: WM events, timers, external processes
+L2 sources      reactive values: WM events, timers, external processes, histories
 L3 widget tree  renderer-agnostic model + flex layout
-L4 renderer     ITajRenderer — currently GDI
+L4 renderer     IRenderer — currently GDI; pictures and shapes are capabilities beside it
 ```
 
 L2 and L3 contain no drawing code and are covered by tests that run with no window
-on screen. Swapping the renderer means implementing one interface.
+on screen. Swapping the renderer means implementing one interface; a renderer that
+cannot draw pictures or lines leaves them out and draws the rest, rather than being
+made to say no.

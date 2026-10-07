@@ -10,6 +10,11 @@ namespace Taj.Core.Widgets;
 /// <param name="MiddleClick">The middle button, or the wheel pressed.</param>
 /// <param name="ScrollUp">The wheel turned away from the user.</param>
 /// <param name="ScrollDown">The wheel turned towards the user.</param>
+/// <param name="DoubleClick">
+/// The left button twice, within the system's double-click time. A widget with one
+/// of these waits that long before running a single click, so a double does not run
+/// the single first; a widget without one runs its click at once.
+/// </param>
 /// <remarks>
 /// Commands rather than callbacks, so a gesture goes through exactly the same path
 /// as a keybinding and the two cannot behave differently. A widget with any of these
@@ -20,7 +25,8 @@ public sealed record PointerActions(
     string? RightClick = null,
     string? MiddleClick = null,
     string? ScrollUp = null,
-    string? ScrollDown = null)
+    string? ScrollDown = null,
+    string? DoubleClick = null)
 {
     /// <summary>A readout: nothing happens.</summary>
     public static PointerActions None { get; } = new();
@@ -28,12 +34,13 @@ public sealed record PointerActions(
     /// <summary>Whether any gesture does anything.</summary>
     public bool Any =>
         Click is { Length: > 0 } || RightClick is { Length: > 0 } || MiddleClick is { Length: > 0 } ||
-        ScrollUp is { Length: > 0 } || ScrollDown is { Length: > 0 };
+        ScrollUp is { Length: > 0 } || ScrollDown is { Length: > 0 } || DoubleClick is { Length: > 0 };
 
     /// <summary>Every command named, for validation.</summary>
     public IEnumerable<(string Key, string Command)> Commands()
     {
         if (Click is { Length: > 0 }) yield return ("on-click", Click);
+        if (DoubleClick is { Length: > 0 }) yield return ("on-double-click", DoubleClick);
         if (RightClick is { Length: > 0 }) yield return ("on-right-click", RightClick);
         if (MiddleClick is { Length: > 0 }) yield return ("on-middle-click", MiddleClick);
         if (ScrollUp is { Length: > 0 }) yield return ("on-scroll-up", ScrollUp);
@@ -46,6 +53,7 @@ public sealed record PointerActions(
         ArgumentNullException.ThrowIfNull(node);
 
         node.OnClick = Click;
+        node.OnDoubleClick = DoubleClick;
         node.OnRightClick = RightClick;
         node.OnMiddleClick = MiddleClick;
         node.OnScrollUp = ScrollUp;
@@ -54,5 +62,5 @@ public sealed record PointerActions(
 
     /// <summary>The settings a widget may carry, for the unknown-setting warning.</summary>
     public static IReadOnlyList<string> Keys { get; } =
-        ["on-click", "on-right-click", "on-middle-click", "on-scroll-up", "on-scroll-down"];
+        ["on-click", "on-double-click", "on-right-click", "on-middle-click", "on-scroll-up", "on-scroll-down"];
 }

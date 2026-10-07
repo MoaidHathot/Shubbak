@@ -54,6 +54,10 @@ public static class VisualScaling
             node.Style = Scale(node.Style, factor);
 
             if (node.HoverStyle is { } hover) node.HoverStyle = Scale(hover, factor);
+
+            // A shape's points are already in units of its box; only its strokes are
+            // in pixels.
+            if (node.Shapes.Count > 0) node.Shapes = [.. node.Shapes.Select(shape => shape.Scaled(factor))];
         }
     }
 

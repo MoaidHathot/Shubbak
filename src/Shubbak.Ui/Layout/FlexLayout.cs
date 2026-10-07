@@ -68,6 +68,10 @@ public sealed class FlexLayout
             VisualKind.Text => _measurer.Measure(node.Text, node.Style.Font),
             VisualKind.Spacer => Size.Empty,
             VisualKind.Image => node.Image is { } image ? new Size(image.Width, image.Height) : Size.Empty,
+
+            // A shape has no size of its own: it is drawn into whatever box it is
+            // given, like a spacer that happens to have something in it.
+            VisualKind.Shape => Size.Empty,
             _ => MeasureChildren(node),
         };
 

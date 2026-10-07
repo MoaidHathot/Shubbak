@@ -17,6 +17,76 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **The bar draws numbers as well as printing them: a `sparkline` and a `meter`.** A
+  bar that reads `23%` is a figure to read; a bar a quarter full is a shape to see.
+  `meter source="battery"` is a track with a fill along it, sized to where the value
+  sits between `min` and `max` (nought and a hundred unless said) and clamped, so a
+  reading past the end fills the meter rather than spilling out; `shape="ring"` is the
+  same as a gauge, clockwise from the top, and `start=225 sweep=270` makes it a dial.
+  `sparkline source="cpu.history"` draws a list of numbers as a line, oldest at the
+  left, with `colour` for the line, `fill` for a wash under it, and `min`/`max` to pin
+  the scale - which a percentage should, since a CPU graph scaled to its own range makes
+  a quiet minute look like a storm. The list comes from `history=N` on the source it
+  graphs: the source then publishes its last `N` readings as `<name>.history`, repeats
+  included, so a value that holds steady is a flat line and not a line that has
+  stopped - which is why the history is kept beside the source and not in the widget,
+  whose snapshot of values could never tell a new reading from the old one. A script
+  that already keeps a history prints the same shape itself. Both widgets take a `when`
+  block that recolours them by the value, and the same six gestures a text widget
+  does. Underneath, the visual tree gained a `Shape` node - a line through points, an
+  arc - drawn through an `IShapeRenderer` capability beside `IImageRenderer`, so a
+  renderer that cannot stroke a path leaves the shape out and draws the rest. The
+  composited GDI renderer rasterises them itself, anti-aliased, with the same
+  coverage-per-pixel arithmetic the rounded corners use; GDI's own `Polyline` and `Arc`
+  are jagged and write no alpha, and would have punched a hole in a translucent bar
+  where the graph lay. The arithmetic is a pure class under test, down to which
+  pixel a half-pixel line falls on, and it allocates nothing - asserted, as the
+  latency stats are. Measured, before and after, on a fifteen-widget bar that uses
+  none of this: a tick - value set, tree rebuilt, laid out with GDI measuring the
+  text, painted by the composited renderer - is 461 µs before and 464 µs after, the
+  same within the run-to-run noise, allocating 21,320 and 21,432 bytes: the extra
+  112 is two reference fields on each of 28 nodes less the enumerator the text
+  widget used to box per condition, which it no longer does. Paint allocates nothing
+  in either. The same bar with a sixty-point sparkline, a bar meter and a ring meter
+  added ticks in 517 µs and 23,480 bytes - a sparkline whose history has not changed
+  costs 448 bytes and a tenth of a microsecond to rebuild, since it keeps its plot by
+  the value's reference as the icon widget keeps its bitmap, and a history sample
+  costs the one string that is its value, 384 bytes for sixty readings. The three
+  entries below together add 92 KB to the published `taj.exe` (5,618 KB to 5,709 KB),
+  most of it the number formatting and the trigonometry the binary had no call for
+  before.
+- **Templates do arithmetic, and `when` compares numbers.** `round`, `round:N`,
+  `add:N`, `sub:N`, `mul:N`, `div:N` and `percent`/`percent:of` read the first number in
+  a value - so `87%` is eighty-seven and `load: 1.75 avg` is one and three quarters -
+  and write a number back, which the template wraps in whatever unit it likes:
+  `{{ mem | div:1073741824 | round:1 }} GB` turns bytes into gigabytes with no script
+  in between. A value with no number in it, or a division by nought, passes through
+  untouched, for the same reason an unknown filter does. `map:a=b,c=d` is the general
+  shape of `icon` and `state-icon`, for a script's `on` and `off` into two glyphs, with
+  `*=` for anything the table does not name. And a `when` block can say
+  `above=80`, `below=10`, or both for a band - strict, on the first number in the drawn
+  text or in the source `of=` names - so "red below ten percent" is a line where it used
+  to need the source to print a word for every band. A value with no number fails a
+  numeric condition: a battery that has not reported yet is not below ten percent. Three
+  new diagnostics say when a `when` names nothing to match (`TAJ0033`), mixes a value
+  with a number (`TAJ0034`), or has a threshold that is not one (`TAJ0035`); the bar's
+  history, source and scale settings get `TAJ0036` to `TAJ0039`.
+- **A double click, and a `media` verb that presses the keyboard's media keys.**
+  `on-double-click` joins the five gestures. A widget with both it and `on-click` holds
+  the single click for the double-click time Windows is set to and runs it only if no
+  second press arrives, so the two cannot both fire - open the mixer, then also mute;
+  a widget with only `on-click` is not made to wait, and two quick clicks on a
+  workspace are two clicks as they always were. The wait is Windows's own figure, from
+  the mouse settings, and the decision of what a press means is a class in the core
+  with its three outcomes under test. `media play-pause`, `media next`, `media
+  previous`, `media stop`, `media mute`, `media volume-up` and `media volume-down` are
+  the second click command the bar performs itself, after `keyboard`: each presses the
+  media key of that name, down and up in one `SendInput`, and Windows routes it to
+  whichever player is current and to the system volume, with the same flyout the key
+  gets. Pressing the key rather than running a program is what makes one pill serve
+  every player. The keybinding spellings - `media_play_pause`, `volume_up` - are taken
+  too, and a misspelt one is pointed out at load (`TAJ0023`) with the gesture it was
+  written on, as a bad `keyboard` command has been.
 - **Seven hello-worlds, one per direction the pipe has.** The extending page opened on
   a 170-line script and a 311-line program, which is the wrong first thing to read; a
   newcomer wants each feature in ten lines before any of them together.

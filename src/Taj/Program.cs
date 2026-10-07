@@ -395,12 +395,22 @@ internal static class Program
 
         window.CommandRequested += command =>
         {
-            // The one verb the bar answers itself. Everything else is the window
+            // The two verbs the bar answers itself. Everything else is the window
             // manager's, and goes to it unread.
             if (KeyboardCommand.Recognises(command))
             {
                 if (KeyboardCommand.TryParse(command, out KeyboardCommand? keyboard, out string? problem))
                     KeyboardLanguage.Switch(keyboard!);
+                else
+                    Log.Warn(LogCategory.Wm, $"refused click command '{command}': {problem}");
+
+                return;
+            }
+
+            if (MediaCommand.Recognises(command))
+            {
+                if (MediaCommand.TryParse(command, out MediaCommand? media, out string? problem))
+                    MediaKeys.Press(media!);
                 else
                     Log.Warn(LogCategory.Wm, $"refused click command '{command}': {problem}");
 

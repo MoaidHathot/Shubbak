@@ -13,7 +13,13 @@ namespace Shubbak.Companion;
 /// <summary>How a window's class is registered: what Windows is told about every window of it.</summary>
 /// <param name="Name">The class name, which is also how <c>shubbak taj-exit</c> finds the windows to close.</param>
 /// <param name="DropShadow">Whether the compositor draws a shadow under it, as it does for a menu.</param>
-public sealed record WindowClassOptions(string Name, bool DropShadow = false);
+/// <param name="DoubleClicks">
+/// Whether Windows should report two quick presses as a double click. Off unless a
+/// window asks: with it on, the second press arrives as <see cref="CompanionWindow.OnMouseDoubleClick"/>
+/// rather than <see cref="CompanionWindow.OnMouseDown"/>, and a window that answers
+/// only the latter would lose every second click.
+/// </param>
+public sealed record WindowClassOptions(string Name, bool DropShadow = false, bool DoubleClicks = false);
 
 /// <summary>Which mouse button a press was.</summary>
 public enum MouseButton
@@ -176,6 +182,15 @@ public abstract class CompanionWindow : IDisposable
     {
     }
 
+    /// <summary>
+    /// A button went down for the second time within the double-click time and
+    /// distance, in client pixels. Only for a class registered with
+    /// <see cref="WindowClassOptions.DoubleClicks"/>; by default the press is treated
+    /// as any other, so opting the class in loses nothing until the window says
+    /// what a double click means.
+    /// </summary>
+    protected virtual void OnMouseDoubleClick(MouseButton button, int x, int y) => OnMouseDown(button, x, y);
+
     /// <summary>The wheel turned over the window; positive is away from the user, in multiples of 120 per notch.</summary>
     protected virtual void OnWheel(int delta)
     {
@@ -224,8 +239,11 @@ public abstract class CompanionWindow : IDisposable
                 lpszClassName = className,
 
                 // A shadow, when asked for, is drawn by the compositor and costs this
-                // process nothing - no layered window, no second surface.
-                style = options.DropShadow ? WNDCLASS_STYLES.CS_DROPSHADOW : 0,
+                // process nothing - no layered window, no second surface. Double
+                // clicks, when asked for, change what the second of two quick presses
+                // arrives as; see WindowClassOptions.
+                style = (options.DropShadow ? WNDCLASS_STYLES.CS_DROPSHADOW : 0)
+                    | (options.DoubleClicks ? WNDCLASS_STYLES.CS_DBLCLKS : 0),
 
                 // No background brush: every pixel is painted from the off-screen
                 // buffer, and letting Windows erase first is a visible flash.
@@ -312,6 +330,20 @@ public abstract class CompanionWindow : IDisposable
 
             case PInvoke.WM_MBUTTONDOWN:
                 OnMouseDown(MouseButton.Middle, LowShort(lParam.Value), HighShort(lParam.Value));
+                return true;
+
+            // Only sent to a class registered with CS_DBLCLKS, in place of the second
+            // button-down.
+            case PInvoke.WM_LBUTTONDBLCLK:
+                OnMouseDoubleClick(MouseButton.Left, LowShort(lParam.Value), HighShort(lParam.Value));
+                return true;
+
+            case PInvoke.WM_RBUTTONDBLCLK:
+                OnMouseDoubleClick(MouseButton.Right, LowShort(lParam.Value), HighShort(lParam.Value));
+                return true;
+
+            case PInvoke.WM_MBUTTONDBLCLK:
+                OnMouseDoubleClick(MouseButton.Middle, LowShort(lParam.Value), HighShort(lParam.Value));
                 return true;
 
             case PInvoke.WM_MOUSEWHEEL:

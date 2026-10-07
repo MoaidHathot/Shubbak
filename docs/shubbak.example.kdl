@@ -726,6 +726,18 @@ bar {
     // reloads this file.
     //
     // source "weather" kind="command" command="pwsh -NoProfile -File C:\\Users\\me\\.config\\shubbak\\weather.ps1"
+    //
+    // `history=N` keeps the source's last N readings - repeats included, so a value
+    // that holds steady is a flat line and not a line that stopped - and publishes
+    // them as `<name>.history`, which is what a `sparkline` graphs. See docs/taj.md,
+    // "Graphs and meters".
+    //
+    // source "cpu" kind="command" command="pwsh -NoProfile -File C:\\Users\\me\\.config\\shubbak\\cpu.ps1" interval=1000 history=60
+
+    // The battery's percentage, as the watcher publishes it - `power` in the `ayn`
+    // section at the end of this file names the signal. Drawn as a level by the
+    // `meter` below; empty, and so hidden, on a desktop with no battery.
+    source "battery" kind="signal"
 
     profile "default" {
         height 34
@@ -873,6 +885,32 @@ bar {
             text id="layout"  template="{{ layout | icon }}" colour="#7f849c" on-click="layout --cycle" {
                 when of="layout" not="splith" colour="#a6e3a1"
             }
+
+            // A level rather than a figure: the battery as a bar a quarter full is a
+            // shape to see where "23%" is a number to read. `colour` is the fill and
+            // `background` the track; `min`/`max` default to 0 and 100. A `when` block
+            // may compare a number - `below=20`, `above=89`, or both for a band - and
+            // here it recolours the fill. The meter hides while the source has no
+            // number in it, so a desktop without a battery never shows an empty one.
+            // The value comes from the watcher; see `power` in the `ayn` section.
+            //
+            // The other two shapes a number can take, for a `cpu` source with
+            // `history=60` on it:
+            //
+            //   meter source="cpu" shape="ring" size=18 thickness=3 colour="accent"
+            //   sparkline source="cpu.history" width=60 height=14 colour="#8dbcff" fill="#8dbcff40" min=0 max=100
+            meter id="battery" source="battery" width=40 height=4 colour="#a6e3a1" {
+                when below=20 colour="#f38ba8"
+            }
+
+            // `media` is the other click command the bar performs itself: it presses
+            // the keyboard's media key of that name, and Windows routes it to whichever
+            // player is current - so one pill serves every player. A widget with both
+            // on-click and on-double-click holds the single click for the double-click
+            // time, so the two cannot both fire.
+            text id="media" template="\u{E768}" font="Segoe Fluent Icons" colour="#7f849c" \
+                 on-click="media play-pause" on-double-click="media next" on-right-click="media previous" \
+                 on-scroll-up="media volume-up" on-scroll-down="media volume-down" on-middle-click="media mute"
 
             text id="clock"   template="{{ clock }}"        colour="#8dbcff"
         }
@@ -1148,11 +1186,12 @@ ayn {
     // Three readings can go to the bar as words rather than as contexts, each as a
     // signal the window manager carries without reading: the battery's percentage
     // and the names of the default speaker and microphone. The bar shows one with
-    // `source "battery" kind="signal"` and `{{ battery }}`, and asks for them again
-    // when it connects, so a bar started after the watcher is not blank. Off until
-    // named:
+    // `source "battery" kind="signal"` and `{{ battery }}` - or draws it, with the
+    // `meter` above - and asks for them again when it connects, so a bar started
+    // after the watcher is not blank. Each is off until named; the battery is, for
+    // the meter:
     //
-    //     power      { battery-percent "battery" }
     //     speaker    { device-name "speaker" }
     //     microphone { device-name "microphone" }
+    power { battery-percent "battery" }
 }

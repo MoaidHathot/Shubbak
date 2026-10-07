@@ -46,8 +46,14 @@ namespace Shubbak.Ui.Gdi;
 /// changes. The measuring device context is separate because layout runs before
 /// <see cref="BeginFrame"/>.
 /// </para>
+/// <para>
+/// Lines and arcs are rasterised here too, by the same means as the rounded corners:
+/// a coverage per pixel from its distance to the stroke, blended once. GDI's own
+/// <c>Polyline</c> and <c>Arc</c> are not anti-aliased and write no alpha, so they
+/// would have drawn a jagged sparkline and punched a hole in the bar where it lay.
+/// </para>
 /// </remarks>
-public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer
+public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer, IShapeRenderer
 {
     private readonly HWND _window;
     private readonly HDC _measureDc;
@@ -286,6 +292,98 @@ public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer
         int a = alpha + Scale((int)(d >> 24), inverse);
 
         destination = Pack(r, g, b, a);
+    }
+
+    // ---- shapes ------------------------------------------------------------
+
+    /// <summary>
+    /// Per-pixel coverage for the shape being drawn, over its clipped bounding box.
+    /// Kept between calls and cleared for each, since a sparkline is drawn on every
+    /// tick of whatever it graphs.
+    /// </summary>
+    private double[] _coverage = [];
+
+    /// <summary>Scratch for the points of a shape moved into the surface's coordinates.</summary>
+    private PointD[] _local = [];
+
+    /// <inheritdoc cref="ShapeRasteriser.Polyline"/>
+    public void DrawPolyline(ReadOnlySpan<PointD> points, Colour colour, double thickness)
+    {
+        if (points.Length < 2 || colour.IsTransparent || thickness <= 0 || _frame.Bits is null) return;
+
+        ReadOnlySpan<PointD> local = Local(points);
+        Rect clip = ShapeRasteriser.Bounds(local, (thickness / 2.0) + 1, SurfaceRect);
+        if (clip.IsEmpty) return;
+
+        Span<double> coverage = Coverage(clip);
+        ShapeRasteriser.Polyline(local, thickness, clip, coverage);
+        Composite(clip, coverage, colour);
+    }
+
+    /// <inheritdoc cref="ShapeRasteriser.Polygon"/>
+    public void FillPolygon(ReadOnlySpan<PointD> points, Colour colour)
+    {
+        if (points.Length < 3 || colour.IsTransparent || _frame.Bits is null) return;
+
+        ReadOnlySpan<PointD> local = Local(points);
+        Rect clip = ShapeRasteriser.Bounds(local, 1, SurfaceRect);
+        if (clip.IsEmpty) return;
+
+        Span<double> coverage = Coverage(clip);
+        ShapeRasteriser.Polygon(local, clip, coverage);
+        Composite(clip, coverage, colour);
+    }
+
+    /// <inheritdoc cref="ShapeRasteriser.Arc"/>
+    public void DrawArc(PointD centre, double radius, double startDegrees, double sweepDegrees, Colour colour, double thickness)
+    {
+        if (colour.IsTransparent || thickness <= 0 || radius <= 0 || sweepDegrees == 0 || _frame.Bits is null) return;
+
+        var local = new PointD(centre.X - _bounds.X, centre.Y - _bounds.Y);
+        Rect clip = ShapeRasteriser.Bounds(local, radius + (thickness / 2.0) + 1, SurfaceRect);
+        if (clip.IsEmpty) return;
+
+        Span<double> coverage = Coverage(clip);
+        ShapeRasteriser.Arc(local, radius, startDegrees, sweepDegrees, thickness, clip, coverage);
+        Composite(clip, coverage, colour);
+    }
+
+    /// <summary>The points moved into the surface's coordinates, in a buffer kept between calls.</summary>
+    private ReadOnlySpan<PointD> Local(ReadOnlySpan<PointD> points)
+    {
+        if (_local.Length < points.Length) _local = new PointD[Math.Max(points.Length, 2 * _local.Length)];
+
+        for (int i = 0; i < points.Length; i++)
+            _local[i] = new PointD(points[i].X - _bounds.X, points[i].Y - _bounds.Y);
+
+        return _local.AsSpan(0, points.Length);
+    }
+
+    /// <summary>A cleared coverage buffer the size of the clip.</summary>
+    private Span<double> Coverage(Rect clip)
+    {
+        int size = clip.Width * clip.Height;
+        if (_coverage.Length < size) _coverage = new double[Math.Max(size, 2 * _coverage.Length)];
+
+        Span<double> span = _coverage.AsSpan(0, size);
+        span.Clear();
+        return span;
+    }
+
+    /// <summary>Blends a colour into the frame by the coverage computed for each pixel of the clip.</summary>
+    private void Composite(Rect clip, ReadOnlySpan<double> coverage, Colour colour)
+    {
+        for (int y = clip.Top; y < clip.Bottom; y++)
+        {
+            uint* row = _frame.Bits + (y * _frame.Width);
+            int offset = (y - clip.Top) * clip.Width;
+
+            for (int x = clip.Left; x < clip.Right; x++)
+            {
+                double c = coverage[offset + (x - clip.Left)];
+                if (c > 0) Blend(ref row[x], colour, c);
+            }
+        }
     }
 
     // ---- compositing -------------------------------------------------------

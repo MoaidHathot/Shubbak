@@ -88,6 +88,18 @@ public abstract class SourceBase : ISource
 
     public event Action<ISource>? Changed;
 
+    /// <summary>
+    /// Raised on every value published, whether or not it differs from the last.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Changed"/> deliberately drops a repeat, and a history deliberately
+    /// keeps one: a CPU at a steady fifty percent is a flat line, not a line that has
+    /// stopped. This is the hook a <see cref="HistorySource"/> hangs off, and nothing
+    /// else listens to it, so a source nobody keeps a history of pays an unsubscribed
+    /// event per tick and no more.
+    /// </remarks>
+    public event Action<ISource, string?>? Sampled;
+
     public abstract void Start();
 
     /// <summary>Does nothing. A source with no timer has nothing to stop.</summary>
@@ -112,6 +124,9 @@ public abstract class SourceBase : ISource
     /// </remarks>
     protected void Publish(string? value)
     {
+        // Every reading, before the equality check, for whoever keeps a history.
+        Sampled?.Invoke(this, value);
+
         // Compared and set under a lock: two timer callbacks overlapping - a slow
         // producer on a short interval - could otherwise both see the old value and
         // both publish, or lose an edge between them. Raised outside it, since a

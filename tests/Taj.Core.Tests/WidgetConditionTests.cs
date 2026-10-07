@@ -186,6 +186,195 @@ public sealed class WidgetConditionTests
         Assert.Equal(ParseColour("#1dfb8d"), node.Style.Foreground);
     }
 
+    // ---- numbers: above, below, and both ------------------------------------------
+
+    private const string Battery = """
+        text id="battery" template="{{ battery }}%" colour="#a1a1a1" {
+            when of="battery" below=10 colour="#f38ba8" bold=#true
+            when of="battery" above=89 colour="#a6e3a1"
+        }
+        """;
+
+    private static VisualNode BuildBattery(TemplateWidget widget, string? battery) =>
+        widget.Build(new Dictionary<string, string?> { ["battery"] = battery });
+
+    [Fact]
+    public void BelowIsStrictlyLess()
+    {
+        TemplateWidget widget = Load(Battery);
+
+        Assert.Equal(ParseColour("#f38ba8"), BuildBattery(widget, "9").Style.Foreground);
+        Assert.Equal(ParseColour("#f38ba8"), BuildBattery(widget, "9.9").Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), BuildBattery(widget, "10").Style.Foreground);
+    }
+
+    [Fact]
+    public void AboveIsStrictlyGreater()
+    {
+        TemplateWidget widget = Load(Battery);
+
+        Assert.Equal(ParseColour("#a6e3a1"), BuildBattery(widget, "90").Style.Foreground);
+        Assert.Equal(ParseColour("#a6e3a1"), BuildBattery(widget, "100").Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), BuildBattery(widget, "89").Style.Foreground);
+    }
+
+    [Fact]
+    public void ANumberIsReadOutOfTheValueItSitsIn()
+    {
+        // The source says "87%", and nobody should have to strip the sign to compare.
+        TemplateWidget widget = Load(Battery);
+
+        Assert.Equal(ParseColour("#a6e3a1"), BuildBattery(widget, "95%").Style.Foreground);
+        Assert.Equal(ParseColour("#f38ba8"), BuildBattery(widget, "charge: 5 pct").Style.Foreground);
+    }
+
+    [Fact]
+    public void AValueWithNoNumberFailsANumericCondition()
+    {
+        // A battery that has not reported is not below ten percent.
+        TemplateWidget widget = Load(Battery);
+
+        Assert.Equal(ParseColour("#a1a1a1"), BuildBattery(widget, "").Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), BuildBattery(widget, null).Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), BuildBattery(widget, "unknown").Style.Foreground);
+    }
+
+    [Fact]
+    public void AboveAndBelowTogetherAreABand()
+    {
+        TemplateWidget widget = Load("""
+            text id="cpu" template="{{ cpu }}" colour="#a1a1a1" {
+                when above=40 below=80 colour="#f9e2af"
+            }
+            """);
+
+        VisualNode Build(string cpu) => widget.Build(new Dictionary<string, string?> { ["cpu"] = cpu });
+
+        Assert.Equal(ParseColour("#f9e2af"), Build("60").Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), Build("40").Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), Build("80").Style.Foreground);
+        Assert.Equal(ParseColour("#a1a1a1"), Build("95").Style.Foreground);
+    }
+
+    [Fact]
+    public void WithoutOfTheRenderedTextIsTheNumber()
+    {
+        // The template may have done the arithmetic already; the condition reads what
+        // came out of it.
+        TemplateWidget widget = Load("""
+            text id="mem" template="{{ mem | div:1024 }}" colour="#a1a1a1" {
+                when above=6 colour="#f38ba8"
+            }
+            """);
+
+        VisualNode node = widget.Build(new Dictionary<string, string?> { ["mem"] = "8192" });
+
+        Assert.Equal("8", node.Text);
+        Assert.Equal(ParseColour("#f38ba8"), node.Style.Foreground);
+    }
+
+    [Fact]
+    public void AQuotedThresholdIsStillANumber()
+    {
+        TemplateWidget widget = Load("""
+            text id="cpu" template="{{ cpu }}" colour="#a1a1a1" {
+                when above="80" colour="#f38ba8"
+            }
+            """);
+
+        Assert.Equal(ParseColour("#f38ba8"), widget.Build(new Dictionary<string, string?> { ["cpu"] = "90" }).Style.Foreground);
+    }
+
+    [Fact]
+    public void AThresholdThatIsNotANumberIsReportedAndTheConditionDropped()
+    {
+        (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" {
+                    zone "right" {
+                        text id="cpu" template="{{ cpu }}" colour="#a1a1a1" {
+                            when above="eighty" colour="#f38ba8"
+                        }
+                    }
+                }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(diagnostics, d => d.Code == "TAJ0035");
+        Assert.Contains("eighty", warning.Message, StringComparison.Ordinal);
+
+        var widget = Assert.IsType<TemplateWidget>(config.Default.Zones[0].Widgets[0]);
+        Assert.Empty(widget.Conditions);
+    }
+
+    [Fact]
+    public void AWhenBlockThatMatchesNothingIsReported()
+    {
+        // It used to be dropped without a word, and a style that can never apply looks
+        // exactly like a colour that is wrong.
+        (_, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" {
+                    zone "right" {
+                        text id="cpu" template="{{ cpu }}" { when colour="#f38ba8" }
+                    }
+                }
+            }
+            """);
+
+        Assert.Single(diagnostics, d => d.Code == "TAJ0033");
+    }
+
+    [Fact]
+    public void AValueAndANumberInOneBlockIsReportedAndTheNumberUsed()
+    {
+        (TajConfig config, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" {
+                    zone "right" {
+                        text id="cpu" template="{{ cpu }}" colour="#a1a1a1" { when value="90" above=80 colour="#f38ba8" }
+                    }
+                }
+            }
+            """);
+
+        Assert.Single(diagnostics, d => d.Code == "TAJ0034");
+
+        var widget = Assert.IsType<TemplateWidget>(config.Default.Zones[0].Widgets[0]);
+        WidgetCondition condition = Assert.Single(widget.Conditions);
+
+        Assert.True(condition.IsNumeric);
+        Assert.True(condition.Holds("95"));
+    }
+
+    [Fact]
+    public void TheNumericKeysAreNotUnknownSettings()
+    {
+        (_, IReadOnlyList<Diagnostic> diagnostics) = TajConfigLoader.Load("""
+            bar {
+                profile "default" {
+                    zone "right" {
+                        text id="cpu" template="{{ cpu }}" { when above=40 below=80 colour="#f9e2af" }
+                    }
+                }
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ANumericConditionAgainstASourceIsADependency()
+    {
+        TemplateWidget widget = Load("""
+            text id="x" template="{{ clock }}" {
+                when of="battery" below=10 colour="#f38ba8"
+            }
+            """);
+
+        Assert.Contains("battery", widget.Dependencies);
+    }
+
     private static Colour ParseColour(string text)
     {
         (TajConfig config, _) = TajConfigLoader.Load($$"""

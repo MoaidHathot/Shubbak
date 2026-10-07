@@ -129,7 +129,7 @@ public sealed class BarWindow : CompanionWindow
     /// <param name="deviceId">The GDI device name of the display this bar is for.</param>
     /// <param name="scalesToDpi">Whether sizes are device-independent pixels scaled to the display, or raw pixels.</param>
     public BarWindow(BarModel model, string deviceId, bool scalesToDpi = true)
-        : base(new WindowClassOptions(WindowClass))
+        : base(new WindowClassOptions(WindowClass, DoubleClicks: true))
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         ArgumentException.ThrowIfNullOrEmpty(deviceId);
@@ -384,14 +384,70 @@ public sealed class BarWindow : CompanionWindow
     /// <summary>Where the pointer last was, for the wheel, which Windows reports in screen coordinates.</summary>
     private (int X, int Y) _lastMouse = (-1, -1);
 
-    protected override void OnMouseDown(MouseButton button, int x, int y) =>
-        Perform(x, y, button switch
+    /// <summary>
+    /// Holds a single click on a widget that also takes a double click, until the
+    /// double-click time has passed; see <see cref="ClickArbiter"/>.
+    /// </summary>
+    private readonly ClickArbiter _clicks = new();
+
+    /// <summary>The timer that ends a held click's wait; one per window, so one id.</summary>
+    private const nuint HeldClickTimer = 1;
+
+    protected override void OnMouseDown(MouseButton button, int x, int y)
+    {
+        if (button != MouseButton.Left)
         {
-            MouseButton.Left => static n => n.OnClick,
-            MouseButton.Right => static n => n.OnRightClick,
-            MouseButton.Middle => static n => n.OnMiddleClick,
-            _ => static _ => null,
-        });
+            Perform(x, y, button == MouseButton.Right ? static n => n.OnRightClick : static n => n.OnMiddleClick);
+            return;
+        }
+
+        // A left press runs at once unless the widget also takes a double click, in
+        // which case it waits the double-click time for the second press that would
+        // make it one. The wait is Windows's own figure, so it matches what the user
+        // set in the mouse settings and what the shell itself does.
+        string? command = _clicks.Press(Resolve(x, y, static n => n.OnClick), Resolve(x, y, static n => n.OnDoubleClick));
+
+        if (command is not null)
+        {
+            CommandRequested?.Invoke(command);
+            return;
+        }
+
+        if (_clicks.IsHolding)
+        {
+            // No callback: the timer posts WM_TIMER to the window, which OnMessage
+            // answers, so the held click runs on the thread that owns the tree.
+            unsafe
+            {
+                _ = PInvoke.SetTimer(Hwnd, HeldClickTimer, PInvoke.GetDoubleClickTime(), null);
+            }
+        }
+    }
+
+    /// <summary>The second press of a double click; the held single click, if any, is dropped.</summary>
+    protected override void OnMouseDoubleClick(MouseButton button, int x, int y)
+    {
+        if (button != MouseButton.Left)
+        {
+            // The right and middle buttons have no double gesture; the second press is
+            // a press.
+            OnMouseDown(button, x, y);
+            return;
+        }
+
+        PInvoke.KillTimer(Hwnd, HeldClickTimer);
+
+        string? command = _clicks.DoubleClick(Resolve(x, y, static n => n.OnClick), Resolve(x, y, static n => n.OnDoubleClick));
+        if (command is not null) CommandRequested?.Invoke(command);
+    }
+
+    /// <summary>The double-click time passed with no second press: the held click runs.</summary>
+    private void OnHeldClickElapsed()
+    {
+        PInvoke.KillTimer(Hwnd, HeldClickTimer);
+
+        if (_clicks.Elapsed() is { } command) CommandRequested?.Invoke(command);
+    }
 
     /// <summary>
     /// The wheel over a widget. The gesture lands where the pointer last moved, since
@@ -412,16 +468,20 @@ public sealed class BarWindow : CompanionWindow
     /// </summary>
     private void Perform(int x, int y, Func<VisualNode, string?> command)
     {
-        if (x < 0 || _tree?.HitTest(x, y) is not { } node) return;
+        if (Resolve(x, y, command) is { } run) CommandRequested?.Invoke(run);
+    }
+
+    /// <summary>The command a gesture names on the widget under the pointer, or on the nearest ancestor that names one.</summary>
+    private string? Resolve(int x, int y, Func<VisualNode, string?> command)
+    {
+        if (x < 0 || _tree?.HitTest(x, y) is not { } node) return null;
 
         for (VisualNode? current = node; current is not null; current = FindParent(_tree, current))
         {
-            if (command(current) is { Length: > 0 } run)
-            {
-                CommandRequested?.Invoke(run);
-                return;
-            }
+            if (command(current) is { Length: > 0 } run) return run;
         }
+
+        return null;
     }
 
     private static VisualNode? FindParent(VisualNode root, VisualNode child)
@@ -946,6 +1006,10 @@ public sealed class BarWindow : CompanionWindow
                 NotifyAppbarActivated(state != PInvoke.WA_INACTIVE);
                 return false;
             }
+
+            case PInvoke.WM_TIMER when wParam == HeldClickTimer:
+                OnHeldClickElapsed();
+                return true;
 
             default:
                 return false;

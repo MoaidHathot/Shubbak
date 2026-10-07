@@ -74,6 +74,12 @@ public sealed record SourceSpec(
     /// kept running.
     /// </summary>
     public bool IntervalWasWritten { get; init; }
+
+    /// <summary>
+    /// How many readings to keep as <c>&lt;name&gt;.history</c>, or null to keep none.
+    /// What a sparkline reads; see <see cref="HistorySource"/>.
+    /// </summary>
+    public int? History { get; init; }
 }
 
 /// <summary>
@@ -150,6 +156,8 @@ public static class TajConfigLoader
             TajConfig fallback = CreateDefault();
             profiles = new Dictionary<string, BarProfile>(fallback.Profiles, StringComparer.OrdinalIgnoreCase);
         }
+
+        FitSparklinesToTheirHistories(profiles.Values, sources, bar, diagnostics);
 
         List<BarRule> rules = [];
 
@@ -357,6 +365,29 @@ public static class TajConfigLoader
                 "Write command=\"pwsh -File my-script.ps1\"."));
         }
 
+        // How many readings to keep for a sparkline. Two is the least that draws a
+        // line; a thousand is more than any bar is wide.
+        int? history = null;
+
+        if (Setting(node, "history") is { } kept)
+        {
+            if (kept.TryAsInt(out int count) && count is >= 2 and <= 1000)
+            {
+                history = count;
+            }
+            else
+            {
+                string written = kept.AsString();
+                string historyName = HistorySource.NameFor(name);
+
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0036",
+                    $"Source '{name}' has history=\"{written}\", which is not a whole number from 2 to 1000; no history is kept.",
+                    kept.Span,
+                    $"Write history=60 to keep the last sixty readings as {historyName}."));
+            }
+        }
+
         return new SourceSpec(
             name,
             kind,
@@ -366,6 +397,7 @@ public static class TajConfigLoader
         {
             IntervalWasWritten = explicitInterval is not null,
             Culture = culture,
+            History = history,
         };
     }
 
@@ -395,7 +427,7 @@ public static class TajConfigLoader
 
     /// <summary>What may appear inside a <c>zone</c>: its settings, and the widgets.</summary>
     private static readonly string[] KnownZoneKeys =
-        ["justify", "grow", "gap", "workspaces", "spacer", "text", "icon"];
+        ["justify", "grow", "gap", "workspaces", "spacer", "text", "icon", "sparkline", "meter"];
 
     /// <summary>Styling every widget accepts, whatever kind it is.</summary>
     /// <remarks>
@@ -424,12 +456,26 @@ public static class TajConfigLoader
     private static readonly string[] KnownIconKeys =
         [.. CommonWidgetKeys, .. PointerActions.Keys, "source", "size", "hover-background", "hover-colour", "hover-color"];
 
+    /// <summary>What a <c>sparkline</c> accepts: the list it graphs, the box, the line, the scale.</summary>
+    private static readonly string[] KnownSparklineKeys =
+    [
+        .. CommonWidgetKeys, .. PointerActions.Keys,
+        "source", "width", "height", "thickness", "fill", "min", "max", "points", "when", "hover-background",
+    ];
+
+    /// <summary>What a <c>meter</c> accepts: the value it shows, its shape, and the range it is a fraction of.</summary>
+    private static readonly string[] KnownMeterKeys =
+    [
+        .. CommonWidgetKeys, .. PointerActions.Keys,
+        "source", "shape", "width", "height", "direction", "size", "thickness", "start", "sweep", "min", "max", "when", "hover-background",
+    ];
+
     /// <summary>What a <c>when</c> block accepts: what it matches, and what it restates.</summary>
     private static readonly string[] KnownConditionKeys =
-        ["value", "not", "of", "font", "font-size", "bold", "italic", "colour", "color", "background"];
+        ["value", "not", "above", "below", "of", "font", "font-size", "bold", "italic", "colour", "color", "background"];
 
     private static readonly string[] KnownSourceKeys =
-        ["kind", "format", "command", "interval", "timezone", "culture", "signal"];
+        ["kind", "format", "command", "interval", "timezone", "culture", "signal", "history"];
 
     private static readonly string[] KnownBarRuleKeys = ["use", "workspace", "monitor", "context"];
 
@@ -487,6 +533,65 @@ public static class TajConfigLoader
     }
 
     /// <summary>
+    /// Gives each sparkline that reads a history, and does not say how many points it
+    /// holds, the history's own count - so the graph fills in from the right over its
+    /// first minute rather than stretching two readings across the whole width - and
+    /// points out a sparkline reading the bare source where the history was meant.
+    /// </summary>
+    /// <remarks>
+    /// After the profiles rather than during, because the sources are a sibling
+    /// section and the widget parser does not see them; one pass over the finished
+    /// widgets is simpler than threading the list through three methods.
+    /// </remarks>
+    private static void FitSparklinesToTheirHistories(
+        IEnumerable<BarProfile> profiles, List<SourceSpec> sources, KdlNode bar, List<Diagnostic> diagnostics)
+    {
+        Dictionary<string, int> histories = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (SourceSpec spec in sources)
+            if (spec.History is { } kept) histories[spec.Name] = kept;
+
+        if (histories.Count == 0) return;
+
+        foreach (SparklineWidget sparkline in profiles.SelectMany(p => p.Zones).SelectMany(z => z.Widgets).OfType<SparklineWidget>())
+        {
+            if (sparkline.Points is not null) continue;
+
+            if (sparkline.Source.EndsWith(HistorySource.Suffix, StringComparison.OrdinalIgnoreCase) &&
+                histories.TryGetValue(sparkline.Source[..^HistorySource.Suffix.Length], out int capacity))
+            {
+                sparkline.Points = capacity;
+            }
+        }
+
+        // Walked over the KDL for the span, as the context check is. A sparkline on
+        // `cpu` where `cpu` keeps a history shows one reading - the latest - for ever,
+        // which looks like a graph that never started.
+        foreach (KdlNode profile in bar.ChildrenNamed("profile"))
+        {
+            foreach (KdlNode zone in profile.ChildrenNamed("zone"))
+            {
+                foreach (KdlNode widget in zone.ChildrenNamed("sparkline"))
+                {
+                    KdlValue? written = Setting(widget, "source") ?? widget.Argument(0);
+                    if (written is null) continue;
+
+                    string source = written.AsString();
+                    if (!histories.ContainsKey(source)) continue;
+
+                    string history = HistorySource.NameFor(source);
+
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0039",
+                        $"This sparkline reads '{source}', which is one reading at a time; its history is '{history}'.",
+                        written.Span,
+                        $"Write source=\"{history}\"."));
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// The names the <c>contexts</c> section declares, in order, from the same document
     /// the bar was read from.
     /// </summary>
@@ -521,6 +626,8 @@ public static class TajConfigLoader
         "spacer" => KnownSpacerKeys,
         "text" => KnownTextKeys,
         "icon" => KnownIconKeys,
+        "sparkline" => KnownSparklineKeys,
+        "meter" => KnownMeterKeys,
         _ => null,
     };
 
@@ -825,7 +932,8 @@ public static class TajConfigLoader
             RightClick: SettingText(node, "on-right-click"),
             MiddleClick: SettingText(node, "on-middle-click"),
             ScrollUp: SettingText(node, "on-scroll-up"),
-            ScrollDown: SettingText(node, "on-scroll-down"));
+            ScrollDown: SettingText(node, "on-scroll-down"),
+            DoubleClick: SettingText(node, "on-double-click"));
 
         foreach ((string key, string command) in actions.Commands())
         {
@@ -837,6 +945,17 @@ public static class TajConfigLoader
                     $"'{id}' has {key}=\"{command}\", which the bar cannot perform: {problem}",
                     Setting(node, key)?.Span ?? node.Span,
                     $"The gesture will be refused. Write {key}=\"keyboard next\" to cycle the input language."));
+            }
+
+            // The same judgement for the other verb the bar answers itself.
+            if (MediaCommand.Recognises(command) &&
+                !MediaCommand.TryParse(command, out _, out string? mediaProblem))
+            {
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0023",
+                    $"'{id}' has {key}=\"{command}\", which the bar cannot perform: {mediaProblem}",
+                    Setting(node, key)?.Span ?? node.Span,
+                    $"The gesture will be refused. Write {key}=\"media play-pause\" to press the play/pause key."));
             }
         }
 
@@ -858,7 +977,36 @@ public static class TajConfigLoader
             string? negated = SettingText(child, "not");
             string? value = negated ?? SettingText(child, "value") ?? child.Argument(0)?.AsString();
 
-            if (value is null) continue;
+            // Or a number: `above`, `below`, or both for a band. A number is compared
+            // as one, so `above=9` is true of `10%` and `100`, where a text match on
+            // either would have to spell every value out.
+            double? above = Threshold(child, "above", diagnostics);
+            double? below = Threshold(child, "below", diagnostics);
+
+            if (value is null && above is null && below is null)
+            {
+                // A `when` with nothing to match held a style that could never apply,
+                // and looked exactly like a widget whose colour was wrong.
+                if (Setting(child, "above") is null && Setting(child, "below") is null)
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0033",
+                        "A 'when' block names nothing to match; it will never apply.",
+                        child.Span,
+                        "Write when value=\"HE\", when not=\"splith\", or when above=80 / when below=20."));
+                }
+
+                continue;
+            }
+
+            if (value is not null && (above is not null || below is not null))
+            {
+                diagnostics.Add(Diagnostic.Warning(
+                    "TAJ0034",
+                    "A 'when' block matches either a value or a number, not both; the number is used.",
+                    child.Span,
+                    "Split it into two when blocks, one with value= and one with above= or below=."));
+            }
 
             var font = baseFont with
             {
@@ -879,13 +1027,42 @@ public static class TajConfigLoader
             };
 
             conditions.Add(new WidgetCondition(
-                value,
+                value ?? string.Empty,
                 style,
                 Negate: negated is not null,
-                Source: SettingText(child, "of")));
+                Source: SettingText(child, "of"))
+            {
+                Above = above,
+                Below = below,
+            });
         }
 
         return conditions;
+    }
+
+    /// <summary>Reads <c>above</c> or <c>below</c> on a <c>when</c> block, saying so when it is not a number.</summary>
+    private static double? Threshold(KdlNode condition, string key, List<Diagnostic> diagnostics)
+    {
+        if (Setting(condition, key) is not { } written) return null;
+
+        string text = written.AsString();
+
+        // A quoted number is still a number: "80" and 80 mean the same thing to the
+        // person who wrote them.
+        if (written.TryAsDouble(out double number) ||
+            double.TryParse(text.Trim(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out number))
+        {
+            return number;
+        }
+
+        diagnostics.Add(Diagnostic.Warning(
+            "TAJ0035",
+            $"'{key}' is \"{text}\", which is not a number; the condition is ignored.",
+            written.Span,
+            $"Write {key}=80."));
+
+        return null;
     }
 
     private static IWidget? ParseWidget(
@@ -1071,11 +1248,165 @@ public static class TajConfigLoader
                 };
             }
 
+            case "sparkline":
+            {
+                if (RequiredSource(node, id, diagnostics) is not { } source) return null;
+
+                // Sized for a bar: a minute of readings in the room a clock takes, and
+                // as tall as the text beside it, less a little.
+                int width = Positive(node, "width", diagnostics) ?? 60;
+                int height = Positive(node, "height", diagnostics) ?? 14;
+
+                (double? floor, double? ceiling) = Range(node, diagnostics);
+
+                PointerActions actions = ParsePointerActions(node, id, diagnostics);
+                Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
+
+                // The line is drawn in `colour` and the wash under it in `fill`, both
+                // transparent-aware, so a graph may be a line, a mass, or both.
+                return new SparklineWidget(id, source, width, height, style, box with { Padding = Edges.All(2) })
+                {
+                    Thickness = Positive(node, "thickness", diagnostics) ?? 1,
+                    Fill = ParseColour(SettingText(node, "fill")) ?? Colour.Transparent,
+                    Min = floor,
+                    Max = ceiling,
+                    Points = Positive(node, "points", diagnostics),
+                    Actions = actions,
+                    Conditions = ParseConditions(node, style, widgetFont, diagnostics),
+                    HoverStyle = hoverBackground is null
+                        ? null
+                        : VisualStyle.Default with { Background = hoverBackground.Value },
+                };
+            }
+
+            case "meter":
+            {
+                if (RequiredSource(node, id, diagnostics) is not { } source) return null;
+
+                string? shapeText = SettingText(node, "shape");
+
+                MeterShape shape = shapeText?.ToLowerInvariant() switch
+                {
+                    null or "bar" => MeterShape.Bar,
+                    "ring" or "circle" => MeterShape.Ring,
+                    _ => UnknownShape(shapeText),
+                };
+
+                MeterShape UnknownShape(string written)
+                {
+                    diagnostics.Add(Diagnostic.Warning(
+                        "TAJ0030",
+                        $"'shape' is \"{written}\", which is not one of bar or ring; the meter is a bar.",
+                        Setting(node, "shape")?.Span ?? node.Span));
+
+                    return MeterShape.Bar;
+                }
+
+                (double? floor, double? ceiling) = Range(node, diagnostics);
+
+                PointerActions actions = ParsePointerActions(node, id, diagnostics);
+                Colour? hoverBackground = ParseColour(SettingText(node, "hover-background"));
+
+                // The fill is `colour` and the track `background`, with a faint track
+                // when none is written so the level has something to be a level of.
+                var meterStyle = style with
+                {
+                    Background = ParseColour(SettingText(node, "background")) ?? new Colour(0xFF, 0xFF, 0xFF, 0x1A),
+                    CornerRadius = SettingInt(node, "radius") ?? 3,
+                };
+
+                return new MeterWidget(id, source, meterStyle)
+                {
+                    Shape = shape,
+                    Width = Positive(node, "width", diagnostics) ?? 60,
+                    Height = Positive(node, "height", diagnostics) ?? 6,
+                    Vertical = string.Equals(SettingText(node, "direction"), "vertical", StringComparison.OrdinalIgnoreCase),
+                    Size = Positive(node, "size", diagnostics) ?? 16,
+                    Thickness = Positive(node, "thickness", diagnostics) ?? 3,
+                    Start = SettingDouble(node, "start") ?? 0,
+                    Sweep = SettingDouble(node, "sweep") ?? 360,
+                    Min = floor ?? 0,
+                    Max = ceiling ?? 100,
+                    Box = box with { Padding = default },
+                    Actions = actions,
+                    Conditions = ParseConditions(node, style, widgetFont, diagnostics),
+                    HoverStyle = hoverBackground is null
+                        ? null
+                        : VisualStyle.Default with { Background = hoverBackground.Value },
+                };
+            }
+
             default:
                 // Unknown nodes are ignored rather than fatal, so a config written
                 // for a newer Taj still produces a working bar.
                 return null;
         }
+    }
+
+    /// <summary>
+    /// The <c>source=</c> a graph or a meter reads, which it cannot do without: a text
+    /// widget has a template to say what it shows, and these have only this.
+    /// </summary>
+    private static string? RequiredSource(KdlNode node, string id, List<Diagnostic> diagnostics)
+    {
+        string? source = SettingText(node, "source") ?? node.Argument(0)?.AsString();
+
+        if (source is { Length: > 0 }) return source;
+
+        string kind = node.Name;
+
+        diagnostics.Add(Diagnostic.Error(
+            "TAJ0037",
+            $"'{id}' is a {kind} with no source= to read.",
+            node.Span,
+            kind == "sparkline"
+                ? "Write source=\"cpu.history\", with history=60 on the cpu source."
+                : "Write source=\"battery\"."));
+
+        return null;
+    }
+
+    /// <summary>A size that has to be a positive whole number of pixels, or null when it was not written or not one.</summary>
+    private static int? Positive(KdlNode node, string name, List<Diagnostic> diagnostics)
+    {
+        if (Setting(node, name) is not { } value) return null;
+
+        if (value.TryAsInt(out int amount) && amount > 0) return amount;
+
+        string written = value.AsString();
+
+        diagnostics.Add(Diagnostic.Warning(
+            "TAJ0025",
+            $"'{name}' must be a positive whole number ({written}); the default is used.",
+            value.Span,
+            $"Write {name}=60."));
+
+        return null;
+    }
+
+    /// <summary>
+    /// The <c>min</c> and <c>max</c> of a scale, either or both, with a word when they
+    /// are the wrong way round - which would otherwise fill a meter at nought.
+    /// </summary>
+    private static (double? Min, double? Max) Range(KdlNode node, List<Diagnostic> diagnostics)
+    {
+        double? min = SettingDouble(node, "min");
+        double? max = SettingDouble(node, "max");
+
+        if (min is { } low && max is { } high && high <= low)
+        {
+            string written = $"max={Numbers.Format(high)} min={Numbers.Format(low)}";
+
+            diagnostics.Add(Diagnostic.Warning(
+                "TAJ0038",
+                $"'max' is not above 'min' ({written}); the defaults are used.",
+                Setting(node, "max")?.Span ?? node.Span,
+                "Write min=0 max=100."));
+
+            return (null, null);
+        }
+
+        return (min, max);
     }
 
     private static Colour? ParseColour(string? text) =>
@@ -1084,7 +1415,7 @@ public static class TajConfigLoader
     /// <summary>Every setting on a node that is a colour, wherever it appears.</summary>
     private static readonly string[] ColourKeys =
     [
-        "background", "foreground", "colour", "color", "border",
+        "background", "foreground", "colour", "color", "border", "fill",
         "active-background", "active-colour", "active-color",
         "focused-background", "focused-colour", "focused-color",
         "empty-colour", "empty-color",
@@ -1219,10 +1550,12 @@ public static class TajConfigLoader
 
         foreach (SourceSpec spec in specs)
         {
+            SourceBase? source = null;
+
             switch (spec.Kind.ToLowerInvariant())
             {
                 case "time":
-                    yield return new ClockSource(
+                    source = new ClockSource(
                         spec.Name, spec.Argument, spec.Interval, spec.TimeZone, spec.Culture);
                     break;
 
@@ -1231,7 +1564,7 @@ public static class TajConfigLoader
                     // its last line is the value; without one it is kept running and
                     // every line it prints is.
                     if (spec.Argument.Length > 0)
-                        yield return new ProcessSource(spec.Name, spec.Argument, interval: spec.IntervalWasWritten ? spec.Interval : null);
+                        source = new ProcessSource(spec.Name, spec.Argument, interval: spec.IntervalWasWritten ? spec.Interval : null);
                     break;
 
                 case "keyboard":
@@ -1242,19 +1575,27 @@ public static class TajConfigLoader
                         break;
                     }
 
-                    yield return new IntervalSource(spec.Name, spec.Interval, keyboardLanguage);
+                    source = new IntervalSource(spec.Name, spec.Interval, keyboardLanguage);
                     break;
 
                 case "signal":
                     // No timer and no process: a slot the host fills when the signal
                     // arrives, and the reason the bar subscribes to that topic at all.
-                    yield return new SignalSource(spec.Name, spec.Argument);
+                    source = new SignalSource(spec.Name, spec.Argument);
                     break;
 
                 default:
                     Log.Warn(LogCategory.Config, $"unknown source kind '{spec.Kind}' for '{spec.Name}'");
                     break;
             }
+
+            if (source is null) continue;
+
+            yield return source;
+
+            // The history is a source beside the one it records, under the name a
+            // sparkline reads; see HistorySource for why it is not kept by the widget.
+            if (spec.History is { } history) yield return new HistorySource(source, history);
         }
     }
 }

@@ -115,8 +115,111 @@ public static class VisualPainter
             if (!imageRect.IsEmpty) images.DrawImage(image, imageRect);
         }
 
+        // The same bargain for lines and arcs.
+        if (node.Kind == VisualKind.Shape && node.Shapes.Count > 0 && renderer is IShapeRenderer shapes)
+        {
+            Rect content = Deflate(node.Rect, node.Box.Padding);
+
+            if (!content.IsEmpty)
+            {
+                // Indexed: enumerating the list through its interface allocates the
+                // enumerator, once per shape node per paint.
+                IReadOnlyList<Shape> list = node.Shapes;
+                for (int i = 0; i < list.Count; i++) PaintShape(shapes, list[i], content);
+            }
+        }
+
         // Children after the parent's own background, so nesting draws correctly.
         foreach (VisualNode child in node.Children) PaintNode(renderer, child, hovered);
+    }
+
+    /// <summary>
+    /// Resolves a shape's unit square against the node's content rectangle and draws
+    /// it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A stroke is kept inside the rectangle: the square it is mapped onto is inset by
+    /// half the stroke's width, so a line along the top edge of a graph is a whole
+    /// line and not the lower half of one. A fill under a line runs to the rectangle's
+    /// real bottom edge, not the inset one, since the area under a graph ends at the
+    /// bottom of the box.
+    /// </para>
+    /// <para>
+    /// An arc is inscribed in the rectangle's largest centred square, its radius
+    /// brought in by half the stroke so the outer edge of the ring is the edge of the
+    /// box - which is where a gauge sized <c>size=18</c> expects to end.
+    /// </para>
+    /// <para>
+    /// The resolved points live on the stack: this is called once per shape per
+    /// paint, and a sparkline's sixty points and the sixty-two of the area under them
+    /// are two kilobytes that were otherwise two arrays of garbage per frame. Its own
+    /// method rather than a block in the caller's loop, so each call's stack is given
+    /// back before the next shape's is taken.
+    /// </para>
+    /// </remarks>
+    private static void PaintShape(IShapeRenderer renderer, Shape shape, Rect content)
+    {
+        // Past this many points the stack is left alone; a graph that wide is not a
+        // sparkline anyway.
+        const int StackPoints = 256;
+
+        switch (shape)
+        {
+            case PolylineShape line when line.Points.Count > 0:
+            {
+                double inset = Math.Min(line.Thickness / 2.0, Math.Min(content.Width, content.Height) / 2.0);
+
+                double left = content.Left + inset;
+                double top = content.Top + inset;
+                double width = Math.Max(0, content.Width - (2 * inset));
+                double height = Math.Max(0, content.Height - (2 * inset));
+
+                int count = line.Points.Count;
+                bool filled = !line.Fill.IsTransparent && count >= 2;
+
+                // One buffer for both: the line's points, then the two that close the
+                // area under it, so the fill is a slice of the same span.
+                int needed = filled ? count + 2 : count;
+                Span<PointD> points = needed <= StackPoints ? stackalloc PointD[needed] : new PointD[needed];
+
+                for (int i = 0; i < count; i++)
+                {
+                    UnitPoint unit = line.Points[i];
+                    points[i] = new PointD(left + (Math.Clamp(unit.X, 0, 1) * width), top + (Math.Clamp(unit.Y, 0, 1) * height));
+                }
+
+                if (filled)
+                {
+                    // The line, then straight down to the bottom edge at each end and
+                    // back along it: the area under the graph.
+                    points[count] = new PointD(points[count - 1].X, content.Bottom);
+                    points[count + 1] = new PointD(points[0].X, content.Bottom);
+
+                    renderer.FillPolygon(points, line.Fill);
+                }
+
+                if (!line.Stroke.IsTransparent && line.Thickness > 0 && count >= 2)
+                    renderer.DrawPolyline(points[..count], line.Stroke, line.Thickness);
+
+                break;
+            }
+
+            case ArcShape arc when !arc.Stroke.IsTransparent && arc.Thickness > 0 && arc.SweepDegrees != 0:
+            {
+                double side = Math.Min(content.Width, content.Height);
+                double radius = (side / 2.0) - (arc.Thickness / 2.0);
+                if (radius <= 0) break;
+
+                var centre = new PointD(content.Left + (content.Width / 2.0), content.Top + (content.Height / 2.0));
+
+                renderer.DrawArc(centre, radius, arc.StartDegrees, arc.SweepDegrees, arc.Stroke, arc.Thickness);
+                break;
+            }
+
+            default:
+                break;
+        }
     }
 
     /// <summary>

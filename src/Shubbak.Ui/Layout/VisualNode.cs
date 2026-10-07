@@ -131,6 +131,9 @@ public sealed class VisualNode
     /// <summary>The picture to draw, for <see cref="VisualKind.Image"/>.</summary>
     public ImageBitmap? Image { get; set; }
 
+    /// <summary>What to draw, for <see cref="VisualKind.Shape"/>: lines and arcs in the unit square of the content rectangle.</summary>
+    public IReadOnlyList<Shape> Shapes { get; set; } = [];
+
     /// <summary>Whether this node and its children are laid out and drawn at all.</summary>
     public bool Visible { get; set; } = true;
 
@@ -168,10 +171,20 @@ public sealed class VisualNode
     /// <summary>The command for a middle click, if any.</summary>
     public string? OnMiddleClick { get; set; }
 
+    /// <summary>
+    /// The command for two left clicks in quick succession, if any.
+    /// </summary>
+    /// <remarks>
+    /// A node with one of these holds its single click until the double-click time
+    /// has passed, so the two cannot both fire; a node without one runs its click at
+    /// once. The host decides which, by whether this is set.
+    /// </remarks>
+    public string? OnDoubleClick { get; set; }
+
     /// <summary>Whether the pointer can do anything at all here.</summary>
     public bool IsInteractive =>
         OnClick is { Length: > 0 } || OnRightClick is { Length: > 0 } || OnMiddleClick is { Length: > 0 } ||
-        OnScrollUp is { Length: > 0 } || OnScrollDown is { Length: > 0 };
+        OnDoubleClick is { Length: > 0 } || OnScrollUp is { Length: > 0 } || OnScrollDown is { Length: > 0 };
 
     /// <summary>Computed position, filled in by <see cref="FlexLayout"/>.</summary>
     public Rect Rect { get; internal set; }
@@ -230,6 +243,9 @@ public enum VisualKind
 
     /// <summary>Draws <see cref="VisualNode.Image"/>, scaled to its box.</summary>
     Image,
+
+    /// <summary>Draws <see cref="VisualNode.Shapes"/> - lines and arcs - within its box.</summary>
+    Shape,
 }
 
 /// <summary>

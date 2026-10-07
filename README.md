@@ -38,9 +38,9 @@ install first.
 - **shubbak-wm**, the window manager. Eleven layouts that belong to containers rather
   than workspaces, so they nest. Workspaces pinned to monitors, tags, floating,
   fullscreen, a scratchpad, and animations at your display's refresh rate.
-- **Taj** (تاج, *crown*), the bar. One per monitor. Three widget primitives and a
-  template language do the work of a widget catalogue, and any program that prints to
-  stdout can drive a widget.
+- **Taj** (تاج, *crown*), the bar. One per monitor. Six widget primitives - text,
+  workspaces, icon, spacer, sparkline, meter - and a template language do the work of
+  a widget catalogue, and any program that prints to stdout can drive a widget.
 - **Dalil** (دليل, *guide*), the command palette. Every window, command, workspace and
   layout under one search box. Mark several windows and act on all of them at once.
   Ask it why a window is not tiling, and it writes the rule for you.

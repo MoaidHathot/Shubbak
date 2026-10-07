@@ -153,6 +153,13 @@ code, not the page.
 | `TAJ0030` | Warning | '{key}' is "{written}", which is not one of {accepted}; the bar sits at the {fallback.ToString().ToLowerInvariant()}. |
 | `TAJ0031` | Warning | '{key}' on {where} is "{text}", which is not a colour; the default is used. |
 | `TAJ0032` | Warning | Source '{name}' has culture="{culture}", which is not a culture this machine knows; the invariant culture is used. |
+| `TAJ0033` | Warning | A 'when' block names nothing to match; it will never apply. |
+| `TAJ0034` | Warning | A 'when' block matches either a value or a number, not both; the number is used. |
+| `TAJ0035` | Warning | '{key}' is "{text}", which is not a number; the condition is ignored. |
+| `TAJ0036` | Warning | Source '{name}' has history="{written}", which is not a whole number from 2 to 1000; no history is kept. |
+| `TAJ0037` | Error | '{id}' is a {kind} with no source= to read. |
+| `TAJ0038` | Warning | 'max' is not above 'min' ({written}); the defaults are used. |
+| `TAJ0039` | Warning | This sparkline reads '{source}', which is one reading at a time; its history is '{history}'. |
 
 ## DAL - The palette
 
