@@ -341,8 +341,29 @@ public sealed class ScriptPromptTests
 }
 
 /// <summary>Running the program behind a script prompt, against real processes.</summary>
+/// <remarks>
+/// <para>
+/// Two of these race a timer against a program, and the program has to be the one
+/// that loses. On .NET 10 a redirected stream is a synchronous <c>FileStream</c>, so
+/// every read holds a thread-pool worker in <c>ReadFile</c> - two per run here, one for
+/// each stream - and a <see cref="CancellationTokenSource"/> with a delay fires as a
+/// thread-pool work item too. Under load, with other test classes on the pool's
+/// remaining workers, the timer has nobody to run it until a worker frees, and a
+/// worker whose read returns takes its own next read before the queued timer. A
+/// program that finishes inside that delay then finishes with a clean exit, and the
+/// run succeeds instead of being cancelled: on a loaded four-core ARM64 runner, a
+/// 200-millisecond timer lost to a two-second ping. So the raced programs run for
+/// half a minute: a timer that late is a failure worth seeing, not a flake.
+/// </para>
+/// <para>
+/// <c>ping -n 30</c> stops on its own, which matters if a run is killed mid-way; an
+/// endless ping would not.
+/// </para>
+/// </remarks>
 public sealed class ScriptListTests
 {
+    /// <summary>A program that runs for about twenty-nine seconds, printing a line a second.</summary>
+    private const string LongProgram = "ping -n 30 127.0.0.1";
     [Fact]
     public async Task EveryLineTheProgramPrintsIsRead()
     {
@@ -385,8 +406,7 @@ public sealed class ScriptListTests
     [Fact]
     public async Task AProgramThatOutstaysItsWelcomeIsStoppedAndSaidSo()
     {
-        // ping with a count of three waits about two seconds between echoes.
-        ScriptList.Result result = await ScriptList.RunAsync("ping -n 3 127.0.0.1", timeout: TimeSpan.FromMilliseconds(300));
+        ScriptList.Result result = await ScriptList.RunAsync(LongProgram, timeout: TimeSpan.FromMilliseconds(300));
 
         Assert.False(result.Succeeded);
         Assert.Contains("did not finish", result.Failure!, StringComparison.Ordinal);
@@ -407,7 +427,7 @@ public sealed class ScriptListTests
     {
         using var cancel = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
 
-        ScriptList.Result result = await ScriptList.RunAsync("ping -n 3 127.0.0.1", token: cancel.Token);
+        ScriptList.Result result = await ScriptList.RunAsync(LongProgram, token: cancel.Token);
 
         Assert.False(result.Succeeded);
         Assert.Contains("moved on", result.Failure!, StringComparison.Ordinal);

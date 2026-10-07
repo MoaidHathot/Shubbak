@@ -675,6 +675,26 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Two palette tests raced a timer against a two-second ping, and on a loaded runner
+  the ping won.** `CancellingTheWaitStopsTheProgram` and
+  `AProgramThatOutstaysItsWelcomeIsStoppedAndSaidSo` ran `ping -n 3` and expected a
+  200- or 300-millisecond cancellation to stop it. On .NET 10 a redirected stream is a
+  synchronous `FileStream`, so each read holds a thread-pool worker in `ReadFile` - two
+  per run, one per stream - and a `CancellationTokenSource` with a delay fires as a
+  thread-pool work item too. With other test classes on the pool's remaining workers,
+  the timer had nobody to run it; a worker whose read returned took its own next read
+  before the queued timer; and when the ping finished with a clean exit the run was a
+  success, since `WaitForExitAsync` consults the token only for a process still
+  running. The ARM64 job failed exactly so - `Succeeded` true after two seconds - while
+  the x64 job on the same commit passed, and the sequence was reproduced on demand by
+  pinning the pool to its processor count and blocking all but two workers: 2060 ms,
+  ten lines, cancelled a moment too late. The raced programs now run for half a minute,
+  so a timer that is seconds late still cancels something that is running, and one
+  that is thirty seconds late fails loudly rather than by chance; under the same
+  induced starvation the test passes five times in five at three seconds, and in
+  half a second with the pool free. The palette's own cancellation was never at fault
+  - with a worker to run it, it interrupts even a program that prints nothing - so
+  `ScriptList` is unchanged.
 - **The native and end-to-end test suites no longer fail each other.** Both create
   real windows on the desktop: the native tests spawn a `winver` and assert what the
   shell does with it, and the end-to-end test starts a window manager of its own that
