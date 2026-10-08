@@ -225,6 +225,51 @@ public sealed class WmConnection : IAsyncDisposable
     }
 
     /// <summary>
+    /// Asks the window manager which contexts hold right now.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a key that runs an action tied to a context, which has to be judged against
+    /// what holds at the keystroke rather than what held when the palette last read
+    /// the world. The palette reads only while it is open, so for one that has been
+    /// closed since the morning the last reading is the morning's - and "Start focus
+    /// timer" refused because a timer that ended hours ago was still holding the
+    /// context is the palette being wrong in a way nothing on screen explains.
+    /// </para>
+    /// <para>
+    /// The context list rather than the whole state: it is a few names, where the
+    /// state is every window on the desktop, and the names are all that is wanted.
+    /// </para>
+    /// </remarks>
+    /// <returns>
+    /// The names that hold, in the window manager's order; empty when none do, and null
+    /// when the window manager could not be asked.
+    /// </returns>
+    public async Task<IReadOnlyList<string>?> HeldContextsAsync()
+    {
+        try
+        {
+            await using IpcClient client = new();
+            await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
+
+            IReadOnlyList<ContextReport> contexts = await QueryAsync(
+                client, "contexts", IpcJsonContext.Default.IReadOnlyListContextReport) ?? [];
+
+            List<string> held = [];
+
+            for (int i = 0; i < contexts.Count; i++)
+                if (contexts[i].Active) held.Add(contexts[i].Name);
+
+            return held;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Log.Warn(LogCategory.Ipc, $"could not ask which contexts hold: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Asks the window manager for a report fit to attach to a bug tracker, and files it.
     /// </summary>
     /// <remarks>
@@ -461,15 +506,21 @@ public sealed class WmConnection : IAsyncDisposable
                 [.. contexts.Select(c => c.Name)],
                 [.. arrangements.Select(a => a.Name)]);
 
+            // In the light of the contexts just read: a row tied to one is offered
+            // only while its condition holds. The read is already made on every
+            // context.changed, so the switch flips as the context does.
             IReadOnlyList<PaletteEntry> ownActions =
-                PaletteEntries.ForMacros(macros ?? [], completions, labels);
+                PaletteEntries.ForMacros(macros ?? [], completions, labels, status, everything: false);
 
             // The palette's own verbs and the user's own sequences sit above the window
             // manager's, because somebody who named a thing is looking for the name.
+            // The row that lists the actions counts the ones written, not the ones
+            // offered: a configuration whose every row is kept back right now still
+            // needs the one row that says where they went.
             List<PaletteEntry> everyCommand =
             [
                 .. ownActions,
-                .. PaletteEntries.ForBuiltins(configProblems, ownActions.Count),
+                .. PaletteEntries.ForBuiltins(configProblems, macros?.Count ?? 0),
                 .. PaletteEntries.ForCommands(commands, status),
             ];
 

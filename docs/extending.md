@@ -153,6 +153,33 @@ That is the whole of how the palette exists: `signal "palette"` from a key, and 
 program that is listening. Arguments after the name are yours to define. `shubbak
 signal focus start 25` from a terminal raises exactly the same signal.
 
+A palette row is the same request without the key. An `action` in the `dalil` section
+is a named sequence of the same commands a `bind` takes, found by typing roughly what
+it is called, so a program that listens for a signal gets a row in the palette by the
+signal being written down once more with a name on it — nothing in your program
+changes, and no chord has to be found for something done twice a week:
+
+```kdl
+contexts { context "focusing" { } }
+
+dalil {
+    action "Start focus timer" description="25 minutes; the bar counts down" { signal "focus" "start" "25" }
+    action "Stop focus timer" description="Let go of the context and clear the bar" { signal "focus" "stop" }
+    action "Focus for..." description="Pick a length" {
+        param "m" values="15 25 45 60"
+        signal "focus" "start" "{m}"
+    }
+}
+```
+
+The third row asks before it sends: a `param` is a question, and its answer fills the
+placeholder. The `signal` verb is not gated over the pipe — only `shell-exec` is — so
+a row like these needs no setting to run. What a row cannot do is know whether your
+program is listening or what it is doing: the palette carries the signal and the
+window manager carries it on, and neither has any idea what it means. The context your
+program holds is how the palette finds out — see [Dalil](dalil.md#your-own-actions)
+for tying a row to one, and the worked example below for the whole arrangement.
+
 ## A worked example: a focus timer
 
 All seven hello-worlds at once, in one small program that is something none of the
@@ -184,7 +211,8 @@ dotnet run --project examples/Shubbak.Example.FocusTimer
 ```
 
 Both want this in the config: the context to hold, the source to show it, and the keys
-to drive it. Together, as one file:
+to drive it — or palette rows, which are the same commands with a name instead of a
+chord. Together, as one file:
 
 ```kdl
 contexts {
@@ -209,7 +237,21 @@ keybindings {
     bind "alt+f" { signal "focus" "start" "25" }
     bind "alt+shift+f" { signal "focus" "stop" }
 }
+
+dalil {
+    action "Start focus timer" unless-context="focusing" { signal "focus" "start" "25" }
+    action "Stop focus timer" when-context="focusing" { signal "focus" "stop" }
+}
 ```
+
+The two rows are tied to the context the timer holds, so the palette offers the one
+that applies — "Start" while nothing is running, "Stop" while something is — and the
+pair reads as one switch. That is the timer's state reaching the palette without the
+timer knowing the palette exists: it holds a context, as it already did for the keys
+and the borders, and the rows follow. A row kept back is still a lookup away, in the
+palette's own `actions` list, greyed with the condition beside it; a key bound to
+`signal "palette" "run" "Start focus timer"` while the timer is running opens that
+list rather than restarting the timer.
 
 `shubbak contexts` says who holds `focusing` and on which connection; `shubbak sub
 signal,context.changed` shows the conversation as it happens.

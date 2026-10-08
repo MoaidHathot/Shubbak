@@ -227,6 +227,43 @@ Shubbak still has no idea what an action is — it carries the name without read
 and the palette is what knows. An action that *asks* cannot be answered by a key, so
 those open the palette with the name already typed and the picker one Enter away.
 
+**A row can follow a context.** `when-context=` offers a row only while a context
+holds; `unless-context=` only while it does not. That is what makes a pair of rows read
+as one switch — and it is how a program the palette knows nothing about gets its state
+onto the palette: it holds a context, as the focus timer in
+[Extending](extending.md#a-worked-example-a-focus-timer) does and as the watcher does
+for the microphone, and the rows follow.
+
+```kdl
+contexts {
+    context "focusing" { }
+    context "meeting-live" { }
+    context "meeting-muted" { }
+}
+
+dalil {
+    action "Start focus timer" unless-context="focusing" { signal "focus" "start" "25" }
+    action "Stop focus timer" when-context="focusing" { signal "focus" "stop" }
+
+    action "Mute the mic" when-context="meeting-live" { signal "ayn" "microphone" "mute" }
+    action "Unmute the mic" when-context="meeting-muted" { signal "ayn" "microphone" "unmute" }
+}
+```
+
+While nothing is running the list has "Start" and not "Stop"; while the timer holds
+`focusing` it has "Stop" and not "Start"; and the microphone rows appear only in a
+meeting, one at a time. The list changes as the context does — the palette already
+re-reads the world on `context.changed` — and a row that applies is an ordinary row.
+A row kept back is not gone: `>actions`, the palette's own list of every action you
+have written, shows it greyed with the condition beside it (`not now · only while
+context 'focusing' holds`), so a row you cannot find is one lookup away and says why.
+A key bound to `signal "palette" "run" "Start focus timer"` is judged the same way,
+against what holds at the keystroke: a row that is kept back opens that list rather
+than running or doing nothing. Both keys on one action must hold together; a name the
+`contexts` section does not declare never holds and is `DAL0021`, one context named
+by both keys is a row that can never be offered and is `DAL0022`, and a misspelt key
+on an action — `when-contxt=` — is `DAL0023` rather than a condition quietly not there.
+
 ## What the rows tell you
 
 Rows carry the application's icon and badges so you can see at a glance what you are

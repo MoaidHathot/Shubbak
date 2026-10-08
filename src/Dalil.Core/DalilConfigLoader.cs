@@ -104,7 +104,7 @@ public static class DalilConfigLoader
         if (parsed.HasErrors) return new DalilConfigLoad(new DalilConfig(), diagnostics, Usable: false);
 
         DalilConfig config = parsed.Document.Node("dalil") is { } node
-            ? Read(node, ShellExecAllowedOverIpc(parsed.Document), diagnostics)
+            ? Read(node, ShellExecAllowedOverIpc(parsed.Document), DeclaredContexts(parsed.Document), diagnostics)
             : new DalilConfig();
 
         bool usable = !diagnostics.Any(d => d.Severity == DiagnosticSeverity.Error);
@@ -130,7 +130,31 @@ public static class DalilConfigLoader
         return value is not null && value.TryAsBool(out bool allowed) && allowed;
     }
 
-    private static DalilConfig Read(KdlNode node, bool shellExecOverIpc, List<Diagnostic>? diagnostics)
+    /// <summary>
+    /// The names the <c>contexts</c> section declares, in order, from the same document
+    /// the palette's section was read from.
+    /// </summary>
+    /// <remarks>
+    /// Names only, and nothing is reported about the section: whether a context is
+    /// well-formed is the window manager's loader's business, and it says so with its
+    /// own codes. The bar's loader reads the same names the same way, for the same
+    /// check on its rules.
+    /// </remarks>
+    private static List<string> DeclaredContexts(KdlDocument document)
+    {
+        if (document.Node("contexts") is not { } section) return [];
+
+        List<string> names = [];
+
+        foreach (KdlNode context in section.ChildrenNamed("context"))
+            if (context.Argument(0)?.AsString() is { Length: > 0 } name)
+                names.Add(name);
+
+        return names;
+    }
+
+    private static DalilConfig Read(
+        KdlNode node, bool shellExecOverIpc, IReadOnlyList<string> declaredContexts, List<Diagnostic>? diagnostics)
     {
         var defaults = new DalilConfig();
 
@@ -166,7 +190,7 @@ public static class DalilConfigLoader
             Placement = ParsePlacement(node, diagnostics) ?? defaults.Placement,
 
             Prefixes = ReadPrefixes(node, diagnostics),
-            Macros = ReadMacros(node, shellExecOverIpc, diagnostics),
+            Macros = ReadMacros(node, shellExecOverIpc, declaredContexts, diagnostics),
 
             Background = Colour(node, "background", diagnostics) ?? defaults.Background,
             Foreground = Colour(node, "foreground", diagnostics) ?? defaults.Foreground,
@@ -401,8 +425,23 @@ public static class DalilConfigLoader
     /// action travels over the pipe. A row that would be refused is listed as unable to
     /// run, with the setting named, rather than closing the palette and doing nothing.
     /// </para>
+    /// <para>
+    /// <c>when-context=</c> and <c>unless-context=</c> tie a row to a context, so that
+    /// a pair of rows - start and stop, mute and unmute - reads as one switch, with the
+    /// half that applies shown and the other kept back:
+    /// </para>
+    /// <code>
+    /// action "Start focus timer" unless-context="focusing" { signal "focus" "start" "25" }
+    /// action "Stop focus timer"  when-context="focusing"   { signal "focus" "stop" }
+    /// </code>
+    /// <para>
+    /// The names are checked against the <c>contexts</c> section of the same file, as
+    /// the bar's rules are, because a context nothing declares never holds and the row
+    /// would then be kept back - or offered - for ever, with nothing to say why.
+    /// </para>
     /// </remarks>
-    private static List<PaletteMacro> ReadMacros(KdlNode node, bool shellExecOverIpc, List<Diagnostic>? diagnostics)
+    private static List<PaletteMacro> ReadMacros(
+        KdlNode node, bool shellExecOverIpc, IReadOnlyList<string> declaredContexts, List<Diagnostic>? diagnostics)
     {
         List<PaletteMacro> macros = [];
         HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
@@ -436,6 +475,10 @@ public static class DalilConfigLoader
             HashSet<string> declared = new(parameters.Select(p => p.Name), StringComparer.Ordinal);
             HashSet<string> used = new(StringComparer.Ordinal);
 
+            WarnAboutUnknownOnAction(action, name, diagnostics);
+
+            (string? whenContext, string? unlessContext) = ReadConditions(action, name, declaredContexts, diagnostics);
+
             List<string> commands = [];
             string? problem = null;
 
@@ -450,6 +493,13 @@ public static class DalilConfigLoader
                 // to the parser as a verb it has never heard of.
                 if (string.Equals(child.Name, "param", StringComparison.OrdinalIgnoreCase))
                     continue;
+
+                // Nor is a condition, in either spelling, for the same reason.
+                if (string.Equals(child.Name, "when-context", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(child.Name, "unless-context", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
                 // Tokens are passed through directly rather than rebuilt into a string
                 // and re-split. Re-splitting would destroy any argument containing a
@@ -576,10 +626,100 @@ public static class DalilConfigLoader
                 // Only the ones that are actually referred to. Keeping an unused
                 // parameter would make the row stop and ask a question whose answer
                 // provably goes nowhere, which is worse than the warning above.
-                [.. parameters.Where(p => used.Contains(p.Name))]));
+                [.. parameters.Where(p => used.Contains(p.Name))],
+                whenContext,
+                unlessContext));
         }
 
         return macros;
+    }
+
+    /// <summary>The settings an <c>action</c> takes as properties; anything else on it is a command.</summary>
+    /// <remarks>
+    /// A child node that is not one of these is handed to the command parser, which
+    /// reports a misspelling in its own words. A property has nobody to report it:
+    /// <c>when-contxt="focusing"</c> would be read as no condition at all, and the row
+    /// offered whatever holds, with nothing anywhere to say that the file asked
+    /// otherwise. So properties are checked here, as the section's own settings are.
+    /// </remarks>
+    private static readonly string[] s_actionKeys = ["description", "when-context", "unless-context"];
+
+    /// <summary>Reports a property on an action that nothing reads.</summary>
+    private static void WarnAboutUnknownOnAction(KdlNode action, string macro, List<Diagnostic>? diagnostics)
+    {
+        if (diagnostics is null) return;
+
+        foreach ((string key, KdlValue value) in action.Properties)
+        {
+            if (s_actionKeys.Contains(key, StringComparer.OrdinalIgnoreCase)) continue;
+
+            diagnostics.Add(Diagnostic.Warning(
+                "DAL0023",
+                $"Unknown setting '{key}' on palette action '{macro}'; it will be ignored.",
+                value.Span,
+                Suggestion.Closest(key, s_actionKeys) is { } guess
+                    ? $"Did you mean '{guess}'?"
+                    : $"An action takes {string.Join(", ", s_actionKeys)}; everything else is a command."));
+        }
+    }
+
+    /// <summary>
+    /// Reads which contexts an action is tied to, and says when the tie can never be met.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A name the <c>contexts</c> section does not declare is a warning rather than an
+    /// error, and the condition is kept as written: the row is correct and the context
+    /// simply never holds, which is worth saying but not worth losing the row over -
+    /// the same call the bar's loader makes for a rule, and the window manager's for a
+    /// <c>context</c> command.
+    /// </para>
+    /// <para>
+    /// Both keys naming one context is a row that can never be offered - it wants the
+    /// context to hold and not to hold at once - and is said separately, because the
+    /// names are both declared and the mistake is in the pairing.
+    /// </para>
+    /// </remarks>
+    private static (string? When, string? Unless) ReadConditions(
+        KdlNode action, string macro, IReadOnlyList<string> declaredContexts, List<Diagnostic>? diagnostics)
+    {
+        string? when = Condition(action, macro, "when-context", declaredContexts, diagnostics);
+        string? unless = Condition(action, macro, "unless-context", declaredContexts, diagnostics);
+
+        if (when is not null && unless is not null && string.Equals(when, unless, StringComparison.OrdinalIgnoreCase))
+        {
+            diagnostics?.Add(Diagnostic.Warning(
+                "DAL0022",
+                $"Palette action '{macro}' is offered only while context '{when}' holds and only while it does not; it will never be offered.",
+                (Setting(action, "unless-context") ?? Setting(action, "when-context"))?.Span ?? action.Span,
+                "Keep one of when-context= and unless-context=."));
+        }
+
+        return (when, unless);
+    }
+
+    /// <summary>One condition, checked against the declared names.</summary>
+    private static string? Condition(
+        KdlNode action, string macro, string key, IReadOnlyList<string> declaredContexts, List<Diagnostic>? diagnostics)
+    {
+        if (Setting(action, key) is not { } value) return null;
+
+        string context = value.AsString();
+
+        if (!declaredContexts.Contains(context, StringComparer.OrdinalIgnoreCase))
+        {
+            diagnostics?.Add(Diagnostic.Warning(
+                "DAL0021",
+                $"Palette action '{macro}': {key} names context '{context}', which the contexts section does not declare; it never holds.",
+                value.Span,
+                declaredContexts.Count == 0
+                    ? "No contexts are declared. Add a contexts { } section with a context of that name."
+                    : Suggestion.Closest(context, declaredContexts) is { } guess
+                        ? $"Did you mean '{guess}'?"
+                        : $"Declared: {string.Join(", ", declaredContexts)}."));
+        }
+
+        return context;
     }
 
     /// <summary>Every source a <c>param</c> can draw its choices from.</summary>

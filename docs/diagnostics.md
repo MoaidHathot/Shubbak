@@ -188,6 +188,9 @@ code, not the page.
 | `DAL0018` | Warning | The prefix for '{child.Name}' is "{spelling}", a letter or digit; typing it into an empty palette will change mode instead of searching. |
 | `DAL0019` | Error | Palette action '{macro}': param '{name}' has run= with nothing to run. |
 | `DAL0020` | Warning | Palette action '{name}' runs shell-exec, which the window manager refuses over the pipe; the row cannot run. |
+| `DAL0021` | Warning | Palette action '{macro}': {key} names context '{context}', which the contexts section does not declare; it never holds. |
+| `DAL0022` | Warning | Palette action '{macro}' is offered only while context '{when}' holds and only while it does not; it will never be offered. |
+| `DAL0023` | Warning | Unknown setting '{key}' on palette action '{macro}'; it will be ignored. |
 
 ## AYN - The watcher
 

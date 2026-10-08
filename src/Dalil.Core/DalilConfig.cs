@@ -135,23 +135,86 @@ public sealed record MacroParam(
 /// <param name="Parameters">
 /// Values to be chosen before it runs, in the order they are asked for.
 /// <para>
-/// Last, and defaulted, so that every macro written before prompts existed still
-/// constructs exactly as it did. An empty list is the ordinary case and means the row
-/// runs the moment Enter reaches it.
+/// Defaulted, so that every macro written before prompts existed still constructs
+/// exactly as it did. An empty list is the ordinary case and means the row runs the
+/// moment Enter reaches it.
 /// </para>
+/// </param>
+/// <param name="WhenContext">
+/// A context that has to hold for the row to be offered, or null for a row that is
+/// offered whatever holds.
+/// <para>
+/// What makes a pair of rows read as one switch. "Start focus timer" and "Stop focus
+/// timer" are two actions, and only one of them ever makes sense: the one the timer
+/// is not already doing. Tying each to the context the timer holds means the list
+/// shows the one that applies and not the one that does not - which is the thing a
+/// program driven by signals cannot do for itself, since it has no row to edit.
+/// </para>
+/// </param>
+/// <param name="UnlessContext">
+/// A context that has to be absent for the row to be offered, or null. The other half
+/// of the same switch: the row that starts something is wanted while the context that
+/// says it is running does not hold.
 /// </param>
 public sealed record PaletteMacro(
     string Name,
     string Description,
     IReadOnlyList<string> Commands,
     string? Problem = null,
-    IReadOnlyList<MacroParam>? Parameters = null)
+    IReadOnlyList<MacroParam>? Parameters = null,
+    string? WhenContext = null,
+    string? UnlessContext = null)
 {
     /// <summary>The values this macro asks for, in order.</summary>
     public IReadOnlyList<MacroParam> Prompts => Parameters ?? [];
 
     /// <summary>Whether anything has to be chosen before this can run.</summary>
     public bool Asks => Parameters is { Count: > 0 };
+
+    /// <summary>Whether being offered depends on which contexts hold.</summary>
+    public bool Conditional => WhenContext is not null || UnlessContext is not null;
+
+    /// <summary>Whether this is offered while the given contexts hold.</summary>
+    /// <param name="held">The contexts that hold, or null for none.</param>
+    public bool Applies(IReadOnlyList<string>? held) => WhyNotNow(held) is null;
+
+    /// <summary>
+    /// Why this is not offered while the given contexts hold, or null when it is.
+    /// </summary>
+    /// <param name="held">The contexts that hold, or null for none.</param>
+    /// <remarks>
+    /// <para>
+    /// Worded as the rule rather than as the state - "only while 'focusing' holds"
+    /// rather than "'focusing' is not held" - because it is read on a row that is
+    /// being shown precisely to explain why it is not in the ordinary list, and the
+    /// rule is what the reader needs to know to make it appear.
+    /// </para>
+    /// <para>
+    /// Names are compared the way the window manager compares them, without regard to
+    /// case, so a row conditioned on <c>Focusing</c> follows a context declared as
+    /// <c>focusing</c> rather than waiting for one that will never hold.
+    /// </para>
+    /// </remarks>
+    public string? WhyNotNow(IReadOnlyList<string>? held)
+    {
+        if (WhenContext is { } wanted && !Holds(held, wanted))
+            return $"only while context '{wanted}' holds";
+
+        if (UnlessContext is { } unwanted && Holds(held, unwanted))
+            return $"not while context '{unwanted}' holds";
+
+        return null;
+    }
+
+    private static bool Holds(IReadOnlyList<string>? held, string name)
+    {
+        if (held is null) return false;
+
+        for (int i = 0; i < held.Count; i++)
+            if (string.Equals(held[i], name, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return false;
+    }
 }
 
 /// <summary>

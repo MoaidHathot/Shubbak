@@ -31,6 +31,10 @@ keybindings {
     bind "alt+h" { signal "hello" }                     // 4: reaches 4-signal.ps1
 }
 
+dalil {
+    action "Say hello" { signal "hello" "from" "the" "palette" }   // 4 again, as a palette row rather than a key
+}
+
 bar {
     source "hello" kind="signal"                        // 5: {{ hello }} reads what `shubbak signal hello ...` said
 
@@ -50,7 +54,9 @@ contexts {
 
 A `bar` block replaces the one you have, so merge the `source` and the `text` into
 yours rather than pasting the whole thing if your bar is already set up. The others
-add to what is there.
+add to what is there. The `dalil` row is the same signal as the key, reached by typing
+its name in the palette rather than by a chord; `>Say hello` and Enter while
+`4-signal.ps1` is running shows the words arriving.
 
 ## Trying them against a throwaway window manager
 

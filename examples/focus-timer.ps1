@@ -18,7 +18,17 @@
                  clears it.
 
     The config it wants is in docs/extending.md: a `context "focusing"` with whatever
-    it should change, a `source "focus" kind="signal"` on the bar, and two keys.
+    it should change, a `source "focus" kind="signal"` on the bar, and two keys - or
+    two palette rows, which raise the same signals by name:
+
+      dalil {
+          action "Start focus timer" unless-context="focusing" { signal "focus" "start" "25" }
+          action "Stop focus timer"  when-context="focusing"   { signal "focus" "stop" }
+      }
+
+    Tied to the context this script holds, so the palette offers "Start" while nothing
+    is running and "Stop" while something is - the timer's state reaching the palette
+    without this script knowing the palette exists.
 
     Nothing here polls. The script blocks on the event stream and wakes once a second
     only while a timer is running - and that second is how often the bar changes, so
@@ -29,7 +39,7 @@
 
 .EXAMPLE
     .\examples\focus-timer.ps1
-    shubbak signal focus start 25      # from another terminal, or alt+f
+    shubbak signal focus start 25      # from another terminal, alt+f, or the palette row
     shubbak signal focus stop
 #>
 [CmdletBinding()]

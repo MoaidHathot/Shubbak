@@ -1138,6 +1138,21 @@ dalil {
     // at one opens the palette with its name already typed and the picker one
     // Enter away.
 
+    // A row can follow a context. `when-context=` offers it only while the
+    // context holds, `unless-context=` only while it does not, so a pair of rows
+    // reads as one switch: during a meeting exactly one of these two is listed,
+    // and outside one neither is. The signal goes to ayn, which flips the system
+    // mute (see the `ayn` section at the end of the file); the contexts are the
+    // ones declared above, and `check-config` says so when a name is not. A row
+    // kept back is still in `>actions`, the palette's own list of every action,
+    // greyed with the condition beside it.
+    action "Mute the mic" description="The system mute; Teams says 'muted by your system'" when-context="meeting-live" {
+        signal "ayn" "microphone" "mute"
+    }
+    action "Unmute the mic" description="Lift the system mute" when-context="meeting-muted" {
+        signal "ayn" "microphone" "unmute"
+    }
+
     // Six colours, not ten. The chip behind the mode name, the pill behind a
     // badge, the accent down the selected row and the hairlines between sections
     // are all derived from these, so changing background and match moves the

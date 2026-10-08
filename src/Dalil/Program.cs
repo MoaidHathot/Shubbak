@@ -348,11 +348,7 @@ internal static class Program
             if (s_palette is { } showing)
             {
                 showing.Open(PaletteMode.Commands);
-
-                // Built from the same sources the command list uses, so a prompting
-                // action opened from here asks exactly what it asks from there.
-                showing.Push("actions", PaletteEntries.ForMacros(
-                    s_config.Macros, s_completions, s_sources.WorkspaceLabels));
+                ShowEveryAction(showing, s_sources.Status);
             }
 
             return;
@@ -403,6 +399,22 @@ internal static class Program
 
         return string.Join(" and ", parts);
     }
+
+    /// <summary>
+    /// Lists every action the configuration declares on top of the open palette, the
+    /// ones kept back from the command list included.
+    /// </summary>
+    /// <remarks>
+    /// Built from the same sources the command list uses, so a prompting action opened
+    /// from here asks exactly what it asks from there. The difference is what is kept
+    /// back: nothing. A row tied to a context that does not hold is listed greyed with
+    /// the condition as its reason, because this list is where somebody who cannot
+    /// find a row goes to find out why - and from a key that asked for one, it is the
+    /// answer to "nothing happened".
+    /// </remarks>
+    private static void ShowEveryAction(PaletteWindow palette, WmStatus status) =>
+        palette.Push("actions", PaletteEntries.ForMacros(
+            s_config.Macros, s_completions, s_sources.WorkspaceLabels, status, everything: true));
 
     /// <summary>
     /// Opens the configuration file in whatever Windows opens it with.
@@ -639,6 +651,12 @@ internal static class Program
     /// same reason an unrecognised mode name does: the key has already been pressed and
     /// silence is indistinguishable from the palette being dead.
     /// </para>
+    /// <para>
+    /// An action tied to a context is run only while its condition holds, judged
+    /// against the window manager at the keystroke; one that is kept back opens the
+    /// palette's list of every action, where the row sits greyed with the condition
+    /// beside it. The key is the same gesture as the row, and the row is not there.
+    /// </para>
     /// </remarks>
     private static bool RunRequested(IReadOnlyList<string> arguments)
     {
@@ -681,6 +699,49 @@ internal static class Program
             return true;
         }
 
+        if (!macro.Conditional)
+        {
+            Launch(macro);
+            return true;
+        }
+
+        // A row tied to a context is judged against what holds at the keystroke, not
+        // against the palette's last reading - which, for a palette closed since the
+        // morning, is the morning's. One query, on the thread the signal came in on;
+        // the row's own path from the list is unchanged, because the list it was
+        // chosen from was read a moment ago.
+        _ = Task.Run(async () =>
+        {
+            IReadOnlyList<string>? held = await s_connection!.HeldContextsAsync().ConfigureAwait(false);
+
+            if (macro.WhyNotNow(held) is not { } withheld)
+            {
+                Launch(macro);
+                return;
+            }
+
+            // Not silence. The key has been pressed, and the row that would say why it
+            // did nothing is the one kept out of the command list - so the list that
+            // keeps nothing out is opened instead, with the row greyed and the
+            // condition beside it.
+            Log.Info(LogCategory.Wm, $"action \"{macro.Name}\" is kept back: {withheld}");
+
+            Post(() =>
+            {
+                if (s_palette is not { } palette) return;
+
+                Open(PaletteMode.Commands);
+                ShowEveryAction(palette, s_sources.Status with { Contexts = held });
+            });
+        });
+
+        return true;
+    }
+
+    /// <summary>Runs an action that may run, or opens the palette to ask what it asks.</summary>
+    /// <remarks>Safe from any thread: everything that touches the palette is posted.</remarks>
+    private static void Launch(PaletteMacro macro)
+    {
         // A question cannot be asked without somewhere to ask it. The palette opens at
         // the command list with the name already typed, so the row is under the
         // selection and Enter is the next key either way.
@@ -688,13 +749,11 @@ internal static class Program
         {
             Log.Debug(LogCategory.Wm, $"action \"{macro.Name}\" asks first; opening the palette");
             Post(() => OpenAt(macro.Name));
-            return true;
+            return;
         }
 
         Log.Debug(LogCategory.Wm, $"running action \"{macro.Name}\"");
         Post(() => OnCommand(string.Join('\n', macro.Commands)));
-
-        return true;
     }
 
     /// <summary>Opens the command list with something already typed into it.</summary>

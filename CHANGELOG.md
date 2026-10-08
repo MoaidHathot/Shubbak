@@ -17,6 +17,38 @@ schedule and breaking either is a different kind of event:
 
 ### Added
 
+- **A palette row can follow a context.** `when-context="focusing"` on an `action`
+  offers the row only while that context holds; `unless-context="focusing"` only while
+  it does not. The reason is a pair of rows that are really one switch: "Start focus
+  timer" and "Stop focus timer" are two actions, and only ever one of them makes sense
+  - the one the timer is not already doing - yet the list showed both, every time, and
+  left the reader to remember which. The program behind such a pair is driven by
+  signals and has no row of its own to edit, so the condition is how its state reaches
+  the palette without the program knowing the palette exists: it holds a context, as
+  the focus timer in `examples/` already did for the keys and the borders and as the
+  watcher does for the microphone, and the rows follow. The command list shows the half
+  that applies and keeps the other back, changing as the context does - the palette
+  already re-read the world on `context.changed`. A row kept back is not gone: the
+  palette's own `actions` list, the row that says how many you have written, shows
+  every one, the withheld ones greyed with the condition beside them (`not now` -
+  `only while context 'focusing' holds`), so a row you cannot find is one lookup away
+  and says why; and that row now counts the actions written rather than the ones
+  offered, because a configuration whose every row is kept back is exactly the one that
+  needs it. A key bound to `signal "palette" "run" "Start focus timer"` is judged the
+  same way, against what holds at the keystroke rather than at the palette's last
+  reading - which, for a palette closed since the morning, is the morning's - and a
+  row kept back opens that list rather than running or doing nothing. Both keys on one
+  action must hold together. The names are checked against the `contexts` section of
+  the same file, as the bar's rules are: a name nothing declares never holds and is
+  `DAL0021`; one context named by both keys is a row that can never be offered and is
+  `DAL0022`. And a misspelt key on an action - `when-contxt=` - is `DAL0023` rather
+  than, as any unknown property on an action was until now, a setting silently not
+  there; that gap predates the feature and was harmless while `description=` was the
+  only property an action took, and is not harmless for a condition. The example
+  config gains a "Mute the mic" / "Unmute the mic" pair tied to `meeting-live` and
+  `meeting-muted`, and the focus timer's write-up in `docs/extending.md` gains the
+  palette rows that drive it - a listener gets a row by its signal being written down
+  once more with a name on it, which was always so and was never said.
 - **The bar draws the layout as a picture of itself.** The layout indicator was a
   box-drawing glyph per layout - `┤` for the spiral, `▌` for master-left - chosen
   because they need no font installed, and that is all they could be: a character

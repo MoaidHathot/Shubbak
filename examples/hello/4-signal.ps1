@@ -16,7 +16,9 @@
         }
 
     `shubbak signal hello from a terminal` raises exactly the same signal, so the key
-    is not required to try it. Ctrl+C to stop.
+    is not required to try it. So does a palette row - `dalil { action "Say hello"
+    { signal "hello" } }` - which is a key you find by typing its name instead of
+    remembering its chord. Ctrl+C to stop.
 
 .EXAMPLE
     .\examples\hello\4-signal.ps1

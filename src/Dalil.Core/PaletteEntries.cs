@@ -359,7 +359,8 @@ public static class PaletteEntries
         ForMacros(macros, CompletionSources.None, labels: null);
 
     /// <summary>
-    /// Describes the user's own named sequences as rows, prompts included.
+    /// Describes the user's own named sequences as rows, prompts included, with
+    /// nothing kept back.
     /// </summary>
     /// <param name="macros">What the configuration declared.</param>
     /// <param name="sources">
@@ -371,10 +372,47 @@ public static class PaletteEntries
     /// <c>\</c> and <c>'</c> is a picker nobody can choose from; showing "3  Code"
     /// beside it is the whole difference between a list and a riddle.
     /// </param>
+    /// <remarks>
+    /// For a caller that does not know what the window manager holds. Every row is
+    /// offered, condition or no condition, as every row was before conditions existed.
+    /// </remarks>
     public static IReadOnlyList<PaletteEntry> ForMacros(
         IEnumerable<PaletteMacro> macros,
         CompletionSources sources,
-        IReadOnlyDictionary<string, string>? labels)
+        IReadOnlyDictionary<string, string>? labels) =>
+        ForMacros(macros, sources, labels, status: null, everything: false);
+
+    /// <summary>
+    /// Describes the user's own named sequences as rows, prompts included, in the
+    /// light of what the window manager is doing.
+    /// </summary>
+    /// <param name="macros">What the configuration declared.</param>
+    /// <param name="sources">The lists a prompt draws its choices from.</param>
+    /// <param name="labels">Workspace display names, keyed by workspace name.</param>
+    /// <param name="status">
+    /// What the window manager is currently doing - in particular which contexts it
+    /// holds, which is what a row written <c>when-context=</c> or
+    /// <c>unless-context=</c> is waiting on. Null offers every row.
+    /// </param>
+    /// <param name="everything">
+    /// Whether a row whose condition does not hold is listed anyway, greyed, with the
+    /// condition as its reason, rather than left out.
+    /// <para>
+    /// The command list leaves it out: the point of tying "Start" and "Stop" to a
+    /// context is that the list reads as one switch, and a greyed twin beside the live
+    /// row would be the clutter the condition exists to remove. The palette's own list
+    /// of actions - the row that says how many have been written - shows every one,
+    /// because that is where somebody who cannot find a row goes to find out why, and
+    /// an answer that is a lookup away is the honest alternative to hiding it: the
+    /// same reason a verb that does not apply right now is marked rather than dropped.
+    /// </para>
+    /// </param>
+    public static IReadOnlyList<PaletteEntry> ForMacros(
+        IEnumerable<PaletteMacro> macros,
+        CompletionSources sources,
+        IReadOnlyDictionary<string, string>? labels,
+        WmStatus? status,
+        bool everything)
     {
         ArgumentNullException.ThrowIfNull(macros);
         ArgumentNullException.ThrowIfNull(sources);
@@ -390,6 +428,20 @@ public static class PaletteEntries
             {
                 entries.Add(new PaletteEntry(
                     macro.Name, wrong, ["cannot run"], string.Empty, Rank: 10, Unavailable: true));
+
+                continue;
+            }
+
+            // Kept back, or - where everything is wanted - said. Judged after the
+            // mistake above, which is the more urgent thing to know about a row, and
+            // before the prompts below, which are not asked of a row that does not
+            // apply. Below the live rows, so the switch's other half reads as such.
+            if (status is { } state && macro.WhyNotNow(state.Contexts) is { } withheld)
+            {
+                if (!everything) continue;
+
+                entries.Add(new PaletteEntry(
+                    macro.Name, withheld, ["macro", "not now"], string.Empty, Rank: 9, Unavailable: true));
 
                 continue;
             }
