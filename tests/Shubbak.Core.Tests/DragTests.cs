@@ -385,4 +385,165 @@ public sealed class DragTests
 
         Assert.False(wm.ResizeFromDrag(left, new Rect(0, 0, 700, 800)).Succeeded);
     }
+
+    [Fact]
+    public void ResizingReportsTheContainerAsResized()
+    {
+        // As the keyboard's resize does. The daemon chooses the animation profile from
+        // the events, and a mouse resize that reported nothing was shown as a move,
+        // while nothing listening to the tree heard that it had happened at all.
+        (WindowManager wm, WindowNode left, _) = TwoAcross();
+
+        WmResult result = wm.ResizeFromDrag(left, new Rect(0, 0, 700, 800));
+
+        Assert.True(result.Has<ContainerResized>());
+    }
+
+    [Fact]
+    public void ResizingWithGapsGivesExactlyTheWidthAsked()
+    {
+        // The share used to be the asked width over the container's, and the
+        // container's includes the gap between the tiles, so a drag fell short of
+        // where the border was let go by the gap's share of it.
+        var wm = new WindowManager(new WmOptions { InnerGap = 10 });
+        wm.AddMonitor(TreeBuilder.Monitor(width: 1000, height: 800));
+        wm.AddWorkspace(new WorkspaceNode("1"));
+        wm.ActivateWorkspace(wm.Root.Monitors[0].Workspaces[0]);
+
+        WindowNode left = wm.Open("left");
+        WindowNode right = wm.Open("right");
+        wm.ComputePlacements();
+
+        wm.ResizeFromDrag(left, left.Rect with { Width = 700 });
+        wm.ComputePlacements();
+
+        Assert.Equal(700, left.Rect.Width);
+        Assert.Equal(290, right.Rect.Width);
+    }
+
+    [Fact]
+    public void ResizingOnASecondMonitorIsMeasuredThere()
+    {
+        // Nothing in the arithmetic may depend on where the monitor is: a window on a
+        // display to the right of the primary has an x in the thousands, and a share
+        // computed from an edge rather than a width would be nonsense there.
+        var wm = new WindowManager();
+        wm.AddMonitor(TreeBuilder.Monitor("\\\\.\\DISPLAY1", x: 0, width: 1920, height: 1080));
+        wm.AddMonitor(TreeBuilder.Monitor("\\\\.\\DISPLAY2", x: 1920, width: 1000, height: 800));
+
+        wm.AddWorkspace(new WorkspaceNode("1"), wm.Root.Monitors[0]);
+        wm.AddWorkspace(new WorkspaceNode("2"), wm.Root.Monitors[1]);
+        wm.ActivateWorkspace(wm.Root.Monitors[1].Workspaces[0]);
+
+        WindowNode left = wm.Open("left");
+        WindowNode right = wm.Open("right");
+        wm.ComputePlacements();
+
+        Assert.Equal(1920, left.Rect.X);
+
+        wm.ResizeFromDrag(left, left.Rect with { Width = left.Rect.Width - 20 });
+        wm.ComputePlacements();
+
+        Assert.Equal(480, left.Rect.Width);
+        Assert.Equal(520, right.Rect.Width);
+    }
+
+    [Fact]
+    public void AnAxisTheShareDoesNotGovernIsLeftAlone()
+    {
+        // The reported case. A spiral of two is split left/right, so both windows have
+        // the whole height, and a drag that only touched the width arrived with a
+        // height a few pixels off - the shadow, before the daemon stopped passing it.
+        // That height was read as a share of more than one, clamped to the most a
+        // child may have, and the spiral's one ratio sizes a window in both
+        // directions: a border nudged inwards gave the window almost the whole screen,
+        // with the other left a sliver.
+        WindowManager wm = WmFixture.Create();
+        wm.SetLayout(FibonacciLayout.Horizontal);
+        WindowNode firefox = wm.Open("firefox");
+        WindowNode terminal = wm.Open("terminal");
+        wm.Arrange();
+
+        Rect current = firefox.Rect;
+        var dragged = new Rect(current.X, current.Y, current.Width - 20, current.Height + 7);
+
+        Assert.True(wm.ResizeFromDrag(firefox, dragged).Succeeded);
+        wm.Arrange();
+
+        Assert.Equal(current.Width - 20, firefox.Rect.Width);
+        Assert.Equal(1920 - firefox.Rect.Width, terminal.Rect.Width);
+        Assert.Equal(current.Height, firefox.Rect.Height);
+    }
+
+    [Theory]
+    [InlineData(2, 0, 20)]
+    [InlineData(2, 0, -20)]
+    [InlineData(3, 0, 20)]
+    [InlineData(3, 0, -20)]
+    [InlineData(4, 0, 20)]
+    [InlineData(4, 1, 20)]
+    [InlineData(5, 2, -20)]
+    public void DraggingAnEdgeInASpiralMovesItByTheDrag(int windows, int index, int by)
+    {
+        // The spiral gives a child own ÷ (own + the average of the rest), not
+        // own ÷ total, so storing the pixel share as the ratio overshot by more the
+        // more windows there were: with three, a drag of twenty pixels moved the edge
+        // by three hundred, and with six a nudge took the window to the clamp.
+        WindowManager wm = WmFixture.Create();
+        wm.SetLayout(FibonacciLayout.Horizontal);
+
+        var opened = new WindowNode[windows];
+        for (int i = 0; i < windows; i++) opened[i] = wm.Open($"w{i}");
+        wm.Arrange();
+
+        WindowNode window = opened[index];
+        Rect current = window.Rect;
+
+        Assert.True(wm.ResizeFromDrag(window, current with { Width = current.Width + by }).Succeeded);
+        wm.Arrange();
+
+        // Only the width: an inner window of the spiral is sized in both directions
+        // by its one weight, by design, so its height moves with it.
+        Assert.Equal(current.Width + by, window.Rect.Width);
+    }
+
+    [Fact]
+    public void DraggingTheMasterEdgeMovesTheDividerByTheDrag()
+    {
+        // Master's share is its weight against the stack's per-window weight, which
+        // is not the pixel share either.
+        WindowManager wm = WmFixture.Create();
+        wm.SetLayout(MasterStackLayout.Left);
+        WindowNode master = wm.Open("master");
+        wm.Open("s1");
+        wm.Open("s2");
+        wm.Open("s3");
+        wm.Arrange();
+
+        Rect current = master.Rect;
+
+        Assert.True(wm.ResizeFromDrag(master, current with { Width = current.Width + 30 }).Succeeded);
+        wm.Arrange();
+
+        Assert.Equal(current.Width + 30, master.Rect.Width);
+    }
+
+    [Fact]
+    public void DraggingPastWhatAnyShareCanGiveStopsAtTheLimit()
+    {
+        // The spiral never gives a child more than 95% of a division, so a border
+        // dragged beyond that lands on the limit rather than being refused - which is
+        // what a border dragged past its limit does everywhere.
+        WindowManager wm = WmFixture.Create();
+        wm.SetLayout(FibonacciLayout.Horizontal);
+        WindowNode first = wm.Open("first");
+        WindowNode second = wm.Open("second");
+        wm.Arrange();
+
+        Assert.True(wm.ResizeFromDrag(first, first.Rect with { Width = 1900 }).Succeeded);
+        wm.Arrange();
+
+        Assert.Equal(1824, first.Rect.Width);
+        Assert.Equal(96, second.Rect.Width);
+    }
 }

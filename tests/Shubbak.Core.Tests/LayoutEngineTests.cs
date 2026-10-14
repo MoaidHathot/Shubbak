@@ -301,4 +301,112 @@ public sealed class LayoutEngineTests
         Assert.Equal(new Rect(0, 0, 1000, 800), workspace.Rect);
         Assert.Equal(new Rect(500, 0, 500, 800), column.Rect);
     }
+
+    // ---- the inverse: a share from an extent ---------------------------------
+
+    [Fact]
+    public void RatioForExtentInvertsTheLayoutItIsAskedAbout()
+    {
+        // Three in a spiral: the first window's share is not its pixel share, so the
+        // answer is only right if it came from the layout and not from a division.
+        WindowNode a = TreeBuilder.Window("a");
+        WindowNode b = TreeBuilder.Window("b");
+        WindowNode c = TreeBuilder.Window("c");
+
+        (RootNode root, _, WorkspaceNode workspace) = Setup(1000, 800, a, b, c);
+        workspace.Layout = FibonacciLayout.Horizontal;
+
+        var engine = new LayoutEngine();
+        engine.Arrange(root, ArrangeOptions.Default);
+        Assert.Equal(500, a.Rect.Width);
+
+        double? ratio = LayoutEngine.RatioForExtent(workspace, a, Axis.Horizontal, 620, LayoutOptions.Default);
+
+        Assert.NotNull(ratio);
+        workspace.SetChildRatio(a, ratio.Value);
+        engine.Arrange(root, ArrangeOptions.Default);
+
+        Assert.Equal(620, a.Rect.Width);
+    }
+
+    [Fact]
+    public void RatioForExtentIsNullOnAnAxisTheShareDoesNotGovern()
+    {
+        // Two in a spiral are split left/right: both have the whole height whatever
+        // their shares, so there is no share that gives one a different height, and
+        // the caller has to be told rather than handed the clamp.
+        WindowNode a = TreeBuilder.Window("a");
+        WindowNode b = TreeBuilder.Window("b");
+
+        (RootNode root, _, WorkspaceNode workspace) = Setup(1000, 800, a, b);
+        workspace.Layout = FibonacciLayout.Horizontal;
+        new LayoutEngine().Arrange(root, ArrangeOptions.Default);
+
+        Assert.Null(LayoutEngine.RatioForExtent(workspace, a, Axis.Vertical, 807, LayoutOptions.Default));
+        Assert.NotNull(LayoutEngine.RatioForExtent(workspace, a, Axis.Horizontal, 507, LayoutOptions.Default));
+    }
+
+    [Fact]
+    public void RatioForExtentLeavesTheTreeAsItFoundIt()
+    {
+        // It measures by arranging, and arranging reads the ratios, so it sets them -
+        // and must put every one back, or the question would have changed the answer.
+        WindowNode a = TreeBuilder.Window("a");
+        WindowNode b = TreeBuilder.Window("b");
+        WindowNode c = TreeBuilder.Window("c");
+
+        (RootNode root, _, WorkspaceNode workspace) = Setup(1000, 800, a, b, c);
+        new LayoutEngine().Arrange(root, ArrangeOptions.Default);
+        workspace.SetChildRatio(a, 0.5);
+
+        double[] before = [a.SizeRatio, b.SizeRatio, c.SizeRatio];
+        Rect[] rects = [a.Rect, b.Rect, c.Rect];
+
+        LayoutEngine.RatioForExtent(workspace, b, Axis.Horizontal, 300, LayoutOptions.Default);
+
+        double[] after = [a.SizeRatio, b.SizeRatio, c.SizeRatio];
+        Rect[] rectsAfter = [a.Rect, b.Rect, c.Rect];
+
+        Assert.Equal(before, after);
+        Assert.Equal(rects, rectsAfter);
+    }
+
+    [Fact]
+    public void RatioForExtentClampsARequestBeyondTheLayout()
+    {
+        WindowNode a = TreeBuilder.Window("a");
+        WindowNode b = TreeBuilder.Window("b");
+
+        (RootNode root, _, WorkspaceNode workspace) = Setup(1000, 800, a, b);
+        new LayoutEngine().Arrange(root, ArrangeOptions.Default);
+
+        Assert.Equal(1.0 - Node.MinSizeRatio, LayoutEngine.RatioForExtent(workspace, a, Axis.Horizontal, 5000, LayoutOptions.Default));
+        Assert.Equal(Node.MinSizeRatio, LayoutEngine.RatioForExtent(workspace, a, Axis.Horizontal, -5, LayoutOptions.Default));
+    }
+
+    [Fact]
+    public void RatioForExtentIgnoresAFloatingSiblingAsTheArrangeDoes()
+    {
+        // A floating child holds a ratio and no slot. The arrange divides the area
+        // among the tiled children alone, and so must the measurement, or the share
+        // found would be for a row that is not the one on screen.
+        WindowNode a = TreeBuilder.Window("a");
+        WindowNode floating = TreeBuilder.Window("floating");
+        WindowNode b = TreeBuilder.Window("b");
+
+        (RootNode root, _, WorkspaceNode workspace) = Setup(1000, 800, a, floating, b);
+        floating.State = WindowState.Floating;
+
+        var engine = new LayoutEngine();
+        engine.Arrange(root, ArrangeOptions.Default);
+
+        double? ratio = LayoutEngine.RatioForExtent(workspace, a, Axis.Horizontal, 700, LayoutOptions.Default);
+
+        Assert.NotNull(ratio);
+        workspace.SetChildRatio(a, ratio.Value);
+        engine.Arrange(root, ArrangeOptions.Default);
+
+        Assert.Equal(700, a.Rect.Width);
+        Assert.Equal(300, b.Rect.Width);
+    }
 }

@@ -1504,7 +1504,7 @@ public sealed class WindowManager
         return changed ? Complete() : Reject("resize", "The drag did not change any resizable axis.");
     }
 
-    private static bool ApplyDragRatio(WindowNode window, Axis axis, int newExtent)
+    private bool ApplyDragRatio(WindowNode window, Axis axis, int newExtent)
     {
         ContainerNode? container = TreeOps.NearestAncestorOnAxis(window, axis);
         if (container is null) return false;
@@ -1512,19 +1512,27 @@ public sealed class WindowManager
         Node? child = TreeOps.ChildContaining(container, window);
         if (child is null) return false;
 
-        int available = container.Rect.Extent(axis);
-        if (available <= 0) return false;
-
         // The child may be a container holding the window, in which case the window
         // occupies only part of it and the delta has to be applied to the child's
         // share rather than derived from the window's own size.
-        int childExtent = child.Rect.Extent(axis);
-        int windowExtent = window.Rect.Extent(axis);
+        int delta = newExtent - window.Rect.Extent(axis);
+        int target = child.Rect.Extent(axis) + delta;
 
-        int delta = newExtent - windowExtent;
-        double ratio = (double)(childExtent + delta) / available;
+        // Asked of the layout rather than computed as target ÷ available, which is
+        // only the answer for a split. See LayoutEngine.RatioForExtent for the two
+        // ways that went wrong in the spiral.
+        var options = new LayoutOptions(Options.InnerGap, Options.MinimumTileExtent);
+        if (LayoutEngine.RatioForExtent(container, child, axis, target, in options) is not { } ratio)
+            return false;
 
         container.SetChildRatio(child, ratio);
+
+        // As the keyboard's Resize reports it, so the two are one thing to everything
+        // downstream: the pass that follows uses the resize profile - the dragged window
+        // is already where the hand left it, and its neighbour snapping to meet it is
+        // what both the keyboard and the mouse already showed - and a subscriber to the
+        // tree hears about a mouse resize at all, which it did not.
+        Emit(new ContainerResized(container));
         return true;
     }
 

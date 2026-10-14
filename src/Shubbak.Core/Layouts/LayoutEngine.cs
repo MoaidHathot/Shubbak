@@ -160,26 +160,8 @@ public sealed class LayoutEngine
     {
         container.Rect = area;
 
-        // Only tiled children participate; a floating window must not consume a
-        // slot, or removing it from the flow would leave a hole.
-        Node[] tiled = [.. container.Children.Where(IsTiled)];
+        Node[] tiled = ArrangeTiledChildren(container, area, in options, out Rect[] rects);
         if (tiled.Length == 0) return;
-
-        Rect[] rects = new Rect[tiled.Length];
-
-        if (tiled.Length == container.Children.Count)
-        {
-            container.Layout.Arrange(container, area, in options, rects);
-        }
-        else
-        {
-            // The layout contract is "one rect per child", so a container holding a
-            // mix of tiled and floating children is arranged through a temporary
-            // view containing just the tiled ones. This keeps every ILayout
-            // implementation free of float-awareness.
-            using var view = TiledView.Create(container, tiled);
-            view.Container.Layout.Arrange(view.Container, area, in options, rects);
-        }
 
         // In a layout whose rectangles overlap, stacking is the only thing that
         // decides what the user sees, so the focused window has to be raised. Where
@@ -216,6 +198,149 @@ public sealed class LayoutEngine
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Divides <paramref name="area"/> among the tiled children of one container, as
+    /// an arrange pass would, without writing to any node.
+    /// </summary>
+    /// <returns>
+    /// The tiled children in order; <paramref name="rects"/> receives one rectangle
+    /// per entry.
+    /// </returns>
+    /// <remarks>
+    /// Only tiled children participate; a floating window must not consume a slot,
+    /// or removing it from the flow would leave a hole. The layout contract is "one
+    /// rect per child", so a container holding a mix of tiled and floating children
+    /// is arranged through a temporary view containing just the tiled ones, which
+    /// keeps every <see cref="ILayout"/> implementation free of float-awareness.
+    /// </remarks>
+    internal static Node[] ArrangeTiledChildren(
+        ContainerNode container, Rect area, in LayoutOptions options, out Rect[] rects)
+    {
+        Node[] tiled = [.. container.Children.Where(IsTiled)];
+        rects = new Rect[tiled.Length];
+
+        if (tiled.Length == 0) return tiled;
+
+        if (tiled.Length == container.Children.Count)
+        {
+            container.Layout.Arrange(container, area, in options, rects);
+        }
+        else
+        {
+            using var view = TiledView.Create(container, tiled);
+            view.Container.Layout.Arrange(view.Container, area, in options, rects);
+        }
+
+        return tiled;
+    }
+
+    /// <summary>
+    /// The share that gives <paramref name="child"/> an extent of
+    /// <paramref name="extent"/> pixels along <paramref name="axis"/>, once
+    /// <paramref name="container"/> is arranged again into its current rectangle.
+    /// </summary>
+    /// <returns>
+    /// The ratio to pass to <see cref="ContainerNode.SetChildRatio"/>, or
+    /// <see langword="null"/> when the child's share has no say over that axis.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// Found by measuring rather than by formula. A split gives a child
+    /// <c>ratio × width</c>, and dragging a border used to assume every layout did,
+    /// but the spiral gives it <c>own ÷ (own + average of the rest)</c> and the
+    /// master layouts something else again - so a drag of twenty pixels on the first
+    /// of three spiral windows moved its edge by three hundred, and each layout's
+    /// inverse would have to be written and kept in step with its arrange. Arranging
+    /// the container at a candidate share and reading the child's extent back asks
+    /// the layout itself, with its gaps, its clamps and its rounding included, and
+    /// holds for a layout that does not exist yet.
+    /// </para>
+    /// <para>
+    /// A bisection, because every layout gives a child more room for more share and
+    /// never less, which is the one property the search needs. Pixels are integers,
+    /// so the answer is the smallest share that reaches the requested extent; a
+    /// request beyond what any share can give is clamped to the end it is nearer,
+    /// which is what a border dragged past its limit should do.
+    /// </para>
+    /// <para>
+    /// Null is an answer, not a failure. In a spiral of two the first split is
+    /// left/right, so both windows have the whole height and no ratio changes that;
+    /// a height asked of such a window would otherwise be read as "the whole
+    /// container and seven pixels more", a share of more than one, clamped to the
+    /// most a child may have - and that one number sizes a spiral window in both
+    /// directions, so the window took almost the whole screen from a drag that had
+    /// shrunk it. The caller leaves that axis alone instead.
+    /// </para>
+    /// <para>
+    /// Measuring means arranging, and arranging reads the tree's ratios, so the
+    /// container's ratios are set to each candidate and restored at the end. The
+    /// node rectangles are not touched: the pass that follows writes them.
+    /// </para>
+    /// </remarks>
+    public static double? RatioForExtent(
+        ContainerNode container, Node child, Axis axis, int extent, in LayoutOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(container);
+        ArgumentNullException.ThrowIfNull(child);
+
+        if (container.Count < 2 || !ReferenceEquals(child.Parent, container)) return null;
+        if (container.Rect.Extent(axis) <= 0) return null;
+
+        IReadOnlyList<Node> children = container.Children;
+        double[] saved = new double[children.Count];
+        for (int i = 0; i < saved.Length; i++) saved[i] = children[i].SizeRatio;
+
+        try
+        {
+            // The same bounds SetChildRatio clamps to, so every share measured here is
+            // one that can actually be set.
+            double low = Node.MinSizeRatio;
+            double high = 1.0 - (Node.MinSizeRatio * (children.Count - 1));
+
+            int atLow = Measure(container, child, axis, low, saved, in options);
+            int atHigh = Measure(container, child, axis, high, saved, in options);
+
+            if (atLow == atHigh) return null;
+            if (extent <= atLow) return low;
+            if (extent >= atHigh) return high;
+
+            // Fifty halvings take the interval well below any difference a ratio can
+            // make to a pixel; the loop ends sooner once it has.
+            for (int i = 0; i < 50 && high - low > 1e-12; i++)
+            {
+                double mid = (low + high) / 2;
+                if (Measure(container, child, axis, mid, saved, in options) < extent) low = mid;
+                else high = mid;
+            }
+
+            return high;
+        }
+        finally
+        {
+            container.SetRatios(saved);
+        }
+    }
+
+    /// <summary>
+    /// The extent <paramref name="child"/> would have along <paramref name="axis"/>
+    /// with a share of <paramref name="ratio"/>, everything else as in
+    /// <paramref name="saved"/>.
+    /// </summary>
+    private static int Measure(
+        ContainerNode container, Node child, Axis axis, double ratio,
+        double[] saved, in LayoutOptions options)
+    {
+        // From the saved ratios each time rather than from the last candidate, so the
+        // siblings' proportions are those of the tree and not of a previous guess.
+        container.SetRatios(saved);
+        container.SetChildRatio(child, ratio);
+
+        Node[] tiled = ArrangeTiledChildren(container, container.Rect, in options, out Rect[] rects);
+        int index = Array.IndexOf(tiled, child);
+
+        return index < 0 ? 0 : rects[index].Extent(axis);
     }
 
     /// <summary>

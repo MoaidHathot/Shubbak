@@ -811,6 +811,29 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Dragging a tiled window's border by a few pixels no longer hands it almost the
+  whole screen.** In a spiral of two - Firefox beside a terminal, say - nudging a
+  border inwards with the mouse left the window you had just shrunk filling all but a
+  sliver of the monitor, and nudging it outwards did the same; the keyboard's
+  `resize --width -2%` behaved. Two things were wrong, and either was enough. The
+  rectangle read back after the drag was `GetWindowRect`, which includes the shadow,
+  while the tile it was compared against does not - about fourteen pixels of width and
+  seven of height - so every drag of a border was read as having also pulled the
+  bottom edge down seven pixels. And the share was then worked out as if every layout
+  were a plain split, `pixels ÷ container`: in a spiral of two both windows have the
+  whole height, so "the whole height and seven more" was a share above one, clamped to
+  the most a child may have, and the spiral's one weight sizes a window in both
+  directions. The drag end is now measured as a visible frame, the way a floating
+  drag already was, and the share is found by asking the layout - arranging it at a
+  candidate and reading the width back, with its gaps, clamps and rounding included -
+  so a drag of twenty pixels moves the border by twenty in the spiral and the master
+  layouts too, where it used to move it by three hundred with three windows and to
+  the clamp with six; and an axis the share cannot change, like that height, is left
+  alone. A drag beyond what the layout allows stops at its limit, as it does
+  everywhere else. The mouse resize also now reports `ContainerResized` as the
+  keyboard's does, so it is shown with the resize profile - the dragged window is
+  already where your hand left it, and its neighbour snaps to meet it rather than
+  gliding - and a subscriber to the tree hears about it, which it did not.
 - **The end-to-end suite's refusal to run beside a window manager now says which one
   it found.** The x64 job once refused with "shubbak-wm is running" in a run where the
   only window managers to have existed were the ones the three tests before it had

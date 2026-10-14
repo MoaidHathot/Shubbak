@@ -1571,8 +1571,10 @@ public sealed class WmDaemon : IDisposable
 
             case WinEventKind.MoveSizeStart:
                 // The starting geometry is what distinguishes a move from a resize,
-                // and a real drag from a click on a title bar.
-                if (_windows.IsManaged(handle)) _dragOrigin[handle] = Win32Window.GetBounds(handle);
+                // and a real drag from a click on a title bar. Measured as a visible
+                // frame, in the terms the layout speaks and HandleUserMove compares
+                // against; see there for what the raw rectangle did.
+                if (_windows.IsManaged(handle)) _dragOrigin[handle] = WindowCommitter.VisibleBounds(handle);
                 break;
 
             case WinEventKind.MoveSizeEnd:
@@ -1611,7 +1613,20 @@ public sealed class WmDaemon : IDisposable
         Rect before = _dragOrigin.TryGetValue(handle, out Rect recorded) ? recorded : window.Rect;
         _dragOrigin.Remove(handle);
 
-        Rect after = Win32Window.GetBounds(handle);
+        // The visible frame, not GetWindowRect. A layout rectangle is a visible frame,
+        // and so is window.Rect, which is what the resize below is measured against;
+        // the raw rectangle is about fourteen pixels wider and seven taller for the
+        // shadow. Compared raw against the tile, every drag was read as having also
+        // grown the window seven pixels downwards - and in a spiral of two, where a
+        // window already has the whole height, a height of "the whole and seven more"
+        // was a share above one, clamped to the most a child may have, and the one
+        // ratio that sizes a spiral window in both directions. A border nudged
+        // inwards by a few pixels gave the window almost the entire screen.
+        //
+        // Measured the same way at MoveSizeStart, and window.Rect is the fallback
+        // when that was missed, so the move-or-resize question is asked of like and
+        // like: a raw end against a visible start read a plain move as a resize.
+        Rect after = WindowCommitter.VisibleBounds(handle);
 
         if (window.State == WindowState.Floating)
         {
@@ -1620,7 +1635,7 @@ public sealed class WmDaemon : IDisposable
             // includes the shadow, and the commit path adds the shadow on the way out,
             // so storing the raw value grew the window by its own shadow - about
             // fourteen pixels of width - every single time it was dragged.
-            window.FloatingRect = WindowCommitter.VisibleBounds(handle);
+            window.FloatingRect = after;
 
             // Forgotten so the recorded position is what the next pass compares
             // against; without it the skip check would still be holding the rectangle
