@@ -230,15 +230,6 @@ knowing before you change anything; [CONTRIBUTING.md](CONTRIBUTING.md) is what C
 will hold a change to and how to check it first; [RELEASING.md](RELEASING.md) is how
 a release is cut.
 
-## Thanks
-
-To [GlazeWM](https://github.com/glzr-io/glazewm), where I learned what a good Windows
-tiling window manager feels like to live in, and whose config I used as the
-translation target for Shubbak's example file. To
-[komorebi](https://github.com/LGUG2Z/komorebi), for showing that a window manager can
-be a queryable, scriptable, subscribable service rather than a black box. And to
-AwesomeWM and i3, for the ideas everyone on Windows is still catching up with.
-
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
