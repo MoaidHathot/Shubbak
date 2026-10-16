@@ -327,9 +327,17 @@ public sealed class PlacementTransitTests
         committer.Commit([Place(window, wanted)], static p => (nint)p.Window.Handle);
         TestWindow.PumpUntil(() => WindowCommitter.VisibleBounds(window.Handle) == wanted);
 
-        var elsewhere = new Rect(before.X + 900, before.Y + 500, before.Width, before.Height);
-        window.MoveTo(elsewhere.X, elsewhere.Y);
-        TestWindow.PumpUntil(() => WindowCommitter.VisibleBounds(window.Handle) == elsewhere);
+        // The window moves its own rectangle, shadow included; the committer answers in
+        // visible frames. Where it ended up is therefore read back, not assumed from the
+        // coordinates it was sent to. The two differ by the shadow's inset wherever the
+        // host can measure one - seven pixels on the 100% runner, where the assumption
+        // failed - and the test is about which rectangle the committer believes, not
+        // about the shadow.
+        window.MoveTo(before.X + 900, before.Y + 500);
+        TestWindow.PumpUntil(() => WindowCommitter.VisibleBounds(window.Handle) != wanted);
+
+        Rect elsewhere = WindowCommitter.VisibleBounds(window.Handle);
+        Assert.NotEqual(wanted, elsewhere);
 
         Assert.False(committer.IsInTransit(window.Handle));
         Assert.Equal(elsewhere, committer.CurrentBounds(window.Handle));

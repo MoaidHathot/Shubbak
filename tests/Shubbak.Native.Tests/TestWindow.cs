@@ -256,6 +256,15 @@ internal sealed class TestWindow : IDisposable
     /// new rectangle as one Shubbak asked for and so hide the very thing under test.
     /// Size is left alone: this is a move, not a resize.
     /// </para>
+    /// <para>
+    /// The coordinates are the window rectangle's, shadow included, because that is
+    /// what <c>SetWindowPos</c> takes. <c>WindowCommitter.VisibleBounds</c> answers in
+    /// visible frames, so where the window lands by that measure is the point plus the
+    /// shadow's left and top insets: seven and nothing on the 100% runner, nothing at
+    /// all on a scaled display, where this host - not DPI aware - measures a shadow it
+    /// cannot trust and discards it (see <c>ShadowMarginTests</c>). A test that wants
+    /// the destination reads it back.
+    /// </para>
     /// </remarks>
     public void MoveTo(int x, int y) =>
         PInvoke.SetWindowPos(
