@@ -252,6 +252,46 @@ public sealed class PaletteModelTests
     }
 
     [Fact]
+    public void AListThatArrivesAfterOpeningSelectsItsOwnTopRow()
+    {
+        // What the host does on open: show the list it remembered from last time,
+        // reset the query, and read a fresh one. The remembered list has the window
+        // that was in front *then* at the top; the fresh one has the window in front
+        // now. Nobody chose the stale top row, so the selection must not follow it
+        // into second place - that is how the palette opened on the previous window
+        // every single time.
+        var model = new PaletteModel();
+
+        model.SetEntries([Entry("Firefox", rank: 2), Entry("Terminal", rank: 1)]);
+        model.SetQuery(string.Empty);
+        Assert.Equal("Firefox", model.Selected!.Entry.Primary);
+
+        model.SetEntries([Entry("Terminal", rank: 2), Entry("Firefox", rank: 1)]);
+
+        Assert.Equal(0, model.SelectedIndex);
+        Assert.Equal("Terminal", model.Selected!.Entry.Primary);
+    }
+
+    [Fact]
+    public void ASelectionMadeWhileTheListWasStaleSurvivesTheFreshOne()
+    {
+        // The other half of the rule. Somebody who pressed Down during the round trip
+        // chose a row, and the fresh list must leave it under their finger wherever it
+        // has moved to.
+        var model = new PaletteModel();
+
+        model.SetEntries([Entry("Firefox", rank: 2), Entry("Terminal", rank: 1)]);
+        model.SetQuery(string.Empty);
+        model.MoveSelection(1);
+        Assert.Equal("Terminal", model.Selected!.Entry.Primary);
+
+        model.SetEntries([Entry("Terminal", rank: 2), Entry("Firefox", rank: 1)]);
+
+        Assert.Equal(0, model.SelectedIndex);
+        Assert.Equal("Terminal", model.Selected!.Entry.Primary);
+    }
+
+    [Fact]
     public void ASelectedEntryThatDisappearsFallsBackToTheTop()
     {
         var model = new PaletteModel();

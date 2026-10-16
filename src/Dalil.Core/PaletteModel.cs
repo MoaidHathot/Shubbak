@@ -574,6 +574,28 @@ public sealed class PaletteModel
     /// <summary>Which row is selected, or -1 when there are none.</summary>
     public int SelectedIndex { get; private set; } = -1;
 
+    /// <summary>
+    /// Whether the selection is where the user put it, rather than where the list did.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A list arriving over the wire keeps the selected row selected wherever it has
+    /// moved to - see <see cref="SetEntries"/> - and that is right only for a row
+    /// somebody chose. The row the list chose by itself, the top one, has to be chosen
+    /// again from the new list, because the new list may have a new top.
+    /// </para>
+    /// <para>
+    /// The case that made the difference: the host shows the list it remembered from
+    /// the last time the palette was open while it reads a fresh one, and opening
+    /// resets the query, so the selection sits on the stale list's top row - the
+    /// window that was in front then. The fresh list puts the window in front now at
+    /// the top and that row second, and carrying the selection to it opened the
+    /// palette on the previous window every single time, one step behind wherever
+    /// the user had just gone.
+    /// </para>
+    /// </remarks>
+    private bool _selectionChosen;
+
     /// <summary>The selected row, if any.</summary>
     public PaletteRow? Selected =>
         SelectedIndex >= 0 && SelectedIndex < _rows.Count ? _rows[SelectedIndex] : null;
@@ -620,9 +642,9 @@ public sealed class PaletteModel
     /// <summary>Replaces the candidates and re-filters.</summary>
     /// <remarks>
     /// <para>
-    /// The selection is preserved where it can be. Entries arrive again whenever the
-    /// window manager reports a change, and a list that jumped back to the top each
-    /// time would be unusable while anything was happening on screen.
+    /// A selection the user made is preserved where it can be. Entries arrive again
+    /// whenever the window manager reports a change, and a list that jumped back to
+    /// the top each time would be unusable while anything was happening on screen.
     /// </para>
     /// <para>
     /// By identity first and by what the row is second. Identity alone was not enough
@@ -631,12 +653,17 @@ public sealed class PaletteModel
     /// back to the top on every window event regardless. Matching on the command and
     /// the title finds the same row in the new list.
     /// </para>
+    /// <para>
+    /// A selection the list made by itself is not preserved; it is made again from the
+    /// new list. See <see cref="_selectionChosen"/> for the open that went one window
+    /// wrong because it was.
+    /// </para>
     /// </remarks>
     public void SetEntries(IEnumerable<PaletteEntry> entries)
     {
         ArgumentNullException.ThrowIfNull(entries);
 
-        PaletteEntry? wasSelected = Selected?.Entry;
+        PaletteEntry? wasSelected = _selectionChosen ? Selected?.Entry : null;
 
         _entries.Clear();
         _entries.AddRange(entries);
@@ -677,7 +704,10 @@ public sealed class PaletteModel
     {
         if (_rows.Count == 0) return;
 
-        SelectedIndex = IndexOf(entry);
+        int index = IndexOf(entry);
+
+        _selectionChosen = index >= 0;
+        SelectedIndex = Math.Max(index, 0);
     }
 
     /// <summary>Switches mode, keeping whatever has been typed.</summary>
@@ -1032,8 +1062,11 @@ public sealed class PaletteModel
         if (_rows.Count == 0)
         {
             SelectedIndex = -1;
+            _selectionChosen = false;
             return;
         }
+
+        _selectionChosen = true;
 
         if (Math.Abs(delta) >= _rows.Count)
         {
@@ -1055,12 +1088,18 @@ public sealed class PaletteModel
     /// </remarks>
     public void SelectAt(int index)
     {
-        if (index >= 0 && index < _rows.Count) SelectedIndex = index;
+        if (index < 0 || index >= _rows.Count) return;
+
+        SelectedIndex = index;
+        _selectionChosen = true;
     }
 
     /// <summary>Selects the first or last row outright.</summary>
-    public void SelectEdge(bool last) =>
+    public void SelectEdge(bool last)
+    {
         SelectedIndex = _rows.Count == 0 ? -1 : last ? _rows.Count - 1 : 0;
+        _selectionChosen = _rows.Count > 0;
+    }
 
     /// <summary>The window of rows to draw, given how many fit.</summary>
     /// <remarks>
@@ -1155,7 +1194,12 @@ public sealed class PaletteModel
                        .Select(e => new PaletteRow(e, 0, [])));
         }
 
-        SelectedIndex = _rows.Count == 0 ? -1 : IndexOf(keep);
+        // Found again, the row stays the user's; not found, or never chosen, the list
+        // picks the top and the selection is the list's until somebody moves it.
+        int kept = keep is null ? -1 : IndexOf(keep);
+
+        _selectionChosen = kept >= 0;
+        SelectedIndex = _rows.Count == 0 ? -1 : Math.Max(kept, 0);
     }
 
     /// <summary>Whether Enter on a derived row does something, as opposed to only saying something.</summary>
@@ -1198,7 +1242,7 @@ public sealed class PaletteModel
     }
 
     /// <summary>
-    /// Where a previously selected entry has ended up, or the top.
+    /// Where a previously selected entry has ended up, or -1 when it is not here.
     /// </summary>
     /// <remarks>
     /// Identity first, because within one list it is exact and free. Then by what the
@@ -1208,7 +1252,7 @@ public sealed class PaletteModel
     /// </remarks>
     private int IndexOf(PaletteEntry? entry)
     {
-        if (entry is null) return 0;
+        if (entry is null) return -1;
 
         for (int i = 0; i < _rows.Count; i++)
             if (ReferenceEquals(_rows[i].Entry, entry))
@@ -1225,6 +1269,6 @@ public sealed class PaletteModel
             }
         }
 
-        return 0;
+        return -1;
     }
 }
