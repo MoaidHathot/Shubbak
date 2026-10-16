@@ -197,6 +197,7 @@ jobs:
           }
 
           $login = (Invoke-RestMethod -Uri "$api/user" -Headers $headers).login
+          Write-Output "WINGET_TOKEN belongs to $login."
 
           try {
             $fork = Invoke-RestMethod -Uri "$api/repos/$login/winget-pkgs" -Headers $headers
@@ -209,6 +210,23 @@ jobs:
           $upstream = $fork.parent
           if ($upstream.full_name -ne 'microsoft/winget-pkgs') {
             throw "$($fork.full_name) is a fork of $($upstream.full_name), not of microsoft/winget-pkgs. Not touching it."
+          }
+
+          # Asked outright, because GitHub answers a write the token may not make with
+          # a bare 404 - which is how the first run of this step ended, and which says
+          # nothing about the cause. The repository's permissions object says what this
+          # token may do to it; a classic token also names its scopes in a header.
+          if (-not $fork.permissions.push) {
+            $scopes = 'none reported (a fine-grained token)'
+            try {
+              $probe = Invoke-WebRequest -Uri "$api/user" -Headers $headers -UseBasicParsing
+              if ($probe.Headers['X-OAuth-Scopes']) { $scopes = "$($probe.Headers['X-OAuth-Scopes'])" }
+            }
+            catch { }
+
+            throw "WINGET_TOKEN cannot push to $($fork.full_name): permissions pull=$($fork.permissions.pull) push=$($fork.permissions.push) admin=$($fork.permissions.admin); scopes: $scopes. " +
+              "wingetcreate needs the same access to branch from the fork, so the submission would fail after this anyway. " +
+              "Issue a classic token with public_repo as $login and put it in the package-managers environment's WINGET_TOKEN; see RELEASING.md."
           }
 
           $branch = $fork.default_branch
