@@ -170,6 +170,70 @@ jobs:
             }
           }
 
+      # wingetcreate syncs the fork before it branches from it, through GitHub's
+      # merge-upstream endpoint, and that endpoint answers 422 to a fork too far behind
+      # a repository the size of winget-pkgs: the 0.11.0 submission failed exactly so -
+      # the bot's fork 16,609 commits behind and none ahead, "the forked repository
+      # could not be synced with the upstream commits. Sync your fork manually and try
+      # again" - five weeks after the fork was made. So the fork is brought up to date
+      # here first, as the by-hand sync does it: its default branch is moved to the
+      # commit upstream's is on, a fast-forward to an object the fork's network already
+      # holds, which the endpoint that merges has no part in. The tool then finds
+      # nothing to sync. A fork that is ahead is not touched and is said, because
+      # somebody put commits on it, and the tool fails on it as before; no fork at all
+      # is left to the tool, which makes one, in step by definition.
+      - name: Bring the fork up to date with winget-pkgs
+        if: env.HAS_WINGET_TOKEN == 'true' && steps.upstream.outputs.exists != 'true'
+        shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          $api = 'https://api.github.com'
+          $headers = @{
+            'User-Agent' = 'shubbak-release'
+            'Authorization' = "Bearer $env:WINGET_TOKEN"
+            'Accept' = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+
+          $login = (Invoke-RestMethod -Uri "$api/user" -Headers $headers).login
+
+          try {
+            $fork = Invoke-RestMethod -Uri "$api/repos/$login/winget-pkgs" -Headers $headers
+          }
+          catch {
+            Write-Output "$login has no fork of winget-pkgs yet; wingetcreate will make one."
+            return
+          }
+
+          $upstream = $fork.parent
+          if ($upstream.full_name -ne 'microsoft/winget-pkgs') {
+            throw "$($fork.full_name) is a fork of $($upstream.full_name), not of microsoft/winget-pkgs. Not touching it."
+          }
+
+          $branch = $fork.default_branch
+          $compare = Invoke-RestMethod -Headers $headers `
+            -Uri "$api/repos/microsoft/winget-pkgs/compare/$($upstream.default_branch)...${login}:winget-pkgs:$branch"
+
+          if ($compare.ahead_by -gt 0) {
+            Write-Warning "$($fork.full_name) $branch is $($compare.ahead_by) commit(s) ahead of upstream and $($compare.behind_by) behind; left alone, since those commits are somebody's."
+            return
+          }
+
+          if ($compare.behind_by -eq 0) {
+            Write-Output "$($fork.full_name) $branch is up to date with microsoft/winget-pkgs."
+            return
+          }
+
+          $sha = (Invoke-RestMethod -Uri "$api/repos/microsoft/winget-pkgs/git/ref/heads/$($upstream.default_branch)" -Headers $headers).object.sha
+
+          # Not forced: a fork that gained a commit between the compare and the move is
+          # refused rather than rewound.
+          $moved = Invoke-RestMethod -Method Patch -Uri "$api/repos/$login/winget-pkgs/git/refs/heads/$branch" -Headers $headers `
+            -ContentType 'application/json' -Body (@{ sha = $sha; force = $false } | ConvertTo-Json -Compress)
+
+          Write-Output "$($fork.full_name) $branch was $($compare.behind_by) commits behind microsoft/winget-pkgs; moved to $($moved.object.sha.Substring(0, 7))."
+
       - name: Open the winget-pkgs pull request
         if: env.HAS_WINGET_TOKEN == 'true' && steps.upstream.outputs.exists != 'true'
         shell: pwsh
