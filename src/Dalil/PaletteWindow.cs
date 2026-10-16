@@ -153,8 +153,17 @@ public sealed class PaletteWindow : CompanionWindow
     /// </summary>
     private string? _obstacle;
 
-    /// <summary>Where the pointer was last seen, so a resting cursor is ignored.</summary>
-    private (int X, int Y) _lastMouse = (int.MinValue, int.MinValue);
+    /// <summary>
+    /// Where the pointer was last seen, on the screen, so a resting cursor is ignored.
+    /// </summary>
+    /// <remarks>
+    /// Screen coordinates, not the window's. The move Windows reports when the window
+    /// appears, grows or is shown somewhere else beneath a pointer that has not moved
+    /// carries fresh client coordinates every time - the window is what moved - and
+    /// the same screen position, which is the one fact that tells a resting pointer
+    /// from a moving one. Seeded on every open; see <see cref="Open"/>.
+    /// </remarks>
+    private (int X, int Y) _pointerSeen = (int.MinValue, int.MinValue);
 
 
     /// <summary>Raised with a command string when a row is chosen.</summary>
@@ -374,6 +383,17 @@ public sealed class PaletteWindow : CompanionWindow
 
         _model.SetQuery(PrefixFor(mode));
         _closing = false;
+
+        // Where the pointer is as the palette appears. Windows posts a mouse move to a
+        // window that is shown or grows beneath a resting pointer, and the palette
+        // used to take that for a hover and move the selection to whichever row the
+        // pointer happened to be over - on the first open always, since nothing had
+        // been seen yet, and on later ones whenever the pointer or the window was not
+        // exactly where it had been last time. Taken as the position already seen,
+        // that move is recognised as no move at all; see OnMouseMove.
+        _pointerSeen = PInvoke.GetCursorPos(out System.Drawing.Point pointer)
+            ? (pointer.X, pointer.Y)
+            : (int.MinValue, int.MinValue);
 
         if (!wasOpen)
         {
@@ -1233,16 +1253,29 @@ public sealed class PaletteWindow : CompanionWindow
     /// Selects the row under the pointer.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Only when the pointer has actually moved. Windows sends <c>WM_MOUSEMOVE</c>
-    /// whenever the window moves or is shown beneath a resting cursor, and acting on
-    /// those would let a pointer that happens to be sitting over the list take the
+    /// whenever a window appears, moves or grows beneath a resting cursor, and acting
+    /// on those would let a pointer that happens to be sitting over the list take the
     /// selection away from the keyboard the moment the palette appears - which is the
     /// one thing it must never do, since it opened to receive typing.
+    /// </para>
+    /// <para>
+    /// "Moved" is judged on the screen. The coordinates in the message are the
+    /// window's, and those change whenever the window does: the first open after a
+    /// start, an open on another monitor, a list growing down under a pointer parked
+    /// below it, all delivered a position never seen before and were taken for a
+    /// hover. A pointer that is where it was when the palette opened has not moved,
+    /// whatever the window under it has done.
+    /// </para>
     /// </remarks>
     protected override void OnMouseMove(int x, int y)
     {
-        if (x == _lastMouse.X && y == _lastMouse.Y) return;
-        _lastMouse = (x, y);
+        var pointer = new System.Drawing.Point(x, y);
+        if (!PInvoke.ClientToScreen(Hwnd, ref pointer)) return;
+
+        if (pointer.X == _pointerSeen.X && pointer.Y == _pointerSeen.Y) return;
+        _pointerSeen = (pointer.X, pointer.Y);
 
         (int first, int count) = _model.VisibleWindow(_rowsShown);
         int slot = Layout().SlotAt(x, y);
