@@ -140,6 +140,15 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     private readonly LatencyStats _commitDuration = new(1024, "commit layout");
 
+    /// <summary>How long a whole layout pass took: arrange, schedule, commit, focus, border.</summary>
+    /// <remarks>
+    /// The pass is what stands between a keystroke and the first frame of the motion
+    /// it asks for, so this is the latency figure for the keyboard. The commit and
+    /// the focus hand-off below are its two calls into other processes, timed apart;
+    /// the rest is the layout engine and the tree.
+    /// </remarks>
+    private readonly LatencyStats _layoutDuration = new(1024, "layout pass");
+
     /// <summary>How long handing the foreground to the focused window took.</summary>
     /// <remarks>
     /// The other synchronous call a layout pass made, and the one that blocked for
@@ -1013,6 +1022,7 @@ public sealed class WmDaemon : IDisposable
                 _layoutDirty = false;
 
                 _layoutAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeLayout);
+                _layoutDuration.Record(Ms(afterContexts, Stopwatch.GetTimestamp()));
             }
 
             afterLayout = Stopwatch.GetTimestamp();
@@ -1214,7 +1224,15 @@ public sealed class WmDaemon : IDisposable
             _animatingMs += sinceFrameMs;
         }
 
-        AdvanceAnimation(ClampAnimationStep(sinceFrameMs, frameMs));
+        // The first frame is advanced by one interval rather than by the nothing that
+        // has elapsed. Advanced by nothing, every track is still at its start, the
+        // engine emits no rectangle, and the window first moves one whole interval
+        // later - 17 ms at 60 Hz - after a pass that ran because the user pressed a
+        // key. A frame posted now is composed at the next refresh, so the position
+        // for one interval hence is the honest one to post, and it is the same first
+        // step a motion starting mid-flight has always taken, since that one is
+        // advanced by the gap since the previous frame.
+        AdvanceAnimation(first ? frameMs : ClampAnimationStep(sinceFrameMs, frameMs));
 
         _lastFrameTicks = now;
     }
@@ -2325,6 +2343,9 @@ public sealed class WmDaemon : IDisposable
             // to wait on the target's thread and both now post; either reading in
             // milliseconds rather than microseconds means a window is being waited on
             // again.
+            $"- **Layout pass** (last {_layoutDuration.Count}): p50 {_layoutDuration.Percentile(0.5):F2} ms, " +
+            $"p99 {_layoutDuration.Percentile(0.99):F2} ms, max {_layoutDuration.Max:F2} ms all-time",
+
             $"- **Layout commit** (last {_commitDuration.Count}): p50 {_commitDuration.Percentile(0.5):F2} ms, " +
             $"p99 {_commitDuration.Percentile(0.99):F2} ms, max {_commitDuration.Max:F2} ms all-time",
 

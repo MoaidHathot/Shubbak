@@ -217,8 +217,6 @@ public sealed class SessionStore
         {
             Session session = Capture(root, focusedMonitor);
 
-            string json = JsonSerializer.Serialize(session, SessionJsonContext.Default.Session);
-
             // Written only when something changed. The periodic save fired every thirty
             // seconds regardless, so an untouched desktop still rewrote the file nearly
             // three thousand times a day and announced each one - which was half of
@@ -229,9 +227,16 @@ public sealed class SessionStore
             // once any other path had been written with the same contents - so deleting
             // the session file meant it was never written again, and two saves to
             // different paths in one process silently produced one file.
+            //
+            // Decided before the JSON is built, not after: the fingerprint is what
+            // answers the question, and serialising a session only to find it already
+            // on disk was the routine save's whole allocation, nearly three thousand
+            // times a day.
             string fingerprint = Fingerprint(session);
 
             if (routine && IsAlreadyOnDisk(path, fingerprint)) return true;
+
+            string json = JsonSerializer.Serialize(session, SessionJsonContext.Default.Session);
 
             string? directory = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
