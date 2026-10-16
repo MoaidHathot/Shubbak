@@ -22,11 +22,11 @@
     "architecture": {
         "64bit": {
             "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-x64.zip",
-            "hash": "1111111111111111111111111111111111111111111111111111111111111111"
+            "hash": "c6f19b9bbf392c9fdda90457c98a41df8365a05cc682c6f176a8aefd97457edc"
         },
         "arm64": {
             "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-arm64.zip",
-            "hash": "3333333333333333333333333333333333333333333333333333333333333333"
+            "hash": "f47934ccf5b4101aaf2b132169f2ee394fe870070279214d6c57ca56806b538a"
         }
     },
     "bin": [

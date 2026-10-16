@@ -9,7 +9,7 @@ InstallModes:
   - silentWithProgress
 UpgradeBehavior: install
 # Filled by tools/build-release.ps1 with the day the build was made.
-ReleaseDate: 2026-10-17
+ReleaseDate: 2026-10-16
 
 # Four ways to install the same version: an MSI and a portable zip, each for x64 and
 # for ARM64. winget picks the native architecture, prefers the MSI when both apply
@@ -36,14 +36,14 @@ Installers:
     Scope: machine
     ElevationRequirement: elevationRequired
     InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-x64.msi
-    InstallerSha256: '0000000000000000000000000000000000000000000000000000000000000000'
-    ProductCode: '{00000000-0000-0000-0000-000000000000}'
+    InstallerSha256: 6A358A5943D9A94E4D23B112664B08DCD8BD742F376449975B52DD242BEFE80E
+    ProductCode: '{38401C53-0F18-44A0-820E-39E427E5E0C3}'
     Commands:
       - shubbak
     AppsAndFeaturesEntries:
       - DisplayName: Shubbak
         Publisher: Moaid Hathot
-        ProductCode: '{00000000-0000-0000-0000-000000000000}'
+        ProductCode: '{38401C53-0F18-44A0-820E-39E427E5E0C3}'
         UpgradeCode: '{FCFFCA55-3741-45D5-9410-3429B9DF9BFD}'
         InstallerType: wix
 
@@ -62,21 +62,21 @@ Installers:
       - RelativeFilePath: ayn.exe
         PortableCommandAlias: ayn
     InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-x64.zip
-    InstallerSha256: '1111111111111111111111111111111111111111111111111111111111111111'
+    InstallerSha256: C6F19B9BBF392C9FDDA90457C98A41DF8365A05CC682C6F176A8AEFD97457EDC
 
   - Architecture: arm64
     InstallerType: wix
     Scope: machine
     ElevationRequirement: elevationRequired
     InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-arm64.msi
-    InstallerSha256: '2222222222222222222222222222222222222222222222222222222222222222'
-    ProductCode: '{00000000-0000-0000-0000-000000000000}'
+    InstallerSha256: 842A525D82676D579F5D73F4941999CEED794A2DDC99B608269F6473E323B0D8
+    ProductCode: '{6D6E817D-AB35-4966-B646-2267A8C7D3B1}'
     Commands:
       - shubbak
     AppsAndFeaturesEntries:
       - DisplayName: Shubbak
         Publisher: Moaid Hathot
-        ProductCode: '{00000000-0000-0000-0000-000000000000}'
+        ProductCode: '{6D6E817D-AB35-4966-B646-2267A8C7D3B1}'
         UpgradeCode: '{FCFFCA55-3741-45D5-9410-3429B9DF9BFD}'
         InstallerType: wix
 
@@ -95,7 +95,7 @@ Installers:
       - RelativeFilePath: ayn.exe
         PortableCommandAlias: ayn
     InstallerUrl: https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-arm64.zip
-    InstallerSha256: '3333333333333333333333333333333333333333333333333333333333333333'
+    InstallerSha256: F47934CCF5B4101AAF2B132169F2EE394FE870070279214D6C57CA56806B538A
 
 ManifestType: installer
 ManifestVersion: 1.12.0
