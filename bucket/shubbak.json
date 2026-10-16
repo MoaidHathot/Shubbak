@@ -1,5 +1,5 @@
 {
-    "version": "0.10.0",
+    "version": "0.11.0",
     "description": "A tiling window manager for Windows, with an animation engine, a status bar, a command palette and a configuration language that tells you when you have made a mistake.",
     "homepage": "https://github.com/MoaidHathot/Shubbak",
     "license": "MIT",
@@ -21,12 +21,12 @@
     ],
     "architecture": {
         "64bit": {
-            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-x64.zip",
-            "hash": "7fb9b6bc600d4c1fd18239c6522bb215d9d163d2f45ab40eeee245f7e883cb57"
+            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-x64.zip",
+            "hash": "1111111111111111111111111111111111111111111111111111111111111111"
         },
         "arm64": {
-            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.10.0/shubbak-0.10.0-win-arm64.zip",
-            "hash": "03a7ba7ce3cfbdbd6eebe2786642652656ab344e940d6c82a5d956c22cb16ede"
+            "url": "https://github.com/MoaidHathot/Shubbak/releases/download/v0.11.0/shubbak-0.11.0-win-arm64.zip",
+            "hash": "3333333333333333333333333333333333333333333333333333333333333333"
         }
     },
     "bin": [

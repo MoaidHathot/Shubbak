@@ -15,8 +15,21 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-17
+
 ### Added
 
+- **`general { conceal-until-placed #true }` keeps a new window hidden until it is
+  seen in its tile.** Off by default. A window Shubbak is about to place is shown by
+  its application wherever the application put it and moves to its tile a moment
+  later; with every placement now posted rather than waited for, that moment is
+  short, but a window whose application is slow to pump still appears at its own
+  position first. This cloaks the window with the compositor as soon as it is
+  adopted - a few milliseconds after it appears, so one composed frame at the
+  application's position is still possible - and lifts the cloak once the window is
+  seen at its rectangle, or after `timeout=300` milliseconds if it never is, so a
+  window is never left invisible to a hung application. `diagnose` says how many are
+  veiled; `SHB0456` names a timeout that is not a positive number.
 - **A palette row can follow a context.** `when-context="focusing"` on an `action`
   offers the row only while that context holds; `unless-context="focusing"` only while
   it does not. The reason is a pair of rows that are really one switch: "Start focus
@@ -811,6 +824,67 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A new window no longer flickers into its tile, and a busy window no longer stalls
+  everything else.** Open File Explorer beside a tiled window and the neighbour
+  animated late and short, while the new window grew, shrank, grew and shrank once
+  per layout pass before settling. Two causes, both measured. First, every placement
+  was synchronous: `DeferWindowPos` refuses `SWP_ASYNCWINDOWPOS` and
+  `SWP_NOSENDCHANGING` with `ERROR_INVALID_PARAMETER`, so the batch the committer built
+  failed on its first window and fell back - silently, every time, since the day it
+  was written - to one `SetWindowPos` per window that waited on each window's own
+  thread. The busiest thread on the desktop is the one whose window has just appeared:
+  98 ms placing an Explorer window, six of its neighbours' fourteen frames never
+  emitted; a dialog arriving stretched a 140 ms motion to 723 ms; `BringWindowToTop`
+  in the focus hand-off waited 363 ms on a window pausing between pumps, for a raise
+  `SetForegroundWindow` already does. Every placement is now one posted `SetWindowPos`
+  per window, and focusing asks for the foreground and nothing else. Second, posting
+  leaves `GetWindowRect` reporting the old rectangle until the window's thread catches
+  up, and the layout pass read that as where the animation should start - the
+  oscillation. The committer now remembers what it posted and answers for the window
+  until it is seen there, seen elsewhere, or a second has passed; the drift watch and
+  the full-screen poll wait with it. A window that has fallen two frames behind is
+  not sent a third, so a busy application applies two resizes rather than ten and one
+  that keeps up sees no difference. Before and after on the same desktop: layout
+  commit 98 ms → 1 ms, neighbour animation 8 of 14 frames → 10 of 10, frame interval
+  p99 284 ms → 23 ms, commit-frame p99 30 ms → 0.5 ms, pacing overshoot p99 269 ms →
+  6 ms. Also found on the way, by a new report that writes any tick over 20 ms up
+  phase by phase: `SHQueryUserNotificationState`, asked by the monitor poll, blocked
+  the tick for 436 ms while the shell tore down an Explorer window, and is now asked
+  on a thread of its own; and `Show` no longer tries to reverse a browser's own paint
+  cloak with three failing shell calls and a warning. The design rule ADR 0001 carried
+  for this - "batch with `DeferWindowPos`" - is withdrawn there, with the re-measured
+  table from a spike that now fails if a batch does, in favour of the rule the
+  measurements support: the window manager's thread never waits on an application's.
+- **A motion starts on the pass that asked for it, not one frame later.** The first
+  frame of an animation advanced it by the nothing that had elapsed, so every track
+  was still at its start, no rectangle went out, and the window first moved a whole
+  frame interval later - 17 ms on a 60 Hz panel, after a pass that ran because a key
+  was pressed. The first frame now advances by one interval, which is the position it
+  will be composed at anyway. Measured: a new window's neighbour now moves 2-3 ms
+  after the window is shown, where it was one interval behind.
+- **The palette opened with the previous window selected, every time.** Focus a
+  terminal and open it: the browser is selected. Focus the browser and open it: the
+  terminal. One step behind wherever you had just gone, consistently enough to look
+  deliberate. The palette shows the list it remembered from the last time it was open
+  while it reads a fresh one, so the box is full the instant it appears; opening
+  resets the selection to that list's top row, which is the window that was in front
+  *last* time; and when the fresh list arrived with the current window at the top and
+  that one second, the selection followed the row it was on - a courtesy meant for a
+  row somebody had chosen, applied to one nobody had. A selection the list made by
+  itself is now made again from the new list; one you moved to - keys, mouse, or
+  coming back out of a frame - still follows its row.
+- **A mouse pointer resting where the palette appears no longer selects the row under
+  it.** Windows posts a mouse move to a window that is shown or grows beneath a
+  pointer that has not moved, and the palette knew to ignore one that reported the
+  position it had last seen - but it kept that position in the window's own
+  coordinates, which are exactly what changes when the window is the thing that
+  moved, and it had seen nothing at all on the first open after a start. So the first
+  open always took the resting pointer for a hover, and later ones did whenever the
+  pointer or the palette was not precisely where it had been last time - which is why
+  it was hard to reproduce on purpose. The position kept is now the pointer's on the
+  screen, taken as the palette opens: a pointer that has not moved since has not
+  moved, whatever the window under it did, and one that moves by a pixel selects the
+  row under it, as hovering should.
 - **Dragging a tiled window's border by a few pixels no longer hands it almost the
   whole screen.** In a spiral of two - Firefox beside a terminal, say - nudging a
   border inwards with the mouse left the window you had just shrunk filling all but a
@@ -1329,6 +1403,26 @@ schedule and breaking either is a different kind of event:
 
 ### Internal
 
+- **The routine session save no longer serialises a session it is not going to
+  write.** It built the JSON every thirty seconds and then checked a fingerprint to
+  decide whether the file had changed; unchanged, it threw the JSON away - 3.6 KB as a
+  string, 2,880 times a day on an untouched desktop. The fingerprint is asked first.
+  The daemon also records how long a whole layout pass takes, alongside the commit
+  and the focus hand-off it already timed, and writes any tick over 20 ms up phase by
+  phase at debug - which is how the 436 ms `SHQueryUserNotificationState` stall above
+  was found. Tried and not kept, both measured: running the loop thread above normal
+  priority delivered the same 9 of 9 frames under a fully loaded CPU as normal did,
+  and deferring the focus hand-off until after a pass's first frame saved nothing a
+  motion could show.
+- **A native test assumed a window has no shadow.** `PlacementTransitTests` moved a
+  window with a raw `SetWindowPos` and waited for its visible frame to appear at the
+  very coordinates it had sent, which are window-rectangle coordinates, shadow
+  included. It passed on a 150% display, where the test host - not DPI aware - measures
+  a shadow it cannot trust and discards it, and failed on every CI run, where the
+  100% runner measures the real seven pixels. Reproduced here with a DPI-aware probe
+  against the real committer; the test now reads the destination back, as the drift
+  tests beside it already did, and `TestWindow.MoveTo` says which coordinates it
+  takes.
 - **One test runs the real window manager.** `Shubbak.EndToEnd.Tests` starts
   `shubbak-wm.exe` as a user would - a config, a state directory and a pipe of its own -
   opens `winver` beside it, and asks the daemon over the pipe what it did: managed, tiled
@@ -3092,6 +3186,7 @@ to be running twice.
 
 - **x64 only.** There is no ARM64 configuration yet.
 
-[Unreleased]: https://github.com/MoaidHathot/Shubbak/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/MoaidHathot/Shubbak/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/MoaidHathot/Shubbak/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/MoaidHathot/Shubbak/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/MoaidHathot/Shubbak/tree/v0.9.0
