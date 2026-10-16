@@ -156,6 +156,63 @@ only the Win32 call pattern differs, and it is the difference between 0% and 41%
 dropped frames. This is very likely the mechanism behind the "feel" gap between
 window managers.
 
+### Correction, 2026-10-16: the batched path never ran
+
+The S2 batched numbers above are void, and the conclusion drawn from them was
+wrong. `DeferWindowPos` rejects `SWP_NOSENDCHANGING` (and `SWP_ASYNCWINDOWPOS`)
+with `ERROR_INVALID_PARAMETER`, whatever the documentation lists as accepted - Wine's
+implementation carries the same mask, so this is long-standing behaviour rather
+than a build quirk. The spike's `CommitBatched` passed `SWP_NOSENDCHANGING`, got a
+null handle back from its first `DeferWindowPos`, and `return`ed. That is how it
+"moved" twenty windows in 11 µs with no dropped frames: it moved none of them. The
+shipping `WindowCommitter` carried the same flags into the same API, so every batch
+it ever built failed on its first window and fell back - silently, because the
+fallback existed for resource pressure - to individual `SetWindowPos` calls. The
+project ran unbatched from the first day, and nothing noticed, because the
+synchronous `SetWindowPos` of the fallback was blocking the tick on each target's
+thread and that block was, by accident, pacing the frames.
+
+The spike was also moving windows on its own thread, where a synchronous
+`SetWindowPos` is processed inline and an asynchronous one has nothing to post to.
+Re-run with the windows on a thread of their own, the flags `DeferWindowPos` does
+accept, and a gate that fails the run if any `DeferWindowPos` returns null
+(`shubbak-spike s2 --mode async|sync|batched [--target-pause N]`):
+
+| Windows | Target thread | Commit | p50 | p99 | Dropped |
+| --- | --- | --- | --- | --- | --- |
+| 3 | pumping | posted per window (`SWP_ASYNCWINDOWPOS`) | **0.05** | **1.44** | **0.00%** |
+| 3 | pumping | sent per window | 1.31 | 4.09 | 0.00% |
+| 3 | pumping | one `DeferWindowPos` transaction | 1.01 | 3.47 | 0.09% |
+| 3 | pauses 50 ms between pumps | posted per window | **0.03** | **1.01** | **0.00%** |
+| 3 | pauses 50 ms between pumps | sent per window | 57.58 | 182.01 | 92.6% |
+| 3 | pauses 50 ms between pumps | one `DeferWindowPos` transaction | 243.70 | 367.82 | 100.0% |
+| 20 | pumping | posted per window | **0.65** | **2.76** | **0.00%** |
+| 20 | pumping | sent per window | 3.57 | 7.41 | 1.56% |
+| 20 | pumping | one `DeferWindowPos` transaction | 1.92 | 5.01 | 0.09% |
+
+(144 Hz, 6.94 ms budget, JIT debug build, no GC pressure, all targets on one thread,
+taken on an otherwise idle machine - a first run with a test suite building in the
+background doubled every tail and was discarded.)
+
+Three things follow. A working batch does beat sending each window separately when
+there are many of them on a responsive thread - it is the middle row of every group -
+but it never beats posting, and the daemon moves a median of one window per frame
+and at most three in any case. Against a target that is busy, which is what a window
+that has just opened always is, anything that waits on the target's thread waits for
+the whole of its pause, batch included; the transaction is only as fast as its
+slowest window and gets nothing in exchange, since `EndDeferWindowPos` moves each
+window on its own thread in turn and offers no visual atomicity across processes.
+And posting costs a few hundredths of a millisecond whatever the target is doing. The
+committer now posts one `SetWindowPos` per window with `SWP_ASYNCWINDOWPOS` for
+every placement, and remembers what it posted so the layout pass is never told a
+window is where the window's thread has not yet put it
+(`WindowCommitter.CurrentBounds`).
+
+What was right in the original finding survives: Win32 takes 99.9% of frame time in
+every configuration, so language choice is not the bottleneck. What determines
+whether motion is smooth is whether the window manager's thread ever waits on an
+application's, and the answer has to be never.
+
 ---
 
 ## S3 — NativeAOT viability
@@ -276,10 +333,15 @@ These are load-bearing. Violating them invalidates the measurements above.
    All real work happens on the worker thread.
 2. **The animation tick loop must never allocate.** Same rules. Pre-allocate all
    per-frame state.
-3. **All window moves in a frame must go through a single `DeferWindowPos`
-   transaction.** Per S2's control group this is the difference between 0% and
-   41% dropped frames. It is the highest-leverage implementation detail in the
-   entire project.
+3. ~~**All window moves in a frame must go through a single `DeferWindowPos`
+   transaction.**~~ Withdrawn; see the S2 correction above. `DeferWindowPos` cannot
+   take the flags a window manager needs, the batch never ran, and against a busy
+   target it is the worst of the three options measured. The constraint that
+   replaces it: **the window manager's thread must never wait on an application's
+   thread.** Every placement is a posted `SetWindowPos` with `SWP_ASYNCWINDOWPOS`,
+   and anything that would wait - `BringWindowToTop`, synchronous `ShowWindow`, a
+   sent `SetWindowPos` - is a stall of the animation and of keystroke dispatch for
+   exactly as long as the slowest application takes to pump.
 4. **Callbacks are `[UnmanagedCallersOnly]` static methods** and must not let an
    exception escape — doing so tears down the process. Wrap in `try`/`catch` and
    log to a pre-allocated buffer.
@@ -304,13 +366,15 @@ These are load-bearing. Violating them invalidates the measurements above.
 ### Note on fidelity
 
 S2 animates borderless `WS_POPUP` test windows with no content. Real
-applications — browsers, Electron apps — are heavier to move, because
-`EndDeferWindowPos` cost scales with what each target window does in response to
-`WM_WINDOWPOSCHANGED`. The 26× headroom and the zero-drop result at 60 windows
-give considerable margin, but the true figure will be worse than measured here.
-This does not change the decision, since the cost is in Win32 and would be
-identical in any language — it just means the animation engine should be
-re-benchmarked against real windows during P3.
+applications — browsers, Electron apps — are heavier to move, because the cost
+of a sent move scales with what each target window does in response to
+`WM_WINDOWPOSCHANGED`. The original run also had those windows on the spike's own
+thread, where none of that cost exists at all; the correction above puts them on a
+thread of their own and makes that thread as slow as the spike is told to. Even so,
+the true figure against a real application will be worse than measured here. This
+does not change the decision, since the cost is in Win32 and would be identical in
+any language — it just means the animation engine's numbers have to come from the
+shipping daemon's own `diagnose` report, which is where they now come from.
 
 ## Consequences
 

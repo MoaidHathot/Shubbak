@@ -52,6 +52,21 @@ public static class WindowActions
     /// holding, which every window ignores and the keyboard hook lets through. Then it
     /// asks once more. Tried only on refusal, so the ordinary case costs nothing extra.
     /// </para>
+    /// <para>
+    /// No <c>BringWindowToTop</c>. It was here from the first version, as it is in
+    /// every copy of this idiom, and it was the slowest thing a layout pass did:
+    /// <c>SetWindowPos(HWND_TOP)</c> <i>with</i> activation, which sends the
+    /// activation messages to the window being raised and the deactivation to the one
+    /// losing out and waits on both threads - 363 ms measured against a window whose
+    /// thread was pausing 200 ms between pumps, 46 ms against one that was pumping
+    /// every 15 ms. The window most often focused this way is the one that has just
+    /// opened and is busiest. <c>SetForegroundWindow</c> on its own activates and
+    /// raises - measured: the window is the new foreground and at the top of the
+    /// stacking order after a 1.2 ms call - so the raise was paying for something it
+    /// already had. Only when the foreground is refused outright is the window still
+    /// raised, and then with a posted, non-activating restack that costs nothing to
+    /// wait for.
+    /// </para>
     /// </remarks>
     public static unsafe bool Focus(nint handle)
     {
@@ -76,7 +91,6 @@ public static class WindowActions
             if (foreign)
                 attached = PInvoke.AttachThreadInput(ours, theirs, true);
 
-            PInvoke.BringWindowToTop(hwnd);
             if (PInvoke.SetForegroundWindow(hwnd)) return true;
         }
         finally
@@ -85,10 +99,13 @@ public static class WindowActions
         }
 
         // Refused. Provide an input event and ask again; see the remarks.
-        if (!Nudge()) return false;
+        if (Nudge() && PInvoke.SetForegroundWindow(hwnd)) return true;
 
-        PInvoke.BringWindowToTop(hwnd);
-        return PInvoke.SetForegroundWindow(hwnd);
+        // Still refused, so the window will not be activated. It is at least brought
+        // forward, as the raise-then-activate idiom this replaced always did.
+        WindowCommitter.Raise(handle);
+
+        return false;
     }
 
     /// <summary>
@@ -197,12 +214,17 @@ public static class WindowActions
     /// stale position immediately before the layout corrects it.
     /// </para>
     /// <para>
-    /// Synchronous, and that matters. The committer places windows with a sending
-    /// <c>SetWindowPos</c>, and a send overtakes anything merely posted - so the
-    /// asynchronous form of this would arrive <i>after</i> the placement and undo it.
-    /// A window that is not answering is given the asynchronous form anyway: it cannot
-    /// be worse than leaving it maximised, and blocking the whole layout pass on one
-    /// stuck application is what the committer already refuses to do elsewhere.
+    /// Synchronous, and that matters. The committer posts its placements, and this
+    /// has to have taken effect before the placement that follows it is posted, or
+    /// the window is told where to go and then un-maximised to wherever it was before.
+    /// Sent, it has completed by the time the committer's post is queued behind it.
+    /// It is the one placement-path call that still waits on the target's thread -
+    /// 154 ms measured against a thread pausing 200 ms between pumps - and it runs
+    /// only for a window that is both maximised and being placed somewhere that is
+    /// not the work area, which is rare. A window that is not answering is given the
+    /// asynchronous form anyway: it cannot be worse than leaving it maximised, and
+    /// blocking the whole layout pass on one stuck application is what the committer
+    /// already refuses to do elsewhere.
     /// </para>
     /// <para>
     /// The rectangle is converted on the way in, because <c>WINDOWPLACEMENT</c> does

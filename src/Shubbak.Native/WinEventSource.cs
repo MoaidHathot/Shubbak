@@ -66,14 +66,14 @@ public sealed class WinEventSource : IDisposable
         // It was subscribed and then discarded by an empty case, which is not the same
         // as being free. WINEVENT_SKIPOWNPROCESS does not help: it skips windows owned
         // by this process, and every managed window belongs to another one. So every
-        // DeferWindowPos the animation path issued came straight back as a callback,
+        // SetWindowPos the animation path issued came straight back as a callback,
         // and callbacks arrive through this thread's message queue, which is exactly
         // what the pump waits on with QS_ALLINPUT.
         //
         // The loop therefore paced itself against its own output: commit a frame, be
         // woken by the echo of that frame, commit another. The 7 ms frame interval was
         // a ceiling that was never reached, and the only thing limiting the rate was
-        // how long EndDeferWindowPos took - which is the definition of a spin. A
+        // how long the synchronous commit took - which is the definition of a spin. A
         // dragged window produced 122 of these a second on its own, each waking a pump
         // that would throw it away.
         //
@@ -88,7 +88,11 @@ public sealed class WinEventSource : IDisposable
         // first two use PlacementDrift, which asks the question coarsely enough that
         // an application rounding its own size cannot start the fight this removal was
         // avoiding; the third uses NativeFullscreen, which asks a different question
-        // and can afford to be exact.
+        // and can afford to be exact. All three now wait while the committer still
+        // has a placement outstanding for the window - see WindowCommitter.IsInTransit
+        // - because a posted move leaves GetWindowRect reporting the old rectangle
+        // until the window's thread gets to it, which this event would otherwise have
+        // been the thing to say.
         //
         // For the record, since this comment used to claim otherwise: the two obvious
         // comparisons do not agree with each other. komorebi hooks the whole event

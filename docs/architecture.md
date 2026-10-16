@@ -46,7 +46,7 @@ src/
   Dalil/            the palette
   Ayn.Core/         the watcher's decisions: debounce, leases, config  — no Win32
   Ayn/              the watcher: the rest of the machine, as contexts
-tests/              2752 test methods across 15 projects
+tests/              2783 test methods across 15 projects
 examples/           programs of somebody else's: seven hello-worlds, one per direction the pipe has, in PowerShell; a forty-line C# hello on the Shubbak.Ipc package; and a focus timer that is all of them at once, as a script of shubbak commands and as C#
 docs/               this, and the annotated example config
 bucket/             the Scoop manifest, where Scoop looks for it
@@ -62,7 +62,7 @@ replaced behind the `Shubbak.Native` boundary without touching any of the logic.
 
 ## Tests
 
-**2752 test methods**, around a second to run. Everything except the platform layer and
+**2783 test methods**, around a second to run. Everything except the platform layer and
 the renderer runs headless, so the entire behavioural surface — tree, layout, focus,
 animation, tags, sessions, the state machine, the config diagnostics, the palette's
 matching, the bar's model — is testable in milliseconds with no window manager
@@ -97,10 +97,15 @@ Not the obvious choice for a window manager, so it was measured rather than assu
 - **Keyboard hook latency** — p99.9 of **0.8 µs** against Windows' 300 ms unhook
   threshold, measured under ~1,300 forced blocking Gen2 collections. The hazard is
   real; it does not materialise, because the callback never allocates.
-- **Animation** — zero dropped frames at 144 Hz, with **managed code accounting for
-  2.5–5.3% of frame time** and Win32 taking the rest. The unbatched control group
-  dropped 33–42% of frames with *identical* managed code — so `DeferWindowPos`
-  batching, not language choice, is what decides whether motion looks smooth.
+- **Animation** — Win32 takes **99.9% of frame time** in every configuration
+  measured, so language choice is not where smoothness is decided. What decides it is
+  whether the window manager's thread ever waits on an application's: a move *sent*
+  to a window whose thread is busy waits for the whole of that thread's pause, and a
+  move *posted* (`SetWindowPos` with `SWP_ASYNCWINDOWPOS`) costs a hundredth of a
+  millisecond whatever the target is doing. The ADR's original claim that
+  `DeferWindowPos` batching was the decisive factor was wrong - that API refuses the
+  flags a window manager needs and the batch had never actually run; the ADR carries
+  the correction and the re-measured table.
 - **Distribution** — five single-file NativeAOT executables, ~25 MB total, under
   11 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
 

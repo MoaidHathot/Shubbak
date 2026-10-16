@@ -120,6 +120,7 @@ code, not the page.
 | `SHB0453` | Error | Unknown empty workspace focus '{text}'. |
 | `SHB0454` | Error | Workspace '{name}' holds both a double and a single quote, which no command can write. |
 | `SHB0455` | Warning | The setting '{node.Name}' has been removed and is ignored. |
+| `SHB0456` | Error | 'conceal-until-placed' has a timeout of {ms} ms, which would never show the window. |
 
 ## TAJ - The bar
 

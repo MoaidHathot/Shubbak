@@ -76,7 +76,7 @@ internal static class Program
         // Only one window manager per account, enforced before anything touches the
         // desktop. Two daemons used to start in silence and then fight: two low-level
         // keyboard hooks, so every binding fired twice; two layout passes contradicting
-        // each other through DeferWindowPos; a CLI connecting to whichever accept loop
+        // each other through SetWindowPos; a CLI connecting to whichever accept loop
         // won the race; and on exit, one restoring windows the other still believed
         // were concealed. Nothing reported any of it, because nothing was looking.
         using var instance = SingleInstance.TryAcquire(

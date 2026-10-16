@@ -384,6 +384,38 @@ stacking order — reaches it, it hands the keyboard straight on to the next win
 no press is lost to it. `desktop` is for anyone who would rather Shubbak owned no such
 window — on a single monitor the two behave the same.
 
+## A new window's first frame
+
+An application shows its window where it chooses, and Shubbak is told only once it is
+on screen. The move into its tile is posted and takes effect when the application's
+thread gets to it — 86 to 150 ms for a File Explorer window still building its view.
+Until then the window sits where the application put it: full-size across its
+neighbours, or on the monitor it was last *dragged* to, since File Explorer remembers
+nothing else (closing it in its tile does not update that memory; dragging it once and
+dropping it does). Opt in to hiding that:
+
+```kdl
+general {
+    // Cloak a new window the moment it appears and show it once it is seen in its
+    // tile, so the first thing on screen is the window where it belongs. The timeout
+    // is the longest it stays hidden waiting - past it, the window is shown wherever
+    // it is. Only for windows placed into their tile; an arrival animation
+    // (animate-new-windows) is a motion from where the window appeared and is shown
+    // from its start.
+    conceal-until-placed #true timeout=300
+}
+```
+
+Off by default: it leans on the shell's cloak, and a crash between the cloak and the
+uncloak leaves the window to `shubbak restore`, exactly as a workspace concealment
+would. The shell catalogues a new window a few milliseconds after it appears, so the
+cloak goes on a few milliseconds after the window does - measured at 2 to 5 ms for
+File Explorer, against the 50 to 150 ms it then spends out of sight - which means a
+single composed frame of the window where the application put it is still possible.
+The timeout bounds the wait for a window that never applies the rectangle it was
+given; past it, the window is shown wherever it is. `shubbak log-level debug` writes a
+line for each veil put on and taken off, with the times.
+
 ## Contexts
 
 A talk from the laptop alone, then on a projector, then docked to two monitors for a

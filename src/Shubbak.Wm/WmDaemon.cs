@@ -24,8 +24,8 @@ namespace Shubbak.Wm;
 /// This is the only class that talks to both sides, and it is deliberately thin.
 /// Everything it does is translate: a WinEvent becomes a
 /// <see cref="WindowManager"/> call, a keystroke becomes a
-/// <see cref="WmCommand"/>, and the resulting placements become one
-/// <c>DeferWindowPos</c> transaction.
+/// <see cref="WmCommand"/>, and the resulting placements become a
+/// <c>SetWindowPos</c> posted to each window.
 /// </para>
 /// <para>
 /// All of it runs on a single thread with a message pump. Both hook kinds require
@@ -43,6 +43,7 @@ public sealed class WmDaemon : IDisposable
     private readonly WindowCommitter _committer = new();
     private readonly MessageLoop _loop = new();
     private readonly AnimationEngine _animation = new();
+    private readonly UserActivityProbe _activityProbe = new();
 
     /// <summary>
     /// Which windows Shubbak manages, and which it has decided not to.
@@ -120,6 +121,34 @@ public sealed class WmDaemon : IDisposable
     /// with <see cref="_frameBatchSize"/>, without which the duration means nothing.
     /// </remarks>
     private readonly LatencyStats _commitFrameDuration = new(4096, "commit frame");
+
+    /// <summary>How long placing the windows of one layout pass took.</summary>
+    /// <remarks>
+    /// <para>
+    /// The frame commit above was timed from the first measurement onwards and the
+    /// layout commit never was, which is how the layout commit got to be the slowest
+    /// thing the tick did without anyone seeing it. It placed windows synchronously,
+    /// and a window that has just appeared is busy building itself: a File Explorer
+    /// window held this call for 98 ms on the tick that saw it shown, and six of the
+    /// fourteen animation frames due to its neighbours in that time were never
+    /// emitted. The report showed the frames missing and nothing about why.
+    /// </para>
+    /// <para>
+    /// Placements are posted now and this should read in microseconds. It is kept so
+    /// that if it ever does not, the report says so.
+    /// </para>
+    /// </remarks>
+    private readonly LatencyStats _commitDuration = new(1024, "commit layout");
+
+    /// <summary>How long handing the foreground to the focused window took.</summary>
+    /// <remarks>
+    /// The other synchronous call a layout pass made, and the one that blocked for
+    /// longest: <c>BringWindowToTop</c> sends the activation to the window being raised
+    /// and the deactivation to the one losing out, and waits on both - 363 ms measured
+    /// against a thread pausing between pumps. Timed separately from the commit so
+    /// that a slow pass can be attributed to one or the other from the report alone.
+    /// </remarks>
+    private readonly LatencyStats _focusDuration = new(1024, "focus hand-off");
 
     /// <summary>How many windows moved in each frame.</summary>
     /// <remarks>
@@ -426,6 +455,11 @@ public sealed class WmDaemon : IDisposable
         _keyboard.Start(_bindings.IsBound);
         phase = ReportPhase("keyboard hook", phase);
 
+        // The one question the monitor poll asks of the shell, moved off this thread:
+        // the shell answers it in its own time, which during a File Explorer close was
+        // measured at a third of a second. See UserActivityProbe.
+        _activityProbe.Start();
+
         _ipc = new IpcServer
         {
             Warn = message => Log.Warn(LogCategory.Ipc, message),
@@ -705,7 +739,7 @@ public sealed class WmDaemon : IDisposable
 
         return IdleWait(
             _suspended,
-            _layoutDirty,
+            _layoutDirty || _committer.VeiledCount > 0,
             _settling.Count > 0,
             FrameInterval,
             SettleInterval,
@@ -757,7 +791,10 @@ public sealed class WmDaemon : IDisposable
     /// end would otherwise leave that pass sitting until something else happened to
     /// wake the loop. It cannot arise in practice - whatever set the flag woke the
     /// pump on its way past - but an infinite wait is the wrong place to be relying on
-    /// that.
+    /// that. Also true while a window is veiled on arrival, which wants the same
+    /// cadence: the veil comes off on the tick that sees the placement land, and a
+    /// tick that waits a quarter of a second to look keeps the window invisible for
+    /// that long after it was ready.
     /// </param>
     /// <param name="settling">Whether a newly adopted window is due another look.</param>
     /// <param name="frame">One animation frame, for a pass that wants to run now.</param>
@@ -920,9 +957,16 @@ public sealed class WmDaemon : IDisposable
         long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         bool reported = false;
 
+        // Phase boundaries, for the slow-tick report. Plain timestamps in locals: the
+        // tick may not allocate, and a tick that is not slow pays eleven reads of the
+        // performance counter and nothing else.
+        long now = Stopwatch.GetTimestamp();
+        long afterKeys = now, afterEvents = now, afterInbox = now, afterContexts = now, afterLayout = now;
+        long afterFrame = now, afterFlush = now, afterSettle = now, afterFullscreen = now, afterMonitors = now, afterBorder = now;
+        int keys = 0, events = 0, inbox = 0;
+
         try
         {
-            long now = Stopwatch.GetTimestamp();
             double deltaMs = _lastTickTicks == 0
                 ? 0
                 : (now - _lastTickTicks) * 1000.0 / Stopwatch.Frequency;
@@ -936,9 +980,12 @@ public sealed class WmDaemon : IDisposable
 
             long beforeDrain = GC.GetAllocatedBytesForCurrentThread();
 
-            DrainKeyboard();
-            DrainWindowEvents();
-            DrainInbox();
+            keys = DrainKeyboard();
+            afterKeys = Stopwatch.GetTimestamp();
+            events = DrainWindowEvents();
+            afterEvents = Stopwatch.GetTimestamp();
+            inbox = DrainInbox();
+            afterInbox = Stopwatch.GetTimestamp();
 
             _drainAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeDrain);
 
@@ -947,6 +994,7 @@ public sealed class WmDaemon : IDisposable
             // pass. Two comparisons when nothing is dirty and nothing is due; not while
             // suspended, when nothing is watching the desktop the contexts describe.
             if (!_suspended) EvaluateContexts(now);
+            afterContexts = Stopwatch.GetTimestamp();
 
             // Paused means the daemon keeps its hands off the desktop. The flag is left
             // set, so everything that accumulated while paused is applied in a single
@@ -967,6 +1015,8 @@ public sealed class WmDaemon : IDisposable
                 _layoutAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeLayout);
             }
 
+            afterLayout = Stopwatch.GetTimestamp();
+
             // Counted here rather than in Retarget: a layout pass retargets many
             // windows at once and that is one motion as far as the report is concerned.
             bool started = !wasAnimating && _animation.IsAnimating;
@@ -981,6 +1031,8 @@ public sealed class WmDaemon : IDisposable
                 _frameAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeFrame);
             }
 
+            afterFrame = Stopwatch.GetTimestamp();
+
             // Anything held back is due as soon as nothing is moving, which is
             // deliberately not the same as "a motion just ended". A pass can defer a
             // conceal and then take the last animating track away in the same pass -
@@ -989,6 +1041,12 @@ public sealed class WmDaemon : IDisposable
             // something unrelated hides them. Asking the simpler question costs a
             // bool compare per tick and cannot strand anything.
             if (!_animation.IsAnimating) FlushDeferredConceal();
+            afterFlush = Stopwatch.GetTimestamp();
+
+            // A window veiled on arrival is shown the moment its placement is seen to
+            // have landed. Asked every tick while anything is veiled - the wait is
+            // shortened to a frame for it, see IdleWait - and nothing at all otherwise.
+            MaybeUnveil();
 
             // Reported once per motion, not once per frame - an instrument that logs
             // at frame rate becomes the thing it is measuring.
@@ -1015,9 +1073,13 @@ public sealed class WmDaemon : IDisposable
             if (!_suspended)
             {
                 SettleArrivedWindows(now);
+                afterSettle = Stopwatch.GetTimestamp();
                 MaybeDetectNativeFullscreen(now);
+                afterFullscreen = Stopwatch.GetTimestamp();
                 MaybeSyncMonitors(now);
+                afterMonitors = Stopwatch.GetTimestamp();
                 MaybeRefreshFocusBorder(now);
+                afterBorder = Stopwatch.GetTimestamp();
                 MaybeSaveSession(now);
             }
         }
@@ -1029,14 +1091,78 @@ public sealed class WmDaemon : IDisposable
         }
         finally
         {
-            _tickDuration.Record(
-                (Stopwatch.GetTimestamp() - _lastTickTicks) * 1000.0 / Stopwatch.Frequency);
+            long end = Stopwatch.GetTimestamp();
+            double tickMs = (end - _lastTickTicks) * 1000.0 / Stopwatch.Frequency;
+
+            _tickDuration.Record(tickMs);
 
             // Skipped on the tick that logged: see ReportMotionEnded.
             if (!reported)
                 _tickAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - allocatedBefore);
+
+            if (tickMs >= SlowTickMs && Log.IsEnabled(LogLevel.Debug))
+            {
+                ReportSlowTick(
+                    tickMs, keys, events, inbox,
+                    Ms(now, afterKeys), Ms(afterKeys, afterEvents), Ms(afterEvents, afterInbox),
+                    Ms(afterInbox, afterContexts), Ms(afterContexts, afterLayout), Ms(afterLayout, afterFrame),
+                    Ms(afterFrame, afterFlush), Ms(afterFlush, afterSettle), Ms(afterSettle, afterFullscreen),
+                    Ms(afterFullscreen, afterMonitors), Ms(afterMonitors, afterBorder), Ms(afterBorder, end));
+            }
         }
     }
+
+    private static double Ms(long from, long to) => (to - from) * 1000.0 / Stopwatch.Frequency;
+
+    /// <summary>Lifts the veil from any arrived window; see <see cref="WindowCommitter.Veil"/>.</summary>
+    private void MaybeUnveil()
+    {
+        if (_committer.VeiledCount == 0) return;
+
+        _committer.UnveilDue(TimeSpan.FromMilliseconds(_config.ConcealUntilPlacedTimeoutMs));
+    }
+
+    /// <summary>A tick longer than this is written up, phase by phase.</summary>
+    /// <remarks>
+    /// <para>
+    /// Twenty milliseconds: more than a frame at any rate the loop paces, so a tick
+    /// this long has cost the motion at least one frame, and short enough to catch
+    /// the stalls that matter - the ones that were found by their symptoms, a motion
+    /// reported as "9 frames delivered of 35 due over 563 ms", and could not be
+    /// attributed because the tick was timed as a whole.
+    /// </para>
+    /// <para>
+    /// The report is the one place the tick builds a string, and it builds it only
+    /// on a tick that has already blown its budget by a factor of three, so the
+    /// allocation is noise against the thing being reported.
+    /// </para>
+    /// </remarks>
+    private const double SlowTickMs = 20;
+
+    /// <summary>Writes out where a slow tick spent its time.</summary>
+    /// <remarks>
+    /// Every phase, not only the slow one, because a stall is often two phases that
+    /// each took half, and because the phases that took nothing say which calls were
+    /// not involved. At debug level: the in-memory ring keeps debug entries whatever
+    /// the file level, so <c>diagnose</c> carries the last few of these without
+    /// anyone having turned anything up first.
+    /// </remarks>
+    private void ReportSlowTick(
+        double tickMs, int keys, int events, int inbox,
+        double keysMs, double eventsMs, double inboxMs, double contextsMs, double layoutMs, double frameMs,
+        double flushMs, double settleMs, double fullscreenMs, double monitorsMs, double borderMs, double sessionMs)
+    {
+        Log.Debug(LogCategory.Wm,
+            $"slow tick: {tickMs:F1} ms - keys {keysMs:F1} ({keys}), events {eventsMs:F1} ({events}), " +
+            $"inbox {inboxMs:F1} ({inbox}), contexts {contextsMs:F1}, " +
+            $"layout {layoutMs:F1} (commit {_lastCommitMs:F1}, focus {_lastFocusMs:F1}), " +
+            $"frame {frameMs:F1}, flush {flushMs:F1}, settle {settleMs:F1}, fullscreen {fullscreenMs:F1}, " +
+            $"monitors {monitorsMs:F1}, border {borderMs:F1}, session {sessionMs:F1}");
+    }
+
+    /// <summary>What the layout commit and the focus hand-off cost on the latest pass, for the slow-tick report.</summary>
+    private double _lastCommitMs;
+    private double _lastFocusMs;
 
     /// <summary>
     /// Emits an animation frame, but no faster than <see cref="FrameInterval"/>.
@@ -1046,8 +1172,8 @@ public sealed class WmDaemon : IDisposable
     /// The loop's wait is <c>MsgWaitForMultipleObjectsEx</c> with <c>QS_ALLINPUT</c>,
     /// so it returns on any queue activity and the interval it asks for is an upper
     /// bound, never a pace. Until the commit call stopped blocking, nothing noticed:
-    /// <c>EndDeferWindowPos</c> waited on each target window's thread and that wait
-    /// was, by accident, the frame clock.
+    /// the synchronous <c>SetWindowPos</c> waited on each target window's thread and
+    /// that wait was, by accident, the frame clock.
     /// </para>
     /// <para>
     /// Removing the block removed the clock. The first run without it emitted frames
@@ -1160,6 +1286,13 @@ public sealed class WmDaemon : IDisposable
         double animatingMs = _animatingMs;
         long delivered = _framesDelivered;
 
+        // Frames the committer kept back from windows that had not applied the one
+        // before. Counted all-time by the committer; the difference since the last
+        // report is this motion's share.
+        long withheldTotal = _committer.FramesWithheld;
+        long withheld = withheldTotal - _framesWithheldAtLastReport;
+        _framesWithheldAtLastReport = withheldTotal;
+
         // Reset first and unconditionally. Behind the level check these grew across
         // every motion of the session, so "delivered against due" stopped describing
         // a motion and started describing the whole run - and _animatingMs never
@@ -1182,14 +1315,19 @@ public sealed class WmDaemon : IDisposable
 
         Log.Debug(LogCategory.Animation,
             $"motion ended: {delivered} frames delivered of {due:F0} due " +
-            $"over {animatingMs:F0} ms");
+            $"over {animatingMs:F0} ms" +
+            (withheld > 0 ? $"; {withheld} withheld from windows still applying the frame before" : ""));
 
         return true;
     }
 
-    private void DrainKeyboard()
+    /// <summary>The committer's withheld-frame count as of the last motion report.</summary>
+    private long _framesWithheldAtLastReport;
+
+    /// <returns>How many keystrokes were taken from the ring, for the slow-tick report.</returns>
+    private int DrainKeyboard()
     {
-        if (_keyboard is null) return;
+        if (_keyboard is null) return 0;
 
         int count = _keyboard.Drain(_keyScratch, _keyScratch.Length);
 
@@ -1269,6 +1407,8 @@ public sealed class WmDaemon : IDisposable
                 Log.Error(LogCategory.Command, $"{binding.Key.Display} -> {binding.Commands.Describe()} failed", ex);
             }
         }
+
+        return count;
     }
 
     /// <summary>
@@ -1277,9 +1417,10 @@ public sealed class WmDaemon : IDisposable
     /// </summary>
     private static readonly string BindingFiredTopic = new BindingFired(string.Empty, null, []).Topic;
 
-    private void DrainWindowEvents()
+    /// <returns>How many events were taken from the queue, for the slow-tick report.</returns>
+    private int DrainWindowEvents()
     {
-        if (_winEvents is null) return;
+        if (_winEvents is null) return 0;
 
         int count = _winEvents.Drain(_eventScratch, _eventScratch.Length);
 
@@ -1299,20 +1440,27 @@ public sealed class WmDaemon : IDisposable
                 Log.Error(LogCategory.Window, $"handling {_eventScratch[i].Kind} for 0x{_eventScratch[i].Handle:X} failed", ex);
             }
         }
+
+        return count;
     }
 
     /// <summary>Runs work queued by IPC threads, on the daemon thread.</summary>
-    private void DrainInbox()
+    /// <returns>How many items were run, for the slow-tick report.</returns>
+    private int DrainInbox()
     {
+        int ran = 0;
+
         while (true)
         {
             Action? work;
 
             lock (_inboxGate)
             {
-                if (_inbox.Count == 0) return;
+                if (_inbox.Count == 0) return ran;
                 work = _inbox.Dequeue();
             }
+
+            ran++;
 
             try
             {
@@ -2121,7 +2269,7 @@ public sealed class WmDaemon : IDisposable
             // What this can and cannot see is documented on UserActivity. Briefly: a
             // Direct3D exclusive-fullscreen game is caught reliably, a borderless
             // windowed one is indistinguishable from any other window and is not.
-            $"- **User activity**: {DisplayPreferences.CurrentActivity()}",
+            $"- **User activity**: {(_activityProbe.Current is { } activity ? activity.ToString() : "not asked yet")}",
 
             // The answer to "why will that window not tile" when nothing is wrong
             // with the window. Stated as a capability rather than as elevation,
@@ -2131,6 +2279,10 @@ public sealed class WmDaemon : IDisposable
             $" (uiAccess {Win32Privilege.HasUiAccess}, elevated {Win32Privilege.IsElevated})",
 
             $"- **Animating**: {_animation.ActiveCount}",
+
+            // Opt-in, so the report says whether it is on - a window that appears late
+            // reads as a slow launch, and this is the setting that would be making it so.
+            $"- **Conceal until placed**: {(_config.ConcealUntilPlaced ? $"on (timeout {_config.ConcealUntilPlacedTimeoutMs} ms, {_committer.VeiledCount} veiled now)" : "off")}",
 
             // Stated as the hooks rather than as a flag, because "is Shubbak really
             // out of the way" is the question somebody about to play a game is
@@ -2167,6 +2319,23 @@ public sealed class WmDaemon : IDisposable
             $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms all-time",
 
             $"- **Ticks over 6.94 ms budget**: {_tickDuration.CountOver(6.94)} of the last {_tickDuration.Count}",
+
+            // The two calls a layout pass makes into other processes' threads, timed
+            // apart so a slow pass can be blamed on one of them from here. Both used
+            // to wait on the target's thread and both now post; either reading in
+            // milliseconds rather than microseconds means a window is being waited on
+            // again.
+            $"- **Layout commit** (last {_commitDuration.Count}): p50 {_commitDuration.Percentile(0.5):F2} ms, " +
+            $"p99 {_commitDuration.Percentile(0.99):F2} ms, max {_commitDuration.Max:F2} ms all-time",
+
+            $"- **Focus hand-off** (last {_focusDuration.Count}): p50 {_focusDuration.Percentile(0.5):F2} ms, " +
+            $"p99 {_focusDuration.Percentile(0.99):F2} ms, max {_focusDuration.Max:F2} ms all-time",
+
+            // Placements posted and not yet seen to arrive. Non-zero on a desktop that
+            // has been still for a second means a window is refusing the rectangle it
+            // was given - a minimum size, usually - and is being trusted at its target
+            // until the committer's grace lapses.
+            $"- **Placements in transit**: {_committer.InTransitCount}",
             $"- **Waits**: {_loop.WaitsTimedOut} ran out, {_loop.WaitsInterrupted} cut short " +
             "by a message or signal",
 
@@ -2337,6 +2506,12 @@ public sealed class WmDaemon : IDisposable
             $"p50 {_frameBatchSize.Percentile(0.5):F0}, " +
             $"p99 {_frameBatchSize.Percentile(0.99):F0}, " +
             $"max {_frameBatchSize.Max:F0} all-time",
+
+            // Frames not posted because the window had not applied the previous one.
+            // High against the frames delivered means the applications, not the loop,
+            // are the limit on how smooth motion can be on this machine - and that a
+            // lower `fps` would cost nothing visible.
+            $"- **Frames withheld** (window still applying the frame before): {_committer.FramesWithheld} all-time",
         ]);
 
         return string.Join('\n', lines);
@@ -3961,6 +4136,11 @@ public sealed class WmDaemon : IDisposable
         DetectNativeFullscreen();
         _lastNativeFullscreenTicks = Stopwatch.GetTimestamp();
 
+        // Zeroed per pass, so a slow-tick report quotes this pass's commit and focus
+        // rather than the last pass that happened to make them.
+        _lastCommitMs = 0;
+        _lastFocusMs = 0;
+
         IReadOnlyList<Placement> placements = _wm.ComputePlacements();
 
         // Taken once and reset here rather than at the end, so a pass that throws does
@@ -4226,16 +4406,24 @@ public sealed class WmDaemon : IDisposable
         _committer.Reveal(handle);
 
         // Where the window is now: mid-flight position if it is already moving,
-        // otherwise its real position on screen.
+        // otherwise where the committer believes it to be.
         //
         // Measured as the visible frame, because that is what a layout rectangle
         // describes. GetWindowRect includes the window's shadow, so comparing it
         // against the target reported a difference for every shadowed window even when
         // it had not moved at all - and a focus change re-runs the layout, so every
         // focus change animated the window out by the width of its own shadow and back.
+        //
+        // Asked of the committer rather than of Windows, because every placement is
+        // posted and the window reports its old rectangle until its thread gets to the
+        // new one. Read raw, a window whose final frame was posted a moment ago was
+        // animated to the same target again from where it had been - and when its
+        // thread caught up it applied the first instruction, jumped back for the
+        // second's early frames and travelled again: a new window shrinking into its
+        // tile, growing, shrinking, growing and shrinking. See CurrentBounds.
         Rect current = _animation.TryGetCurrent(placement.Window.Handle, out Rect inFlight)
             ? inFlight
-            : WindowCommitter.VisibleBounds(handle);
+            : _committer.CurrentBounds(handle);
 
         AnimationKind kind = current.IsEmpty ? AnimationKind.WindowOpen : movementKind;
 
@@ -4265,6 +4453,15 @@ public sealed class WmDaemon : IDisposable
                 !OpeningIsWorthAnimating(current, placement.Window.Monitor?.Bounds))
             {
                 _animation.Remove(placement.Window.Handle);
+
+                // Out of sight until the placement about to be posted has landed, if
+                // asked. Only for a window that is placed rather than animated: an
+                // arrival animation is a motion from where the window appeared, and
+                // hiding its start would show a window materialising mid-journey. The
+                // veil goes on before the post, so that if the window's thread gets to
+                // the move first the window is already invisible when it moves.
+                if (_config.ConcealUntilPlaced) _committer.Veil(handle);
+
                 _commitScratch.Add(placement);
                 return;
             }
@@ -4347,12 +4544,17 @@ public sealed class WmDaemon : IDisposable
         return monitor.Contains(origin.CenterX, origin.CenterY);
     }
 
-    /// <summary>Moves every window that is not being animated, in one transaction.</summary>
+    /// <summary>Moves every window that is not being animated.</summary>
     private void CommitScheduled(int total)
     {
         if (_commitScratch.Count == 0) return;
 
+        long started = Stopwatch.GetTimestamp();
+
         int moved = _committer.Commit(_commitScratch, static p => (nint)p.Window.Handle);
+
+        _lastCommitMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _commitDuration.Record(_lastCommitMs);
 
         if (moved > 0 && Log.IsEnabled(LogLevel.Debug))
         {
@@ -4469,7 +4671,12 @@ public sealed class WmDaemon : IDisposable
             return;
         }
 
+        long started = Stopwatch.GetTimestamp();
+
         WindowActions.Focus((nint)focused.Handle);
+
+        _lastFocusMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _focusDuration.Record(_lastFocusMs);
     }
 
     /// <summary>The focused window the previous layout pass saw, if any.</summary>
@@ -5179,6 +5386,11 @@ public sealed class WmDaemon : IDisposable
             // every answer this asks for.
             if (_animation.TryGetCurrent(window.Handle, out _)) continue;
 
+            // Posted and not yet arrived. The rectangle Windows reports is the one the
+            // window is leaving, and a window leaving the whole monitor for a tile
+            // reads from here as having taken itself full-screen.
+            if (_committer.IsInTransit(handle)) continue;
+
             // The maximise flag, read once here for both questions below. A style read,
             // beside the GetBounds this loop already pays for.
             bool zoomed = Win32Window.IsMaximised(handle);
@@ -5309,12 +5521,6 @@ public sealed class WmDaemon : IDisposable
         {
             (long placed, int attempt) = _settling[handle];
 
-            // Done watching. Recorded before the check so that every path through the
-            // rest of this loop is the last one for this window at this attempt, and
-            // the bound holds however the check turns out.
-            if (attempt + 1 >= s_settleChecksMs.Length) _settling.Remove(handle);
-            else _settling[handle] = (placed, attempt + 1);
-
             if (!_windows.TryGet(handle, out WindowNode? window))
             {
                 _settling.Remove(handle);
@@ -5329,10 +5535,21 @@ public sealed class WmDaemon : IDisposable
                 continue;
             }
 
-            // Mid-flight. The animation owns the window's position until it lands, and
-            // measuring it against its destination now would always report a
-            // difference, because it has not arrived yet.
-            if (_animation.TryGetCurrent(window.Handle, out _)) continue;
+            // Mid-flight, or posted and not yet arrived. Either way the window's
+            // position is not its own to be judged on: the animation owns it until it
+            // lands, and a placement the window has not processed yet makes it report
+            // where it used to be - which measured against its destination always
+            // reads as displacement, and was. Left for a later tick, with the attempt
+            // kept, so the look happens once the window is still. Both waits are
+            // bounded - by the motion's duration and by the committer's grace - so the
+            // watch still ends.
+            if (_animation.TryGetCurrent(window.Handle, out _) || _committer.IsInTransit(handle)) continue;
+
+            // Done watching. Recorded before the check so that every path through the
+            // rest of this loop is the last one for this window at this attempt, and
+            // the bound holds however the check turns out.
+            if (attempt + 1 >= s_settleChecksMs.Length) _settling.Remove(handle);
+            else _settling[handle] = (placed, attempt + 1);
 
             if (!PlacementDrift.HasEscaped(
                     WindowCommitter.VisibleBounds(handle), window.Rect, window.Monitor?.Bounds))
@@ -5412,7 +5629,11 @@ public sealed class WmDaemon : IDisposable
         _systemWantsAnimation = DisplayPreferences.SystemWantsAnimation();
 
         bool remote = DisplayPreferences.IsRemoteSession();
-        UserActivity activity = DisplayPreferences.CurrentActivity();
+
+        // Read from the probe rather than asked of the shell here: the shell answers
+        // in its own time, and this is the tick thread. Null until the probe has had
+        // its first answer, which keeps "not asked yet" meaning exactly that.
+        UserActivity? activity = _activityProbe.Current ?? _userActivity;
 
         // Announced only when either answer moved. The read happens every two seconds
         // for the life of the process; the event happens when a remote session begins
@@ -5428,7 +5649,7 @@ public sealed class WmDaemon : IDisposable
         // for the animation state gets the answer the event implies.
         ApplySystemAnimationPreference();
 
-        if (changed) Publish(new WmResult(true, [new EnvironmentChanged(remote, activity)]));
+        if (changed) Publish(new WmResult(true, [new EnvironmentChanged(remote, activity ?? UserActivity.Unknown)]));
     }
 
     /// <summary>
@@ -5565,12 +5786,14 @@ public sealed class WmDaemon : IDisposable
 
         long committing = Stopwatch.GetTimestamp();
 
-        // One atomic transaction per frame, exactly as in the S2 spike: the
-        // unbatched alternative dropped 33-42% of frames at 144 Hz.
+        // One posted SetWindowPos per moving window. Not the DeferWindowPos batch the
+        // S2 spike was credited with: that API refuses the flags both it and this
+        // program used, so the batch never ran anywhere - see WindowCommitter.
         _committer.CommitFrame(_frameScratch.AsSpan(0, count));
 
         // Timed on its own. ADR 0001 measured 94.6% of frame time inside this call at
-        // twenty windows, and that has not been checked in the shipping binary since.
+        // twenty windows; posted, it should be a tenth of a millisecond per window
+        // whatever the targets are doing, and this is what says whether it is.
         _commitFrameDuration.Record(
             (Stopwatch.GetTimestamp() - committing) * 1000.0 / Stopwatch.Frequency);
 
@@ -6802,6 +7025,7 @@ public sealed class WmDaemon : IDisposable
         _keyboard?.Dispose();
         _winEvents?.Dispose();
         _resumeHotKey.Dispose();
+        _activityProbe.Dispose();
 
         // Before the loop goes, so a save landing now has no loop to be posted to.
         _configWatcher?.Dispose();

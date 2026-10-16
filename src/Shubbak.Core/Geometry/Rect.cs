@@ -9,7 +9,7 @@ namespace Shubbak.Core.Geometry;
 /// <para>
 /// Integer rather than floating point deliberately: Win32 window positions are
 /// integers, so keeping the model integral means the value a test asserts on is
-/// the exact value that will eventually reach <c>DeferWindowPos</c>. Layout
+/// the exact value that will eventually reach <c>SetWindowPos</c>. Layout
 /// arithmetic that needs sub-pixel precision does it internally and rounds once,
 /// distributing the remainder (see <c>SplitLayout</c>) so that children always
 /// tile their parent exactly with no seams or overlaps.

@@ -64,8 +64,8 @@ public readonly record struct ArrangeOptions(
 /// <para>
 /// This class contains no Win32 and no timing. It computes <i>target</i>
 /// rectangles; the animation engine owns interpolation towards them, and the
-/// platform layer owns committing them in a single <c>DeferWindowPos</c>
-/// transaction (docs/adr/0001-language-choice.md, constraint 3).
+/// platform layer owns committing them, one posted <c>SetWindowPos</c> per window
+/// (docs/adr/0001-language-choice.md, constraint 3).
 /// </para>
 /// </remarks>
 public sealed class LayoutEngine

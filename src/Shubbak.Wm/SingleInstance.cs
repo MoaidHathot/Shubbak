@@ -12,7 +12,7 @@ namespace Shubbak.Wm;
 /// There was no such guarantee, and nothing detected its absence. A second
 /// <c>shubbak-wm</c> started perfectly happily and the two then fought over the same
 /// desktop: two <c>WH_KEYBOARD_LL</c> hooks, so every binding ran twice; two layout
-/// passes issuing contradictory <c>DeferWindowPos</c> batches; a CLI reaching whichever
+/// passes issuing contradictory placements; a CLI reaching whichever
 /// daemon's accept loop won the race, so consecutive commands could land in different
 /// processes; a bar mirroring one of the two; and on exit, one daemon un-concealing
 /// windows the other still had recorded as concealed.

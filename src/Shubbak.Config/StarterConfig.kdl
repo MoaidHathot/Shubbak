@@ -64,6 +64,13 @@ general {
     // list of what is open. #false makes an inactive workspace vanish entirely.
     keep-in-taskbar #true
 
+    // A new window appears where its application put it and is moved into its
+    // tile a moment later, once the application's thread gets to the request.
+    // #true cloaks it for that moment, so the first thing on screen is the window
+    // in its tile; timeout= is the longest it stays hidden waiting. Off by default -
+    // see docs/configuration.md, "A new window's first frame".
+    // conceal-until-placed #true timeout=300
+
     // The bar, the palette and the watcher are separate programs, started here
     // when the window manager starts. Each reads its own section of this file.
     // Delete a line and its section to do without one.

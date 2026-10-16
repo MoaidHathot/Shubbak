@@ -135,6 +135,48 @@ public sealed record ShubbakConfig
     public EmptyWorkspaceFocus EmptyWorkspaceFocus { get; init; } = EmptyWorkspaceFocus.Hold;
 
     /// <summary>
+    /// Whether a window joining the layout is kept out of sight from the moment it
+    /// appears until it is seen at its tile.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Off by default. An application shows its window where it chooses - where it
+    /// was last closed, which for File Explorer is wherever it was last <i>dragged</i>
+    /// to, since nothing else updates its memory - and Shubbak is told only once the
+    /// window is on screen. Its placement is then posted and takes effect when the
+    /// application's thread gets to it, which for a window still building its contents
+    /// was measured at 86-150 ms. For that long the window sits where the application
+    /// put it: full-size over its neighbours, or on the other monitor.
+    /// </para>
+    /// <para>
+    /// With this on, the window is cloaked as soon as the shell will cloak it - it
+    /// catalogues a new window a few milliseconds after it appears - and uncloaked
+    /// once its placement is seen to have landed, so the first thing on screen, give
+    /// or take one composed frame, is the window in its tile. Applies only to a
+    /// window that is placed rather than animated into its tile: an arrival animation
+    /// is a motion from where the window appeared, and hiding the start of it would
+    /// make it a window appearing partway through a journey. Not the default because
+    /// it is a new behaviour that leans on the shell's cloak, and a crash between the
+    /// cloak and the uncloak leaves the window to <c>shubbak restore</c>, as a
+    /// workspace concealment would.
+    /// </para>
+    /// </remarks>
+    public bool ConcealUntilPlaced { get; init; }
+
+    /// <summary>
+    /// The longest a window stays concealed waiting for its placement to land, in
+    /// milliseconds, before it is shown wherever it is.
+    /// </summary>
+    /// <remarks>
+    /// The safety valve for an application that never applies the rectangle it was
+    /// given - a minimum size, a thread that is not pumping. A window that cannot be
+    /// seen for longer than this reads as the launch having failed, so the limit is
+    /// short: three hundred milliseconds is above every arrival measured and below
+    /// what anyone waits before pressing the key again.
+    /// </remarks>
+    public int ConcealUntilPlacedTimeoutMs { get; init; } = 300;
+
+    /// <summary>
     /// Switch back to the previous workspace when re-focusing the active one.
     /// </summary>
     /// <remarks>

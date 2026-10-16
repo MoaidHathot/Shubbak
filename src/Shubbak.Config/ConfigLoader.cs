@@ -320,6 +320,7 @@ public sealed class ConfigLoader
         "default-layout", "unmanaged-window-commands", "allow-shell-exec-over-ipc",
         "allow-config-edits-over-ipc", "reload-on-save",
         "startup-command", "new-window-placement", "empty-workspace-focus",
+        "conceal-until-placed",
     ];
 
     /// <summary>
@@ -427,6 +428,8 @@ public sealed class ConfigLoader
             InitialWindowState = InitialState(node, config.InitialWindowState),
             NewWindowPlacement = Placement(node, config.NewWindowPlacement),
             EmptyWorkspaceFocus = EmptyFocus(node, config.EmptyWorkspaceFocus),
+            ConcealUntilPlaced = Bool(node, "conceal-until-placed", config.ConcealUntilPlaced),
+            ConcealUntilPlacedTimeoutMs = ConcealTimeout(node, config.ConcealUntilPlacedTimeoutMs),
             HideMethod = HideMethod(node, config.HideMethod),
             UnmanagedWindowCommands = UnmanagedCommands(node, config.UnmanagedWindowCommands),
             AllowShellExecOverIpc = Bool(node, "allow-shell-exec-over-ipc", config.AllowShellExecOverIpc),
@@ -458,6 +461,46 @@ public sealed class ConfigLoader
             $"Available: {string.Join(", ", Core.Layouts.LayoutRegistry.CanonicalNames)}."));
 
         return fallback;
+    }
+
+    /// <summary>
+    /// Reads the <c>timeout=</c> property of <c>conceal-until-placed</c>, in
+    /// milliseconds: <c>conceal-until-placed #true timeout=300</c>.
+    /// </summary>
+    /// <remarks>
+    /// A property on the setting rather than a setting of its own, because it means
+    /// nothing apart from the switch it qualifies. Zero or less is refused: a window
+    /// that is never allowed to wait is a setting that does nothing, and one that is
+    /// allowed to wait for ever is a window that never appears.
+    /// </remarks>
+    private int ConcealTimeout(KdlNode general, int fallback)
+    {
+        if (Setting(general, "conceal-until-placed")?.Property("timeout") is not { } value) return fallback;
+
+        if (!value.TryAsInt(out int ms))
+        {
+            const string name = "conceal-until-placed timeout";
+
+            Report(Diagnostic.Error(
+                "SHB0420",
+                $"'{name}' expects a whole number but got '{value.Raw}'.",
+                value.Span));
+
+            return fallback;
+        }
+
+        if (ms <= 0)
+        {
+            Report(Diagnostic.Error(
+                "SHB0456",
+                $"'conceal-until-placed' has a timeout of {ms} ms, which would never show the window.",
+                value.Span,
+                "Give it a positive number of milliseconds; 300 is the default."));
+
+            return fallback;
+        }
+
+        return ms;
     }
 
     /// <summary>

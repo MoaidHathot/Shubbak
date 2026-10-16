@@ -81,7 +81,9 @@ internal static class Program
                     --windows N         windows to animate per frame      (default 20)
                     --hz N              target frame rate                 (default 144)
                     --seconds N         run duration                      (default 60)
-                    --no-batch          use individual SetWindowPos (control group)
+                    --mode M            async (posted per window, shipping) | sync | batched
+                    --no-batch          same as --mode sync (the original control group)
+                    --target-pause N    make the window thread pause N ms between pumps (a busy app)
                     --no-gc-pressure    run without GC load
 
               s3    NativeAOT viability self-report (size / startup / memory)
@@ -93,7 +95,8 @@ internal static class Program
               shubbak-spike s1 --events 1000000
               shubbak-spike s1 --events 1000000 --no-gc-pressure
               shubbak-spike s2 --windows 20 --hz 144 --seconds 60
-              shubbak-spike s2 --windows 20 --hz 144 --seconds 60 --no-batch
+              shubbak-spike s2 --windows 20 --hz 144 --seconds 60 --mode batched
+              shubbak-spike s2 --windows 20 --hz 144 --seconds 60 --mode sync
               shubbak-spike s4 --seconds 90
 
             Run everything and capture results with:

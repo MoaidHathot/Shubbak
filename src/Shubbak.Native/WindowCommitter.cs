@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Shubbak.Core.Animation;
 using Shubbak.Core.Diagnostics;
 using Shubbak.Core.Geometry;
@@ -15,13 +16,37 @@ namespace Shubbak.Native;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Every rectangle for a frame goes into a single
-/// <c>BeginDeferWindowPos</c>/<c>DeferWindowPos</c>/<c>EndDeferWindowPos</c>
-/// transaction. This is not a micro-optimisation: P0's S2 spike measured the naive
-/// per-window <c>SetWindowPos</c> alternative dropping <b>33-42% of frames</b> at
-/// 144 Hz with identical managed code, against <b>0%</b> when batched. Batching -
-/// not language choice - is what determines whether window movement looks smooth
-/// (docs/adr/0001-language-choice.md, constraint 3).
+/// Every rectangle is handed to Windows as one <c>SetWindowPos</c> per window, posted
+/// to the window's own thread with <c>SWP_ASYNCWINDOWPOS</c>, and the committer then
+/// remembers what it asked for so that nothing downstream has to ask Windows where a
+/// window is while the request is still in that thread's queue. Both halves of that
+/// sentence replaced something, and both replacements were measured.
+/// </para>
+/// <para>
+/// <b>Why not one <c>DeferWindowPos</c> transaction per frame.</b> That was the design
+/// from P0's S2 spike onwards - "the highest-leverage implementation detail in the
+/// entire project", per ADR 0001 constraint 3 - and it never ran. <c>DeferWindowPos</c>
+/// refuses <c>SWP_NOSENDCHANGING</c> and <c>SWP_ASYNCWINDOWPOS</c> with
+/// <c>ERROR_INVALID_PARAMETER</c>, whatever the documentation lists; measured on
+/// Windows 11 26200 with every combination of the flags this class uses, and Wine's
+/// implementation carries the same accepted-flag mask, so this is not a build quirk.
+/// Both flag sets here contained <c>SWP_NOSENDCHANGING</c>, so every batch failed on
+/// its first <c>DeferWindowPos</c> and the code fell back to individual
+/// <c>SetWindowPos</c> calls - silently, because the fallback existed for resource
+/// pressure and nobody checked <c>GetLastError</c>. The spike's batched path had the
+/// same flags and <c>return</c>ed on the same failure, which is how it moved twenty
+/// windows in 11 microseconds and dropped no frames: it moved none of them. The
+/// "33-42% dropped frames" of its unbatched control group measured twenty
+/// <i>synchronous</i> <c>SetWindowPos</c> calls into twenty threads, which is the
+/// blocking described below and not a property of batching at all. ADR 0001 carries
+/// the correction.
+/// </para>
+/// <para>
+/// There is also no batch to want. <c>EndDeferWindowPos</c> moves each window on its
+/// own thread in turn, waiting for each, so a transaction is only as fast as its
+/// slowest target and offers no visual atomicity across processes in exchange. The
+/// one thing it could do that individual calls cannot - give up <c>SWP_NOZORDER</c>
+/// and restack several windows together - is nothing a tiling layout needs.
 /// </para>
 /// <para>
 /// The committer also owns <b>feedback suppression</b>. Our own <c>SetWindowPos</c>
@@ -32,49 +57,45 @@ namespace Shubbak.Native;
 /// </remarks>
 public sealed class WindowCommitter
 {
-    private const uint DefaultFlags =
-        (uint)(SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
-               SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
-               SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
-               SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
-               SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS);
-
-    /// <summary>
-    /// <see cref="DefaultFlags"/> plus <c>SWP_ASYNCWINDOWPOS</c>, for animation only.
-    /// </summary>
+    /// <summary>The flags every placement is posted with.</summary>
     /// <remarks>
     /// <para>
-    /// Without the flag, <c>EndDeferWindowPos</c> <i>sends</i> to each target window's
-    /// thread and blocks until that thread has processed it. Every window being moved
-    /// therefore gets to decide how long the window manager's animation loop takes,
-    /// and a browser or an Electron app busy on its UI thread stops the loop dead.
+    /// <c>SWP_ASYNCWINDOWPOS</c> on every placement, not only on animation frames.
+    /// Without it <c>SetWindowPos</c> <i>sends</i> to the target window's thread and
+    /// blocks until that thread has processed it, so every window being placed gets to
+    /// decide how long the window manager's tick takes - and the tick is also what
+    /// delivers animation frames and dispatches keystrokes.
     /// </para>
     /// <para>
     /// This is not a theory. The first run to measure the commit call found a median
     /// of <b>3.71 ms to move a median of one window</b> - 53% of a 7 ms frame budget -
-    /// with a p99 of 73.63 ms and a worst case of 138.75 ms. The worst tick of that
-    /// entire run was 138.76 ms, so ten microseconds of the worst stall the daemon
-    /// suffered was something other than this call.
-    /// </para>
-    /// <para>
-    /// ADR 0001 measured the same path at 94.6% of frame time and drew the conclusion
-    /// that managed code was not the bottleneck, which was correct. What it could not
-    /// see is that its harness moved synthetic windows whose message pumps were idle
-    /// and always ready to answer. Real targets are not.
-    /// </para>
-    /// <para>
-    /// Animation only, deliberately. The flag makes the move asynchronous, so
-    /// <c>GetWindowRect</c> can briefly report the old rectangle - harmless for a
-    /// waypoint that a later frame supersedes, and harmless for the final frame
-    /// because "is the window already where we put it?" is answered from
-    /// <see cref="_lastApplied"/> rather than by asking Windows. Placement outside an
-    /// animation keeps the synchronous flags until there is a measurement saying it
-    /// should not.
+    /// with a p99 of 73.63 ms and a worst case of 138.75 ms, and that was with the
+    /// targets settled. The window most likely to be busy is the one that has just
+    /// appeared: a File Explorer window placed synchronously on the tick that saw it
+    /// shown blocked for <b>98 ms</b>, during which six of the fourteen frames due to
+    /// its neighbours' animation were never emitted; a dialog from the shell arriving
+    /// stretched a 140 ms motion to 723 ms with six frames in it. Measured directly
+    /// against a window whose thread paused 200 ms between pumps: synchronous
+    /// <c>SetWindowPos</c> 109-202 ms, asynchronous 0.01-0.14 ms; a thread pumping
+    /// every 15 ms still cost the synchronous call 16 ms.
     /// </para>
     /// <para>
     /// Windows ignores the flag when the calling thread and the target window's thread
-    /// share an input queue, so it changes nothing for windows in this process and
-    /// everything for the cross-process ones that were doing the blocking.
+    /// share an input queue, so it changes nothing for windows in this process - the
+    /// tests' - and everything for the cross-process ones that were doing the blocking.
+    /// </para>
+    /// <para>
+    /// What asynchrony costs is that <c>GetWindowRect</c> reports the old rectangle
+    /// until the target thread gets round to the request - exactly as long as the
+    /// synchronous call would have blocked - and the layout pass reads that rectangle
+    /// as the place an animation should start from. Read it stale, and a window that
+    /// has just been told to go somewhere is animated there again from where it used
+    /// to be; when the application catches up it applies the first instruction, jumps
+    /// back for the second's early frames and travels again. Seen as a new window that
+    /// shrinks into its tile, grows, shrinks, grows and shrinks. The remedy is
+    /// <see cref="CurrentBounds"/>: the committer knows what it asked for, and answers
+    /// with that until the window is seen to have arrived or has clearly gone
+    /// elsewhere.
     /// </para>
     /// <para>
     /// <b>Every animation frame, including the last one.</b> Sending the settling
@@ -95,37 +116,22 @@ public sealed class WindowCommitter
     /// the lever that actually works - fewer frames give each one more time to be
     /// painted.
     /// </para>
-    /// </remarks>
-    private const uint FrameFlags =
-        DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
-
-    /// <summary>
-    /// <see cref="DefaultFlags"/> plus <c>SWP_ASYNCWINDOWPOS</c>, for a window whose
-    /// thread has stopped answering.
-    /// </summary>
-    /// <remarks>
     /// <para>
-    /// The same flags as <see cref="FrameFlags"/> and a different reason, so they are
-    /// named apart: one is a decision about animation, this is a defence against one
-    /// application taking the desktop down with it.
-    /// </para>
-    /// <para>
-    /// <c>EndDeferWindowPos</c> delivers the batch to each target window's thread and
-    /// waits. One thread that is not pumping therefore blocks the move of every other
-    /// window in the batch, and since a workspace switch is a batch, it blocks
-    /// switching workspaces at all. Reported as a black window - a window that is not
-    /// painting is a window that is not pumping - after which no workspace could be
-    /// switched to for some seconds, until the application either recovered or was
-    /// closed.
-    /// </para>
-    /// <para>
-    /// Asking asynchronously costs nothing that matters for a window in this state.
-    /// It is not going to redraw at the new size until it starts answering again, and
-    /// when it does it will process the position it was sent.
+    /// A window whose thread has stopped answering needs nothing further. The request
+    /// is posted and waits in its queue; it is not going to redraw at the new size
+    /// until it starts answering again, and when it does it will process the position
+    /// it was sent. Before the flag was universal this case had its own set of flags
+    /// and an <c>IsHungAppWindow</c> check per window to choose them, because one
+    /// window that was not pumping blocked a whole workspace switch for seconds.
     /// </para>
     /// </remarks>
-    private const uint UnresponsiveFlags =
-        DefaultFlags | (uint)SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS;
+    private const uint DefaultFlags =
+        (uint)(SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
+               SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+               SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
+               SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
+               SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS |
+               SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS);
 
     /// <summary>
     /// The flags one animation frame is sent with.
@@ -170,13 +176,13 @@ public sealed class WindowCommitter
     /// repaint there and nothing to amortise it over.
     /// </para>
     /// </remarks>
-    private static uint FlagsFor(AnimationFrame frame)
+    private static uint FlagsFor(bool isFinal, bool sizeUnchanged)
     {
-        uint flags = frame.IsFinal
-            ? FrameFlags
-            : FrameFlags & ~(uint)SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS;
+        uint flags = isFinal
+            ? DefaultFlags
+            : DefaultFlags & ~(uint)SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS;
 
-        return frame.SizeUnchanged
+        return sizeUnchanged
             ? flags | (uint)SET_WINDOW_POS_FLAGS.SWP_NOSIZE
             : flags;
     }
@@ -196,6 +202,98 @@ public sealed class WindowCommitter
     /// visible: a small jump every time focus moved.
     /// </remarks>
     private readonly Dictionary<nint, Rect> _lastApplied = [];
+
+    /// <summary>
+    /// Each window's resting rectangle that was posted and has not yet been seen to
+    /// arrive. Absent once it has, or once the committer has stopped expecting it to.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every placement is posted rather than sent, so between the post and the moment
+    /// the target thread gets to it the window is, as far as <c>GetWindowRect</c> is
+    /// concerned, still wherever it was. For a healthy application that is under a
+    /// millisecond; for one that has just opened its window and is busy building its
+    /// contents it was measured at 69-108 ms for Firefox and 86 ms for File Explorer,
+    /// and a slow machine makes it longer still. Anything that asks "where is this
+    /// window" in that gap - the layout pass choosing an animation's origin, the drift
+    /// watch, the full-screen detector - gets the old answer, and acts on it.
+    /// </para>
+    /// <para>
+    /// So the committer remembers that it asked, and <see cref="CurrentBounds"/>
+    /// answers with what it asked for until the window is seen at the rectangle, is
+    /// seen to have gone somewhere else, or <see cref="TransitGrace"/> runs out - see
+    /// <see cref="JudgeTransit"/> for the rule. Only resting rectangles are recorded -
+    /// a layout placement, or the final frame of a motion - because while a motion is
+    /// in flight the animation engine already owns the answer to where the window is.
+    /// </para>
+    /// <para>
+    /// Judged per look rather than on a timer. Each question about a window that has
+    /// one of these costs a <c>GetWindowRect</c>, which is a few hundred nanoseconds,
+    /// and the entry is dropped the first time the question is settled, so on a
+    /// settled desktop the table is empty and nothing is paid at all.
+    /// </para>
+    /// </remarks>
+    private readonly Dictionary<nint, Pending> _posted = [];
+
+    /// <summary>One outstanding placement.</summary>
+    /// <param name="Ticks">When it was posted.</param>
+    /// <param name="Origin">
+    /// The window rectangle Windows reported at the moment of posting, when the post
+    /// was the only request of ours outstanding for the window; <see langword="null"/>
+    /// for the final frame of a motion, behind which the window may still be working
+    /// through earlier frames. See <see cref="JudgeTransit"/> for what each means.
+    /// </param>
+    private readonly record struct Pending(long Ticks, Rect? Origin);
+
+    /// <summary>
+    /// How long a posted placement is trusted over what the window reports before the
+    /// committer gives up waiting and believes <c>GetWindowRect</c> again.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The ambiguity this bounds: a window not at the rectangle it was sent to, and
+    /// not moved since, is either still working through its queue or has moved itself
+    /// back to exactly where it started, and from outside the two look identical.
+    /// Within the grace the first is assumed, which is right for a window whose thread
+    /// is merely busy and wrong for one that put itself back - that case is caught by
+    /// the drift watch, which is simply deferred until the grace lapses rather than
+    /// fooled. After it, the second is assumed, which is right for the self-moving
+    /// window and wrong for one that is genuinely this slow; what it costs that one is
+    /// the re-animation this whole table exists to prevent, and a window that cannot
+    /// process a posted message in a second is close enough to hung that nothing it
+    /// does looks right anyway.
+    /// </para>
+    /// <para>
+    /// A second, then: an order of magnitude above the slowest arrival measured and
+    /// short enough that a window which did move itself is put back before anyone
+    /// decides it is staying there.
+    /// </para>
+    /// </remarks>
+    public static readonly TimeSpan TransitGrace = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// How close to its posted rectangle a window has to be before it is taken to have
+    /// arrived there.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Tight, and on every edge. The drift watch's tolerance is a hundred and twenty
+    /// pixels of position only, because it asks a different question - "has this gone
+    /// somewhere else" - and must not be tripped by a terminal rounding to a character
+    /// cell. Asked here, that tolerance says a window halved in place has arrived the
+    /// moment it is posted, since halving changes no position, and the layout pass
+    /// then animates the resize a second time from the size the window still has.
+    /// </para>
+    /// <para>
+    /// Four pixels, which is below the distance the animation engine bothers to
+    /// animate at all. That is what makes a too-tight tolerance harmless: a window
+    /// that lands within it is read as being where it is, and whatever few pixels
+    /// separate that from the target are too few to move it for. A window whose
+    /// application insists on a size of its own never arrives by this measure and is
+    /// simply trusted at its target until the grace lapses, which costs nothing.
+    /// </para>
+    /// </remarks>
+    public const int ArrivalTolerance = 4;
 
     /// <summary>
     /// Windows currently concealed, and how.
@@ -218,7 +316,22 @@ public sealed class WindowCommitter
 
         /// <summary><c>SW_MINIMIZE</c>. Visible to the user in the taskbar.</summary>
         Minimised,
+
+        /// <summary>
+        /// Cloaked through the shell for a moment, while a placement travels to a window
+        /// that has only just appeared. See <see cref="Veil"/>.
+        /// </summary>
+        Veiled,
     }
+
+    /// <summary>When each veiled window was veiled, for the timeout.</summary>
+    private readonly Dictionary<nint, long> _veiledSince = [];
+
+    /// <summary>
+    /// Windows a veil was asked for and could not yet be applied to, with when it was
+    /// first asked. See <see cref="Veil"/>.
+    /// </summary>
+    private readonly Dictionary<nint, long> _veilWanted = [];
 
     /// <summary>How windows on inactive workspaces are taken off screen.</summary>
     /// <remarks>
@@ -270,9 +383,248 @@ public sealed class WindowCommitter
             _lastCommitted.Remove(handle);
             _lastApplied.Remove(handle);
             _concealed.Remove(handle);
+            _posted.Remove(handle);
+            _inFlight.Remove(handle);
+            _veiledSince.Remove(handle);
+            _veilWanted.Remove(handle);
         }
 
         ForgetShadow(handle);
+    }
+
+    /// <summary>
+    /// Keeps a newly arrived window out of sight until its placement has landed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An application shows its window where it chooses, and Shubbak is told only
+    /// once it is on screen. The placement that follows is posted and takes effect
+    /// when the application's thread gets to it - 86 to 150 ms for a File Explorer
+    /// window still building its view, measured - and until then the window sits
+    /// where the application put it: full-size across its neighbours, or on the
+    /// monitor it was last dragged to. The cloak is the same one an inactive
+    /// workspace uses, applied on the tick that sees the window and lifted by
+    /// <see cref="UnveilDue"/> once the window is seen at its rectangle, so what the
+    /// user first sees is the window in its tile.
+    /// </para>
+    /// <para>
+    /// Recorded as its own method rather than as a workspace concealment, because the
+    /// two end differently: a concealed window is shown when its workspace is, a
+    /// veiled one when its placement lands or a timeout says enough. <see cref="Show"/>
+    /// therefore leaves a veiled window alone - the layout pass calls it for every
+    /// visible placement, this one included - and <see cref="Hide"/> turns a veil into
+    /// an ordinary concealment, since a window whose workspace is switched away while
+    /// it is still arriving has acquired the better reason to stay hidden. Restore and
+    /// RestoreAll lift it like any other, so a window released or a daemon exiting
+    /// mid-arrival leaves nothing cloaked behind.
+    /// </para>
+    /// <para>
+    /// The shell catalogues new windows asynchronously, and on the tick that sees a
+    /// window shown it has, every time it was measured, no view for it yet - so the
+    /// cloak is refused at the one moment it is wanted most. The request is therefore
+    /// remembered and retried from <see cref="UnveilDue"/> on every tick until the
+    /// shell has the view, the placement is seen to have landed, or the timeout
+    /// lapses; whichever comes first ends it. The debug log says how long the shell
+    /// took, which is the number that decides whether this is worth having for a
+    /// given application.
+    /// </para>
+    /// </remarks>
+    /// <returns>Whether the window is veiled now. False also when the veil is merely wanted.</returns>
+    public bool Veil(nint handle)
+    {
+        if (handle == 0 || !Win32Window.Exists(handle)) return false;
+
+        lock (_lastCommitted)
+        {
+            // Already off screen for some reason of its own; a veil would only confuse
+            // whose reason ends it.
+            if (_concealed.ContainsKey(handle)) return false;
+        }
+
+        long now = Stopwatch.GetTimestamp();
+
+        // Asked read-only first. The shell's cloak call refreshes the collection and
+        // retries when it has no view, and warns - once per run, with advice to run
+        // `shubbak restore` - when it still has none. For a window shown a millisecond
+        // ago that is the expected answer rather than a failure, and the warning is
+        // kept for a concealment that genuinely cannot be done.
+        if (!Win32ApplicationView.HasView(handle) || !Win32ApplicationView.Cloak(handle))
+        {
+            lock (_lastCommitted) _veilWanted[handle] = now;
+            return false;
+        }
+
+        RecordVeil(handle, now);
+
+        if (Log.IsEnabled(LogLevel.Debug))
+            Log.Debug(LogCategory.Window, $"veiled 0x{handle:X} until it is seen in its tile");
+
+        return true;
+    }
+
+    private void RecordVeil(nint handle, long now)
+    {
+        lock (_lastCommitted)
+        {
+            _veilWanted.Remove(handle);
+            _concealed[handle] = ConcealMethod.Veiled;
+            _veiledSince[handle] = now;
+        }
+    }
+
+    /// <summary>How many windows are veiled or waiting to be, so the loop knows to keep looking.</summary>
+    public int VeiledCount
+    {
+        get { lock (_lastCommitted) return _veiledSince.Count + _veilWanted.Count; }
+    }
+
+    /// <summary>
+    /// Lifts the veil from every window whose placement has landed, or has been
+    /// waited for long enough; and puts one on any window still waiting for the shell
+    /// to be able to.
+    /// </summary>
+    /// <param name="timeout">
+    /// The longest a window stays veiled, and the longest a veil is pursued. The
+    /// safety valve for a window that never applies the rectangle it was sent; past
+    /// it, the window is shown wherever it is.
+    /// </param>
+    /// <returns>How many windows were unveiled.</returns>
+    public int UnveilDue(TimeSpan timeout)
+    {
+        RetryWantedVeils(timeout);
+
+        nint[] veiled;
+
+        lock (_lastCommitted)
+        {
+            if (_veiledSince.Count == 0) return 0;
+
+            veiled = [.. _veiledSince.Keys];
+        }
+
+        int unveiled = 0;
+
+        foreach (nint handle in veiled)
+        {
+            long since;
+
+            lock (_lastCommitted)
+            {
+                // Hidden or released since the list was taken; nothing of ours to lift.
+                if (!_veiledSince.TryGetValue(handle, out since)) continue;
+            }
+
+            bool waited = Stopwatch.GetElapsedTime(since) >= timeout;
+
+            // IsInTransit is the arrival test: false once the window is seen at its
+            // rectangle - or seen to have gone elsewhere, which is also a place it can
+            // be shown - and true only while it is believed to be on its way.
+            if (!waited && Win32Window.Exists(handle) && IsInTransit(handle))
+            {
+                // Still waiting, so the veil should still be on. It is not always: File
+                // Explorer's window is a view of the shell's own, and the shell lifts
+                // the cloak on it a few milliseconds into the window's start-up as part
+                // of showing it. Put back, once per tick, for as long as the wait lasts.
+                if (Win32Window.GetCloakState(handle) == Win32Window.CloakState.None &&
+                    Win32ApplicationView.Cloak(handle) &&
+                    Log.IsEnabled(LogLevel.Debug))
+                {
+                    Log.Debug(LogCategory.Window, $"re-veiled 0x{handle:X}: something had lifted the cloak while its placement was still on its way");
+                }
+
+                continue;
+            }
+
+            if (Unveil(handle))
+            {
+                unveiled++;
+
+                if (Log.IsEnabled(LogLevel.Debug))
+                {
+                    Log.Debug(LogCategory.Window,
+                        waited
+                            ? $"unveiled 0x{handle:X}: waited {timeout.TotalMilliseconds:F0} ms for its placement; shown where it is"
+                            : $"unveiled 0x{handle:X} in its tile after {Stopwatch.GetElapsedTime(since).TotalMilliseconds:F0} ms");
+                }
+            }
+        }
+
+        return unveiled;
+    }
+
+    /// <summary>Tries again to veil the windows the shell could not cloak when asked.</summary>
+    private void RetryWantedVeils(TimeSpan timeout)
+    {
+        nint[] wanted;
+
+        lock (_lastCommitted)
+        {
+            if (_veilWanted.Count == 0) return;
+
+            wanted = [.. _veilWanted.Keys];
+        }
+
+        foreach (nint handle in wanted)
+        {
+            long since;
+
+            lock (_lastCommitted)
+            {
+                if (!_veilWanted.TryGetValue(handle, out since)) continue;
+            }
+
+            double waitedMs = Stopwatch.GetElapsedTime(since).TotalMilliseconds;
+
+            // Landed, gone, or waited for as long as a veil would have been worn: there
+            // is nothing left for the veil to hide.
+            if (waitedMs >= timeout.TotalMilliseconds || !Win32Window.Exists(handle) || !IsInTransit(handle))
+            {
+                lock (_lastCommitted) _veilWanted.Remove(handle);
+
+                if (Log.IsEnabled(LogLevel.Debug))
+                    Log.Debug(LogCategory.Window, $"veil for 0x{handle:X} not applied: the placement landed, or {waitedMs:F0} ms passed, before the shell had a view for it");
+
+                continue;
+            }
+
+            lock (_lastCommitted)
+            {
+                // Concealed for a real reason in the meantime; that reason wins.
+                if (_concealed.ContainsKey(handle))
+                {
+                    _veilWanted.Remove(handle);
+                    continue;
+                }
+            }
+
+            // One read-only round trip per tick until the shell has catalogued the
+            // window; the cloak itself, with its refreshes and its warning, only then.
+            if (!Win32ApplicationView.HasView(handle) || !Win32ApplicationView.Cloak(handle)) continue;
+
+            RecordVeil(handle, Stopwatch.GetTimestamp());
+
+            if (Log.IsEnabled(LogLevel.Debug))
+                Log.Debug(LogCategory.Window, $"veiled 0x{handle:X} after {waitedMs:F0} ms: the shell took that long to catalogue it");
+        }
+    }
+
+    private bool Unveil(nint handle)
+    {
+        lock (_lastCommitted)
+        {
+            if (!_veiledSince.Remove(handle)) return false;
+
+            // Only a veil is lifted here. Hide may have turned it into a concealment in
+            // the meantime, and that one ends when the workspace is shown.
+            if (_concealed.TryGetValue(handle, out ConcealMethod method) && method == ConcealMethod.Veiled)
+                _concealed.Remove(handle);
+            else
+                return false;
+        }
+
+        if (Win32Window.Exists(handle)) Win32ApplicationView.Uncloak(handle);
+
+        return true;
     }
 
 
@@ -375,6 +727,11 @@ public sealed class WindowCommitter
                 RestoreTaskbarButton(handle);
                 break;
 
+            case ConcealMethod.Veiled:
+                lock (_lastCommitted) _veiledSince.Remove(handle);
+                Win32ApplicationView.Uncloak(handle);
+                break;
+
             case ConcealMethod.Minimised:
                 PInvoke.ShowWindowAsync(new HWND(handle), SHOW_WINDOW_CMD.SW_RESTORE);
                 break;
@@ -423,9 +780,9 @@ public sealed class WindowCommitter
 
         if (placements.Count == 0) return 0;
 
-        // Visibility is applied outside the transaction: ShowWindow cannot take part
-        // in a DeferWindowPos batch, and hiding a window we are also moving would
-        // make the move pointless.
+        // Visibility is applied before the moves, and separately: ShowWindow is its
+        // own call, and hiding a window we are also moving would make the move
+        // pointless.
         List<(nint Handle, Rect Rect)> toMove = new(placements.Count);
 
         // Raises are separate from moves, and are applied even when nothing moved.
@@ -476,6 +833,10 @@ public sealed class WindowCommitter
                 {
                     _lastCommitted[handle] = placement.Rect;
                     _lastApplied[handle] = placement.Rect;
+
+                    // Nothing of ours is on its way to this window any more; the
+                    // maximise is Windows's to carry out.
+                    _posted.Remove(handle);
                 }
 
                 continue;
@@ -506,7 +867,8 @@ public sealed class WindowCommitter
             //
             // So the window is asked where it is, but only when it was about to be
             // skipped, and only coarsely enough that character-cell rounding cannot
-            // trip it. See PlacementDrift.
+            // trip it. See PlacementDrift - and HasWandered, which declines to ask at
+            // all while the previous placement is still on its way to the window.
             bool alreadyCommanded;
 
             lock (_lastCommitted)
@@ -559,9 +921,27 @@ public sealed class WindowCommitter
                 WindowActions.Unmaximise(handle, Expand(handle, rect));
         }
 
+        long now = Stopwatch.GetTimestamp();
+
         try
         {
-            ApplyBatch(toMove);
+            foreach ((nint handle, Rect rect) in toMove)
+            {
+                // Read before the post, so the record says where the window was when
+                // it was asked to go; see Pending.Origin.
+                Rect origin = Win32Window.GetBounds(handle);
+
+                MoveSingle(handle, rect);
+
+                lock (_lastCommitted)
+                {
+                    _posted[handle] = new Pending(now, origin);
+
+                    // A direct placement supersedes whatever motion the window was in;
+                    // the next motion's first frame must not be judged against it.
+                    _inFlight.Remove(handle);
+                }
+            }
         }
         finally
         {
@@ -588,10 +968,9 @@ public sealed class WindowCommitter
     /// unwelcome one; this only orders a window against its own siblings.
     /// </para>
     /// <para>
-    /// Applied after the move so the raise is not undone by it, and outside the
-    /// batch: a <c>DeferWindowPos</c> transaction that changes stacking has to give up
-    /// <c>SWP_NOZORDER</c> for every window in it, and almost none of them want that.
-    /// The list is short - only fullscreen, maximised and monocle windows ask.
+    /// Applied after the move so the raise is not undone by it. Posted like the moves
+    /// are, so the order the target thread sees is the order given here. The list is
+    /// short - only fullscreen, maximised and monocle windows ask.
     /// </para>
     /// </remarks>
     private static void RaiseAll(List<nint>? handles)
@@ -603,9 +982,17 @@ public sealed class WindowCommitter
 
     /// <summary>Brings one window to the front of the ordinary stacking order.</summary>
     /// <remarks>
+    /// <para>
     /// Public because an animated window never reaches <see cref="Commit"/>, which is
     /// where <c>Placement.Raise</c> is otherwise honoured. The layout pass raises those
     /// itself, at the moment it hands the window to the animation engine.
+    /// </para>
+    /// <para>
+    /// Posted, for the same reason every placement is: a restack is a request to the
+    /// window's own thread, and sent synchronously it waited on that thread - 16 ms
+    /// against a window pumping every 15 ms, measured; the whole of a stall against
+    /// one that was busy.
+    /// </para>
     /// </remarks>
     public static void Raise(nint handle)
     {
@@ -620,69 +1007,21 @@ public sealed class WindowCommitter
             SET_WINDOW_POS_FLAGS.SWP_NOSIZE |
             SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
             SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
-            SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING);
+            SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
+            SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS);
     }
 
-    private static void ApplyBatch(List<(nint Handle, Rect Rect)> moves)
-    {
-        HDWP batch = PInvoke.BeginDeferWindowPos(moves.Count);
-
-        if (batch.IsNull)
-        {
-            // The batch API can fail under resource pressure. Falling back to
-            // individual calls is slower but correct; dropping the frame is not.
-            foreach ((nint handle, Rect rect) in moves) MoveSingle(handle, rect);
-            return;
-        }
-
-        foreach ((nint handle, Rect rect) in moves)
-        {
-            Rect target = Expand(handle, rect);
-
-            // Checked per window, because the batch is only as fast as its slowest
-            // target and one stuck application should not decide how long a workspace
-            // switch takes for the other seven windows.
-            uint flags = Win32Window.IsHung(handle) ? UnresponsiveFlags : DefaultFlags;
-
-            batch = PInvoke.DeferWindowPos(
-                batch, new HWND(handle), HWND.Null,
-                target.X, target.Y, target.Width, target.Height,
-                (SET_WINDOW_POS_FLAGS)flags);
-
-            if (batch.IsNull)
-            {
-                // A failed DeferWindowPos invalidates the whole batch, so the
-                // remaining windows have to be placed individually.
-                foreach ((nint h, Rect r) in moves) MoveSingle(h, r);
-                return;
-            }
-        }
-
-        PInvoke.EndDeferWindowPos(batch);
-    }
-
-    /// <summary>Places one window immediately, without a batch.</summary>
+    /// <summary>Posts one window's placement to its thread.</summary>
     /// <param name="handle">The window to move.</param>
     /// <param name="rect">Where its visible frame should end up.</param>
-    /// <param name="flags">
-    /// Defaults to the synchronous <see cref="DefaultFlags"/>. The animation path
-    /// passes <see cref="FlagsFor"/>, because a fallback frame is still a frame and
-    /// blocking on a busy target is exactly as bad when the batch failed as when it
-    /// did not.
-    /// </param>
-    private static void MoveSingle(nint handle, Rect rect, uint flags = DefaultFlags)
+    private static void MoveSingle(nint handle, Rect rect)
     {
         Rect target = Expand(handle, rect);
-
-        // Same defence as the batch, and it matters more here: the fallback path
-        // places every window individually, so without this a single stuck window
-        // would block the ones queued behind it one after another.
-        if (flags == DefaultFlags && Win32Window.IsHung(handle)) flags = UnresponsiveFlags;
 
         PInvoke.SetWindowPos(
             new HWND(handle), HWND.Null,
             target.X, target.Y, target.Width, target.Height,
-            (SET_WINDOW_POS_FLAGS)flags);
+            (SET_WINDOW_POS_FLAGS)DefaultFlags);
     }
 
     /// <summary>
@@ -774,13 +1113,8 @@ public sealed class WindowCommitter
     /// window by the width of its own shadow and then settled back.
     /// </para>
     /// </remarks>
-    public static Rect VisibleBounds(nint handle)
-    {
-        Rect outer = Win32Window.GetBounds(handle);
-        if (outer.IsEmpty) return outer;
-
-        return Shrink(outer, ShadowOf(handle));
-    }
+    public static Rect VisibleBounds(nint handle) =>
+        ShrinkToVisible(handle, Win32Window.GetBounds(handle));
 
     /// <summary>Forgets a window's measured shadow.</summary>
     /// <remarks>
@@ -796,19 +1130,197 @@ public sealed class WindowCommitter
     /// Whether a window we were about to skip has moved itself somewhere else.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Asked only of windows whose target has not changed since they were last
     /// committed - which in a settled desktop is nearly all of them, so it has to stay
     /// cheap. It is one <c>GetWindowRect</c> plus a shadow margin this class has
     /// already measured and cached.
+    /// </para>
+    /// <para>
+    /// Never while the previous placement is still in transit. A window that has not
+    /// yet processed the rectangle it was sent is not somewhere else; it is on its way,
+    /// and re-sending the same rectangle would only lengthen its queue.
+    /// </para>
     /// </remarks>
-    private static bool HasWandered(nint handle, Placement placement) =>
-        PlacementDrift.HasEscaped(
-            VisibleBounds(handle), placement.Rect, placement.Window.Monitor?.Bounds);
+    private bool HasWandered(nint handle, Placement placement)
+    {
+        Rect actual = Win32Window.GetBounds(handle);
+
+        if (IsInTransit(handle, actual)) return false;
+
+        return PlacementDrift.HasEscaped(
+            ShrinkToVisible(handle, actual), placement.Rect, placement.Window.Monitor?.Bounds);
+    }
+
+    /// <summary>
+    /// Where a window's visible frame is, as far as the layout should believe.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="VisibleBounds"/> asks Windows, and Windows answers with where the
+    /// window's thread has got to, which while a placement is in that thread's queue
+    /// is where the window used to be. This answers with the rectangle the committer
+    /// posted instead, for as long as it is reasonable to believe the window is still
+    /// on its way there - see <see cref="_posted"/> and <see cref="TransitGrace"/> -
+    /// and with the real rectangle otherwise.
+    /// </para>
+    /// <para>
+    /// This is the origin a layout pass should hand the animation engine. Handing it
+    /// the stale answer started a second journey from the window's old rectangle a
+    /// few milliseconds after the first was posted, and the window then visibly made
+    /// both.
+    /// </para>
+    /// </remarks>
+    public Rect CurrentBounds(nint handle)
+    {
+        Rect actual = Win32Window.GetBounds(handle);
+
+        if (IsInTransit(handle, actual))
+        {
+            lock (_lastCommitted)
+            {
+                if (_lastCommitted.TryGetValue(handle, out Rect target)) return target;
+            }
+        }
+
+        return ShrinkToVisible(handle, actual);
+    }
+
+    /// <summary>
+    /// Whether a placement posted to this window has yet to be seen to arrive.
+    /// </summary>
+    /// <remarks>
+    /// Resolves the question as a side effect: a window seen at its rectangle, or one
+    /// whose grace has lapsed, stops being in transit from this call onwards. Callers
+    /// that want to act on the window's real position - the drift watch, the
+    /// full-screen detector - should simply wait while this is true. Costs a
+    /// dictionary probe for a window with nothing outstanding, which on a settled
+    /// desktop is every window; the geometry is read only when there is something to
+    /// compare it against.
+    /// </remarks>
+    public bool IsInTransit(nint handle)
+    {
+        lock (_lastCommitted)
+        {
+            if (!_posted.ContainsKey(handle)) return false;
+        }
+
+        return IsInTransit(handle, Win32Window.GetBounds(handle));
+    }
+
+    private bool IsInTransit(nint handle, Rect actual)
+    {
+        Pending pending;
+        Rect applied;
+
+        lock (_lastCommitted)
+        {
+            if (!_posted.TryGetValue(handle, out pending) || !_lastApplied.TryGetValue(handle, out applied))
+                return false;
+        }
+
+        TransitVerdict verdict = JudgeTransit(actual, applied, pending.Origin, Stopwatch.GetElapsedTime(pending.Ticks));
+
+        if (verdict == TransitVerdict.InTransit) return true;
+
+        lock (_lastCommitted) _posted.Remove(handle);
+
+        return false;
+    }
+
+    /// <summary>What a look at a window with an outstanding placement concluded.</summary>
+    public enum TransitVerdict
+    {
+        /// <summary>The window is at, or within rounding of, the rectangle it was sent.</summary>
+        Arrived,
+
+        /// <summary>Not there yet, and believed to be on its way.</summary>
+        InTransit,
+
+        /// <summary>Not there, and no longer expected to be.</summary>
+        Abandoned,
+    }
+
+    /// <summary>
+    /// Decides whether a window with an outstanding placement has arrived, is still
+    /// on its way, or is not coming.
+    /// </summary>
+    /// <param name="actual">The window rectangle Windows reports, shadow included.</param>
+    /// <param name="applied">The window rectangle that was posted, shadow included.</param>
+    /// <param name="origin">
+    /// Where the window was when the placement was posted, if that is known to have
+    /// been the only request of ours it had outstanding; otherwise <see langword="null"/>.
+    /// </param>
+    /// <param name="sincePosted">How long ago it was posted.</param>
+    /// <remarks>
+    /// <para>
+    /// Pure, so the rule can be stated in a test without a window to post to. In order:
+    /// a window within <see cref="ArrivalTolerance"/> of the rectangle on every edge
+    /// has arrived, however long it took. One further away than that after
+    /// <see cref="TransitGrace"/> is not coming. One that has moved since the post, to
+    /// anywhere other than the rectangle, is not coming either - provided the post was
+    /// the only thing of ours in its queue, because then its thread has acted and
+    /// acted on something else: the application restoring its own remembered
+    /// geometry, which is the drift watch's case and must not be made to wait out the
+    /// grace. Otherwise it is on its way.
+    /// </para>
+    /// <para>
+    /// The proviso is what the final frame of a motion fails. A window lagging behind
+    /// an animation has several of our frames queued, and moving from one waypoint to
+    /// the next is progress towards the rectangle rather than a departure from it - so
+    /// for that case no origin is given and only the clock can give up on it.
+    /// </para>
+    /// </remarks>
+    public static TransitVerdict JudgeTransit(Rect actual, Rect applied, Rect? origin, TimeSpan sincePosted)
+    {
+        if (Math.Abs(actual.X - applied.X) <= ArrivalTolerance &&
+            Math.Abs(actual.Y - applied.Y) <= ArrivalTolerance &&
+            Math.Abs(actual.Width - applied.Width) <= ArrivalTolerance &&
+            Math.Abs(actual.Height - applied.Height) <= ArrivalTolerance)
+        {
+            return TransitVerdict.Arrived;
+        }
+
+        if (sincePosted >= TransitGrace) return TransitVerdict.Abandoned;
+
+        if (origin is { } from && actual != from) return TransitVerdict.Abandoned;
+
+        return TransitVerdict.InTransit;
+    }
+
+    /// <summary>How many placements are posted and not yet seen to arrive, for the report.</summary>
+    /// <remarks>
+    /// Resolved on the way, not merely counted: an entry for a window nothing has asked
+    /// about since - one on a concealed workspace, typically - would otherwise be
+    /// reported as outstanding for ever. A <c>GetWindowRect</c> per entry, on a call
+    /// that happens when somebody runs <c>diagnose</c>.
+    /// </remarks>
+    public int InTransitCount
+    {
+        get
+        {
+            nint[] handles;
+
+            lock (_lastCommitted) handles = [.. _posted.Keys];
+
+            int count = 0;
+
+            foreach (nint handle in handles)
+                if (IsInTransit(handle)) count++;
+
+            return count;
+        }
+    }
+
+    private static Rect ShrinkToVisible(nint handle, Rect outer) =>
+        outer.IsEmpty ? outer : Shrink(outer, ShadowOf(handle));
 
     /// <summary>Places a single window immediately, outside any frame.</summary>
     public void CommitOne(nint handle, Rect rect)
     {
         if (handle == 0 || !Win32Window.Exists(handle)) return;
+
+        Rect origin = Win32Window.GetBounds(handle);
 
         try
         {
@@ -820,87 +1332,195 @@ public sealed class WindowCommitter
             {
                 _lastCommitted[handle] = rect;
                 _lastApplied[handle] = Expand(handle, rect);
+                _posted[handle] = new Pending(Stopwatch.GetTimestamp(), origin);
+                _inFlight.Remove(handle);
             }
         }
     }
 
     /// <summary>
-    /// Applies one frame of animation as a single atomic transaction.
+    /// Applies one frame of animation.
     /// </summary>
     /// <remarks>
     /// <para>
     /// The hot path: called every tick while anything is moving. Takes a
     /// <see cref="Span{T}"/> over a caller-owned buffer and allocates nothing, per
-    /// ADR 0001 constraint 2.
+    /// ADR 0001 constraint 2. One posted <c>SetWindowPos</c> per window, each
+    /// measured at about a tenth of a millisecond whatever the target is doing.
     /// </para>
     /// <para>
     /// Unlike <see cref="Commit"/> this does not skip windows already at their
     /// target, because an animation frame is by definition a new position, and it
     /// does not touch visibility, which the layout pass has already settled.
     /// </para>
+    /// <para>
+    /// <b>A frame is withheld from a window that has fallen two frames behind.</b>
+    /// Every frame is a real resize for the application - a terminal reflows its
+    /// buffer and resizes its pty, a browser lays its page out again - and one that
+    /// cannot finish a resize before the next frame arrives does not fall behind
+    /// gracefully: the posted requests queue up and it works through all of them
+    /// later, in a burst, each for a rectangle that is already stale. Measured on a
+    /// Firefox window still building itself: nine frames posted at a steady 16 ms,
+    /// applied at +69, +135, +159, +207, +226, +245 ms; and on one whose thread was
+    /// busy for the whole of a motion: ten frames queued, applied in a burst after it.
+    /// So before a frame is posted the window is asked where it is, and a window that
+    /// has not changed at all across the last two posts has processed neither and is
+    /// not given a third. It gets the next frame on the first tick after it moves - a
+    /// later point on the same curve, so what it shows is current rather than
+    /// backlogged - and the final frame regardless. A window that keeps up is asked
+    /// one <c>GetWindowRect</c> per frame and nothing else changes for it; the busy
+    /// one above applied two resizes instead of ten. See <see cref="ShouldWithhold"/>
+    /// for the rule.
+    /// </para>
     /// </remarks>
     public void CommitFrame(ReadOnlySpan<AnimationFrame> frames)
     {
         if (frames.Length == 0) return;
 
-        HDWP batch = PInvoke.BeginDeferWindowPos(frames.Length);
+        long now = Stopwatch.GetTimestamp();
 
-        if (batch.IsNull)
+        foreach (AnimationFrame frame in frames)
         {
-            foreach (AnimationFrame frame in frames)
-                MoveSingle((nint)frame.Handle, frame.Rect, FlagsFor(frame));
-        }
-        else
-        {
-            bool ok = true;
+            nint handle = (nint)frame.Handle;
 
-            foreach (AnimationFrame frame in frames)
+            // Expanded exactly as the layout path expands, so a window is the same
+            // size whether it arrived by animation or by a direct placement. Writing
+            // raw here made every animated frame land the visible window about
+            // fourteen pixels narrower than the layout asked for, and the next
+            // placement snapped it back - a visible pop on every focus change.
+            Rect target = Expand(handle, frame.Rect);
+            Rect actual = Win32Window.GetBounds(handle);
+
+            InFlight previous;
+            bool known;
+
+            lock (_lastCommitted) known = _inFlight.TryGetValue(handle, out previous);
+
+            if (known && !frame.IsFinal &&
+                ShouldWithhold(actual, previous.ActualAtPost, previous.ActualAtPostBefore, Stopwatch.GetElapsedTime(previous.Ticks)))
             {
-                // Expanded exactly as the layout path expands, so a window is the same
-                // size whether it arrived by animation or by a direct placement.
-                // Writing raw here made every animated frame land the visible window
-                // about fourteen pixels narrower than the layout asked for, and the
-                // next placement snapped it back - a visible pop on every focus change.
-                Rect target = Expand((nint)frame.Handle, frame.Rect);
-
-                batch = PInvoke.DeferWindowPos(
-                    batch, new HWND((nint)frame.Handle), HWND.Null,
-                    target.X, target.Y, target.Width, target.Height,
-                    (SET_WINDOW_POS_FLAGS)FlagsFor(frame));
-
-                if (batch.IsNull)
-                {
-                    ok = false;
-                    break;
-                }
+                _framesWithheld++;
+                continue;
             }
 
-            if (ok) PInvoke.EndDeferWindowPos(batch);
-            else foreach (AnimationFrame frame in frames) MoveSingle((nint)frame.Handle, frame.Rect, FlagsFor(frame));
-        }
+            // Judged against the frame this window was actually sent, not the one the
+            // engine computed before this one: with frames withheld the two differ,
+            // and SWP_NOSIZE against a size the window never received would leave it
+            // the wrong size until the final frame.
+            bool sizeUnchanged = !frame.IsFinal && (known
+                ? previous.Posted.Width == target.Width && previous.Posted.Height == target.Height
+                : frame.SizeUnchanged);
 
-        lock (_lastCommitted)
-        {
-            foreach (AnimationFrame frame in frames)
+            PInvoke.SetWindowPos(
+                new HWND(handle), HWND.Null,
+                target.X, target.Y, target.Width, target.Height,
+                (SET_WINDOW_POS_FLAGS)FlagsFor(frame.IsFinal, sizeUnchanged));
+
+            lock (_lastCommitted)
             {
-                // Only the final frame is recorded. Every position before it is a
-                // waypoint the window is passing through, and recording those would
-                // make the skip check believe the window was already where the layout
-                // wants it while it was still halfway there.
-                if (!frame.IsFinal) continue;
+                if (!frame.IsFinal)
+                {
+                    // The sentinel for "no post before this one" is the empty rectangle,
+                    // which a window that exists never reports.
+                    _inFlight[handle] = new InFlight(target, actual, known ? previous.ActualAtPost : default, now);
+                    continue;
+                }
 
-                nint handle = (nint)frame.Handle;
-
+                // Only the final frame is recorded as the window's resting place. Every
+                // position before it is a waypoint the window is passing through, and
+                // recording those would make the skip check believe the window was
+                // already where the layout wants it while it was still halfway there.
+                _inFlight.Remove(handle);
                 _lastCommitted[handle] = frame.Rect;
 
                 // Recorded for the same reason the layout path records it: the skip
                 // check treats a missing entry as "never compensated" and places the
                 // window again. After an animation that meant one redundant move,
                 // which is what the user saw jump.
-                _lastApplied[handle] = Expand(handle, frame.Rect);
+                _lastApplied[handle] = target;
+
+                // And as outstanding, because the frame was posted like every other
+                // and the window will report its previous waypoint until it catches
+                // up - which for a window busy repainting through a motion is exactly
+                // when the next layout pass tends to ask. No origin: the window may
+                // have an earlier frame still queued, so moving is not leaving.
+                _posted[handle] = new Pending(now, Origin: null);
             }
         }
     }
+
+    /// <summary>The last intermediate frame posted to a moving window.</summary>
+    /// <param name="Posted">The window rectangle it was sent, shadow included.</param>
+    /// <param name="ActualAtPost">The window rectangle Windows reported at that moment.</param>
+    /// <param name="ActualAtPostBefore">
+    /// The same for the post before it; empty when there was none, which no window that
+    /// exists ever reports.
+    /// </param>
+    /// <param name="Ticks">When.</param>
+    private readonly record struct InFlight(Rect Posted, Rect ActualAtPost, Rect ActualAtPostBefore, long Ticks);
+
+    /// <summary>
+    /// The last intermediate frame posted to each window still in motion. Dropped by
+    /// the final frame, by a direct placement, and by <see cref="Forget"/>.
+    /// </summary>
+    /// <remarks>
+    /// Pre-sized so the frame path never grows it: the engine's own track table starts
+    /// at the same size, and a desktop with more windows in motion at once than this
+    /// has other problems.
+    /// </remarks>
+    private readonly Dictionary<nint, InFlight> _inFlight = new(64);
+
+    private long _framesWithheld;
+
+    /// <summary>
+    /// How many intermediate frames were not posted because their window had not yet
+    /// applied the previous one. For the report, and the motion log.
+    /// </summary>
+    public long FramesWithheld => Interlocked.Read(ref _framesWithheld);
+
+    /// <summary>
+    /// How long a window may go without applying a posted frame before the next one
+    /// is posted anyway.
+    /// </summary>
+    /// <remarks>
+    /// Not a courtesy to the window - a frame it has not processed is a frame it does
+    /// not need another of - but a guard against a stale record. A motion the engine
+    /// drops without a final frame leaves its last entry behind, and a window that
+    /// happens not to have moved since would otherwise have its next motion's frames
+    /// withheld against a post from minutes ago. Frames arrive every few milliseconds
+    /// while a window is genuinely behind, so a record this old describes nothing
+    /// current.
+    /// </remarks>
+    public static readonly TimeSpan WithholdingLapses = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>
+    /// Whether the next frame should be kept from a window, because it has fallen two
+    /// or more frames behind.
+    /// </summary>
+    /// <param name="actual">The window rectangle Windows reports now.</param>
+    /// <param name="actualAtLastPost">What it reported when the last frame was posted.</param>
+    /// <param name="actualAtPostBefore">What it reported when the frame before that was posted.</param>
+    /// <param name="sinceLastPost">How long ago the last post was.</param>
+    /// <remarks>
+    /// <para>
+    /// Pure, so the rule can be stated in a test. A window that has not changed at all
+    /// across the last two posts has processed neither of them; one that has changed
+    /// in any way since the post before last is at worst one frame behind, and one
+    /// frame behind is the ordinary state of an application that takes about a frame
+    /// to apply a resize - a steady lag, not a growing queue - so it is given the
+    /// next frame. Measured on a browser that keeps up: judged on the last post alone,
+    /// a check landing a moment before the window applied it cost that window a
+    /// frame it would have shown in time.
+    /// </para>
+    /// <para>
+    /// Any change counts as progress, so an application that adjusts the sizes it is
+    /// given - and so lands near a frame rather than on it - is never mistaken for one
+    /// that is stuck. The clock only guards against a stale record; see
+    /// <see cref="WithholdingLapses"/>.
+    /// </para>
+    /// </remarks>
+    public static bool ShouldWithhold(Rect actual, Rect actualAtLastPost, Rect actualAtPostBefore, TimeSpan sinceLastPost) =>
+        actual == actualAtLastPost && actualAtLastPost == actualAtPostBefore && sinceLastPost < WithholdingLapses;
 
     /// <summary>
     /// Brings a window back into view, undoing whatever concealed it.
@@ -918,6 +1538,12 @@ public sealed class WindowCommitter
             method = _concealed.TryGetValue(handle, out ConcealMethod recorded)
                 ? recorded
                 : null;
+
+            // A veil is not the layout's to lift: it ends when the placement lands or
+            // the timeout says enough, in UnveilDue. The layout pass calls this for
+            // every visible placement, the veiled window's included, and must not undo
+            // the veil on the same tick it was put on.
+            if (method == ConcealMethod.Veiled) return;
 
             _concealed.Remove(handle);
         }
@@ -944,13 +1570,21 @@ public sealed class WindowCommitter
 
         // Not concealed by us. It may still be concealed by a previous run that was
         // killed before it could restore, in which case undoing it here is exactly the
-        // recovery that makes concealment survivable. Both cloak routes are reversed:
-        // the shell's, and the per-process one used on windows Shubbak owns.
+        // recovery that makes concealment survivable.
+        //
+        // The shell's cloak only. A previous run concealed through the shell and that
+        // reports as Shell; the per-process DWMWA_CLOAK route reports as App and has
+        // never succeeded against a window of another process, so an App cloak on a
+        // managed window is the application's own. Firefox and Chromium cloak a new
+        // window themselves until its first paint, and reversing that here cost three
+        // cross-process calls into the shell per new browser window - 13 ms on the
+        // tick that placed it, measured - all of which failed, before logging a
+        // warning that told the user to run `shubbak restore` for a window that was
+        // about to uncloak itself twenty milliseconds later.
         Win32Window.CloakState cloak = Win32Window.GetCloakState(handle);
 
-        if (cloak is Win32Window.CloakState.App or Win32Window.CloakState.Shell)
+        if (cloak == Win32Window.CloakState.Shell)
         {
-            Win32Window.Uncloak(handle);
             Win32ApplicationView.Uncloak(handle);
             Win32Taskbar.SetVisible(handle, visible: true);
             return;
@@ -1035,7 +1669,7 @@ public sealed class WindowCommitter
     /// </remarks>
     private static bool StillConcealed(nint handle, ConcealMethod method) => method switch
     {
-        ConcealMethod.Cloaked => Win32Window.GetCloakState(handle)
+        ConcealMethod.Cloaked or ConcealMethod.Veiled => Win32Window.GetCloakState(handle)
             is Win32Window.CloakState.App or Win32Window.CloakState.Shell,
         ConcealMethod.Minimised => Win32Window.IsMinimised(handle),
         ConcealMethod.Hidden => !Win32Window.IsVisible(handle),
@@ -1051,6 +1685,18 @@ public sealed class WindowCommitter
             already = _concealed.TryGetValue(handle, out ConcealMethod recorded)
                 ? recorded
                 : null;
+
+            // A veiled window whose workspace has been switched away is already
+            // cloaked, and now for the better reason. The veil becomes the ordinary
+            // concealment, which ends when the workspace is shown rather than when the
+            // placement lands - so UnveilDue will not put it on screen over another
+            // workspace a moment from now.
+            if (already == ConcealMethod.Veiled)
+            {
+                _veiledSince.Remove(handle);
+                _concealed[handle] = ConcealMethod.Cloaked;
+                already = ConcealMethod.Cloaked;
+            }
         }
 
         // The record alone is not enough. It used to be the whole test, and a window

@@ -173,7 +173,10 @@ public sealed class ShadowMarginTests
                 new Core.Tree.WindowNode(window.Handle, Identity), wanted, Visible: false)],
             static p => (nint)p.Window.Handle);
 
-        TestWindow.PumpUntil(() => IsConcealed(window.Handle));
+        // Both the concealment and the move are posted to the window's thread, the
+        // concealment first; waiting on the concealment alone could read the rectangle
+        // a message too early.
+        TestWindow.PumpUntil(() => IsConcealed(window.Handle) && WindowCommitter.VisibleBounds(window.Handle) == wanted);
 
         // Off screen, and nonetheless exactly where the layout asked for it.
         Assert.True(IsConcealed(window.Handle));
@@ -195,7 +198,8 @@ public sealed class ShadowMarginTests
             [new Core.Layouts.Placement(node, away, Visible: false)],
             static p => (nint)p.Window.Handle);
 
-        TestWindow.PumpUntil(() => IsConcealed(window.Handle));
+        // As above: the move is the message after the concealment.
+        TestWindow.PumpUntil(() => IsConcealed(window.Handle) && WindowCommitter.VisibleBounds(window.Handle) == away);
 
         Core.Geometry.Rect whileHidden = WindowCommitter.VisibleBounds(window.Handle);
 

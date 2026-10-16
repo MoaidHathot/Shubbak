@@ -71,10 +71,13 @@ WaitForSingleObject
 WAIT_EVENT
 
 // --- window manipulation -------------------------------------------------------
+//
+// SetWindowPos only, posted per window with SWP_ASYNCWINDOWPOS. The DeferWindowPos
+// family was listed here from P1 and is deliberately gone: DeferWindowPos rejects
+// SWP_NOSENDCHANGING and SWP_ASYNCWINDOWPOS with ERROR_INVALID_PARAMETER, so every
+// batch this program ever built failed on its first window and fell back to the
+// individual calls. See WindowCommitter.
 SetWindowPos
-BeginDeferWindowPos
-DeferWindowPos
-EndDeferWindowPos
 SET_WINDOW_POS_FLAGS
 ShowWindow
 ShowWindowAsync
@@ -89,7 +92,6 @@ SHOW_WINDOW_CMD
 SetWindowPlacement
 WINDOWPLACEMENT
 SetForegroundWindow
-BringWindowToTop
 AttachThreadInput
 
 // The second route to the foreground, when attaching input is refused. Windows lets

@@ -15,16 +15,25 @@ namespace Shubbak.Spike;
 /// Question under test: can a managed tick loop move N windows per frame at
 /// 144 Hz (6.94 ms budget) without dropping frames?
 ///
-/// The design under test is the one the real animation engine will use:
-///   - a high-resolution waitable timer (CREATE_WAITABLE_TIMER_HIGH_RESOLUTION)
-///     rather than Thread.Sleep, whose granularity is far too coarse
-///   - all window moves for a frame batched into ONE
-///     BeginDeferWindowPos / DeferWindowPos* / EndDeferWindowPos transaction,
-///     so the frame lands atomically instead of tearing between tiles
-///   - zero allocation inside the tick loop
+/// Three ways of committing a frame are compared, chosen with --mode:
+///   - async   : one SetWindowPos per window, posted with SWP_ASYNCWINDOWPOS. This is
+///               what the window manager ships.
+///   - sync    : one SetWindowPos per window, sent. The original "unbatched" control.
+///   - batched : one BeginDeferWindowPos / DeferWindowPos* / EndDeferWindowPos
+///               transaction per frame. The original design under test.
+///
+/// A correction, recorded here because this spike's result was load-bearing for ADR
+/// 0001 and was wrong. The first version of the batched path passed
+/// SWP_NOSENDCHANGING to DeferWindowPos, which that function refuses with
+/// ERROR_INVALID_PARAMETER whatever the documentation lists, and then `return`ed on
+/// the null handle it got back. It therefore moved nothing, in eleven microseconds,
+/// and dropped no frames - and that was reported as "batching: 0% dropped against
+/// 33-42% unbatched". The batched path now uses only the flags DeferWindowPos
+/// accepts and the run FAILS if any DeferWindowPos call returns null, so the number
+/// can never again describe a commit that did not happen.
 ///
 /// It also breaks the frame down into (a) time spent in our managed interpolation
-/// math and (b) time spent inside the Win32 batch call. If (b) dominates, the
+/// math and (b) time spent inside the Win32 commit call. If (b) dominates, the
 /// choice of language is irrelevant to animation smoothness - which is the real
 /// thing we want to learn here.
 ///
@@ -39,8 +48,14 @@ internal static class S2AnimationTiming
         public float EndX, EndY, EndW, EndH;
     }
 
+    private enum CommitMode { Async, Sync, Batched }
+
     private const string WindowClass = "ShubbakSpikeS2";
     private static readonly List<HWND> s_created = [];
+
+    /// <summary>How many DeferWindowPos calls returned null, and the last error they left.</summary>
+    private static int s_batchFailures;
+    private static int s_lastBatchError;
 
     /// <summary>TIMER_ALL_ACCESS. Not exposed as a CsWin32 enum, so spelled out here.</summary>
     private const uint TimerAllAccess = 0x1F0003;
@@ -51,7 +66,18 @@ internal static class S2AnimationTiming
         double targetHz = ArgUtil.GetDouble(args, "--hz", 144.0);
         int durationSec = ArgUtil.GetInt(args, "--seconds", 60);
         bool noGcPressure = ArgUtil.HasFlag(args, "--no-gc-pressure");
-        bool noBatch = ArgUtil.HasFlag(args, "--no-batch");
+        s_targetPauseMs = ArgUtil.GetInt(args, "--target-pause", 0);
+
+        // --no-batch is the original spelling of the synchronous control group and is
+        // kept so the recorded command lines still run.
+        CommitMode mode = ArgUtil.HasFlag(args, "--no-batch")
+            ? CommitMode.Sync
+            : (ArgUtil.GetString(args, "--mode", "async") ?? "async").ToLowerInvariant() switch
+            {
+                "sync" => CommitMode.Sync,
+                "batched" => CommitMode.Batched,
+                _ => CommitMode.Async,
+            };
 
         // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4. CsWin32 models
         // this as a handle type rather than an enum, so the sentinel is spelled out.
@@ -66,8 +92,14 @@ internal static class S2AnimationTiming
         Console.WriteLine($"Windows         : {windowCount}");
         Console.WriteLine($"Target rate     : {targetHz:F1} Hz  (budget {frameBudgetMs:F3} ms/frame)");
         Console.WriteLine($"Duration        : {durationSec}s  ({totalFrames:N0} frames)");
-        Console.WriteLine($"Batching        : {(noBatch ? "OFF (individual SetWindowPos)" : "ON (DeferWindowPos)")}");
+        Console.WriteLine($"Commit          : {mode switch
+        {
+            CommitMode.Async => "posted per window (SetWindowPos + SWP_ASYNCWINDOWPOS) - the shipping design",
+            CommitMode.Sync => "sent per window (SetWindowPos) - the synchronous control",
+            _ => "one DeferWindowPos transaction per frame",
+        }}");
         Console.WriteLine($"GC pressure     : {(noGcPressure ? "disabled" : "enabled")}");
+        Console.WriteLine($"Target thread   : {(s_targetPauseMs > 0 ? $"busy - pauses {s_targetPauseMs} ms between pumps" : "pumping promptly")}");
         ReportDwmRefresh();
         Console.WriteLine();
 
@@ -140,8 +172,12 @@ internal static class S2AnimationTiming
             long t1 = Qpc.Now();
 
             // ---- win32: commit the frame -------------------------------------
-            if (noBatch) CommitIndividual(anim, eased);
-            else CommitBatched(anim, eased);
+            switch (mode)
+            {
+                case CommitMode.Batched: CommitBatched(anim, eased); break;
+                case CommitMode.Sync: CommitIndividual(anim, eased, posted: false); break;
+                default: CommitIndividual(anim, eased, posted: true); break;
+            }
 
             long t2 = Qpc.Now();
 
@@ -201,10 +237,16 @@ internal static class S2AnimationTiming
 
         bool passDrop = dropPct < 1.0;
         bool passP99 = ft.P99 < frameBudgetMs;
-        bool pass = passDrop && passP99;
+
+        // A frame that was not committed is not a frame that landed in budget. The
+        // first version of this spike passed its gate on exactly that mistake.
+        bool passCommitted = s_batchFailures == 0;
+        bool pass = passDrop && passP99 && passCommitted;
 
         Console.WriteLine($"GATE dropped < 1%       : {(passDrop ? "PASS" : "FAIL")}  ({dropPct:F3}%)");
         Console.WriteLine($"GATE p99 < {frameBudgetMs:F2} ms budget: {(passP99 ? "PASS" : "FAIL")}  ({ft.P99:F3} ms)");
+        Console.WriteLine($"GATE every frame committed: {(passCommitted ? "PASS" : "FAIL")}" +
+                          (passCommitted ? "" : $"  ({s_batchFailures:N0} DeferWindowPos calls returned null, last error {s_lastBatchError})"));
         Console.WriteLine();
         Console.WriteLine($"S2: {(pass ? "PASS" : "FAIL")}");
 
@@ -214,13 +256,37 @@ internal static class S2AnimationTiming
     // ---- frame commit paths ------------------------------------------------
 
     /// <summary>
-    /// The real path: one atomic transaction for every window in the frame.
-    /// Allocation-free.
+    /// The flags <c>DeferWindowPos</c> accepts. Not <c>SWP_NOSENDCHANGING</c> and not
+    /// <c>SWP_ASYNCWINDOWPOS</c>: both come back as <c>ERROR_INVALID_PARAMETER</c>, and
+    /// the first version of this path passed the former and so never moved a window.
+    /// </summary>
+    private const SET_WINDOW_POS_FLAGS BatchFlags =
+        SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
+        SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+        SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
+        SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS;
+
+    private const SET_WINDOW_POS_FLAGS SingleFlags =
+        SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
+        SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
+        SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
+        SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
+        SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS;
+
+    /// <summary>
+    /// One transaction for every window in the frame. Allocation-free. A null handle
+    /// from <c>DeferWindowPos</c> is counted and fails the run; it is not a frame.
     /// </summary>
     private static unsafe void CommitBatched(AnimWindow[] anim, float t)
     {
         HDWP hdwp = PInvoke.BeginDeferWindowPos(anim.Length);
-        if (hdwp.IsNull) return;
+
+        if (hdwp.IsNull)
+        {
+            s_batchFailures++;
+            s_lastBatchError = Marshal.GetLastWin32Error();
+            return;
+        }
 
         for (int i = 0; i < anim.Length; i++)
         {
@@ -230,22 +296,26 @@ internal static class S2AnimationTiming
             int w = (int)(a.StartW + (a.EndW - a.StartW) * t);
             int h = (int)(a.StartH + (a.EndH - a.StartH) * t);
 
-            hdwp = PInvoke.DeferWindowPos(hdwp, a.Hwnd, HWND.Null, x, y, w, h,
-                SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
-                SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
-                SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
-                SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
-                SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS);
+            hdwp = PInvoke.DeferWindowPos(hdwp, a.Hwnd, HWND.Null, x, y, w, h, BatchFlags);
 
-            if (hdwp.IsNull) return;
+            if (hdwp.IsNull)
+            {
+                s_batchFailures++;
+                s_lastBatchError = Marshal.GetLastWin32Error();
+                return;
+            }
         }
 
         PInvoke.EndDeferWindowPos(hdwp);
     }
 
-    /// <summary>Control group: naive per-window SetWindowPos, for comparison.</summary>
-    private static void CommitIndividual(AnimWindow[] anim, float t)
+    /// <summary>One <c>SetWindowPos</c> per window, sent or posted.</summary>
+    private static void CommitIndividual(AnimWindow[] anim, float t, bool posted)
     {
+        SET_WINDOW_POS_FLAGS flags = posted
+            ? SingleFlags | SET_WINDOW_POS_FLAGS.SWP_ASYNCWINDOWPOS
+            : SingleFlags;
+
         for (int i = 0; i < anim.Length; i++)
         {
             ref AnimWindow a = ref anim[i];
@@ -254,12 +324,7 @@ internal static class S2AnimationTiming
             int w = (int)(a.StartW + (a.EndW - a.StartW) * t);
             int h = (int)(a.StartH + (a.EndH - a.StartH) * t);
 
-            PInvoke.SetWindowPos(a.Hwnd, HWND.Null, x, y, w, h,
-                SET_WINDOW_POS_FLAGS.SWP_NOACTIVATE |
-                SET_WINDOW_POS_FLAGS.SWP_NOZORDER |
-                SET_WINDOW_POS_FLAGS.SWP_NOOWNERZORDER |
-                SET_WINDOW_POS_FLAGS.SWP_NOSENDCHANGING |
-                SET_WINDOW_POS_FLAGS.SWP_NOCOPYBITS);
+            PInvoke.SetWindowPos(a.Hwnd, HWND.Null, x, y, w, h, flags);
         }
     }
 
@@ -335,7 +400,81 @@ internal static class S2AnimationTiming
     private static LRESULT TestWndProc(HWND hwnd, uint msg, WPARAM wparam, LPARAM lparam)
         => PInvoke.DefWindowProc(hwnd, msg, wparam, lparam);
 
+    private static Thread? s_windowThread;
+    private static uint s_windowThreadId;
+
+    /// <summary>
+    /// How long the target thread sleeps between pumps, to stand in for an
+    /// application that is busy. Zero means it pumps promptly.
+    /// </summary>
+    private static int s_targetPauseMs;
+
+    /// <summary>
+    /// Creates the windows on a thread of their own, with a message pump.
+    /// </summary>
+    /// <remarks>
+    /// The first version created them on the spike's own thread, which made every
+    /// mode the same mode: a <c>SetWindowPos</c> into a window on the calling thread
+    /// is processed inline, so a "synchronous" move never waited on anyone and an
+    /// "asynchronous" one had nothing to post to - Windows ignores
+    /// <c>SWP_ASYNCWINDOWPOS</c> within one input queue. The thing the modes differ in
+    /// is what happens when the target is another thread, so the targets are.
+    /// </remarks>
     private static unsafe bool CreateTestWindows(int count)
+    {
+        using var ready = new ManualResetEventSlim(false);
+        bool ok = false;
+
+        s_windowThread = new Thread(() =>
+        {
+            s_windowThreadId = PInvoke.GetCurrentThreadId();
+            ok = CreateTestWindowsHere(count);
+            ready.Set();
+
+            if (!ok) return;
+
+            if (s_targetPauseMs <= 0)
+            {
+                while (PInvoke.GetMessage(out MSG message, default, 0, 0))
+                {
+                    PInvoke.TranslateMessage(in message);
+                    PInvoke.DispatchMessage(in message);
+                }
+            }
+            else
+            {
+                // A busy application: drain the queue, then go away for a while.
+                bool quit = false;
+
+                while (!quit)
+                {
+                    while (PInvoke.PeekMessage(out MSG message, default, 0, 0, PEEK_MESSAGE_REMOVE_TYPE.PM_REMOVE))
+                    {
+                        if (message.message == PInvoke.WM_QUIT) { quit = true; break; }
+
+                        PInvoke.TranslateMessage(in message);
+                        PInvoke.DispatchMessage(in message);
+                    }
+
+                    if (!quit) Thread.Sleep(s_targetPauseMs);
+                }
+            }
+
+            foreach (var hwnd in s_created) PInvoke.DestroyWindow(hwnd);
+            s_created.Clear();
+        })
+        {
+            Name = "S2 target windows",
+            IsBackground = true,
+        };
+
+        s_windowThread.Start();
+        ready.Wait();
+
+        return ok;
+    }
+
+    private static unsafe bool CreateTestWindowsHere(int count)
     {
         fixed (char* className = WindowClass)
         {
@@ -405,7 +544,12 @@ internal static class S2AnimationTiming
 
     private static void DestroyTestWindows()
     {
-        foreach (var hwnd in s_created) PInvoke.DestroyWindow(hwnd);
-        s_created.Clear();
+        // The windows belong to their thread, so it destroys them on its way out.
+        if (s_windowThreadId != 0)
+            PInvoke.PostThreadMessage(s_windowThreadId, PInvoke.WM_QUIT, default, default);
+
+        s_windowThread?.Join(TimeSpan.FromSeconds(5));
+        s_windowThread = null;
+        s_windowThreadId = 0;
     }
 }
