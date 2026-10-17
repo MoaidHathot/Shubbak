@@ -175,13 +175,23 @@ jobs:
       # a repository the size of winget-pkgs: the 0.11.0 submission failed exactly so -
       # the bot's fork 16,609 commits behind and none ahead, "the forked repository
       # could not be synced with the upstream commits. Sync your fork manually and try
-      # again" - five weeks after the fork was made. So the fork is brought up to date
-      # here first, as the by-hand sync does it: its default branch is moved to the
-      # commit upstream's is on, a fast-forward to an object the fork's network already
-      # holds, which the endpoint that merges has no part in. The tool then finds
-      # nothing to sync. A fork that is ahead is not touched and is said, because
-      # somebody put commits on it, and the tool fails on it as before; no fork at all
-      # is left to the tool, which makes one, in step by definition.
+      # again" - five weeks after the fork was made. Nor will the reference API move the
+      # fork's branch to upstream's commit: for a network this size the fork does not
+      # hold the object, and the update is refused - once as a bare 404, once as "Object
+      # does not exist" - which is also why the tool's own branch creation at that
+      # commit needs the sync in the first place (winget-create issue 282).
+      #
+      # So the missing objects are carried across the way git carries them. The fork
+      # is cloned without blobs, without a checkout and one commit deep - the shape of
+      # its tree, which is what the push needs to leave out, and nothing it does not;
+      # the range since is fetched from upstream, which the clone's one commit lets the
+      # server narrow to what is new; and that is pushed to the fork as a fast-forward,
+      # without thin deltas, since a delta base would be a blob the clone left out.
+      # Measured on the 0.11.0 gap, 16,651 commits: 37 s, 74 s and 13 s. The tool then
+      # finds the fork a few commits behind at most, which is the case its endpoint is
+      # for. A fork that is ahead is not touched and is said, because somebody put
+      # commits on it, and the tool fails on it as before; no fork at all is left to
+      # the tool, which makes one, in step by definition.
       - name: Bring the fork up to date with winget-pkgs
         if: env.HAS_WINGET_TOKEN == 'true' && steps.upstream.outputs.exists != 'true'
         shell: pwsh
@@ -243,14 +253,34 @@ jobs:
             return
           }
 
-          $sha = (Invoke-RestMethod -Uri "$api/repos/microsoft/winget-pkgs/git/ref/heads/$($upstream.default_branch)" -Headers $headers).object.sha
+          function Invoke-Git([string] $what, [string[]] $arguments) {
+            & git @arguments
+            if ($LASTEXITCODE -ne 0) { throw "git $what exited $LASTEXITCODE." }
+          }
 
-          # Not forced: a fork that gained a commit between the compare and the move is
-          # refused rather than rewound.
-          $moved = Invoke-RestMethod -Method Patch -Uri "$api/repos/$login/winget-pkgs/git/refs/heads/$branch" -Headers $headers `
-            -ContentType 'application/json' -Body (@{ sha = $sha; force = $false } | ConvertTo-Json -Compress)
+          $work = Join-Path $env:RUNNER_TEMP 'winget-pkgs-fork'
 
-          Write-Output "$($fork.full_name) $branch was $($compare.behind_by) commits behind microsoft/winget-pkgs; moved to $($moved.object.sha.Substring(0, 7))."
+          Invoke-Git 'clone' @('clone', '--quiet', '--filter=blob:none', '--no-checkout', '--depth', '1', '--branch', $branch, '--single-branch', "https://github.com/$login/winget-pkgs.git", $work)
+          Invoke-Git 'remote add' @('-C', $work, 'remote', 'add', 'upstream', 'https://github.com/microsoft/winget-pkgs.git')
+          Invoke-Git 'fetch' @('-C', $work, 'fetch', '--quiet', 'upstream', $upstream.default_branch)
+
+          $target = (git -C $work rev-parse FETCH_HEAD).Trim()
+
+          # The token reaches git as a request header rather than in the URL, the way
+          # actions/checkout passes its own, so a failed push names the URL and not the
+          # token. The credential helper is switched off for the call: the runner's git
+          # has Git Credential Manager configured, and a helper with nothing to show a
+          # prompt to is a hang, not a failure.
+          $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:WINGET_TOKEN"))
+          $env:GIT_TERMINAL_PROMPT = '0'
+
+          Invoke-Git 'push' @(
+            '-C', $work,
+            '-c', 'credential.helper=',
+            '-c', "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic",
+            'push', '--quiet', '--no-thin', "https://github.com/$login/winget-pkgs.git", "${target}:refs/heads/$branch")
+
+          Write-Output "$($fork.full_name) $branch was $($compare.behind_by) commits behind microsoft/winget-pkgs; now at $($target.Substring(0, 7))."
 
       - name: Open the winget-pkgs pull request
         if: env.HAS_WINGET_TOKEN == 'true' && steps.upstream.outputs.exists != 'true'

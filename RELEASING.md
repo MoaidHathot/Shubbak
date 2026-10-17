@@ -322,12 +322,15 @@ downstream moves: the Scoop bucket still describes the previous release. Approve
 - commits the filled manifests from the workflow artefact back to `packaging/winget`
   and `bucket/shubbak.json` on `main` - for Scoop, that commit **is** the release,
   since Scoop reads the bucket straight from this repository;
-- brings the bot's fork of `winget-pkgs` up to date, by moving its default branch to
-  the commit upstream's is on. `wingetcreate` syncs the fork itself through GitHub's
-  merge-upstream endpoint, and that endpoint refuses a fork too far behind a
-  repository this size - the 0.11.0 submission failed on it, five weeks and 16,609
-  commits after the fork was made, with "sync your fork manually and try again". A
-  fork with commits of its own is left alone and the run says so;
+- brings the bot's fork of `winget-pkgs` up to date. `wingetcreate` syncs the fork
+  itself through GitHub's merge-upstream endpoint, and that endpoint refuses a fork
+  too far behind a repository this size - the 0.11.0 submission failed on it, five
+  weeks and 16,609 commits after the fork was made, with "sync your fork manually and
+  try again" - and the reference API will not point the fork at a commit it holds
+  only through its parent. So the missing commits are carried across with git: a
+  blobless, one-commit clone of the fork, a fetch of what upstream has since, and a
+  fast-forward push - about two minutes for five weeks of upstream. A fork with
+  commits of its own is left alone and the run says so;
 - unless this version is already in `microsoft/winget-pkgs`, opens the pull request
   there with `wingetcreate`, from the manifests it has just committed. The first
   version goes the same way as every one after it; nothing is derived from a previous
