@@ -376,6 +376,26 @@ couple of weeks. Questions arrive as comments addressed to the account that open
 pull request, which is the bot, so its mailbox is one to watch. Once it is merged,
 `winget search shubbak` finds it within a day.
 
+**`Validation-Defender-Error`** on the pull request means the lab's Defender blocked
+one of the four installers while installing it - "failed to pass the Installers Scan
+test" - and the bot does not say which or why. The 0.11.0 submission got it with
+every package and every executable inside them scanning clean on a desktop with
+cloud protection on and the day's definitions, so it is a verdict of the lab's
+stricter configuration on files it has never seen, signed by a certificate issued
+days before: Artifact Signing's certificates live three days, so every release is
+signed by a new one with no history. The remedy is the one the bot names. Sign in
+to the [Defender submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission)
+with a Microsoft account, choose *Software developer*, and submit each of the four
+packages from the release page as *incorrectly detected*, saying what Shubbak is and
+that it is signed through Azure Artifact Signing; the portal takes one file per
+submission and answers by mail, usually within a day. Then, as the bot, comment on
+the pull request with the submission ids and ask for the validation to be run again
+- the `Needs-Author-Feedback` label waits for the author's reply, and a moderator
+re-runs the pipeline. Scanning locally first is worth the minute, so the comment can
+say so: `MpCmdRun.exe -Scan -ScanType 3 -File <package> -DisableRemediation` from
+`%ProgramData%\Microsoft\Windows Defender\Platform\<version>`, and `wix msi
+decompile <msi> -x <dir>` gets the executables out of an MSI without installing it.
+
 The same workflow's second job pushes `Shubbak.Ipc` to nuget.org, from the package
 attached to the release - downloaded, checked against its published hash, and pushed
 as it is, so what nuget.org serves is byte for byte what the release attached. It
