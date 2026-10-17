@@ -261,12 +261,19 @@ run (signed) or the local build (unsigned, `-PortableWm`):
   monitor, the tray icon is there and shows a "starter config written" notification,
   and `HKCU\...\Run\Shubbak` exists. Then in a **new** terminal: `where shubbak` finds
   `C:\Program Files\Shubbak\shubbak.exe`; Apps & Features lists Shubbak with its
-  icon; the Start Menu has one entry.
+  icon; the Start Menu has one entry. **This first one only a signed package on a
+  desktop can check**: CI installs silently, so the dialog never shows, and its build
+  is unsigned, so the uiAccess window manager could not start from it anyway. The
+  0.11.0 checkbox did nothing, for a launch no release had tried; CI now checks the
+  authoring - that Finish runs a DLL action and not an executable one - and the rest
+  is this step.
 - `shubbak stop`, delete `%USERPROFILE%\.config\shubbak`, then `shubbak setup` writes
   the config, says `autostart enabled`, starts the window manager, and prints the
   keys. `alt+shift+space` opens the palette - on the keys list the first time, the
   windows list after - and `alt+w` cycles the layout. `shubbak status` answers and
-  `shubbak doctor` is all `ok` and `info`.
+  `shubbak doctor` is all `ok` and `info`. The signed MSI is the one to do this with
+  too: the window manager it installs asks for uiAccess, and `setup` starting it is
+  the same launch the checkbox makes.
 - With the signed MSI only: Task Manager tiles. `shubbak inspect` on it says so rather
   than reporting an integrity-level refusal.
 - Log off and on: it starts, and starts the other three.
@@ -421,11 +428,17 @@ it) and a per-build `ProductCode`.
 
 The elevated half of the install does **not** start anything, register anything to
 start at logon, or touch the user's files. The one thing that does is the checkbox on
-the final dialog - *Start Shubbak now, and at every logon* - which runs
-`shubbak-wm --autostart` from the unelevated client half of the install, as the
-logged-on user; that is the right process to write a per-user Run key from and the
-right one to be a window manager. Silent installs never show the dialog, so winget's
-notes say `shubbak setup`. The config under `~\.config\shubbak` and the session under
+the final dialog - *Start Shubbak now, and at every logon* - which runs `shubbak setup`
+from the unelevated client half of the install, hidden, as the logged-on user; that is
+the right process to write a per-user Run key from and the right one to start a window
+manager for that user. It runs the CLI and not the window manager because the window
+manager in the package asks for `uiAccess`, and Windows refuses to create a uiAccess
+process with `CreateProcess` - which is how Windows Installer runs an executable
+custom action, and how the 0.11.0 checkbox came to do nothing on every signed install
+- while the shell's launch, which the CLI uses, goes through. A failure is shown in a
+message box, since the CLI's output goes to an installer log nobody asked for. Silent
+installs never show the dialog, so winget's notes say `shubbak setup`, and both roads
+run the same command. The config under `~\.config\shubbak` and the session under
 `%LOCALAPPDATA%\Shubbak` survive an uninstall for the same reason.
 
 ### How an upgrade while running works

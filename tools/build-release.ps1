@@ -199,6 +199,50 @@ function Get-MsiPath([string] $rid) { Join-Path $artifacts "shubbak-$version-$ri
 function Get-NugetDir { Join-Path $artifacts 'nuget' }
 function Get-NupkgPath { Join-Path (Get-NugetDir) "Shubbak.Ipc.$version.nupkg" }
 
+# Reads the finished package's tables; see tools\Msi.ps1.
+. (Join-Path $PSScriptRoot 'Msi.ps1')
+
+# Checks what the final dialog's Finish button runs, in the package as built.
+#
+# The window manager in this package asks for uiAccess, and Windows will not create
+# a uiAccess process with CreateProcess from a process without it - which is how
+# Windows Installer runs every executable custom action, so an action that launched
+# shubbak-wm.exe directly did nothing on every signed install, asynchronously and with
+# its result ignored. CI cannot see that: its install is silent, so the dialog never
+# shows, and its build is unsigned, so the window manager could not start anyway.
+# What CI can see is the authoring. Every action Finish runs must be a call into a
+# DLL, and the one that starts Shubbak must do it through the CLI, which has no
+# uiAccess and goes through the shell; see Package.wxs.
+function Test-FinishActions([string] $msi) {
+    $events = @(Get-MsiTable -Path $msi -Table 'ControlEvent' -Columns 'Dialog_', 'Control_', 'Event', 'Argument', 'Condition' |
+        Where-Object { $_.Dialog_ -eq 'ExitDialog' -and $_.Control_ -eq 'Finish' })
+    $actions = @(Get-MsiTable -Path $msi -Table 'CustomAction' -Columns 'Action', 'Type', 'Source', 'Target')
+
+    $launched = @($events | Where-Object { $_.Event -eq 'DoAction' })
+    if ($launched.Count -eq 0) { throw "The ExitDialog's Finish button runs no action; the 'start now' checkbox would do nothing." }
+
+    foreach ($event in $launched) {
+        $action = $actions | Where-Object { $_.Action -eq $event.Argument } | Select-Object -First 1
+        if (-not $action) { throw "Finish runs '$($event.Argument)', which is not in the CustomAction table." }
+
+        # The low three bits of Type are the kind of action: 1 is a DLL entry point,
+        # 2 an executable, 5 JScript, 6 VBScript. Everything else is a flag.
+        $kind = [int]$action.Type -band 0x7
+        if ($kind -ne 1) {
+            throw "Finish runs '$($action.Action)', a custom action of type $($action.Type), which Windows Installer executes with CreateProcess - " +
+                  "and a uiAccess window manager cannot be started that way. It must be a DLL call that goes through the shell; see Package.wxs."
+        }
+    }
+
+    $command = @($events | Where-Object { $_.Event -eq '[WixQuietExecCmdLine]' }) | Select-Object -First 1
+    if (-not $command) { throw "Finish sets no WixQuietExecCmdLine, so the quiet-exec action has nothing to run." }
+    if ($command.Argument -notmatch '^"\[#ShubbakCli\]" setup --from-installer$') {
+        throw "Finish runs '$($command.Argument)'; expected `"[#ShubbakCli]`" setup --from-installer - the CLI, which starts the window manager through the shell."
+    }
+
+    Write-Output "  Finish runs $($command.Argument) through $(($launched | ForEach-Object { $_.Argument }) -join ', '), a DLL call"
+}
+
 # The assembly dotnet pack puts in the package, where the workflow signs it before
 # packing. Architecture-neutral, so one copy under the plain target framework.
 function Get-IpcAssemblyDir { Join-Path $root "src\Shubbak.Ipc\bin\$Configuration\net10.0" }
@@ -404,6 +448,7 @@ if ($Pack) {
         if (-not (Test-Path $built)) { throw "The MSI did not build to $built." }
         Copy-Item $built (Get-MsiPath $rid) -Force
         Write-Output ("  {0}  {1:N2} MB" -f (Split-Path (Get-MsiPath $rid) -Leaf), ((Get-Item (Get-MsiPath $rid)).Length / 1MB))
+        Test-FinishActions (Get-MsiPath $rid)
         Group-End
     }
 }
@@ -475,7 +520,6 @@ if ($Nuget) {
 
 if ($Manifests) {
     Group-Begin 'Hash the packages and fill the manifests'
-    . (Join-Path $PSScriptRoot 'Msi.ps1')
     . (Join-Path $PSScriptRoot 'WingetManifest.ps1')
 
     # The packages, by architecture and kind, from whichever RIDs were built. A

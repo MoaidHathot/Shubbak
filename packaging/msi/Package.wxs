@@ -12,11 +12,12 @@
   something it never gave.
 
   Nothing is started and nothing is registered to start at logon unless the person
-  at the final dialog leaves its checkbox ticked. That runs the window manager with
-  its autostart switch, as the logged-on user: the dialog's action runs in the
-  unelevated client half of the install, which is the right process to write a
-  per-user Run key from and the right one to be a window manager. winget's silent
-  install never shows the dialog, so its notes say `shubbak setup` instead.
+  at the final dialog leaves its checkbox ticked. That runs `shubbak setup` - the
+  same command the install notes end with - hidden, as the logged-on user: the
+  dialog's action runs in the unelevated client half of the install, which is the
+  right process to write a per-user Run key from and the right one to start a
+  window manager for that user. winget's silent install never shows the dialog, so
+  its notes say `shubbak setup` instead, and both roads end in the same place.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
@@ -75,17 +76,56 @@
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Start Shubbak now, and at every logon" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
+    <!--
+      What the checkbox runs: `shubbak setup`, with its installer switch, hidden,
+      through WixQuietExec. Not the window manager itself, and not an executable
+      custom action, for one reason that took a release to learn. The window manager
+      in this package asks for uiAccess, and Windows will not create a uiAccess
+      process with CreateProcess from a process that has none - ERROR_ELEVATION_REQUIRED,
+      740 - which is exactly how Windows Installer runs an executable custom action.
+      The 0.11.0 package launched `shubbak-wm.exe` with its autostart switch that way,
+      asynchronously and without looking at the result, and so its Finish button did
+      nothing at all on every signed install, while the Start Menu - which launches
+      through the shell - worked; CI never saw it, because its install is silent and
+      its build unsigned. The CLI has no uiAccess, so Windows Installer may start it,
+      and it starts the window manager through the shell, as Explorer does. It is the
+      command the install notes end with, so the checkbox and the notes now agree.
+
+      QuietExec logs the command and its output and treats a non-zero exit as a
+      failure, which Windows Installer would report as "a program run as part of the
+      setup did not finish as expected" and count the whole installation as failed -
+      for a window manager that is installed and merely not running. So the return is
+      ignored here and the CLI says it itself: with that switch, a failure is shown in
+      a message box naming the cause and the remedy. The timeout bounds a hang; the
+      CLI waits at most five seconds for the window manager to answer.
+    -->
     <CustomAction Id="StartShubbak"
-                  Directory="INSTALLFOLDER"
-                  ExeCommand="&quot;[INSTALLFOLDER]shubbak-wm.exe&quot; --autostart"
-                  Return="asyncNoWait" />
+                  BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
+                  DllEntry="WixQuietExec"
+                  Execute="immediate"
+                  Impersonate="yes"
+                  Return="ignore" />
 
     <UI>
       <Publish Dialog="ExitDialog"
                Control="Finish"
+               Property="WixQuietExecCmdLine"
+               Value="&quot;[#ShubbakCli]&quot; setup --from-installer"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed"
+               Order="1" />
+      <!-- Milliseconds, as the source reads it; its own default is a minute. -->
+      <Publish Dialog="ExitDialog"
+               Control="Finish"
+               Property="WixQuietExecCmdTimeout"
+               Value="30000"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed"
+               Order="2" />
+      <Publish Dialog="ExitDialog"
+               Control="Finish"
                Event="DoAction"
                Value="StartShubbak"
-               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed" />
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed"
+               Order="3" />
     </UI>
 
     <Feature Id="Main" Title="Shubbak" Level="1" AllowAbsent="no">

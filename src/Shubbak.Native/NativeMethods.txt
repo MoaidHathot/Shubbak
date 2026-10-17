@@ -362,3 +362,9 @@ GetConsoleWindow
 GetStdHandle
 STD_HANDLE
 
+// --- a word to a person when there is no terminal ------------------------------------
+// The installer runs `shubbak setup` hidden, with its output in a log nobody opens
+// unless told to. A failure there is shown in a message box instead. See UserNotice.
+MessageBox
+MESSAGEBOX_STYLE
+

@@ -200,7 +200,10 @@ jobs:
       # Install it, check everything it claims to put on the machine, uninstall it,
       # check it is all gone. The runner is elevated and disposable, which is exactly
       # what an installer test wants. The window manager inside is the uiAccess build
-      # and is not started; it would refuse to, unsigned.
+      # and is not started; it would refuse to, unsigned. Nor is the final dialog's
+      # checkbox exercised - the install is silent - which is how the 0.11.0 checkbox
+      # shipped doing nothing; build-release.ps1 checks that dialog's authoring
+      # instead, and RELEASING.md's step 4 is the test that actually clicks it.
       - name: Install and uninstall the x64 MSI
         shell: pwsh
         run: ./tools/test-msi.ps1 -Path artifacts/shubbak-${{ steps.version.outputs.version }}-win-x64.msi -Version ${{ steps.version.outputs.version }}

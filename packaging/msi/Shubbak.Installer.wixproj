@@ -59,6 +59,8 @@
 
   <ItemGroup>
     <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+    <!-- For WixQuietExec, which runs the final dialog's `shubbak setup` hidden; see Package.wxs. -->
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
   </ItemGroup>
 
 </Project>

@@ -1167,6 +1167,9 @@ internal static class Program
                                manager to start at logon, and start it now. Safe to
                                run again. --no-autostart and --no-start skip a step;
                                --config <path> uses and records a file of your own.
+                               The installer's last page runs this when its checkbox
+                               is ticked, with --from-installer, which reports a
+                               failure in a dialog since nobody sees its output.
           doctor               Check the install: PATH, config, autostart, whether
                                each of the four programs is running, and the things
                                that commonly go wrong. Each line says how to fix it.

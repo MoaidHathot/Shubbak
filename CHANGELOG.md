@@ -15,6 +15,32 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Fixed
+
+- **The installer's "Start Shubbak now, and at every logon" checkbox did nothing, and
+  `shubbak setup` could not start the window manager the installer installs.** Tick
+  the box, click Finish, and nothing happened; Shubbak had to be found in the Start
+  Menu or Windows Search, which also left it unregistered for logon. The window
+  manager the MSI puts under Program Files asks for `uiAccess` - the standing that
+  lets it move the windows of elevated programs - and Windows will not create a
+  uiAccess process with `CreateProcess` from a process that has none: it fails with
+  `ERROR_ELEVATION_REQUIRED`, whoever asks. That is how Windows Installer runs an
+  executable custom action, which is what the checkbox was, asynchronously and with
+  its result ignored; and it is how `shubbak setup` started the window manager, so
+  the command the install notes end with failed on exactly the build it is written
+  for, while the portable build - no uiAccess - never noticed. The shell's launch,
+  which is what the Start Menu, Explorer and Search use, goes through. `shubbak
+  setup` now starts the window manager through the shell and waits up to five
+  seconds for it to answer on the pipe, so a launch that dies at once is reported as
+  one rather than announced as a start; the installer's checkbox now runs `shubbak
+  setup --from-installer` hidden, through WiX's quiet-exec action, so the two ways of
+  installing end in the same place by the same code; and with that switch a failure
+  is shown in a message box naming the cause and the remedy, since the CLI's output
+  is otherwise in an installer log nobody asked for. CI could not have seen any of
+  this - its install is silent and its build unsigned - so it now checks the
+  package's authoring instead: the action Finish runs must be a DLL call and must run
+  the CLI, and the published 0.11.0 package fails that check.
+
 ## [0.11.0] - 2026-10-17
 
 ### Added
