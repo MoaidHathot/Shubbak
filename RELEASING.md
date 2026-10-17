@@ -92,8 +92,8 @@ service's own authority, which is what keeps it valid afterwards;
 
 Also once, for the post-release automation: the winget submission is made with
 [`wingetcreate`](https://github.com/microsoft/winget-create), which needs a **classic**
-personal access token with the `public_repo` scope - fine-grained tokens are not
-supported - and works as whichever account the token names: it forks
+personal access token with the `public_repo` and `workflow` scopes - fine-grained
+tokens are not supported - and works as whichever account the token names: it forks
 `microsoft/winget-pkgs` under that account if it has to, keeps the fork in step with
 upstream, and opens the pull request from it. `public_repo` is write access to
 *every* public repository that account owns, which for the maintainer's own account
@@ -107,9 +107,16 @@ belongs to an account that owns nothing else:
    that matters. It never needs to be a collaborator on this repository, and it needs
    no fork made by hand: the tool makes one the first time it runs.
 2. **The token.** As the bot: Settings → Developer settings → Personal access tokens →
-   **Tokens (classic)** → Generate. Scope `public_repo` and nothing else. Give it an
-   expiry and put the date in a calendar: when it lapses the workflow's last step fails,
-   which is how you find out, and the fix is a new token in the same secret.
+   **Tokens (classic)** → Generate. Scopes `public_repo` and `workflow`, nothing else.
+   The second is not about this repository's workflows: `winget-pkgs` changes the
+   files under its own `.github/workflows` often, a fork that is to be branched from
+   has to mirror them, and GitHub lets a classic token carry a workflow file only
+   with that scope - the 0.11.0 submission was refused on exactly this, by the fork
+   sync in this workflow and, before that, by the tool's own, which answers 422 and
+   says to sync by hand. On an account that owns nothing but the fork, the scope
+   reaches nothing else. Give the token an expiry and put the date in a calendar: when
+   it lapses the workflow's last step fails, which is how you find out, and the fix is
+   a new token in the same secret.
 3. **This repository.** Settings → Environments → `package-managers` → secret
    `WINGET_TOKEN` - on the environment, not the repository. A repository secret can be
    read by any workflow on any branch, which for a repository that takes direct pushes
@@ -323,14 +330,15 @@ downstream moves: the Scoop bucket still describes the previous release. Approve
   and `bucket/shubbak.json` on `main` - for Scoop, that commit **is** the release,
   since Scoop reads the bucket straight from this repository;
 - brings the bot's fork of `winget-pkgs` up to date. `wingetcreate` syncs the fork
-  itself through GitHub's merge-upstream endpoint, and that endpoint refuses a fork
-  too far behind a repository this size - the 0.11.0 submission failed on it, five
-  weeks and 16,609 commits after the fork was made, with "sync your fork manually and
-  try again" - and the reference API will not point the fork at a commit it holds
-  only through its parent. So the missing commits are carried across with git: a
-  blobless, one-commit clone of the fork, a fetch of what upstream has since, and a
-  fast-forward push - about two minutes for five weeks of upstream. A fork with
-  commits of its own is left alone and the run says so;
+  itself through GitHub's merge-upstream endpoint, and that failed for 0.11.0 - five
+  weeks and 16,609 commits after the fork was made - with "sync your fork manually
+  and try again", because the commits since touched upstream's workflow files and the
+  token had no `workflow` scope; the reference API will not point the fork at a
+  commit it holds only through its parent either. So the missing commits are carried
+  across with git: a blobless, one-commit clone of the fork, a fetch of what upstream
+  has since, and a fast-forward push - about two minutes for five weeks of upstream.
+  A token without the scope is refused by name, with the remedy; a fork with commits
+  of its own is left alone and the run says so;
 - unless this version is already in `microsoft/winget-pkgs`, opens the pull request
   there with `wingetcreate`, from the manifests it has just committed. The first
   version goes the same way as every one after it; nothing is derived from a previous

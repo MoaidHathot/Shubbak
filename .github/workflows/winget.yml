@@ -135,10 +135,12 @@ jobs:
       # is the two lines of env below; the hash is the wingetcreate.exe.txt beside the
       # release asset, or (Get-FileHash wingetcreate.exe).Hash.
       #
-      # The token is a classic personal access token with public_repo, which is write
-      # access to every public repository of the account that issued it - far more
-      # than one pull request needs - so it belongs to an account that owns nothing
-      # but a fork of winget-pkgs; see RELEASING.md. wingetcreate forks, syncs and
+      # The token is a classic personal access token with public_repo and workflow:
+      # the first is write access to every public repository of the account that
+      # issued it - far more than one pull request needs - so it belongs to an account
+      # that owns nothing but a fork of winget-pkgs; the second is what lets any token
+      # carry upstream's workflow files into that fork, which keeping it in step
+      # requires; see RELEASING.md. wingetcreate forks, syncs and
       # opens the pull request as whichever account the token names, which is the
       # whole of the setup. Until the token exists the run stops here and says so;
       # dispatching it again with the same tag once the token is set finds nothing to
@@ -236,7 +238,7 @@ jobs:
 
             throw "WINGET_TOKEN cannot push to $($fork.full_name): permissions pull=$($fork.permissions.pull) push=$($fork.permissions.push) admin=$($fork.permissions.admin); scopes: $scopes. " +
               "wingetcreate needs the same access to branch from the fork, so the submission would fail after this anyway. " +
-              "Issue a classic token with public_repo as $login and put it in the package-managers environment's WINGET_TOKEN; see RELEASING.md."
+              "Issue a classic token with public_repo and workflow as $login and put it in the package-managers environment's WINGET_TOKEN; see RELEASING.md."
           }
 
           $branch = $fork.default_branch
@@ -274,11 +276,23 @@ jobs:
           $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:WINGET_TOKEN"))
           $env:GIT_TERMINAL_PROMPT = '0'
 
-          Invoke-Git 'push' @(
-            '-C', $work,
-            '-c', 'credential.helper=',
-            '-c', "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic",
-            'push', '--quiet', '--no-thin', "https://github.com/$login/winget-pkgs.git", "${target}:refs/heads/$branch")
+          $pushed = & git -C $work -c 'credential.helper=' -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $basic" `
+            push --quiet --no-thin "https://github.com/$login/winget-pkgs.git" "${target}:refs/heads/$branch" 2>&1 | ForEach-Object { "$_" }
+          $pushed | ForEach-Object { Write-Output $_ }
+
+          if ($LASTEXITCODE -ne 0) {
+            # The one refusal with a known remedy, named: upstream changes its workflow
+            # files, a fork that mirrors upstream has to carry those changes, and a
+            # classic token carries a workflow file only with the workflow scope. The
+            # tool's own sync of the fork fails on the same rule, so the scope is what
+            # it takes to submit at all once upstream has touched a workflow.
+            if (($pushed -join "`n") -match 'without `workflow` scope') {
+              throw "WINGET_TOKEN lacks the workflow scope, so it cannot carry upstream's workflow files into $($fork.full_name) - and neither can wingetcreate's own sync. " +
+                "As $login, edit the classic token to add the workflow scope beside public_repo (or issue a new one so scoped), put it in the package-managers environment's WINGET_TOKEN, and run this workflow again with the same tag; see RELEASING.md."
+            }
+
+            throw "git push exited $LASTEXITCODE."
+          }
 
           Write-Output "$($fork.full_name) $branch was $($compare.behind_by) commits behind microsoft/winget-pkgs; now at $($target.Substring(0, 7))."
 
