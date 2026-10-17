@@ -46,6 +46,12 @@
     Skip `dotnet test` before publishing. CI has already run them by the time it
     gets here; locally they are the first thing worth knowing.
 
+.PARAMETER ReleaseDate
+    The date to write as the manifests' ReleaseDate, as yyyy-MM-dd. Today, in UTC,
+    when not given - right for a build made on the day. The post-release workflow
+    passes the day the release was published, so that a manifest filled again on a
+    later day, for a rerun, says the same date as the first.
+
 .EXAMPLE
     .\tools\build-release.ps1
     .\tools\build-release.ps1 -Publish -Rids win-x64
@@ -62,7 +68,9 @@ param(
     [switch] $SkipTests,
     [string] $Configuration = 'Release',
     [ValidateSet('win-x64', 'win-arm64')]
-    [string[]] $Rids = @('win-x64', 'win-arm64')
+    [string[]] $Rids = @('win-x64', 'win-arm64'),
+    [ValidatePattern('^(\d{4}-\d\d-\d\d)?$')]
+    [string] $ReleaseDate = ''
 )
 
 Set-StrictMode -Version Latest
@@ -516,7 +524,7 @@ if ($Manifests) {
     }
 
     Set-Content (Join-Path $artifacts 'SHA256SUMS.txt') ($sums -join "`n")
-    $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+    $releaseDate = if ($ReleaseDate) { $ReleaseDate } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
 
     # The manifests in packaging\ are templates with placeholders for the values only
     # a build can know. Filled copies go to artifacts\, and the post-release workflow

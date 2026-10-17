@@ -91,11 +91,19 @@ jobs:
             --pattern 'shubbak-*-win-arm64.msi' --pattern 'shubbak-*-win-arm64.zip'
           Get-ChildItem artifacts
 
+      # Dated with the day the release was published, not the day this runs: a rerun
+      # on a later day - 0.11.0 took three - rewrote ReleaseDate and committed it, so
+      # the manifest said a different day each time for the same release.
       - name: Fill the manifests from the published packages
         shell: pwsh
         run: |
           ./tools/ensure-winget.ps1
-          ./tools/build-release.ps1 -Manifests
+
+          $published = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json publishedAt --jq .publishedAt
+          $releaseDate = ([DateTimeOffset]::Parse($published)).UtcDateTime.ToString('yyyy-MM-dd')
+          Write-Output "$env:TAG was published $published; ReleaseDate $releaseDate."
+
+          ./tools/build-release.ps1 -Manifests -ReleaseDate $releaseDate
 
       # A push made with the workflow's own token starts no workflow, by GitHub's rule
       # against runs that trigger themselves - so build.yml does not run on this commit.
