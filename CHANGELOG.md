@@ -17,6 +17,12 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Closing a window could stall the remaining window's animation while focus changed.**
+  The foreground hand-off no longer joins the departing application's input queue.
+  In a controlled cross-process test, an application busy for two seconds held the
+  old focus call for 2,013 ms; the separate-queue request returned in 0.62 ms and
+  focus still arrived. The existing input-permission fallback remains, with no new
+  worker thread, polling, or allocation in the focus request.
 - **The installer's "Start Shubbak now, and at every logon" checkbox did nothing, and
   `shubbak setup` could not start the window manager the installer installs.** Tick
   the box, click Finish, and nothing happened; Shubbak had to be found in the Start

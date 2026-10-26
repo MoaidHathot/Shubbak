@@ -92,9 +92,8 @@ SHOW_WINDOW_CMD
 SetWindowPlacement
 WINDOWPLACEMENT
 SetForegroundWindow
-AttachThreadInput
 
-// The second route to the foreground, when attaching input is refused. Windows lets
+// The second route to the foreground, when the direct request is refused. Windows lets
 // the process that provided the last input event take the foreground, so one key-up
 // of a key nobody has bound is provided. See WindowActions.Focus; Dalil does the
 // same thing for the same reason.
@@ -367,4 +366,3 @@ STD_HANDLE
 // unless told to. A failure there is shown in a message box instead. See UserNotice.
 MessageBox
 MESSAGEBOX_STYLE
-

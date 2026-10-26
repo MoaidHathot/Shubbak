@@ -23,30 +23,16 @@ public static class WindowActions
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <c>SetForegroundWindow</c> is heavily restricted: Windows refuses it unless
-    /// the calling process already owns the foreground, to stop applications stealing
-    /// focus. A window manager legitimately needs to do exactly that, so it uses the
-    /// documented workaround of temporarily attaching its input queue to the current
-    /// foreground thread's, which makes the call succeed.
+    /// Ask without joining the foreground thread's input queue. With separate queues
+    /// Windows can deliver activation asynchronously; attaching first turns the
+    /// hand-off into a wait on the application losing focus. A controlled foreign
+    /// window busy for two seconds made SetForegroundWindow take 2013 ms, while the
+    /// attach and detach themselves each took less than a millisecond. That wait was
+    /// on the daemon's animation and command-dispatch thread.
     /// </para>
     /// <para>
-    /// Only across processes, because the restriction is per process: a foreground
-    /// held by any thread of this one is permission enough, and attaching to a thread
-    /// of one's own merges two queues that were deliberately separate. The daemon
-    /// never meets that case - its windows share one thread - but the tests that
-    /// give the focus sink real windows to take the foreground from do.
-    /// </para>
-    /// <para>
-    /// The attachment is always undone, including on failure - leaving input queues
-    /// attached couples the two threads' input state and causes symptoms that look
-    /// like random keyboard freezes.
-    /// </para>
-    /// <para>
-    /// And when the attached request is refused, one more thing, learned by the
-    /// palette first. <c>AttachThreadInput</c> to the thread behind a UWP frame -
-    /// Settings, the Store, whatever <c>ApplicationFrameHost</c> is showing - fails
-    /// with access denied, and every <c>SetForegroundWindow</c> then fails too. The
-    /// way past it is the other clause of Windows' rule: a process that has just
+    /// When the request is refused, the existing fallback supplies the foreground
+    /// permission a swallowed keybinding cannot confer: a process that has just
     /// provided input may take the foreground. So this process provides one event: a
     /// key-up, through <c>SendInput</c>, of a key nobody has bound and nobody is
     /// holding, which every window ignores and the keyboard hook lets through. Then it
@@ -68,7 +54,7 @@ public static class WindowActions
     /// wait for.
     /// </para>
     /// </remarks>
-    public static unsafe bool Focus(nint handle)
+    public static bool Focus(nint handle)
     {
         var hwnd = new HWND(handle);
         if (handle == 0 || !PInvoke.IsWindow(hwnd)) return false;
@@ -79,24 +65,7 @@ public static class WindowActions
         HWND foreground = PInvoke.GetForegroundWindow();
         if (foreground == hwnd) return true;
 
-        uint ours = PInvoke.GetCurrentThreadId();
-        uint theirProcess = 0;
-        uint theirs = foreground.IsNull ? 0 : PInvoke.GetWindowThreadProcessId(foreground, &theirProcess);
-        bool foreign = theirs != 0 && theirs != ours && theirProcess != (uint)Environment.ProcessId;
-
-        bool attached = false;
-
-        try
-        {
-            if (foreign)
-                attached = PInvoke.AttachThreadInput(ours, theirs, true);
-
-            if (PInvoke.SetForegroundWindow(hwnd)) return true;
-        }
-        finally
-        {
-            if (attached) PInvoke.AttachThreadInput(ours, theirs, false);
-        }
+        if (PInvoke.SetForegroundWindow(hwnd)) return true;
 
         // Refused. Provide an input event and ask again; see the remarks.
         if (Nudge() && PInvoke.SetForegroundWindow(hwnd)) return true;
