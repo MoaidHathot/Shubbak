@@ -69,3 +69,21 @@ Deterministic tests cover idle starts at 60/144/240 Hz, a 100 ms stall, a five-s
 stall with a new track joining an old one, retargeting only one of two tracks,
 zero-step starts and a later motion reusing the same slot. The frame-allocation
 tests use the daemon's new call shape and still require exactly zero bytes.
+
+## Redundant retargeting
+
+Before the fix, eight cases in the new retarget regression suite failed: redundant
+layouts extended the deadline, changed easing trajectories, replaced an opening's
+profile with a move's, and lost the final-frame path near the rounded target.
+
+Retarget now compares the destination of the existing track before applying the
+minimum-distance shortcut. An unchanged destination retains elapsed time, origin,
+curve and animation kind. Disabled animation and an explicitly instant request
+still cancel immediately. Reconfiguring the original active profile restarts from
+the current position with the new profile, including when a later layout merely
+supplies the default window-move kind. The lookup is shared with track creation,
+so this adds no second scan, dictionary, allocation or per-frame system call.
+
+The tests compare an interrupted curve with an uninterrupted control, exercise
+duration and curve changes, preserve the settling frame after rounding, and require
+zero allocations for both unchanged and genuinely changed destinations.

@@ -82,8 +82,10 @@ public sealed class TickAllocationTests
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
-    [Fact]
-    public void RetargetingAnAlreadyMovingWindowAllocatesNothing()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetargetingAnAlreadyMovingWindowAllocatesNothing(bool changesTarget)
     {
         // Retarget runs on the layout path rather than the frame path, but a layout
         // pass happens while windows are moving - every focus change is one - and it
@@ -98,8 +100,9 @@ public sealed class TickAllocationTests
         for (int i = 0; i < 200; i++)
         {
             engine.Tick(1, scratch, firstFrameMilliseconds: 1);
+            var target = new Rect(changesTarget && i % 2 == 0 ? 900 : 950, 720, 300, 200);
             for (int handle = 1; handle <= 8; handle++)
-                engine.Retarget(handle, new Rect(0, 0, 100, 100), new Rect(950, 720, 300, 200), AnimationKind.WindowMove);
+                engine.Retarget(handle, new Rect(0, 0, 100, 100), target, AnimationKind.WindowMove);
         }
 
         long before = GC.GetAllocatedBytesForCurrentThread();
@@ -107,11 +110,12 @@ public sealed class TickAllocationTests
         for (int i = 0; i < 500; i++)
         {
             engine.Tick(1, scratch, firstFrameMilliseconds: 1);
+            var target = new Rect(changesTarget && i % 2 == 0 ? 900 : 950, 720, 300, 200);
 
             for (int handle = 1; handle <= 8; handle++)
             {
                 engine.Retarget(
-                    handle, new Rect(0, 0, 100, 100), new Rect(950, 720, 300, 200), AnimationKind.WindowMove);
+                    handle, new Rect(0, 0, 100, 100), target, AnimationKind.WindowMove);
             }
         }
 

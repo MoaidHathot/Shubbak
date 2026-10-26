@@ -173,6 +173,7 @@ internal struct Track
     public double Duration;
     public Easing Curve;
     public bool Started;
+    public AnimationKind Kind;
 }
 
 /// <summary>A window's position for the current frame.</summary>
@@ -219,8 +220,9 @@ public readonly record struct AnimationFrame(
 /// <b>Re-targeting blends from the current position, not the original.</b> Layout
 /// changes arrive far faster than animations complete - opening three windows in
 /// quick succession retargets every tile twice - and restarting from the old origin
-/// would make windows visibly jump backwards. Each retarget begins a fresh track
-/// from wherever the window actually is.
+/// would make windows visibly jump backwards. A changed destination begins a fresh
+/// track from the current position. An unchanged destination keeps its existing
+/// clock and curve, unless animation is disabled or its profile is reconfigured.
 /// </para>
 /// <para>
 /// <b>Allocation-free per frame.</b> Tracks live in a pre-allocated array and are
@@ -259,21 +261,49 @@ public sealed class AnimationEngine
     /// </returns>
     public bool Retarget(long handle, Rect currentRect, Rect target, AnimationKind kind)
     {
-        if (currentRect == target)
-        {
-            Remove(handle);
-            return false;
-        }
-
         AnimationProfile profile = Options.ProfileFor(kind);
 
-        if (!Options.Enabled || profile.Duration <= TimeSpan.Zero || IsNegligible(currentRect, target))
+        if (!Options.Enabled || profile.Duration <= TimeSpan.Zero)
         {
             Remove(handle);
             return false;
         }
 
-        ref Track track = ref GetOrCreate(handle);
+        int existing = IndexOf(handle);
+
+        if (existing >= 0 && _tracks[existing].To == target)
+        {
+            ref Track active = ref _tracks[existing];
+
+            // A focus change or another window's layout is not a new journey for
+            // this window. Keep its origin, curve and elapsed time, including the
+            // settling tail where rounding may already put Current at the target.
+            // The final frame is still owed to the asynchronous committer.
+            // Preserve the original kind too: an opening should not turn into a
+            // window-move merely because that is the next layout pass's default.
+            kind = active.Kind;
+            profile = Options.ProfileFor(kind);
+
+            if (profile.Duration <= TimeSpan.Zero)
+            {
+                Remove(handle);
+                return false;
+            }
+
+            if (active.Duration == profile.Duration.TotalMilliseconds && active.Curve == profile.Curve)
+                return true;
+
+            // A configuration change to the active profile is intentional. Restart
+            // from the supplied current position with the new duration and curve.
+        }
+
+        if (currentRect == target || IsNegligible(currentRect, target))
+        {
+            Remove(handle);
+            return false;
+        }
+
+        ref Track track = ref GetOrCreate(existing);
 
         track.Handle = handle;
         track.From = currentRect;
@@ -283,6 +313,7 @@ public sealed class AnimationEngine
         track.Duration = profile.Duration.TotalMilliseconds;
         track.Curve = profile.Curve;
         track.Started = false;
+        track.Kind = kind;
 
         return true;
     }
@@ -404,9 +435,8 @@ public sealed class AnimationEngine
 
     // ---- internals ---------------------------------------------------------
 
-    private ref Track GetOrCreate(long handle)
+    private ref Track GetOrCreate(int existing)
     {
-        int existing = IndexOf(handle);
         if (existing >= 0) return ref _tracks[existing];
 
         if (_count == _tracks.Length)

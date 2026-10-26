@@ -17,6 +17,11 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **An unrelated layout pass no longer restarts a window already moving to the
+  right destination.** Its original deadline and curve survive focus changes and
+  neighboring windows' updates. Opening animations keep their opening profile;
+  intentional profile edits and instant/disabled animation still take effect. The
+  final frame is delivered even when rounding reaches the destination early.
 - **An animation no longer runs in slow motion after a missed frame.** Running
   tracks now consume all elapsed time instead of discarding anything beyond two
   frame intervals. Newly scheduled tracks still start with one frame, so returning
