@@ -1,7 +1,5 @@
 using System.Diagnostics;
-using System.Globalization;
-using Windows.Win32;
-using Windows.Win32.Foundation;
+using Shubbak.TestWindow;
 using Xunit.Abstractions;
 
 namespace Shubbak.Native.Tests;
@@ -21,6 +19,7 @@ public sealed class FocusLatencyTests(ITestOutputHelper output) : IDisposable
     [InlineData(false)]
     public void AForeignUiThreadCannotHoldUpTheFocusRequest(bool foregroundBusy)
     {
+        DesktopLease.Acquire();
         using var previous = new ControlledWindow();
         using var target = new ControlledWindow();
         Assert.True(WindowActions.Focus(previous.Handle));
@@ -48,6 +47,7 @@ public sealed class FocusLatencyTests(ITestOutputHelper output) : IDisposable
     [Fact]
     public void RepeatedForeignFocusActuallyChangesTheForeground()
     {
+        DesktopLease.Acquire();
         using var first = new ControlledWindow();
         using var second = new ControlledWindow();
 
@@ -63,6 +63,7 @@ public sealed class FocusLatencyTests(ITestOutputHelper output) : IDisposable
     [Fact]
     public void WarmForeignFocusRequestsAllocateNothing()
     {
+        DesktopLease.Acquire();
         using var first = new ControlledWindow();
         using var second = new ControlledWindow();
         long allocated = 0;
@@ -86,70 +87,5 @@ public sealed class FocusLatencyTests(ITestOutputHelper output) : IDisposable
     public void Dispose()
     {
         if (_original != 0 && Win32Window.Exists(_original)) WindowActions.Focus(_original);
-    }
-
-    private sealed class ControlledWindow : IDisposable
-    {
-        private readonly Process _process;
-
-        public ControlledWindow()
-        {
-            DesktopLease.Acquire();
-            Process[] running = Process.GetProcessesByName("shubbak-wm");
-            foreach (Process process in running) process.Dispose();
-            if (running.Length != 0) throw new InvalidOperationException("Stop shubbak-wm before testing foreign focus.");
-
-            _process = Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "Shubbak.TestWindow.exe"))
-            {
-                ArgumentList = { "--test-window" },
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                RedirectStandardInput = true,
-            }) ?? throw new InvalidOperationException("could not start the controlled window");
-
-            _process.StandardInput.Close();
-            _process.BeginErrorReadLine();
-
-            try
-            {
-                Handle = (nint)long.Parse(ReadLine(), CultureInfo.InvariantCulture);
-            }
-            catch
-            {
-                Dispose();
-                throw;
-            }
-        }
-
-        public nint Handle { get; }
-
-        private string ReadLine() => _process.StandardOutput.ReadLineAsync()
-            .WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult()
-            ?? throw new InvalidOperationException("the controlled window exited before replying");
-
-        public void MakeBusy()
-        {
-            Assert.True(PInvoke.PostMessage(new HWND(Handle), PInvoke.WM_APP + 1, new WPARAM(2000), default));
-            Assert.Equal("busy", ReadLine());
-        }
-
-        public void WaitUntilReady() => Assert.Equal("ready", ReadLine());
-
-        public void Dispose()
-        {
-            if (!_process.HasExited)
-            {
-                if (Handle != 0) PInvoke.PostMessage(new HWND(Handle), PInvoke.WM_CLOSE, default, default);
-                if (!_process.WaitForExit(5000))
-                {
-                    _process.Kill(entireProcessTree: true);
-                    _process.WaitForExit(5000);
-                }
-            }
-
-            _process.Dispose();
-        }
     }
 }

@@ -17,6 +17,12 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **The palette no longer waits for a busy foreground application to respond before
+  taking the keyboard.** Its focus path used the same input-queue attachment as the
+  daemon, plus a redundant synchronous raise. The controlled busy-application test
+  dropped from 2,025 ms to 9.40 ms, with both foreground and local keyboard focus
+  verified. Foreground diagnostics now report whether the permission fallback was
+  actually attempted rather than reporting a queue attachment.
 - **An unrelated layout pass no longer restarts a window already moving to the
   right destination.** Its original deadline and curve survive focus changes and
   neighboring windows' updates. Opening animations keep their opening profile;

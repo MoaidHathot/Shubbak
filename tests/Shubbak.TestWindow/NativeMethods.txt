@@ -9,3 +9,4 @@ DispatchMessage
 WM_APP
 WM_CLOSE
 WM_QUIT
+PostMessage

@@ -25,12 +25,12 @@ dotnet test
 
 That is the whole of it for most changes. Two things to know:
 
-- **`Shubbak.Native.Tests` and `Shubbak.EndToEnd.Tests` refuse to run while
-  `shubbak-wm` is running.** The first creates real windows, which a running window
-  manager would manage, move and conceal; the second starts a window manager of its
-  own, and two would fight over the desktop. Either way any result would measure the
-  window manager rather than the code under test. Stop it first (`shubbak stop`, or
-  the tray) and start it again after. Every other test project runs anywhere. The
+- **The native, end-to-end, and Dalil foreground tests need `shubbak-wm` stopped.**
+  The native and Dalil tests create real windows, which a running window manager
+  would manage, move and conceal; the end-to-end tests start a window manager of
+  their own, and two would fight over the desktop. These tests share a desktop
+  lease so they cannot interfere with each other. Stop Shubbak first (`shubbak stop`,
+  or the tray) and start it again after. Other test projects run anywhere. The
   end-to-end project gives its daemon a state directory and a pipe of its own through
   `SHUBBAK_STATE_DIR` and `SHUBBAK_INSTANCE`, so it never touches your session; a test
   that needs the same isolation should do the same, and nothing that starts a process

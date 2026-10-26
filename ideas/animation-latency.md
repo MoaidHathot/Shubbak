@@ -87,3 +87,16 @@ so this adds no second scan, dictionary, allocation or per-frame system call.
 The tests compare an interrupted curve with an uninterrupted control, exercise
 duration and curve changes, preserve the settling frame after rounding, and require
 zero allocations for both unchanged and genuinely changed destinations.
+
+## The same stall in Dalil
+
+The follow-up review found Dalil still attaching input queues and synchronously
+calling BringWindowToTop before SetForegroundWindow. A test using the same foreign
+window and a local companion window reproduced a 2025.00 ms wait. Removing those
+two calls reduced it to 9.40 ms. The test verifies both the actual foreground and
+WM_SETFOCUS on the local window, including repairing local focus when it was
+already the foreground window. SetActiveWindow and SetFocus remain on the palette's
+own queue; the existing refused-request input fallback and UIPI boundary remain.
+
+The helper client is shared by the two suites. Dalil's test takes the same desktop
+mutex as the native/end-to-end suites and carries their Requires=Foreground trait.

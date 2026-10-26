@@ -10,29 +10,21 @@ namespace Dalil;
 /// How one attempt to take the foreground went.
 /// </summary>
 /// <param name="InFront">Whether the target was the foreground window afterwards.</param>
-/// <param name="Attached">
-/// Whether the input queues were joined for the attempt. False when there was nothing
-/// to join - no foreground window, or the target's own thread - and when Windows
-/// refused, which it does for a UWP application's frame and across an integrity
-/// boundary.
-/// </param>
 /// <param name="Accepted">
 /// What <c>SetForegroundWindow</c> answered on the first ask. True with
 /// <paramref name="InFront"/> false is the interesting combination: the request was
 /// taken and the switch had not landed by the time it was looked for, which is what a
 /// retry a moment later is for.
 /// </param>
+/// <param name="NudgeTried">Whether a refused foreground request led to an input-permission attempt.</param>
 /// <param name="Nudged">
 /// Whether the second route was taken and Windows accepted the injected event. The
 /// route is tried whenever the first was refused; Windows refuses the event itself
 /// when the window in front runs higher than this process.
 /// </param>
 /// <param name="Holder">The window in front afterwards, when it is not the target.</param>
-internal readonly record struct ForegroundAttempt(bool InFront, bool Attached, bool Accepted, bool Nudged, nint Holder)
+internal readonly record struct ForegroundAttempt(bool InFront, bool Accepted, bool NudgeTried, bool Nudged, nint Holder)
 {
-    /// <summary>Whether the second route was tried at all - it is, whenever the first was refused.</summary>
-    public bool NudgeTried => !Attached || !Accepted;
-
     /// <summary>The attempt in a few words, for the log.</summary>
     public string Describe()
     {
@@ -43,7 +35,7 @@ internal readonly record struct ForegroundAttempt(bool InFront, bool Attached, b
             : ", nudge refused - is the window in front running higher than Dalil?";
 
         return $"{Foreground.Describe(Holder)} kept the foreground " +
-               $"(attach {(Attached ? "ok" : "refused")}, request {(Accepted ? "accepted" : "refused")}{nudge})";
+               $"(request {(Accepted ? "accepted" : "refused")}{nudge})";
     }
 }
 
@@ -69,20 +61,14 @@ internal readonly record struct ForegroundAttempt(bool InFront, bool Attached, b
 /// focus before. That is the intermittent "I can't type into it" this exists to fix.
 /// </para>
 /// <para>
-/// So the input queues are attached instead, which is the documented workaround and
-/// the same one <c>WindowActions.Focus</c> has always used on the window manager's
-/// side. The attachment is always undone, including on failure: leaving two input
-/// queues joined couples their input state and produces symptoms that look like
-/// random keyboard freezes across the whole desktop.
+/// Keep the input queues separate. Joining the foreign foreground's queue made
+/// opening the palette wait on that application's UI thread: a controlled two-second
+/// pause held Take for 2025 ms. BringWindowToTop also synchronously activated across
+/// the joined queues and duplicated what SetForegroundWindow already does. Neither
+/// is needed to set the palette's own active window and keyboard focus.
 /// </para>
 /// <para>
-/// And when that is refused, one more thing. <c>AttachThreadInput</c> to the thread
-/// behind a UWP application's frame - Settings, the Store, Media Player, whatever
-/// <c>ApplicationFrameHost</c> is showing - fails with access denied, and so, then,
-/// does every <c>SetForegroundWindow</c>. On a desktop straight after logon the window
-/// in front is very often exactly such a frame, which is why the palette's first open
-/// of a session was the one that failed and the second - by which time Windows had
-/// moved the foreground on - the one that worked. The way past it is the other clause
+/// When the direct request is refused, the existing fallback uses the other clause
 /// of the rule: a process that has just <em>provided</em> input may take the
 /// foreground. So this process provides one: a key-up, through <c>SendInput</c>, of a
 /// key that nobody has bound and nobody is holding. It reaches the window in front as
@@ -121,58 +107,42 @@ internal static class Foreground
         if (foreground == target)
         {
             PInvoke.SetFocus(target);
-            return new ForegroundAttempt(true, false, true, false, 0);
+            return new ForegroundAttempt(true, true, false, false, 0);
         }
 
-        uint ours = PInvoke.GetCurrentThreadId();
-        uint theirs = foreground.IsNull ? 0 : PInvoke.GetWindowThreadProcessId(foreground, null);
-
-        bool attached = false;
-        bool accepted;
-
-        try
-        {
-            if (theirs != 0 && theirs != ours)
-                attached = PInvoke.AttachThreadInput(ours, theirs, true);
-
-            accepted = Ask(target);
-        }
-        finally
-        {
-            if (attached) PInvoke.AttachThreadInput(ours, theirs, false);
-        }
+        bool accepted = Ask(target);
 
         HWND after = PInvoke.GetForegroundWindow();
 
-        if (after == target) return new ForegroundAttempt(true, attached, accepted, false, 0);
+        if (after == target) return new ForegroundAttempt(true, accepted, false, false, 0);
 
         // Refused outright, rather than accepted and not yet landed: the second route.
         // Not when the request was taken, because then a retry a moment later is the
         // right answer and an injected key is a stranger thing to do than to wait.
         // The report keeps the first answer, so that NudgeTried reads the same
         // condition this does.
+        bool tried = !accepted;
         bool nudged = false;
 
-        if (!attached || !accepted)
+        if (tried)
         {
             nudged = Nudge();
             if (nudged) _ = Ask(target);
             after = PInvoke.GetForegroundWindow();
         }
 
-        return new ForegroundAttempt(after == target, attached, accepted, nudged, after == target ? 0 : (nint)after.Value);
+        return new ForegroundAttempt(after == target, accepted, tried, nudged, after == target ? 0 : (nint)after.Value);
     }
 
     /// <summary>Asks for the foreground, the active window and the focus, in that order.</summary>
     /// <remarks>
     /// All three, and in this order. SetForegroundWindow decides which window the system
     /// considers in front; SetActiveWindow and SetFocus decide where keys go within the
-    /// input queue this thread is now attached to. Doing only the first is what produced
+    /// palette's own input queue. Doing only the first is what produced
     /// a palette that was visibly in front and still received nothing.
     /// </remarks>
     private static bool Ask(HWND target)
     {
-        PInvoke.BringWindowToTop(target);
         bool accepted = PInvoke.SetForegroundWindow(target);
         PInvoke.SetActiveWindow(target);
         PInvoke.SetFocus(target);

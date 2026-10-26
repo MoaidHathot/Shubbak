@@ -427,7 +427,7 @@ public sealed class PaletteWindow : CompanionWindow
     /// <para>
     /// One case is not transient and no amount of retrying will fix it: the window
     /// being left behind belongs to a process at a higher integrity level.
-    /// <c>AttachThreadInput</c> across that boundary is refused by UIPI, which is the
+    /// The fallback's <c>SendInput</c> across that boundary is refused by UIPI, which is the
     /// same wall that stops the window manager tiling elevated windows. The final
     /// warning, when the host gives up, says so rather than leaving the user to
     /// conclude the palette is broken.
@@ -463,7 +463,7 @@ public sealed class PaletteWindow : CompanionWindow
                 // it is the answer to "why did the first open ever fail".
                 Log.Debug(LogCategory.Wm,
                     $"the palette took the keyboard after a nudge, {TimeSinceShown.TotalMilliseconds:F0} ms after opening " +
-                    $"(attach {(attempt.Attached ? "ok" : "refused")}, request {(attempt.Accepted ? "accepted" : "refused")})");
+                    $"(request {(attempt.Accepted ? "accepted" : "refused")})");
             }
 
             _hadForeground = true;

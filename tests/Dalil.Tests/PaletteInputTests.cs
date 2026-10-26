@@ -857,7 +857,7 @@ public class PaletteInputTests
         Assert.Contains(schedule, at => !PaletteInput.IsSettlingIn(at));
 
         // And the loop's own attempts are paced no faster than a few frames apart, so
-        // a moving mouse does not turn the grace into fifty joined-and-split queues.
+        // a moving mouse does not turn the grace into fifty foreground requests.
         Assert.InRange(PaletteInput.RetryInterval, TimeSpan.FromMilliseconds(16), schedule[0]);
     }
 
@@ -866,25 +866,25 @@ public class PaletteInputTests
     {
         // The one fact anybody investigating a palette that flickered will want, and
         // the fact the old bool threw away.
-        var refusedThenNudged = new ForegroundAttempt(InFront: false, Attached: false, Accepted: false, Nudged: true, Holder: 0);
-        var pending = new ForegroundAttempt(InFront: false, Attached: true, Accepted: true, Nudged: false, Holder: 0);
-        var elevated = new ForegroundAttempt(InFront: false, Attached: false, Accepted: false, Nudged: false, Holder: 0);
+        var refusedThenNudged = new ForegroundAttempt(InFront: false, Accepted: false, NudgeTried: true, Nudged: true, Holder: 0);
+        var pending = new ForegroundAttempt(InFront: false, Accepted: true, NudgeTried: false, Nudged: false, Holder: 0);
+        var elevated = new ForegroundAttempt(InFront: false, Accepted: false, NudgeTried: true, Nudged: false, Holder: 0);
 
         // The second route is tried exactly when the first was refused.
         Assert.True(refusedThenNudged.NudgeTried);
         Assert.False(pending.NudgeTried);
         Assert.True(elevated.NudgeTried);
 
-        Assert.Equal("nothing kept the foreground (attach refused, request refused, nudged and still refused)", refusedThenNudged.Describe());
-        Assert.Equal("nothing kept the foreground (attach ok, request accepted)", pending.Describe());
+        Assert.Equal("nothing kept the foreground (request refused, nudged and still refused)", refusedThenNudged.Describe());
+        Assert.Equal("nothing kept the foreground (request accepted)", pending.Describe());
         Assert.Equal(
-            "nothing kept the foreground (attach refused, request refused, nudge refused - is the window in front running higher than Dalil?)",
+            "nothing kept the foreground (request refused, nudge refused - is the window in front running higher than Dalil?)",
             elevated.Describe());
 
         // And the two ways of getting there are told apart, because the second is the
         // one that says a UWP frame was in the way.
-        Assert.Equal("in front", new ForegroundAttempt(true, true, true, false, 0).Describe());
-        Assert.Equal("in front, after a nudge", new ForegroundAttempt(true, false, false, true, 0).Describe());
+        Assert.Equal("in front", new ForegroundAttempt(true, true, false, false, 0).Describe());
+        Assert.Equal("in front, after a nudge", new ForegroundAttempt(true, false, true, true, 0).Describe());
 
         // A handle that is not a window is described as nothing rather than looked up.
         Assert.Equal("nothing", Foreground.Describe(0));

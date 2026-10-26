@@ -19,10 +19,6 @@ SetForegroundWindow
 SetActiveWindow
 SetFocus
 GetForegroundWindow
-BringWindowToTop
-AttachThreadInput
-GetWindowThreadProcessId
-GetCurrentThreadId
 IsWindow
 WM_ACTIVATE
 WM_CHAR
