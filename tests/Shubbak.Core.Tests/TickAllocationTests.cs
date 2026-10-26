@@ -46,11 +46,11 @@ public sealed class TickAllocationTests
         // Warm up first: the first call through jits the method, and tiered
         // compilation allocates on the runtime's behalf in a way that has nothing to
         // do with what Tick does afterwards.
-        for (int i = 0; i < 200; i++) engine.Tick(1, scratch);
+        for (int i = 0; i < 200; i++) engine.Tick(1, scratch, firstFrameMilliseconds: 1);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
 
-        for (int i = 0; i < 1000; i++) engine.Tick(1, scratch);
+        for (int i = 0; i < 1000; i++) engine.Tick(1, scratch, firstFrameMilliseconds: 1);
 
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
@@ -73,11 +73,11 @@ public sealed class TickAllocationTests
                 AnimationKind.WindowMove);
         }
 
-        for (int i = 0; i < 200; i++) engine.Tick(1, scratch);
+        for (int i = 0; i < 200; i++) engine.Tick(1, scratch, firstFrameMilliseconds: 1);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
 
-        for (int i = 0; i < 1000; i++) engine.Tick(1, scratch);
+        for (int i = 0; i < 1000; i++) engine.Tick(1, scratch, firstFrameMilliseconds: 1);
 
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
@@ -97,7 +97,7 @@ public sealed class TickAllocationTests
 
         for (int i = 0; i < 200; i++)
         {
-            engine.Tick(1, scratch);
+            engine.Tick(1, scratch, firstFrameMilliseconds: 1);
             for (int handle = 1; handle <= 8; handle++)
                 engine.Retarget(handle, new Rect(0, 0, 100, 100), new Rect(950, 720, 300, 200), AnimationKind.WindowMove);
         }
@@ -106,7 +106,7 @@ public sealed class TickAllocationTests
 
         for (int i = 0; i < 500; i++)
         {
-            engine.Tick(1, scratch);
+            engine.Tick(1, scratch, firstFrameMilliseconds: 1);
 
             for (int handle = 1; handle <= 8; handle++)
             {

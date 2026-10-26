@@ -172,6 +172,7 @@ internal struct Track
     public double Elapsed;
     public double Duration;
     public Easing Curve;
+    public bool Started;
 }
 
 /// <summary>A window's position for the current frame.</summary>
@@ -281,6 +282,7 @@ public sealed class AnimationEngine
         track.Elapsed = 0;
         track.Duration = profile.Duration.TotalMilliseconds;
         track.Curve = profile.Curve;
+        track.Started = false;
 
         return true;
     }
@@ -290,8 +292,14 @@ public sealed class AnimationEngine
     /// </summary>
     /// <param name="deltaMilliseconds">Time since the previous tick.</param>
     /// <param name="destination">Receives one entry per moving window.</param>
+    /// <param name="firstFrameMilliseconds">
+    /// Initial advance for a track that has not been ticked since it was scheduled.
+    /// The daemon supplies one display interval: its preceding frame may predate this
+    /// track, so that frame's elapsed time does not belong to it. Null uses the delta,
+    /// for callers that supply time measured from the track's start themselves.
+    /// </param>
     /// <returns>How many entries were written.</returns>
-    public int Tick(double deltaMilliseconds, Span<AnimationFrame> destination)
+    public int Tick(double deltaMilliseconds, Span<AnimationFrame> destination, double? firstFrameMilliseconds = null)
     {
         if (_count == 0) return 0;
 
@@ -307,7 +315,15 @@ public sealed class AnimationEngine
             // - a branch on every track on every frame, protecting against a state the
             // engine has no way to produce. Tracks stop existing by being left out of
             // the compaction below, not by being marked dead.
-            track.Elapsed += deltaMilliseconds;
+
+            // Only the first frame needs protection from time before this track
+            // existed. Capping every delta at two intervals made a 100 ms stall count
+            // as only 33 ms at 60 Hz, stretching a 140 ms motion long past its deadline.
+            // Per track, because a layout can start or retarget one while others run.
+            track.Elapsed += !track.Started && firstFrameMilliseconds is { } first
+                ? first
+                : deltaMilliseconds;
+            track.Started = true;
 
             double progress = track.Duration <= 0 ? 1 : Math.Clamp(track.Elapsed / track.Duration, 0, 1);
             double eased = track.Curve.Evaluate(progress);

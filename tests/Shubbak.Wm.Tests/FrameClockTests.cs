@@ -100,17 +100,6 @@ public sealed class FrameClockTests
     }
 
     [Fact]
-    public void TheFloorAndTheClampAgreeOnTheInterval()
-    {
-        // Both are defined in terms of the pump's frame interval and neither can see
-        // it directly. If one is changed without the other, animations either stutter
-        // or run at the wrong speed, and the two failures look nothing alike.
-        Assert.Equal(FrameMs * 2, WmDaemon.ClampAnimationStep(1000, FrameMs));
-        Assert.True(WmDaemon.IsFrameDue(FrameMs, FrameMs));
-        Assert.False(WmDaemon.IsFrameDue(FrameMs / 2, FrameMs));
-    }
-
-    [Fact]
     public void AFreshFrameWaitsTheWholeInterval()
     {
         Assert.Equal(FrameMs, WmDaemon.RemainingUntilFrame(0, FrameMs).TotalMilliseconds, 6);

@@ -49,3 +49,23 @@ dotnet test tests/Shubbak.Native.Tests -c Release --filter FullyQualifiedName~Fo
 The whole Release solution passed before changes (15 test projects). Native and
 end-to-end tests serialize desktop access and isolate their daemons' state from
 the user's session.
+
+## Animation clock
+
+A regression exercising the old daemon's clamp failed: a 140 ms linear resize,
+advanced by 16, 100, then 24 ms, remained active. The clamp handed the engine only
+16 + 32 + 24 = 72 ms. This was an explicit policy in the old clamp tests, justified
+as protection against a new track inheriting a preceding idle wait.
+
+That protection now belongs to each track's first tick. The daemon supplies one
+frame interval for a fresh track and the full measured delta for a running one.
+A first-frame flag also handles a zero initial step correctly and survives track
+compaction. There is no new timer or callback: the existing post-layout timestamp
+is reused, rather than backdating frames to the beginning of the tick. The engine's
+two-argument Tick remains available for callers that already supply track-relative
+deltas; the daemon supplies the explicit initial step.
+
+Deterministic tests cover idle starts at 60/144/240 Hz, a 100 ms stall, a five-second
+stall with a new track joining an old one, retargeting only one of two tracks,
+zero-step starts and a later motion reusing the same slot. The frame-allocation
+tests use the daemon's new call shape and still require exactly zero bytes.

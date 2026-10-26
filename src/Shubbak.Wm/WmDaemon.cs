@@ -919,46 +919,6 @@ public sealed class WmDaemon : IDisposable
 
     private readonly TimerResolution _timerResolution = new(1);
 
-    /// <summary>
-    /// How far an animation may be advanced by a single tick.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// The tick measures the real gap since the previous pass and hands it to the
-    /// animation engine, which adds it to the elapsed time of every track. That is
-    /// right for a track already in flight and wrong for one created on the same tick,
-    /// because the gap says nothing about how long <i>that</i> animation has been
-    /// running - it has been running for none of it.
-    /// </para>
-    /// <para>
-    /// The idle wait is a quarter of a second, and rightly so. But a layout pass runs
-    /// before the animation is advanced, so the order within one tick was: wait up to
-    /// 250 ms, create a track with zero elapsed, then add up to 250 ms to it. A
-    /// window-move animation is 140 ms by default, so it completed on its first frame
-    /// and the window teleported.
-    /// </para>
-    /// <para>
-    /// That is why the animations looked unreliable rather than absent: it needed the
-    /// tick that starts the animation to follow a long wait, which means the first
-    /// action after the desktop has been idle, and almost never during a burst of
-    /// activity. "It animates while I'm working and not when I come back to it" is an
-    /// accurate description and points nowhere near a delta.
-    /// </para>
-    /// <para>
-    /// Two frames, so a single missed one is still caught up and anything longer
-    /// stretches the animation in wall-clock time rather than collapsing it. Slower is
-    /// invisible; instant is the bug.
-    /// </para>
-    /// </remarks>
-    /// <param name="deltaMs">Elapsed time the tick wants to hand to the engine.</param>
-    /// <param name="frameMs">
-    /// One frame, in milliseconds. Passed rather than read from configuration so the
-    /// rule holds at whatever rate the frame clock is running at, and so a test can
-    /// state the rate it is asserting about instead of inheriting today's default.
-    /// </param>
-    internal static double ClampAnimationStep(double deltaMs, double frameMs) =>
-        Math.Min(deltaMs, frameMs * 2);
-
     private void OnTick()
     {
         // A thread-local read, not a collection or a walk. Taken here and again in
@@ -1036,7 +996,9 @@ public sealed class WmDaemon : IDisposable
             {
                 long beforeFrame = GC.GetAllocatedBytesForCurrentThread();
 
-                MaybeAdvanceFrame(now);
+                // Reuse the timestamp at emission, after layout and focus. The tick's
+                // opening timestamp backdated the frame by that work's full cost.
+                MaybeAdvanceFrame(afterLayout);
 
                 _frameAllocation.Record(GC.GetAllocatedBytesForCurrentThread() - beforeFrame);
             }
@@ -1224,15 +1186,11 @@ public sealed class WmDaemon : IDisposable
             _animatingMs += sinceFrameMs;
         }
 
-        // The first frame is advanced by one interval rather than by the nothing that
-        // has elapsed. Advanced by nothing, every track is still at its start, the
-        // engine emits no rectangle, and the window first moves one whole interval
-        // later - 17 ms at 60 Hz - after a pass that ran because the user pressed a
-        // key. A frame posted now is composed at the next refresh, so the position
-        // for one interval hence is the honest one to post, and it is the same first
-        // step a motion starting mid-flight has always taken, since that one is
-        // advanced by the gap since the previous frame.
-        AdvanceAnimation(first ? frameMs : ClampAnimationStep(sinceFrameMs, frameMs));
+        // Each newly scheduled track starts with one interval, so it moves on its
+        // first frame without consuming time before it existed. Already-running
+        // tracks get the whole elapsed interval, including missed frames. The engine
+        // distinguishes them even when a layout retargets only some of the windows.
+        AdvanceAnimation(sinceFrameMs, frameMs);
 
         _lastFrameTicks = now;
     }
@@ -5784,12 +5742,12 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>Drives one frame of in-flight window motion.</summary>
-    private void AdvanceAnimation(double deltaMs)
+    private void AdvanceAnimation(double deltaMs, double firstFrameMs)
     {
         if (_frameScratch.Length < _animation.ActiveCount)
             _frameScratch = new AnimationFrame[Math.Max(_animation.ActiveCount * 2, 128)];
 
-        int count = _animation.Tick(deltaMs, _frameScratch);
+        int count = _animation.Tick(deltaMs, _frameScratch, firstFrameMs);
 
         // Counted before the early return, and the batch size recorded even when it is
         // zero. The engine now declines to emit a frame for a window whose rectangle

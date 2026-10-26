@@ -17,6 +17,12 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **An animation no longer runs in slow motion after a missed frame.** Running
+  tracks now consume all elapsed time instead of discarding anything beyond two
+  frame intervals. Newly scheduled tracks still start with one frame, so returning
+  from idle or retargeting one window during another's motion cannot finish a fresh
+  animation instantly. Frame timing is measured after layout and focus work rather
+  than before it, avoiding back-to-back frames after a slow layout pass.
 - **Closing a window could stall the remaining window's animation while focus changed.**
   The foreground hand-off no longer joins the departing application's input queue.
   In a controlled cross-process test, an application busy for two seconds held the
