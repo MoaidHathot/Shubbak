@@ -12,3 +12,4 @@ WM_QUIT
 PostMessage
 GetForegroundWindow
 GetLastInputInfo
+SystemParametersInfo

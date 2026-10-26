@@ -17,6 +17,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Windows' animation preference is now applied before the first layout and IPC
+  reply on startup or resume.** Previously the daemon assumed animation was allowed
+  until its first periodic display check, briefly overriding a disabled preference
+  and reporting the default instead of the system's setting.
 - **The palette no longer waits for a busy foreground application to respond before
   taking the keyboard.** Its focus path used the same input-queue attachment as the
   daemon, plus a redundant synchronous raise. The controlled busy-application test

@@ -154,3 +154,36 @@ Release tests, documented test count, all 39 config snippets, 30 example checks,
 the example config, release-version consistency and the generated diagnostics
 catalogue passed. Tracked text files were checked for LF endings and the working
 tree for a `nul` file. No temporary timing instrumentation remains in production.
+
+## CI follow-up, 2026-10-27
+
+The first hosted run of these changes
+([40414798593](https://github.com/MoaidHathot/Shubbak/actions/runs/40414798593))
+passed the build and every native/keyboard test, but failed both new removal cases:
+their windows reached the expanded rectangle in 62-70 ms with zero redraws observed,
+including the configured 1000 ms motion. The test had assumed that enabling motion
+in the config was enough, although Shubbak also respects the system preference.
+
+Reproduced locally by temporarily clearing `SPI_SETCLIENTAREAANIMATION`: both cases
+failed identically, reaching their targets in 56-58 ms with zero redraws. The fixture
+now explicitly controls that session preference under the desktop lease, restores
+the original value on every exit, and does not persist or broadcast the change. A
+separate case verifies that system-disabled animations really do place immediately;
+a native test verifies restoration when the test body throws. The daemon reports
+the setup facts before any motion, so an unavailable prerequisite is visible.
+
+That early report exposed a second issue: startup had not yet queried the system
+and could report the default `True` while Windows said `False`. Startup/resume now
+read display preferences with their initial monitor snapshot, before layout or IPC,
+and stamp the poll time so the first tick does not repeat the read. The fixture also
+requests its initial focus through `focus-window` instead of racing the daemon with
+a second foreground request from the test process.
+
+For the short motion, recorded frames prove animation even if the runner does not
+return from IPC inside 140 ms. The long scenario still requires redundant mid-flight
+redraws, and both animated cases retain their deadline and zero-allocation checks.
+
+The full Release suite was run with the same coverage collector as CI, starting
+with system animations disabled: **3607 passed, zero failures or skips**. The session
+preference was still disabled at the end of the suite, proving the fixtures restored
+it, and was then restored to the user's original setting before restarting Shubbak.

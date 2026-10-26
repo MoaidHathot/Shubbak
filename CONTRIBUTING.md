@@ -35,6 +35,9 @@ That is the whole of it for most changes. Two things to know:
   `SHUBBAK_STATE_DIR` and `SHUBBAK_INSTANCE`, so it never touches your session; a test
   that needs the same isolation should do the same, and nothing that starts a process
   should wait on it without a timeout.
+  The animation scenarios temporarily set Windows' session animation preference
+  under that same lease, restore it on exit, and cover both enabled and disabled
+  motion. They require a local desktop; the daemon disables motion in remote sessions.
 - **The published binary is not the built one.** `dotnet build` gives you a managed
   apphost; what ships is NativeAOT. To try a change as a user would:
 

@@ -133,10 +133,21 @@ public sealed class WindowManagerSmokeTests : IDisposable
     // ---- the scenario ----------------------------------------------------------------
 
     [Theory]
-    [InlineData(140)]
-    [InlineData(1000)]
-    public void RemovingATileFinishesItsAnimationDespiteRepeatedRedraws(int duration)
+    [InlineData(140, true)]
+    [InlineData(1000, true)]
+    [InlineData(140, false)]
+    public void RemovingATileFinishesItsAnimationDespiteRepeatedRedraws(int duration, bool systemAnimations)
     {
+        // A configured animation is still disabled by Windows' accessibility setting
+        // or a remote session. The hosted runner's preference is not a test input we
+        // may assume: the first CI run placed both targets instantly and failed the
+        // in-flight assertion. Control that input under the desktop lease and restore
+        // it on every exit. The false case holds the daemon's opt-out to account too.
+        bool remote = DisplayPreferences.IsRemoteSession();
+        _output.WriteLine($"System animation preference: {AnimationPreferenceScope.Read()}, remote session: {remote}");
+        Assert.False(remote, "The animation integration scenario requires a local desktop; the daemon disables animation in remote sessions.");
+        using var preference = new AnimationPreferenceScope(systemAnimations);
+
         // The daemon measures physical pixels; so must the test reading back the real
         // window. No windows are created in this process by the end-to-end suite.
         MonitorSource.EnableDpiAwareness();
@@ -165,6 +176,17 @@ public sealed class WindowManagerSmokeTests : IDisposable
         using var right = new ControlledWindow();
         Process daemon = StartDaemon();
         WaitFor(() => IpcClient.IsServerRunning(_pipe), StartupTimeout, "the animation test daemon", daemon);
+        IpcResponse setup = Send("diagnose", "animation test prerequisites");
+        Assert.True(setup.Ok);
+        string setupReport = setup.Data ?? string.Empty;
+        foreach (string line in setupReport.Split('\n'))
+        {
+            if (line.Contains("**Enabled**", StringComparison.Ordinal) ||
+                line.Contains("**System allows animation**", StringComparison.Ordinal) ||
+                line.Contains("**Asking for**", StringComparison.Ordinal))
+                _output.WriteLine(line);
+        }
+        Assert.Contains($"**System allows animation**: {systemAnimations}", setupReport, StringComparison.Ordinal);
         WindowInfo before = WaitForWindow(w => w.Handle == left.Handle && w.Width > 0, "the left tile");
         WindowInfo other = WaitForWindow(w => w.Handle == right.Handle && w.Width > 0, "the right tile");
         StateSnapshot state = Query("state", IpcJsonContext.Default.StateSnapshot);
@@ -173,9 +195,11 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         // Close the focused tile, rather than assuming enumeration chose it. This
         // makes the test exercise the survivor's focus hand-off on every run.
-        Assert.True(WindowActions.Focus(right.Handle),
-            $"test setup could not focus the right tile; foreground [{Win32Window.GetClassName(Win32Window.GetForeground())}], " +
-            $"pid {Win32Window.GetProcessId(Win32Window.GetForeground())}, last input {ControlledWindow.LastInputTime}");
+        // Go through the daemon so there is one owner of the focus transition. A
+        // direct SetForegroundWindow from this test raced the daemon's startup focus
+        // and could be refused while the other test window was being activated.
+        IpcResponse focus = Send("command", $"focus-window {right.Handle.ToString(CultureInfo.InvariantCulture)}");
+        Assert.True(focus.Ok, $"test setup could not focus the right tile: {focus.Error}");
         WaitForWindow(w => w.Handle == right.Handle && w.Focused, "the right tile to be focused in the tree");
         WaitFor(() => Win32Window.GetForeground() == right.Handle, ManageTimeout, "the right tile's foreground", daemon);
         int focusBefore = left.ForegroundCount;
@@ -199,7 +223,11 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
         double elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
         _output.WriteLine($"{duration} ms removal animation: {elapsed:F1} ms including detection, {redraws} redundant redraws");
-        Assert.True(redraws > 0, "the test never observed an in-flight animation");
+        // The short motion can finish while a loaded/coverage-instrumented runner is
+        // waiting for its IPC reply. Its recorded frames below still prove animation;
+        // the long case is the one that must exercise redundant mid-flight layouts.
+        if (systemAnimations && duration == 1000)
+            Assert.True(redraws > 0, $"the test never observed an in-flight animation. Prerequisites:\n{setupReport}");
         Assert.True(At(left.Handle, expanded), $"the survivor had not arrived after {elapsed:F0} ms and {redraws} redraws");
         WaitFor(() => left.ForegroundCount > focusBefore, ManageTimeout, "focus to reach the survivor", daemon,
             () => $"foreground class {Win32Window.GetClassName(Win32Window.GetForeground())}, " +
@@ -222,6 +250,10 @@ public sealed class WindowManagerSmokeTests : IDisposable
         }
 
         Assert.Contains("  - frame p99 0 B, max 0 B", report, StringComparison.Ordinal);
+        if (systemAnimations)
+            Assert.Matches(@"\*\*Motions\*\*: [1-9]\d*", report);
+        else
+            Assert.Contains("Nothing has been animated yet", report, StringComparison.Ordinal);
         Assert.DoesNotContain(" ERR ", report, StringComparison.Ordinal);
         Assert.True(RunCli("stop", StopTimeout).Exit == 0);
         WaitForExit(daemon, "the animation test daemon to exit");

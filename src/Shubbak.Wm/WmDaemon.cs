@@ -5952,7 +5952,17 @@ public sealed class WmDaemon : IDisposable
 
     // ---- monitors ----------------------------------------------------------
 
-    private void SyncMonitors() => SyncMonitors(MonitorSource.Enumerate());
+    private void SyncMonitors()
+    {
+        IReadOnlyList<MonitorInfo> monitors = MonitorSource.Enumerate();
+
+        // Startup and resume must know the system's animation policy before the
+        // first layout or IPC reply. Waiting for the periodic poll left the initial
+        // pass using the default "allowed", even when Windows had disabled motion.
+        RefreshDisplayPreferences(monitors);
+        SyncMonitors(monitors);
+        _lastMonitorSyncTicks = Stopwatch.GetTimestamp();
+    }
 
     private void SyncMonitors(IReadOnlyList<MonitorInfo> current)
     {
