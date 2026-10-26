@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using Windows.Win32;
 using Windows.Win32.Foundation;
+using Windows.Win32.UI.Input.KeyboardAndMouse;
 
 namespace Shubbak.TestWindow;
 
@@ -42,6 +43,26 @@ public sealed class ControlledWindow : IDisposable
     }
 
     public nint Handle { get; }
+
+    public int ForegroundCount
+    {
+        get
+        {
+            if (!PInvoke.PostMessage(new HWND(Handle), PInvoke.WM_APP + 2, default, default))
+                throw new InvalidOperationException("the controlled window is not accepting messages");
+            return int.Parse(ReadLine(), CultureInfo.InvariantCulture);
+        }
+    }
+
+    public static unsafe uint LastInputTime
+    {
+        get
+        {
+            var info = new LASTINPUTINFO { cbSize = (uint)sizeof(LASTINPUTINFO) };
+            if (!PInvoke.GetLastInputInfo(ref info)) throw new InvalidOperationException("could not read the last input time");
+            return info.dwTime;
+        }
+    }
 
     private string ReadLine() => _process.StandardOutput.ReadLineAsync()
         .WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult()

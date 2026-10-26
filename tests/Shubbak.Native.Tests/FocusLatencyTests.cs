@@ -27,11 +27,13 @@ public sealed class FocusLatencyTests(ITestOutputHelper output) : IDisposable
         Assert.Equal(previous.Handle, Win32Window.GetForeground());
 
         ControlledWindow busy = foregroundBusy ? previous : target;
+        int focusBefore = target.ForegroundCount;
         busy.MakeBusy();
 
         long started = Stopwatch.GetTimestamp();
         bool accepted = WindowActions.Focus(target.Handle);
         double elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        uint inputAfterRequest = ControlledWindow.LastInputTime;
         output.WriteLine($"busy {(foregroundBusy ? "foreground" : "target")}: focus returned in {elapsed:F2} ms, accepted={accepted}");
 
         // Not a microbenchmark. A generous bound distinguishes a posted request from
@@ -40,8 +42,13 @@ public sealed class FocusLatencyTests(ITestOutputHelper output) : IDisposable
         Assert.True(accepted, Desktop.WhyNotInFront("the requested window"));
         busy.WaitUntilReady();
 
-        TestWindow.PumpUntil(() => Win32Window.GetForeground() == target.Handle);
-        Assert.Equal(target.Handle, Win32Window.GetForeground());
+        // Observe actual arrival on the target's UI thread. Requiring it still to
+        // own the foreground after a two-second wait falsely fails when it arrived
+        // promptly and another application or the user subsequently took focus.
+        TestWindow.PumpUntil(() => target.ForegroundCount > focusBefore);
+        int arrivals = target.ForegroundCount;
+        output.WriteLine($"target foreground arrivals {focusBefore} -> {arrivals}; input after request {inputAfterRequest}, now {ControlledWindow.LastInputTime}");
+        Assert.True(arrivals > focusBefore, Desktop.WhyNotInFront("the target after it resumed"));
     }
 
     [Fact]

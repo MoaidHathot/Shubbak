@@ -4,6 +4,9 @@ using System.Text;
 using System.Text.Json;
 using Shubbak.Ipc;
 using Shubbak.Native;
+using Shubbak.TestWindow;
+using Shubbak.Core.Geometry;
+using Xunit.Abstractions;
 
 namespace Shubbak.EndToEnd.Tests;
 
@@ -61,9 +64,11 @@ public sealed class WindowManagerSmokeTests : IDisposable
     private readonly List<Process> _started = [];
     private readonly StringBuilder _daemonOutput = new();
     private readonly DesktopLease _desktop;
+    private readonly ITestOutputHelper _output;
 
-    public WindowManagerSmokeTests()
+    public WindowManagerSmokeTests(ITestOutputHelper output)
     {
+        _output = output;
         // The desktop first, from the native tests' host if it has it; then the check
         // for a window manager that is really the user's. See DesktopLease.
         _desktop = DesktopLease.Take();
@@ -126,6 +131,108 @@ public sealed class WindowManagerSmokeTests : IDisposable
         """;
 
     // ---- the scenario ----------------------------------------------------------------
+
+    [Theory]
+    [InlineData(140)]
+    [InlineData(1000)]
+    public void RemovingATileFinishesItsAnimationDespiteRepeatedRedraws(int duration)
+    {
+        // The daemon measures physical pixels; so must the test reading back the real
+        // window. No windows are created in this process by the end-to-end suite.
+        MonitorSource.EnableDpiAwareness();
+        File.WriteAllText(_config, $$"""
+            general {
+                default-layout "splith"
+                reload-on-save #false
+            }
+            animation {
+                enabled #true
+                fps 60
+                window-move duration={{duration}} curve="linear"
+            }
+            workspaces { workspace "e2e"; }
+            rules {
+                rule "only test-owned windows" {
+                    match { !process "Shubbak.TestWindow"; }
+                    do { ignore; }
+                }
+            }
+            """);
+
+        // Before the daemon, so the helper's guard still refuses an ordinary live
+        // window manager. These are the only windows the isolated config may adopt.
+        using var left = new ControlledWindow();
+        using var right = new ControlledWindow();
+        Process daemon = StartDaemon();
+        WaitFor(() => IpcClient.IsServerRunning(_pipe), StartupTimeout, "the animation test daemon", daemon);
+        WindowInfo before = WaitForWindow(w => w.Handle == left.Handle && w.Width > 0, "the left tile");
+        WindowInfo other = WaitForWindow(w => w.Handle == right.Handle && w.Width > 0, "the right tile");
+        StateSnapshot state = Query("state", IpcJsonContext.Default.StateSnapshot);
+        Assert.Equal(2, Assert.Single(state.Workspaces, w => w.Name == "e2e").WindowCount);
+        WaitFor(() => At(left.Handle, before) && At(right.Handle, other), ManageTimeout, "both posted tiles to arrive", daemon);
+
+        // Close the focused tile, rather than assuming enumeration chose it. This
+        // makes the test exercise the survivor's focus hand-off on every run.
+        Assert.True(WindowActions.Focus(right.Handle),
+            $"test setup could not focus the right tile; foreground [{Win32Window.GetClassName(Win32Window.GetForeground())}], " +
+            $"pid {Win32Window.GetProcessId(Win32Window.GetForeground())}, last input {ControlledWindow.LastInputTime}");
+        WaitForWindow(w => w.Handle == right.Handle && w.Focused, "the right tile to be focused in the tree");
+        WaitFor(() => Win32Window.GetForeground() == right.Handle, ManageTimeout, "the right tile's foreground", daemon);
+        int focusBefore = left.ForegroundCount;
+        uint inputBefore = ControlledWindow.LastInputTime;
+
+        TimeSpan cpuBefore = daemon.TotalProcessorTime;
+        long start = Stopwatch.GetTimestamp();
+        WindowActions.Close(right.Handle);
+        WindowInfo expanded = WaitForWindow(
+            w => w.Handle == left.Handle && w.Width > before.Width,
+            "the survivor's expanded destination");
+
+        int redraws = 0;
+        TimeSpan deadline = TimeSpan.FromMilliseconds(Math.Max(500, duration * 2));
+        while (!At(left.Handle, expanded) && Stopwatch.GetElapsedTime(start) < deadline)
+        {
+            Assert.True(Send("command", "wm-redraw").Ok);
+            redraws++;
+            Thread.Sleep(10);
+        }
+
+        double elapsed = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        _output.WriteLine($"{duration} ms removal animation: {elapsed:F1} ms including detection, {redraws} redundant redraws");
+        Assert.True(redraws > 0, "the test never observed an in-flight animation");
+        Assert.True(At(left.Handle, expanded), $"the survivor had not arrived after {elapsed:F0} ms and {redraws} redraws");
+        WaitFor(() => left.ForegroundCount > focusBefore, ManageTimeout, "focus to reach the survivor", daemon,
+            () => $"foreground class {Win32Window.GetClassName(Win32Window.GetForeground())}, " +
+                $"input {inputBefore} -> {ControlledWindow.LastInputTime}. {Send("diagnose", "focus failure").Data}");
+
+        daemon.Refresh();
+        _output.WriteLine($"daemon during the redraw workload: {(daemon.TotalProcessorTime - cpuBefore).TotalMilliseconds:F1} ms CPU, " +
+            $"{daemon.PrivateMemorySize64 / 1048576.0:F1} MiB private, {daemon.WorkingSet64 / 1048576.0:F1} MiB working set");
+
+        IpcResponse diagnostic = Send("diagnose", "animation regression");
+        Assert.True(diagnostic.Ok);
+        string report = diagnostic.Data ?? string.Empty;
+        foreach (string line in report.Split('\n'))
+        {
+            if (line.Contains("**Frame interval**", StringComparison.Ordinal) ||
+                line.Contains("**Focus hand-off**", StringComparison.Ordinal) ||
+                line.Contains("  - frame p99", StringComparison.Ordinal) ||
+                line.Contains("motion ended:", StringComparison.Ordinal))
+                _output.WriteLine(line);
+        }
+
+        Assert.Contains("  - frame p99 0 B, max 0 B", report, StringComparison.Ordinal);
+        Assert.DoesNotContain(" ERR ", report, StringComparison.Ordinal);
+        Assert.True(RunCli("stop", StopTimeout).Exit == 0);
+        WaitForExit(daemon, "the animation test daemon to exit");
+    }
+
+    private static bool At(nint handle, WindowInfo wanted)
+    {
+        Rect actual = WindowCommitter.VisibleBounds(handle);
+        return Math.Abs(actual.X - wanted.X) <= 4 && Math.Abs(actual.Y - wanted.Y) <= 4 &&
+            Math.Abs(actual.Width - wanted.Width) <= 4 && Math.Abs(actual.Height - wanted.Height) <= 4;
+    }
 
     [Fact]
     public void TheWindowManagerStartsTilesAForeignWindowAndGivesItBackOnStop()

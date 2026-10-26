@@ -14,6 +14,7 @@ namespace Shubbak.TestWindow;
 internal static class Program
 {
     private const string ClassName = "ShubbakControlledTestWindow";
+    private static int s_foregroundCount;
 
     private static unsafe int Main(string[] args)
     {
@@ -57,6 +58,12 @@ internal static class Program
                     continue;
                 }
 
+                if (message.message == PInvoke.WM_APP + 2)
+                {
+                    Console.WriteLine(s_foregroundCount.ToString(CultureInfo.InvariantCulture));
+                    continue;
+                }
+
                 PInvoke.TranslateMessage(in message);
                 PInvoke.DispatchMessage(in message);
             }
@@ -70,6 +77,12 @@ internal static class Program
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static LRESULT WindowProc(HWND window, uint message, WPARAM wParam, LPARAM lParam) =>
-        PInvoke.DefWindowProc(window, message, wParam, lParam);
+    private static LRESULT WindowProc(HWND window, uint message, WPARAM wParam, LPARAM lParam)
+    {
+        // WM_SETFOCUS, and only when this really is the system foreground. Remembering
+        // arrival lets the parent distinguish a missed activation from someone taking
+        // focus elsewhere after it landed.
+        if (message == 7 && PInvoke.GetForegroundWindow() == window) s_foregroundCount++;
+        return PInvoke.DefWindowProc(window, message, wParam, lParam);
+    }
 }

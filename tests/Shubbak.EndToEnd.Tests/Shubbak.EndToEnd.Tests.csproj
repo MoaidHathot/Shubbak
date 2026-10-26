@@ -41,6 +41,7 @@
     <ProjectReference Include="..\..\src\Shubbak.Cli\Shubbak.Cli.csproj" />
     <ProjectReference Include="..\..\src\Shubbak.Ipc\Shubbak.Ipc.csproj" />
     <ProjectReference Include="..\..\src\Shubbak.Native\Shubbak.Native.csproj" />
+    <ProjectReference Include="..\Shubbak.TestWindow\Shubbak.TestWindow.csproj" />
   </ItemGroup>
 
   <ItemGroup>

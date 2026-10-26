@@ -100,3 +100,57 @@ own queue; the existing refused-request input fallback and UIPI boundary remain.
 
 The helper client is shared by the two suites. Dalil's test takes the same desktop
 mutex as the native/end-to-end suites and carries their Requires=Foreground trait.
+
+## End-to-end verification
+
+The real daemon now has a regression for closing the focused member of a two-window
+tile while repeatedly requesting `wm-redraw`. It reads back actual visible bounds,
+checks that the survivor received foreground keyboard focus, and asserts zero
+frame-path allocation in the daemon's own diagnostic report. It exercises both the
+normal 140 ms duration and a deliberately long 1000 ms linear curve.
+
+The saved pre-change NativeAOT daemon failed the 1000 ms scenario: the survivor
+still had not arrived after 2003.2 ms and 124 redundant redraws. The corrected managed
+daemon finished a run in 1017.0 ms including detection, despite 61 redraws, reporting
+60 animation frames over 996 ms and zero bytes allocated on the frame path.
+
+Foreground tests now record actual arrival inside the controlled window's UI thread,
+instead of assuming it must still hold the desktop's foreground after a two-second
+pause. The removal test also explicitly focuses the departing tile first rather than
+assuming an enumeration order. Interactive runs encountered Windows Search holding
+the foreground and refusing the setup request. A controlled run with the desktop
+idle passed all 3605 test cases, with no failures or skips. Last-input timestamps and
+the foreground holder are included when diagnosing an interrupted focus test.
+
+The keyboard callback, binding table, IPC permissions and elevation/UIAccess policy
+have no changes. No production worker thread or polling mechanism was added. The
+frame clock reuses an existing timestamp; first-frame state and animation kind fit
+in the preallocated track array. Tests assert zero allocations for frame stepping,
+both retarget paths, and warmed foreign focus requests.
+
+Both modified executables (`shubbak-wm` and `dalil`) were published as win-x64
+NativeAOT without warnings. The removal scenario was then run with the published
+daemon substituted for the test fixture's managed apphost:
+
+| Configured duration | Close to observed arrival | Motion's frame span | Redraw requests | Frame allocations |
+|---|---:|---:|---:|---:|
+| 140 ms | 162.8 ms | 138 ms (9 frames) | 7 | 0 B maximum |
+| 1000 ms | 1019.8 ms | 991 ms (59 frames) | 62 | 0 B maximum |
+
+Arrival includes event detection, IPC and the test's 10 ms observation interval;
+the motion span is the daemon's frame clock. The corresponding frame-interval
+medians were 16.95 and 16.99 ms. Private memory in this two-window test was 6.2 and
+7.1 MiB. Process CPU counters reported no increment during these short native runs;
+that is below their measurement resolution, not a claim that the work uses no CPU.
+
+The normal session and all companions were restarted from `dist`. In a 10.05-second
+idle observation the daemon had no measurable process-CPU increment, 11.01 MiB
+private memory and a 31.14 MiB working set. Its live report showed zero frame-path
+allocation across 42 samples, zero dropped keystrokes, zero hook faults and no GC
+collections since restart. The previous long-lived session is not a comparable
+memory baseline, so these numbers are observations rather than claimed RAM savings.
+
+Release tests, documented test count, all 39 config snippets, 30 example checks,
+the example config, release-version consistency and the generated diagnostics
+catalogue passed. Tracked text files were checked for LF endings and the working
+tree for a `nul` file. No temporary timing instrumentation remains in production.
