@@ -41,12 +41,9 @@ public sealed class SplitLayout : ILayout
     /// <summary>The layout for the perpendicular axis.</summary>
     public SplitLayout Transposed => Axis == Axis.Horizontal ? Vertical : Horizontal;
 
-    public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
+    public void Arrange(ReadOnlySpan<double> weights, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
-        ArgumentNullException.ThrowIfNull(container);
-
-        IReadOnlyList<Node> children = container.Children;
-        int count = children.Count;
+        int count = weights.Length;
 
         if (count != destination.Length)
             throw new ArgumentException(
@@ -65,15 +62,18 @@ public sealed class SplitLayout : ILayout
         int totalGap = options.InnerGap * (count - 1);
         int available = Math.Max(0, area.Extent(main) - totalGap);
 
-        Span<int> sizes = count <= 32 ? stackalloc int[count] : new int[count];
-        DistributeExact(children, available, sizes);
+        int[]? rented = count > 128 ? System.Buffers.ArrayPool<int>.Shared.Rent(count) : null;
+        Span<int> sizes = rented is null ? stackalloc int[count] : rented.AsSpan(0, count);
+        try
+        {
+        DistributeExact(weights, available, sizes);
 
         // If ratios alone would starve a tile, re-run with a guaranteed floor.
         // Only when it is actually needed: applying the floor unconditionally would
         // distort deliberately lopsided splits that were already perfectly legal.
         int minimum = options.MinimumTileExtent;
         if (minimum > 0 && available >= (long)minimum * count && AnyBelow(sizes, minimum))
-            DistributeExactWithFloor(children, available, minimum, sizes);
+            DistributeExactWithFloor(weights, available, minimum, sizes);
 
         int origin = area.Origin(main);
         for (int i = 0; i < count; i++)
@@ -81,6 +81,8 @@ public sealed class SplitLayout : ILayout
             destination[i] = area.WithAxis(main, origin, sizes[i]);
             origin += sizes[i] + options.InnerGap;
         }
+        }
+        finally { if (rented is not null) System.Buffers.ArrayPool<int>.Shared.Return(rented); }
     }
 
     public int ResolveInsertIndex(ContainerNode container, Node? reference)
@@ -137,18 +139,18 @@ public sealed class SplitLayout : ILayout
     /// a visible seam or overlap at the right edge of the screen - and the error
     /// would compound every time the user resized.
     /// </remarks>
-    private static void DistributeExact(IReadOnlyList<Node> children, int available, Span<int> sizes)
+    private static void DistributeExact(ReadOnlySpan<double> weights, int available, Span<int> sizes)
     {
         double cumulativeRatio = 0;
         int previousEdge = 0;
 
-        for (int i = 0; i < children.Count; i++)
+        for (int i = 0; i < weights.Length; i++)
         {
-            cumulativeRatio += children[i].SizeRatio;
+            cumulativeRatio += weights[i];
 
             // The final edge is pinned rather than computed, so accumulated
             // floating point error can never leak into the total.
-            int edge = i == children.Count - 1
+            int edge = i == weights.Length - 1
                 ? available
                 : Math.Clamp((int)Math.Round(cumulativeRatio * available), 0, available);
 
@@ -164,9 +166,9 @@ public sealed class SplitLayout : ILayout
     /// <paramref name="floor"/> pixels, with only the surplus distributed by ratio.
     /// </summary>
     private static void DistributeExactWithFloor(
-        IReadOnlyList<Node> children, int available, int floor, Span<int> sizes)
+        ReadOnlySpan<double> weights, int available, int floor, Span<int> sizes)
     {
-        int count = children.Count;
+        int count = weights.Length;
         int surplus = available - (floor * count);
 
         double cumulativeRatio = 0;
@@ -174,7 +176,7 @@ public sealed class SplitLayout : ILayout
 
         for (int i = 0; i < count; i++)
         {
-            cumulativeRatio += children[i].SizeRatio;
+            cumulativeRatio += weights[i];
 
             int edge = i == count - 1
                 ? surplus

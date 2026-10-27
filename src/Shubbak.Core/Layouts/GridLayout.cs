@@ -27,11 +27,9 @@ public sealed class GridLayout : ILayout
     public string? WhyNotResizable(Axis axis) =>
         "The grid sizes its cells equally; switch to splith, splitv or fibonacci to resize windows.";
 
-    public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
+    public void Arrange(ReadOnlySpan<double> weights, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
-        ArgumentNullException.ThrowIfNull(container);
-
-        int count = container.Children.Count;
+        int count = weights.Length;
 
         if (count != destination.Length)
             throw new ArgumentException(
@@ -51,7 +49,12 @@ public sealed class GridLayout : ILayout
 
         int gap = options.InnerGap;
 
-        Span<int> rowHeights = rows <= 32 ? stackalloc int[rows] : new int[rows];
+        int[]? rented = rows + columns > 256 ? System.Buffers.ArrayPool<int>.Shared.Rent(rows + columns) : null;
+        Span<int> scratch = rented is null ? stackalloc int[rows + columns] : rented.AsSpan(0, rows + columns);
+        Span<int> rowHeights = scratch[..rows];
+        Span<int> widths = scratch[rows..];
+        try
+        {
         LayoutMath.DistributeEvenly(Math.Max(0, area.Height - (gap * (rows - 1))), rowHeights);
 
         int y = area.Y;
@@ -59,8 +62,6 @@ public sealed class GridLayout : ILayout
 
         // Allocated once, outside the loop: a stackalloc per row would grow the
         // frame with the row count.
-        Span<int> widths = columns <= 32 ? stackalloc int[columns] : new int[columns];
-
         for (int row = 0; row < rows; row++)
         {
             // The last row may be short, and stretching its cells to fill the width
@@ -81,6 +82,8 @@ public sealed class GridLayout : ILayout
 
             y += rowHeights[row] + gap;
         }
+        }
+        finally { if (rented is not null) System.Buffers.ArrayPool<int>.Shared.Return(rented); }
     }
 
     public int ResolveInsertIndex(ContainerNode container, Node? reference)
@@ -139,13 +142,11 @@ public sealed class MonocleLayout : ILayout
     /// <summary>Every child gets the whole area, so only stacking decides what is seen.</summary>
     public bool Overlaps => true;
 
-    public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
+    public void Arrange(ReadOnlySpan<double> weights, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
-        ArgumentNullException.ThrowIfNull(container);
-
-        if (container.Children.Count != destination.Length)
+        if (weights.Length != destination.Length)
             throw new ArgumentException(
-                $"Destination length {destination.Length} does not match child count {container.Children.Count}.",
+                $"Destination length {destination.Length} does not match child count {weights.Length}.",
                 nameof(destination));
 
         destination.Fill(area);

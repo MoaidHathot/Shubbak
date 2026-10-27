@@ -159,12 +159,18 @@ public abstract class Node
     /// are outside the tiling flow, so a container holding only those must not
     /// consume space or absorb focus - it would appear as an unreachable hole.
     /// </remarks>
-    public bool ParticipatesInTiling => this switch
+    public bool ParticipatesInTiling
     {
-        WindowNode window => window.IsTiled,
-        ContainerNode container => container.DescendantWindows().Any(w => w.IsTiled),
-        _ => false,
-    };
+        get
+        {
+            if (this is WindowNode window) return window.IsTiled;
+            if (this is not ContainerNode) return false;
+            IReadOnlyList<Node> children = Children;
+            for (int i = 0; i < children.Count; i++)
+                if (children[i].ParticipatesInTiling) return true;
+            return false;
+        }
+    }
 
     /// <summary>This node and all ancestors, innermost first.</summary>
     public IEnumerable<Node> SelfAndAncestors()

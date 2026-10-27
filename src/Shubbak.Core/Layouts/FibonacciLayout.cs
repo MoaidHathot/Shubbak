@@ -68,12 +68,9 @@ public sealed class FibonacciLayout : ILayout
     /// </summary>
     public bool Resizes(Axis axis) => true;
 
-    public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
+    public void Arrange(ReadOnlySpan<double> weights, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
-        ArgumentNullException.ThrowIfNull(container);
-
-        IReadOnlyList<Node> children = container.Children;
-        int count = children.Count;
+        int count = weights.Length;
 
         if (count != destination.Length)
             throw new ArgumentException(
@@ -100,11 +97,11 @@ public sealed class FibonacciLayout : ILayout
         // remaining total instead would give the first of four children a quarter of
         // the screen rather than a half, which is not a spiral at all.
         double remainingWeight = 0;
-        for (int i = 0; i < count; i++) remainingWeight += children[i].SizeRatio;
+        for (int i = 0; i < count; i++) remainingWeight += weights[i];
 
         for (int i = 0; i < count - 1; i++)
         {
-            double own = children[i].SizeRatio;
+            double own = weights[i];
             int othersCount = count - i - 1;
             double othersAverage = othersCount > 0 ? (remainingWeight - own) / othersCount : own;
 

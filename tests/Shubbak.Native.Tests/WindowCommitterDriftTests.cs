@@ -37,6 +37,26 @@ public sealed class WindowCommitterDriftTests
     private static Core.Layouts.Placement Place(Core.Tree.WindowNode node, Core.Geometry.Rect rect) =>
         new(node, rect, Visible: true);
 
+    [Fact]
+    public void RecheckingAnUnchangedPlacementAllocatesNothing()
+    {
+        using var window = new TestWindow();
+        var committer = new WindowCommitter();
+        var node = new Core.Tree.WindowNode(window.Handle, Identity);
+        var rect = new Core.Geometry.Rect(240, 180, 720, 540);
+        Core.Layouts.Placement[] placements = [Place(node, rect)];
+        Func<Core.Layouts.Placement, nint> handle = static p => (nint)p.Window.Handle;
+        committer.Commit(placements, handle);
+        TestWindow.PumpUntil(() => WindowCommitter.VisibleBounds(window.Handle) == rect);
+        for (int i = 0; i < 200; i++) committer.Commit(placements, handle);
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        int moved = 0;
+        for (int i = 0; i < 1000; i++) moved += committer.Commit(placements, handle);
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, moved);
+        Assert.Equal(0, allocated);
+    }
+
     /// <summary>
     /// The skip has to keep working, or every layout moves every window.
     /// </summary>

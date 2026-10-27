@@ -71,12 +71,9 @@ public sealed class MasterStackLayout : ILayout
     public MasterStackLayout WithMasterCount(int count) =>
         new(Axis, MasterFirst, Math.Max(1, count));
 
-    public void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination)
+    public void Arrange(ReadOnlySpan<double> weights, Rect area, in LayoutOptions options, Span<Rect> destination)
     {
-        ArgumentNullException.ThrowIfNull(container);
-
-        IReadOnlyList<Node> children = container.Children;
-        int count = children.Count;
+        int count = weights.Length;
 
         if (count != destination.Length)
             throw new ArgumentException(
@@ -100,10 +97,10 @@ public sealed class MasterStackLayout : ILayout
         // of the layout is that master is large. Comparing per-window weights makes
         // untouched ratios yield exactly half, and still lets a resize grow it.
         double masterWeight = 0;
-        for (int i = 0; i < masters; i++) masterWeight += children[i].SizeRatio;
+        for (int i = 0; i < masters; i++) masterWeight += weights[i];
 
         double stackWeight = 0;
-        for (int i = masters; i < count; i++) stackWeight += children[i].SizeRatio;
+        for (int i = masters; i < count; i++) stackWeight += weights[i];
 
         double masterPer = masterWeight / masters;
         double stackPer = stackCount > 0 ? stackWeight / stackCount : masterPer;
@@ -122,12 +119,12 @@ public sealed class MasterStackLayout : ILayout
         // sits one above the other when the split itself is left/right.
         Axis stackAxis = Axis.Cross();
 
-        FillArea(children, 0, masters, masterArea, stackAxis, options.InnerGap, destination);
-        FillArea(children, masters, count - masters, stackArea, stackAxis, options.InnerGap, destination);
+        FillArea(0, masters, masterArea, stackAxis, options.InnerGap, destination);
+        FillArea(masters, count - masters, stackArea, stackAxis, options.InnerGap, destination);
     }
 
     private static void FillArea(
-        IReadOnlyList<Node> children, int offset, int count,
+        int offset, int count,
         Rect area, Axis axis, int gap, Span<Rect> destination)
     {
         if (count <= 0) return;
@@ -138,7 +135,10 @@ public sealed class MasterStackLayout : ILayout
             return;
         }
 
-        Span<int> sizes = count <= 32 ? stackalloc int[count] : new int[count];
+        int[]? rented = count > 128 ? System.Buffers.ArrayPool<int>.Shared.Rent(count) : null;
+        Span<int> sizes = rented is null ? stackalloc int[count] : rented.AsSpan(0, count);
+        try
+        {
         int available = Math.Max(0, area.Extent(axis) - (gap * (count - 1)));
 
         // Evenly rather than by ratio: the stack's individual ratios are reserved
@@ -146,6 +146,8 @@ public sealed class MasterStackLayout : ILayout
         // heights is more confusing than useful.
         LayoutMath.DistributeEvenly(available, sizes);
         LayoutMath.PlaceAlongAxis(area, axis, sizes, gap, destination[offset..(offset + count)]);
+        }
+        finally { if (rented is not null) System.Buffers.ArrayPool<int>.Shared.Return(rented); }
     }
 
     /// <summary>

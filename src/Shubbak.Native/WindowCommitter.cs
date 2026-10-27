@@ -783,15 +783,22 @@ public sealed class WindowCommitter
         // Visibility is applied before the moves, and separately: ShowWindow is its
         // own call, and hiding a window we are also moving would make the move
         // pointless.
-        List<(nint Handle, Rect Rect)> toMove = new(placements.Count);
+        (nint Handle, Rect Rect)[]? rentedMoves = placements.Count > 64
+            ? System.Buffers.ArrayPool<(nint Handle, Rect Rect)>.Shared.Rent(placements.Count) : null;
+        nint[]? rentedRaises = placements.Count > 64 ? System.Buffers.ArrayPool<nint>.Shared.Rent(placements.Count) : null;
+        Span<(nint Handle, Rect Rect)> toMove = rentedMoves is null
+            ? stackalloc (nint Handle, Rect Rect)[placements.Count] : rentedMoves.AsSpan(0, placements.Count);
+        Span<nint> toRaise = rentedRaises is null ? stackalloc nint[placements.Count] : rentedRaises.AsSpan(0, placements.Count);
+        int moveCount = 0, raiseCount = 0;
+        try
+        {
 
         // Raises are separate from moves, and are applied even when nothing moved.
         // Entering monocle changes no rectangle at all - every window already fills
         // the area - so the stacking change is the entire visible effect.
-        List<nint>? toRaise = null;
-
-        foreach (Placement placement in placements)
+        for (int i = 0; i < placements.Count; i++)
         {
+            Placement placement = placements[i];
             nint handle = handleOf(placement);
             if (handle == 0 || !Win32Window.Exists(handle)) continue;
 
@@ -814,7 +821,7 @@ public sealed class WindowCommitter
             {
                 Show(handle);
 
-                if (placement.Raise) (toRaise ??= []).Add(handle);
+                if (placement.Raise) toRaise[raiseCount++] = handle;
             }
 
             // A maximised window is Windows's to size. The tree says Maximised for a
@@ -883,10 +890,12 @@ public sealed class WindowCommitter
             // how a cheap check becomes a contended one.
             if (alreadyCommanded && !HasWandered(handle, placement)) continue;
 
-            toMove.Add((handle, placement.Rect));
+            toMove[moveCount++] = (handle, placement.Rect);
         }
 
-        if (toMove.Count == 0)
+        toMove = toMove[..moveCount];
+        toRaise = toRaise[..raiseCount];
+        if (moveCount == 0)
         {
             RaiseAll(toRaise);
             return 0;
@@ -957,7 +966,13 @@ public sealed class WindowCommitter
 
         RaiseAll(toRaise);
 
-        return toMove.Count;
+        return moveCount;
+        }
+        finally
+        {
+            if (rentedMoves is not null) System.Buffers.ArrayPool<(nint Handle, Rect Rect)>.Shared.Return(rentedMoves);
+            if (rentedRaises is not null) System.Buffers.ArrayPool<nint>.Shared.Return(rentedRaises);
+        }
     }
 
     /// <summary>Brings windows to the front of the ordinary stacking order.</summary>
@@ -973,10 +988,8 @@ public sealed class WindowCommitter
     /// short - only fullscreen, maximised and monocle windows ask.
     /// </para>
     /// </remarks>
-    private static void RaiseAll(List<nint>? handles)
+    private static void RaiseAll(ReadOnlySpan<nint> handles)
     {
-        if (handles is null) return;
-
         foreach (nint handle in handles) Raise(handle);
     }
 

@@ -1,3 +1,4 @@
+using System.Buffers;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Tree;
 
@@ -90,8 +91,8 @@ public sealed class LayoutEngine
         _placements.Clear();
         _focused = options.Focused;
 
-        foreach (MonitorNode monitor in root.Monitors)
-            ArrangeMonitorInto(monitor, options);
+        for (int i = 0; i < root.Monitors.Count; i++)
+            ArrangeMonitorInto(root.Monitors[i], options);
 
         return _placements;
     }
@@ -125,8 +126,9 @@ public sealed class LayoutEngine
 
     private void ArrangeMonitorInto(MonitorNode monitor, ArrangeOptions options)
     {
-        foreach (WorkspaceNode workspace in monitor.Workspaces)
+        for (int i = 0; i < monitor.Workspaces.Count; i++)
         {
+            WorkspaceNode workspace = monitor.Workspaces[i];
             bool visible = ReferenceEquals(workspace, monitor.ActiveWorkspace);
             ArrangeWorkspaceInto(workspace, monitor.WorkArea, monitor.Bounds, visible, options);
         }
@@ -156,12 +158,34 @@ public sealed class LayoutEngine
         Rect area,
         Rect monitorBounds,
         bool visible,
-        in LayoutOptions options)
+        in LayoutOptions options, int depth = 0)
     {
         container.Rect = area;
 
-        Node[] tiled = ArrangeTiledChildren(container, area, in options, out Rect[] rects);
-        if (tiled.Length == 0) return;
+        IReadOnlyList<Node> children = container.Children;
+        int count = children.Count;
+        if (count == 0) return;
+        // Bound stack use even for deeply nested trees. Pool entries contain only
+        // values, so no closed window/tree can be retained by scratch storage.
+        bool onStack = count <= 64 && depth < 8;
+        double[]? rentedWeights = onStack ? null : ArrayPool<double>.Shared.Rent(count);
+        Rect[]? rentedRects = onStack ? null : ArrayPool<Rect>.Shared.Rent(count);
+        Span<double> weights = onStack ? stackalloc double[count] : rentedWeights.AsSpan(0, count);
+        Span<Rect> rects = onStack ? stackalloc Rect[count] : rentedRects.AsSpan(0, count);
+        try
+        {
+        int tiled = 0;
+        double total = 0;
+        for (int i = 0; i < count; i++)
+        {
+            if (!children[i].ParticipatesInTiling) continue;
+            weights[tiled++] = children[i].SizeRatio;
+            total += children[i].SizeRatio;
+        }
+        if (tiled == 0) return;
+        if (tiled != count && total > double.Epsilon)
+            for (int i = 0; i < tiled; i++) weights[i] = Math.Clamp(weights[i] / total, Node.MinSizeRatio, 1.0);
+        container.Layout.Arrange(weights[..tiled], area, in options, rects[..tiled]);
 
         // In a layout whose rectangles overlap, stacking is the only thing that
         // decides what the user sees, so the focused window has to be raised. Where
@@ -169,9 +193,13 @@ public sealed class LayoutEngine
         // which keeps windows in whatever order the user put them.
         bool overlapping = container.Layout.Overlaps;
 
-        for (int i = 0; i < tiled.Length; i++)
+        int slot = 0;
+        for (int i = 0; i < count; i++)
         {
-            switch (tiled[i])
+            Node node = children[i];
+            if (!node.ParticipatesInTiling) continue;
+            Rect tile = rects[slot++];
+            switch (node)
             {
                 case WindowNode window:
                 {
@@ -182,7 +210,7 @@ public sealed class LayoutEngine
                     // being full-screen it returns to a tile that was never
                     // reallocated. See WindowNode.IsNativeFullscreen.
                     bool native = window.IsNativeFullscreen;
-                    Rect rect = native ? monitorBounds : rects[i];
+                    Rect rect = native ? monitorBounds : tile;
 
                     window.Rect = rect;
                     _placements.Add(new Placement(
@@ -194,46 +222,16 @@ public sealed class LayoutEngine
                 }
 
                 case ContainerNode child:
-                    ArrangeContainer(child, rects[i], monitorBounds, visible, in options);
+                    ArrangeContainer(child, tile, monitorBounds, visible, in options, depth + 1);
                     break;
             }
         }
-    }
-
-    /// <summary>
-    /// Divides <paramref name="area"/> among the tiled children of one container, as
-    /// an arrange pass would, without writing to any node.
-    /// </summary>
-    /// <returns>
-    /// The tiled children in order; <paramref name="rects"/> receives one rectangle
-    /// per entry.
-    /// </returns>
-    /// <remarks>
-    /// Only tiled children participate; a floating window must not consume a slot,
-    /// or removing it from the flow would leave a hole. The layout contract is "one
-    /// rect per child", so a container holding a mix of tiled and floating children
-    /// is arranged through a temporary view containing just the tiled ones, which
-    /// keeps every <see cref="ILayout"/> implementation free of float-awareness.
-    /// </remarks>
-    internal static Node[] ArrangeTiledChildren(
-        ContainerNode container, Rect area, in LayoutOptions options, out Rect[] rects)
-    {
-        Node[] tiled = [.. container.Children.Where(IsTiled)];
-        rects = new Rect[tiled.Length];
-
-        if (tiled.Length == 0) return tiled;
-
-        if (tiled.Length == container.Children.Count)
-        {
-            container.Layout.Arrange(container, area, in options, rects);
         }
-        else
+        finally
         {
-            using var view = TiledView.Create(container, tiled);
-            view.Container.Layout.Arrange(view.Container, area, in options, rects);
+            if (rentedWeights is not null) ArrayPool<double>.Shared.Return(rentedWeights);
+            if (rentedRects is not null) ArrayPool<Rect>.Shared.Return(rentedRects);
         }
-
-        return tiled;
     }
 
     /// <summary>
@@ -274,9 +272,8 @@ public sealed class LayoutEngine
     /// shrunk it. The caller leaves that axis alone instead.
     /// </para>
     /// <para>
-    /// Measuring means arranging, and arranging reads the tree's ratios, so the
-    /// container's ratios are set to each candidate and restored at the end. The
-    /// node rectangles are not touched: the pass that follows writes them.
+    /// Candidates are measured in scratch weights. Neither ratios, parentage nor
+    /// rectangles in the live tree are changed by an inverse-size query.
     /// </para>
     /// </remarks>
     public static double? RatioForExtent(
@@ -289,8 +286,18 @@ public sealed class LayoutEngine
         if (container.Rect.Extent(axis) <= 0) return null;
 
         IReadOnlyList<Node> children = container.Children;
-        double[] saved = new double[children.Count];
-        for (int i = 0; i < saved.Length; i++) saved[i] = children[i].SizeRatio;
+        int count = children.Count;
+        int childIndex = container.IndexOf(child);
+        if (!child.ParticipatesInTiling) return null;
+        double[]? rented = count > 128 ? ArrayPool<double>.Shared.Rent(count * 3) : null;
+        Rect[]? rentedRects = count > 128 ? ArrayPool<Rect>.Shared.Rent(count) : null;
+        Span<double> scratch = rented is null ? stackalloc double[count * 3] : rented.AsSpan(0, count * 3);
+        Span<double> saved = scratch[..count];
+        Span<double> trial = scratch.Slice(count, count);
+        Span<double> weights = scratch.Slice(count * 2, count);
+        Span<Rect> rects = rentedRects is null ? stackalloc Rect[count] : rentedRects.AsSpan(0, count);
+        for (int i = 0; i < count; i++) saved[i] = children[i].SizeRatio;
+        Normalise(saved);
 
         try
         {
@@ -299,8 +306,8 @@ public sealed class LayoutEngine
             double low = Node.MinSizeRatio;
             double high = 1.0 - (Node.MinSizeRatio * (children.Count - 1));
 
-            int atLow = Measure(container, child, axis, low, saved, in options);
-            int atHigh = Measure(container, child, axis, high, saved, in options);
+            int atLow = Measure(container, childIndex, axis, low, saved, trial, weights, rects, in options);
+            int atHigh = Measure(container, childIndex, axis, high, saved, trial, weights, rects, in options);
 
             if (atLow == atHigh) return null;
             if (extent <= atLow) return low;
@@ -311,7 +318,7 @@ public sealed class LayoutEngine
             for (int i = 0; i < 50 && high - low > 1e-12; i++)
             {
                 double mid = (low + high) / 2;
-                if (Measure(container, child, axis, mid, saved, in options) < extent) low = mid;
+                if (Measure(container, childIndex, axis, mid, saved, trial, weights, rects, in options) < extent) low = mid;
                 else high = mid;
             }
 
@@ -319,28 +326,49 @@ public sealed class LayoutEngine
         }
         finally
         {
-            container.SetRatios(saved);
+            if (rented is not null) ArrayPool<double>.Shared.Return(rented);
+            if (rentedRects is not null) ArrayPool<Rect>.Shared.Return(rentedRects);
         }
     }
 
     /// <summary>
-    /// The extent <paramref name="child"/> would have along <paramref name="axis"/>
+    /// The extent the child at <paramref name="childIndex"/> would have along <paramref name="axis"/>
     /// with a share of <paramref name="ratio"/>, everything else as in
     /// <paramref name="saved"/>.
     /// </summary>
     private static int Measure(
-        ContainerNode container, Node child, Axis axis, double ratio,
-        double[] saved, in LayoutOptions options)
+        ContainerNode container, int childIndex, Axis axis, double ratio,
+        ReadOnlySpan<double> saved, Span<double> trial, Span<double> weights, Span<Rect> rects, in LayoutOptions options)
     {
-        // From the saved ratios each time rather than from the last candidate, so the
-        // siblings' proportions are those of the tree and not of a previous guess.
-        container.SetRatios(saved);
-        container.SetChildRatio(child, ratio);
-
-        Node[] tiled = ArrangeTiledChildren(container, container.Rect, in options, out Rect[] rects);
-        int index = Array.IndexOf(tiled, child);
-
+        double others = 0;
+        for (int i = 0; i < saved.Length; i++) if (i != childIndex) others += saved[i];
+        double scale = others <= double.Epsilon ? 0 : (1 - ratio) / others;
+        for (int i = 0; i < saved.Length; i++)
+            trial[i] = Math.Clamp(i == childIndex ? ratio : others <= double.Epsilon
+                ? (1 - ratio) / (saved.Length - 1) : saved[i] * scale, Node.MinSizeRatio, 1.0);
+        Normalise(trial);
+        int count = 0, index = -1;
+        double total = 0;
+        for (int i = 0; i < saved.Length; i++)
+        {
+            if (!container.Children[i].ParticipatesInTiling) continue;
+            if (i == childIndex) index = count;
+            weights[count++] = trial[i];
+            total += trial[i];
+        }
+        if (count != saved.Length && total > double.Epsilon)
+            for (int i = 0; i < count; i++) weights[i] = Math.Clamp(weights[i] / total, Node.MinSizeRatio, 1.0);
+        container.Layout.Arrange(weights[..count], container.Rect, in options, rects[..count]);
         return index < 0 ? 0 : rects[index].Extent(axis);
+    }
+
+    private static void Normalise(Span<double> ratios)
+    {
+        double total = 0;
+        foreach (double ratio in ratios) total += ratio;
+        if (Math.Abs(total - 1) < 1e-9) return;
+        for (int i = 0; i < ratios.Length; i++)
+            ratios[i] = Math.Clamp(total <= double.Epsilon ? 1.0 / ratios.Length : ratios[i] / total, Node.MinSizeRatio, 1.0);
     }
 
     /// <summary>
@@ -380,7 +408,7 @@ public sealed class LayoutEngine
     /// <summary>
     /// Emits placements for the windows the tiling recursion skipped.
     /// </summary>
-    /// <param name="workspace">The workspace being arranged.</param>
+    /// <param name="node">The workspace or subtree being walked.</param>
     /// <param name="workArea">
     /// The monitor's work area, <i>before</i> outer gaps. Fullscreen and maximised
     /// windows use this rather than the tiling area: gaps are a tiling concept, and
@@ -393,9 +421,9 @@ public sealed class LayoutEngine
     /// </param>
     /// <param name="visible">Whether this workspace is the active one.</param>
     private void ArrangeNonTiled(
-        WorkspaceNode workspace, Rect workArea, Rect monitorBounds, bool visible)
+        Node node, Rect workArea, Rect monitorBounds, bool visible)
     {
-        foreach (WindowNode window in workspace.DescendantWindows())
+        if (node is WindowNode window)
         {
             switch (window.State)
             {
@@ -454,65 +482,10 @@ public sealed class LayoutEngine
                     break;
             }
         }
-    }
-
-    private static bool IsTiled(Node node) => node.ParticipatesInTiling;
-
-    /// <summary>
-    /// A scratch container holding only the tiled children of a real one, so that
-    /// layouts can keep their simple "one rect per child" contract.
-    /// </summary>
-    /// <remarks>
-    /// The children are moved rather than copied, because <see cref="Node.SizeRatio"/>
-    /// lives on the node and layouts read it. <see cref="Dispose"/> restores the
-    /// original parentage and ratios exactly, so the tree is unchanged afterwards.
-    /// </remarks>
-    private readonly struct TiledView : IDisposable
-    {
-        private readonly ContainerNode _original;
-        private readonly Node[] _tiled;
-        private readonly double[] _ratios;
-
-        public ContainerNode Container { get; }
-
-        private TiledView(ContainerNode original, ContainerNode view, Node[] tiled, double[] ratios)
+        else
         {
-            _original = original;
-            _tiled = tiled;
-            _ratios = ratios;
-            Container = view;
-        }
-
-        public static TiledView Create(ContainerNode original, Node[] tiled)
-        {
-            double[] ratios = new double[tiled.Length];
-            for (int i = 0; i < tiled.Length; i++) ratios[i] = tiled[i].SizeRatio;
-
-            var view = new ContainerNode(original.Layout);
-
-            foreach (Node node in tiled)
-            {
-                node.Parent = null;
-                view.Add(node);
-            }
-
-            // Insert() renormalises as it goes; restore the caller's proportions so
-            // the arrangement reflects the real tree, then let the view normalise
-            // across the tiled subset only.
-            double total = 0;
-            foreach (double r in ratios) total += r;
-
-            if (total > double.Epsilon)
-                for (int i = 0; i < tiled.Length; i++)
-                    tiled[i].SizeRatio = ratios[i] / total;
-
-            return new TiledView(original, view, tiled, ratios);
-        }
-
-        public void Dispose()
-        {
-            foreach (Node node in _tiled) node.Parent = _original;
-            for (int i = 0; i < _tiled.Length; i++) _tiled[i].SizeRatio = _ratios[i];
+            IReadOnlyList<Node> children = node.Children;
+            for (int i = 0; i < children.Count; i++) ArrangeNonTiled(children[i], workArea, monitorBounds, visible);
         }
     }
 }

@@ -98,3 +98,28 @@ Four paired runs against the **state-read step**, 20,000 equal 4 KiB exchanges:
 - Elapsed: **1.99–2.01 -> 1.395–1.404 s**.
 - 56 IPC and 20 Taj integration tests pass, including reused-buffer Unicode escaping,
   large-then-small messages, event/reply order and releasing oversized buffer capacity.
+
+## Layout and inverse resize
+
+Layouts consume read-only weight spans. Mixed tiled/floating arrangements no longer
+allocate a temporary container or change live node parentage/ratios. Inverse sizing
+uses scratch weights instead of repeatedly mutating/restoring the tree. Common
+scratch fits a bounded stack budget; deeper/wider layouts rent value-only buffers.
+Tree membership checks and non-tiled traversal no longer create iterator objects.
+The native placement commit similarly uses bounded scratch instead of new lists.
+
+Four paired native runs, **200,000 operations each**, versus the UTF-8 step:
+
+| Work | Before B/op | After B/op | Before elapsed | After elapsed |
+|---|---:|---:|---:|---:|
+| 32-window complete layout | 5,992 | **0** | 0.950–0.979 s | 0.191–0.193 s |
+| Layout + inverse resize | 14,342 | **0** | 2.597–2.619 s | 0.427–0.430 s |
+
+Every before/after geometry checksum matched (`78454299066233573`). The after runs
+had exactly zero total measured allocation and zero collections. This is roughly
+5x/6x faster for these pure operations, **not** a claim that whole-window animations
+are 5x faster: native window positioning/composition are separate costs.
+
+The coverage-enabled suite passed **3,641 cases**. New guards verify zero warmed
+layout/resize/unchanged-native-commit allocation, mixed and nested output, and that
+the live tree remains unchanged even *during* a layout/inverse-size calculation.

@@ -20,10 +20,9 @@ namespace Shubbak.Core.Tests;
 /// one run and a test is a property. This turns the first into the second.
 /// </para>
 /// <para>
-/// Deliberately not a test of the whole tick. The layout pass allocates on purpose,
-/// per container per pass, and pretending otherwise would either fail immediately or
-/// force a threshold so loose it asserted nothing. What must be free of allocation is
-/// the path taken on every frame between layout passes.
+    /// Deliberately not a test of the whole daemon tick, which also handles commands,
+    /// subscriptions and diagnostics. LayoutAllocationTests separately enforces the
+    /// warmed layout/inverse-resize constraints. Here the frame path is isolated.
 /// </para>
 /// </remarks>
 public sealed class TickAllocationTests

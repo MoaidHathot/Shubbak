@@ -80,19 +80,19 @@ public interface ILayout
     bool Overlaps => false;
 
     /// <summary>
-    /// Writes the rectangle for each direct child of <paramref name="container"/>
+    /// Writes the rectangle for each normalized child weight in <paramref name="weights"/>
     /// into <paramref name="destination"/>.
     /// </summary>
-    /// <param name="container">The container being arranged.</param>
+    /// <param name="weights">Read-only normalized shares; no live tree is exposed while arranging.</param>
     /// <param name="area">
     /// The rectangle to divide. Outer gaps have already been applied by the engine.
     /// </param>
     /// <param name="options">Gap and minimum-size tuning.</param>
     /// <param name="destination">
     /// Receives one rectangle per child, in child order. Its length always equals
-    /// <c>container.Children.Count</c>.
+    /// <c>weights.Length</c>.
     /// </param>
-    void Arrange(ContainerNode container, Rect area, in LayoutOptions options, Span<Rect> destination);
+    void Arrange(ReadOnlySpan<double> weights, Rect area, in LayoutOptions options, Span<Rect> destination);
 
     /// <summary>
     /// Decides where a new child should be placed.
