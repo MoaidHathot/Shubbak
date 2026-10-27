@@ -180,3 +180,16 @@ Focus-triggered geometry validation also repairs windows that move themselves wh
 Shubbak is not subscribing to location-change floods (see WindowCommitterDriftTests).
 Skipping the whole pass would remove that behavior. The allocation-free geometry/
 commit paths retain the repair and overlapping-window stacking semantics.
+
+## Companion responsiveness follow-up
+
+A controlled real-pipe test reproduced Taj clicks waiting behind a held icon reply
+on the command/state connection. Icon fetching now uses a short-lived, round-cancelled
+connection while still sharing one in-flight request/cache across bars. The test
+holds the icon response and verifies the click completes independently. Real icon
+discovery has a bounded foreign-window wait, but that wait should not reach clicks.
+
+The keyboard-language source also constructed CultureInfo and uppercase label strings
+on each 250 ms poll. A bounded 32-language cache preserves known/unknown labels and
+measures zero warmed allocation for repeated label lookups. The necessary foreground
+layout reads still detect per-application language changes. All 26 Taj tests pass.

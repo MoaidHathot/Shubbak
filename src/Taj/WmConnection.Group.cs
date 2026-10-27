@@ -17,6 +17,7 @@ public sealed partial class WmConnection
         internal Dictionary<long, (long ReadAt, string? Json)> Icons { get; } = [];
         internal Dictionary<long, long> Fetching { get; } = [];
         internal long IconGeneration;
+        internal CancellationToken RoundToken;
         private readonly Lock _lifecycle = new();
         private readonly List<WmConnection> _views = [];
         private EventPump? _pump;
@@ -79,6 +80,7 @@ public sealed partial class WmConnection
             {
                 lock (Gate)
                 {
+                    RoundToken = token;
                     Icons.Clear();
                     Fetching.Clear();
                     foreach (WmConnection view in _views)

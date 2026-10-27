@@ -101,4 +101,44 @@ public sealed class SharedConnectionTests
         Assert.True(SpinWait.SpinUntil(() => left.GetValue(FocusedWindow.IconKey) == Icon && right.GetValue(FocusedWindow.IconKey) == Icon, Timeout));
         Assert.Equal(1, Volatile.Read(ref icons));
     }
+
+    [Fact]
+    public async Task ASlowIconDoesNotHoldUpClicksOrStateReads()
+    {
+        string pipe = $"shubbak-test-{Guid.NewGuid():N}";
+        var iconEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseIcon = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var commandArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        WindowInfo? focused = null;
+        await using var server = new IpcServer { PipeName = pipe };
+        server.Start(async request =>
+        {
+            if (request.Method == WindowIcon.Method)
+            {
+                iconEntered.TrySetResult();
+                await releaseIcon.Task;
+                return new(request.Id, false);
+            }
+            if (request.Method == "command")
+            {
+                commandArrived.TrySetResult();
+                return new(request.Id, true);
+            }
+            return new(request.Id, true, JsonSerializer.Serialize(State("") with { FocusedWindow = Volatile.Read(ref focused) }, IpcJsonContext.Default.StateSnapshot));
+        });
+        using var model = new BarModel(TajConfigLoader.CreateDefault().Default);
+        await using var connection = new WmConnection(model, "left") { PipeName = pipe };
+        connection.Start();
+        Assert.True(SpinWait.SpinUntil(() => model.GetValue("layout") == "splith", Timeout));
+        Volatile.Write(ref focused, new WindowInfo(42, 42, "title", "class", "process", "tiling", true, 0, 0, 100, 100));
+        server.Publish("window.focused", JsonSerializer.Serialize(focused, IpcJsonContext.Default.WindowInfo));
+        await iconEntered.Task.WaitAsync(Timeout);
+        try
+        {
+            Task command = connection.SendCommandAsync("focus --direction right");
+            await commandArrived.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            await command.WaitAsync(Timeout);
+        }
+        finally { releaseIcon.TrySetResult(); }
+    }
 }

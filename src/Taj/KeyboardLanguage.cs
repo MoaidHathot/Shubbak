@@ -32,6 +32,8 @@ namespace Taj;
 /// </remarks>
 internal static class KeyboardLanguage
 {
+    private static readonly Lock CodeGate = new();
+    private static readonly Dictionary<int, string> Codes = [];
     /// <summary>
     /// The two-letter code for the foreground window's input language, upper case.
     /// </summary>
@@ -174,17 +176,19 @@ internal static class KeyboardLanguage
     /// </summary>
     private static int LanguageId(HKL layout) => (int)(Id(layout) & 0xFFFF);
 
-    internal static string Code(HKL layout)
-    {
-        int languageId = LanguageId(layout);
+    internal static string Code(HKL layout) => Code(LanguageId(layout));
 
-        try
+    internal static string Code(int languageId)
+    {
+        lock (CodeGate)
         {
-            return new CultureInfo(languageId).TwoLetterISOLanguageName.ToUpperInvariant();
-        }
-        catch (CultureNotFoundException)
-        {
-            return $"0x{languageId:X4}";
+            if (Codes.TryGetValue(languageId, out string? known)) return known;
+            string code;
+            try { code = CultureInfo.GetCultureInfo(languageId).TwoLetterISOLanguageName.ToUpperInvariant(); }
+            catch (CultureNotFoundException) { code = $"0x{languageId:X4}"; }
+            if (Codes.Count >= 32) Codes.Clear();
+            Codes[languageId] = code;
+            return code;
         }
     }
 }

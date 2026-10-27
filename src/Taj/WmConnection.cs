@@ -609,8 +609,14 @@ public sealed partial class WmConnection : IAsyncDisposable
         {
             try
             {
-                IpcResponse response = await client.SendAsync(
-                    WindowIcon.Method, $"{handle} {IconSize}").ConfigureAwait(false);
+                // Icon discovery may wait on another application. A short-lived
+                // connection keeps it off the shared command/state connection, so a
+                // slow picture cannot delay a workspace click or the next refresh.
+                CancellationToken token = _group.RoundToken;
+                await using var icons = new IpcClient { PipeName = PipeName };
+                await icons.ConnectAsync(TimeSpan.FromSeconds(2), token).ConfigureAwait(false);
+                IpcResponse response = await icons.SendAsync(
+                    WindowIcon.Method, $"{handle} {IconSize}", token).ConfigureAwait(false);
 
                 if (response.Ok) json = response.Data;
                 else if (Log.IsEnabled(LogLevel.Debug)) Log.Debug(LogCategory.Ipc, $"no icon for window {handle}: {response.Error}");
