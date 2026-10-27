@@ -124,6 +124,7 @@ public sealed class BarWindow : CompanionWindow
 
     /// <summary>Raised when a widget is clicked, with the command to run.</summary>
     public event Action<string>? CommandRequested;
+    public event Action? ClockSettingsChanged;
 
     /// <param name="model">The bar model to draw.</param>
     /// <param name="deviceId">The GDI device name of the display this bar is for.</param>
@@ -972,6 +973,12 @@ public sealed class BarWindow : CompanionWindow
 
         switch (message)
         {
+            case PInvoke.WM_TIMECHANGE:
+            case PInvoke.WM_SETTINGCHANGE:
+            case PInvoke.WM_POWERBROADCAST:
+                ClockSettingsChanged?.Invoke();
+                return false;
+
             case AppbarCallbackMessage:
                 switch (wParam)
                 {

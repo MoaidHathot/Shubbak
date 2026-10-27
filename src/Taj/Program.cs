@@ -70,6 +70,7 @@ internal static class Program
 
     /// <summary>The sources, once, feeding every bar; see <see cref="SourceHub"/>.</summary>
     private static readonly SourceHub s_sources = new();
+    private static int s_clockRefresh;
 
     /// <summary>The file, watched for saves, so a bar with no window manager still reloads.</summary>
     private static ConfigWatcher? s_watcher;
@@ -334,6 +335,7 @@ internal static class Program
 
 
         var window = new BarWindow(model, deviceId, config.DpiScaling);
+        window.ClockSettingsChanged += () => { Interlocked.Exchange(ref s_clockRefresh, 1); Wake(); };
         var connection = new WmConnection(model, deviceId, s_bars.FirstOrDefault()?.Connection);
 
         var bar = new Bar
@@ -724,6 +726,7 @@ internal static class Program
     /// <summary>One turn of the loop, after the queue has been pumped.</summary>
     private static bool Pass()
     {
+        if (Interlocked.Exchange(ref s_clockRefresh, 0) != 0) s_sources.RefreshClocks();
         if (s_reloadRequested)
         {
             s_reloadRequested = false;

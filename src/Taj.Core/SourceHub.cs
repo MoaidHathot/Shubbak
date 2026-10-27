@@ -32,6 +32,7 @@ public sealed class SourceHub : IDisposable
 {
     private readonly Dictionary<string, ISource> _sources = new(StringComparer.Ordinal);
     private readonly List<BarModel> _models = [];
+    private volatile BarModel[] _publishedModels = [];
     private readonly Lock _gate = new();
     private bool _stoodDown;
     private bool _disposed;
@@ -106,6 +107,7 @@ public sealed class SourceHub : IDisposable
         {
             if (_models.Contains(model)) return;
             _models.Add(model);
+            _publishedModels = [.. _models];
             sources = [.. _sources.Values];
         }
 
@@ -117,7 +119,10 @@ public sealed class SourceHub : IDisposable
     {
         ArgumentNullException.ThrowIfNull(model);
 
-        lock (_gate) _models.Remove(model);
+        lock (_gate)
+        {
+            if (_models.Remove(model)) _publishedModels = [.. _models];
+        }
     }
 
     /// <summary>
@@ -207,12 +212,20 @@ public sealed class SourceHub : IDisposable
 
     private void OnSourceChanged(ISource source)
     {
-        BarModel[] models;
-        lock (_gate) models = [.. _models];
+        BarModel[] models = _publishedModels;
 
         string? value = source.Value;
 
         foreach (BarModel model in models) model.SetValue(source.Name, value);
+    }
+
+    /// <summary>Coalesced Windows time/settings notification, also after sleep/resume.</summary>
+    public void RefreshClocks()
+    {
+        TimeZoneInfo.ClearCachedData();
+        ClockSource[] clocks;
+        lock (_gate) clocks = [.. _sources.Values.OfType<ClockSource>()];
+        foreach (ClockSource clock in clocks) clock.RefreshSystemTime();
     }
 
     /// <summary>Rebuilds <see cref="_bySignal"/> from <see cref="_sources"/>. Under the lock.</summary>
@@ -255,6 +268,7 @@ public sealed class SourceHub : IDisposable
             sources = [.. _sources.Values];
             _sources.Clear();
             _models.Clear();
+            _publishedModels = [];
             _bySignal.Clear();
             _listensForSignals = false;
         }

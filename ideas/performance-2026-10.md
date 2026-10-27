@@ -148,3 +148,20 @@ console nor file output is enabled. All 35 logging tests pass, including deliver
 successive bursts without manually flushing and exactly zero allocation for warmed
 constant ring-only messages. This removes timeout wakeups in all resident programs;
 its CPU/RAM contribution will be reported from the final whole-stack measurement.
+
+## Clock/source idle work
+
+Taj's minute clocks now schedule the next displayed boundary instead of checking
+twice a second: one ordinary timer firing per minute for each of the user's two
+minute-format clocks. Second precision, fractions, quoted/escaped literals and
+configured slower sampling are respected. Windows time/settings/power messages
+request a coalesced refresh; stood-down clocks stay stopped until resume. Histories
+retain the configured cadence, including when a sampling observer attaches later.
+
+Unchanged samples use TryFormat and reuse the published string. The deterministic
+clock/timer tests verify boundary timing, jump/resume, sampling semantics and exactly
+zero warmed allocation across 1,000 unchanged samples. Source fan-out now uses a
+model snapshot rebuilt on attach/detach instead of an array per value change. All
+637 Taj.Core and 20 Taj integration cases pass. Ayn's source loop was also reviewed:
+it already waits on registry/audio/power/theme events with deadlines only for pending
+work; it benefits from the shared IPC/logger changes without adding polling.

@@ -98,7 +98,16 @@ public abstract class SourceBase : ISource
     /// else listens to it, so a source nobody keeps a history of pays an unsubscribed
     /// event per tick and no more.
     /// </remarks>
-    public event Action<ISource, string?>? Sampled;
+    private event Action<ISource, string?>? Samples;
+    public event Action<ISource, string?>? Sampled
+    {
+        add { Samples += value; SamplingChanged(); }
+        remove { Samples -= value; SamplingChanged(); }
+    }
+
+    /// <summary>A history needs the configured sample cadence even when values repeat.</summary>
+    protected bool HasSamplingObservers => Samples is not null;
+    protected virtual void SamplingChanged() { }
 
     public abstract void Start();
 
@@ -125,7 +134,7 @@ public abstract class SourceBase : ISource
     protected void Publish(string? value)
     {
         // Every reading, before the equality check, for whoever keeps a history.
-        Sampled?.Invoke(this, value);
+        Samples?.Invoke(this, value);
 
         // Compared and set under a lock: two timer callbacks overlapping - a slow
         // producer on a short interval - could otherwise both see the old value and
@@ -219,19 +228,23 @@ public sealed class IntervalSource : SourceBase
 /// answer to something so ordinary.
 /// </para>
 /// <para>
-/// The interval is how often the value is <i>checked</i>, not how often the bar
-/// redraws - <see cref="SourceBase.Publish"/> suppresses unchanged values, so a clock
-/// showing minutes polled twice a second still causes one redraw a minute.
+/// A clock without sampling observers wakes at its displayed second/minute boundary.
+/// Fractional or unclassified formats and histories keep the configured interval.
+/// Windows time/settings notifications and stand-up request an immediate refresh.
 /// </para>
 /// </remarks>
 public sealed class ClockSource : SourceBase
 {
     private readonly string _format;
-    private readonly TimeZoneInfo? _timeZone;
+    private TimeZoneInfo? _timeZone;
+    private readonly string? _timeZoneId;
     private readonly TimeSpan _interval;
     private readonly System.Globalization.CultureInfo _culture;
-
-    private Timer? _timer;
+    private readonly TimeProvider _time;
+    private readonly long _quantumTicks;
+    private readonly Lock _clockGate = new();
+    private ITimer? _timer;
+    private bool _stoodDown, _clockDisposed;
 
     /// <param name="name">Name templates refer to.</param>
     /// <param name="format">A .NET date and time format string.</param>
@@ -248,14 +261,19 @@ public sealed class ClockSource : SourceBase
     /// and was the only choice: a bar in Berlin said "Wednesday" whatever its owner
     /// spoke, and a format with <c>dddd</c> in it had no way to say otherwise.
     /// </param>
+    /// <param name="timeProvider">Clock/timer provider; the system clock unless supplied by a test.</param>
     public ClockSource(
-        string name, string format, TimeSpan interval, string? timeZoneId = null, string? culture = null)
+        string name, string format, TimeSpan interval, string? timeZoneId = null, string? culture = null,
+        TimeProvider? timeProvider = null)
         : base(name)
     {
         _format = string.IsNullOrWhiteSpace(format) ? "HH:mm" : format;
         _interval = interval < TimeSpan.FromMilliseconds(100) ? TimeSpan.FromMilliseconds(100) : interval;
         _timeZone = ResolveTimeZone(timeZoneId, name);
+        _timeZoneId = timeZoneId;
         _culture = ResolveCulture(culture, name);
+        _time = timeProvider ?? TimeProvider.System;
+        _quantumTicks = DisplayQuantum(_format, _culture);
     }
 
     /// <summary>The culture the clock speaks; invariant unless one was named and known.</summary>
@@ -322,35 +340,120 @@ public sealed class ClockSource : SourceBase
 
     public override void Start()
     {
+        lock (_clockGate)
+        {
+            if (_clockDisposed || _timer is not null) return;
+            _timer = _time.CreateTimer(Tick, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
         Tick(null);
-        _timer = new Timer(Tick, null, _interval, _interval);
     }
 
     /// <inheritdoc/>
-    public override void StandDown() => _timer?.Change(Timeout.Infinite, Timeout.Infinite);
+    public override void StandDown()
+    {
+        lock (_clockGate)
+        {
+            _stoodDown = true;
+            _timer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        }
+    }
 
     /// <inheritdoc/>
     /// <remarks>
     /// The zero due-time matters most here of anywhere: a clock is the one widget
     /// whose stale value is obviously wrong to look at.
     /// </remarks>
-    public override void StandUp() => _timer?.Change(TimeSpan.Zero, _interval);
+    public override void StandUp()
+    {
+        lock (_clockGate)
+        {
+            _stoodDown = false;
+            _timer?.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>Re-read promptly after Windows reports a clock/timezone change.</summary>
+    public void RefreshSystemTime()
+    {
+        lock (_clockGate)
+        {
+            if (_clockDisposed) return;
+            _timeZone = ResolveTimeZone(_timeZoneId, Name);
+            if (!_stoodDown) _timer?.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    protected override void SamplingChanged()
+    {
+        // An observer can be attached after Start. Wake the timer to adopt its
+        // cadence without taking a source lock from a caller's event-subscription
+        // lock. A queued callback checks stand-down/disposal before publishing.
+        ITimer? timer = Volatile.Read(ref _timer);
+        try { timer?.Change(TimeSpan.Zero, Timeout.InfiniteTimeSpan); }
+        catch (ObjectDisposedException) { }
+    }
 
     private void Tick(object? _)
     {
+        lock (_clockGate)
+        {
+        if (_stoodDown || _clockDisposed) return;
+        DateTimeOffset now = TimeZoneInfo.ConvertTime(_time.GetUtcNow(), _timeZone ?? _time.LocalTimeZone);
         try
         {
-            DateTimeOffset now = _timeZone is null
-                ? DateTimeOffset.Now
-                : TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, _timeZone);
-
-            Publish(now.ToString(_format, _culture));
+            Span<char> text = stackalloc char[128];
+            if (now.TryFormat(text, out int written, _format, _culture))
+            {
+                ReadOnlySpan<char> value = text[..written];
+                Publish(value.SequenceEqual(Value) ? Value : new string(value));
+            }
+            else Publish(now.ToString(_format, _culture));
         }
         catch (FormatException ex)
         {
             Log.Error(LogCategory.Config, $"clock '{Name}' has an invalid format '{_format}'", ex);
             Publish("!");
         }
+        finally
+        {
+            if (!_stoodDown && !_clockDisposed)
+            {
+                TimeSpan due = _quantumTicks > 0 && _interval.Ticks <= _quantumTicks && !HasSamplingObservers
+                    ? TimeSpan.FromTicks(_quantumTicks - now.Ticks % _quantumTicks)
+                    : _interval;
+                _timer?.Change(due, Timeout.InfiniteTimeSpan);
+            }
+        }
+        }
+    }
+
+    private static long DisplayQuantum(string format, System.Globalization.CultureInfo culture)
+    {
+        if (format.Length == 1)
+        {
+            format = format[0] switch
+            {
+                't' => culture.DateTimeFormat.ShortTimePattern,
+                'T' => culture.DateTimeFormat.LongTimePattern,
+                'g' or 'f' => culture.DateTimeFormat.LongDatePattern + " " + culture.DateTimeFormat.ShortTimePattern,
+                'G' or 'F' => culture.DateTimeFormat.FullDateTimePattern,
+                'd' or 'D' or 'M' or 'm' or 'y' or 'Y' => "yyyy-MM-dd",
+                _ => "f", // fractional/round-trip/unknown standard formats keep polling
+            };
+        }
+        char quote = '\0';
+        bool seconds = false;
+        for (int i = 0; i < format.Length; i++)
+        {
+            char c = format[i];
+            if (c == '\\') { i++; continue; }
+            if (quote != '\0') { if (c == quote) quote = '\0'; continue; }
+            if (c is '\'' or '"') { quote = c; continue; }
+            if (c is 'f' or 'F') return 0;
+            if (c == 's') seconds = true;
+        }
+        if (quote != '\0') return 0;
+        return seconds ? TimeSpan.TicksPerSecond : TimeSpan.TicksPerMinute;
     }
 
     private static TimeZoneInfo? ResolveTimeZone(string? id, string sourceName)
@@ -378,7 +481,15 @@ public sealed class ClockSource : SourceBase
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _timer?.Dispose();
+        if (disposing)
+        {
+            lock (_clockGate)
+            {
+                _clockDisposed = true;
+                _timer?.Dispose();
+                _timer = null;
+            }
+        }
         base.Dispose(disposing);
     }
 }
