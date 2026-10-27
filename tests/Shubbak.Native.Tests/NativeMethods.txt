@@ -73,3 +73,14 @@ SendMessage
 WM_SETICON
 ICON_BIG
 ExtractIconEx
+GetMessageExtraInfo
+WM_KEYDOWN
+WM_KEYUP
+WM_SYSKEYDOWN
+WM_SYSKEYUP
+GetAsyncKeyState
+CreateDesktop
+OpenInputDesktop
+SwitchDesktop
+DESKTOP_ACCESS_FLAGS
+CloseDesktop

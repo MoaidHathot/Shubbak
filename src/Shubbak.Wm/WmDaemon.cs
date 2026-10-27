@@ -3667,11 +3667,6 @@ public sealed class WmDaemon : IDisposable
         _rules.Load(_config);
         _bindings.SetOverlay(effective.OverlayBindings);
 
-        // A key that stopped being bound while held would otherwise be reported as
-        // still down to the application that never saw it pressed; the same reason a
-        // mode change forgets.
-        _keyboard?.ForgetSwallowed();
-
         if (_wm.Root.Monitors.Count > 0)
         {
             CreateConfiguredWorkspaces();
@@ -6323,11 +6318,6 @@ public sealed class WmDaemon : IDisposable
 
         _rules.Load(_config);
 
-        // The other moment a key stops being bound. A binding deleted here leaves any
-        // swallow flag it set with nothing to clear it, and the next press of that key
-        // passes through while its release is still swallowed.
-        _keyboard?.ForgetSwallowed();
-
         if (lostMode is not null)
         {
             Log.Warn(LogCategory.Hook,
@@ -6873,11 +6863,6 @@ public sealed class WmDaemon : IDisposable
                 if (_bindings.SetMode(mode.Mode))
                 {
                     ReportBindingMode(mode.Mode);
-
-                    // A mode change is one of the moments a key stops being bound, which
-                    // is precisely when a stranded swallow flag turns into a key the
-                    // application believes is still held down.
-                    _keyboard?.ForgetSwallowed();
                 }
                 else
                 {

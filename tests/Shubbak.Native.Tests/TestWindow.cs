@@ -36,6 +36,28 @@ internal sealed class TestWindow : IDisposable
     private const string ClassName = "ShubbakNativeTestWindow";
     private static bool s_registered;
     private static readonly Lock s_gate = new();
+    private static readonly Dictionary<HWND, TestWindow> s_windows = [];
+
+    // Only the test's tagged F24 stream is recorded; ordinary user input is ignored.
+    internal const nuint KeyboardMarker = 0x53484B54;
+    private readonly List<bool> _keyDowns = new(64);
+    private readonly Lock _keyGate = new();
+    private int _keyboardBarriers;
+    private volatile bool _keyboardFault;
+
+    public bool[] KeyDowns
+    {
+        get { lock (_keyGate) return [.. _keyDowns]; }
+    }
+
+    public int KeyboardBarriers
+    {
+        get
+        {
+            if (_keyboardFault) throw new InvalidOperationException("the test window's keyboard observer failed");
+            return Volatile.Read(ref _keyboardBarriers);
+        }
+    }
 
     /// <summary>Posted to the window to run whatever <see cref="Invoke"/> queued.</summary>
     private const uint InvokeMessage = PInvoke.WM_APP + 0x51;
@@ -222,6 +244,7 @@ internal sealed class TestWindow : IDisposable
 
         Invoke(() =>
         {
+            lock (s_gate) s_windows.Remove(_handle);
             PInvoke.DestroyWindow(_handle);
             _handle = HWND.Null;
             PInvoke.PostQuitMessage(0);
@@ -323,6 +346,8 @@ internal sealed class TestWindow : IDisposable
                 throw new InvalidOperationException(
                     $"CreateWindowEx failed: {Marshal.GetLastWin32Error()}");
 
+            lock (s_gate) s_windows[_handle] = this;
+
             if (visible) PInvoke.ShowWindow(_handle, SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
 
         }
@@ -359,6 +384,7 @@ internal sealed class TestWindow : IDisposable
 
         if (!_handle.IsNull)
         {
+            lock (s_gate) s_windows.Remove(_handle);
             PInvoke.DestroyWindow(_handle);
             _handle = HWND.Null;
         }
@@ -392,8 +418,34 @@ internal sealed class TestWindow : IDisposable
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static LRESULT WindowProc(HWND hwnd, uint message, WPARAM wParam, LPARAM lParam) =>
-        PInvoke.DefWindowProc(hwnd, message, wParam, lParam);
+    private static LRESULT WindowProc(HWND hwnd, uint message, WPARAM wParam, LPARAM lParam)
+    {
+        TestWindow? window = null;
+        try
+        {
+            if (message is PInvoke.WM_KEYDOWN or PInvoke.WM_KEYUP or PInvoke.WM_SYSKEYDOWN or PInvoke.WM_SYSKEYUP &&
+                (nuint)PInvoke.GetMessageExtraInfo().Value == KeyboardMarker)
+            {
+                lock (s_gate) s_windows.TryGetValue(hwnd, out window);
+                if (window is not null)
+                {
+                    bool down = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
+                    if (wParam.Value == 0x87)
+                    {
+                        lock (window._keyGate) window._keyDowns.Add(down);
+                    }
+                    // A distinct unbound key after a sequence is an input-stream
+                    // barrier. Unlike a posted WM_NULL, it cannot overtake input.
+                    if (wParam.Value == 0x86 && !down) Interlocked.Increment(ref window._keyboardBarriers);
+                }
+            }
+        }
+        catch
+        {
+            if (window is not null) window._keyboardFault = true;
+        }
+        return PInvoke.DefWindowProc(hwnd, message, wParam, lParam);
+    }
 
     public void Dispose()
     {

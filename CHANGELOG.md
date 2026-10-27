@@ -17,6 +17,15 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Held keys could get stuck when modifiers or bindings changed.** The hook could
+  pass an application's key-down, then claim its repeat and swallow its key-up; the
+  reverse transition could leak a repeat without its release. Each press now keeps
+  its original recipient through repeats and release. Ordinary application repeats
+  take a fast pass-through path. Binding reloads preserve live presses; input-desktop
+  transitions recover state after releases the hook could not observe. The same
+  pairing is preserved when a probe fails, and a failed wake notification no longer
+  both queues a command and forwards its key. Receiver-based regressions cover these
+  cases and verify zero hook-thread allocations after warmup.
 - **Windows' animation preference is now applied before the first layout and IPC
   reply on startup or resume.** Previously the daemon assumed animation was allowed
   until its first periodic display check, briefly overriding a disabled preference

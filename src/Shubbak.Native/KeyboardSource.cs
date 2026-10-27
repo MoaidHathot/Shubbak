@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Windows.Win32;
 using Windows.Win32.Foundation;
+using Windows.Win32.UI.Accessibility;
 using Windows.Win32.UI.Input.KeyboardAndMouse;
 using Windows.Win32.UI.WindowsAndMessaging;
 
@@ -73,16 +74,24 @@ public sealed class KeyboardSource : IDisposable
     private long _read;
     private long _dropped;
 
+    private enum KeyOwner : byte { None, Application, Shubbak }
+
     /// <summary>
-    /// Virtual keys whose press was swallowed, indexed by code.
+    /// Who received each key's first press, indexed by virtual-key code.
     /// </summary>
     /// <remarks>
     /// A fixed 256-entry array so the hot path neither allocates nor hashes. Written
     /// only from the hook thread, so no synchronisation is needed.
     /// </remarks>
-    private readonly bool[] _swallowed = new bool[256];
+    private readonly KeyOwner[] _owners = new KeyOwner[256];
 
     private UnhookWindowsHookExSafeHandle? _hook;
+    private UnhookWinEventSafeHandle? _desktopEvents;
+    private long _desktopResets;
+
+    /// <summary>Input-desktop transitions that discarded potentially missed releases.</summary>
+    public long DesktopResets => Interlocked.Read(ref _desktopResets);
+
     private Thread? _thread;
     private uint _threadId;
 
@@ -171,13 +180,13 @@ public sealed class KeyboardSource : IDisposable
             // question about input latency is which thread was busy.
             Name = "Shubbak keyboard hook",
             IsBackground = true,
+            Priority = ThreadPriority.AboveNormal,
         };
 
         // Above normal, because a late keystroke is a keystroke the focused
         // application has not received yet. Not time-critical: starving the rest of
         // the system to service a hook would be its own bug.
         _thread.Start();
-        _thread.Priority = ThreadPriority.AboveNormal;
 
         ready.Wait();
 
@@ -192,6 +201,18 @@ public sealed class KeyboardSource : IDisposable
     {
         try
         {
+            // Releases can happen on a secure desktop where this hook sees no input.
+            // Recover at that actual discontinuity, not whenever bindings change:
+            // clearing a live press on reload allowed repeats to change owners.
+            _desktopEvents = PInvoke.SetWinEventHook(
+                PInvoke.EVENT_SYSTEM_DESKTOPSWITCH, PInvoke.EVENT_SYSTEM_DESKTOPSWITCH,
+                null, &DesktopChanged, 0, 0, PInvoke.WINEVENT_OUTOFCONTEXT);
+            if (_desktopEvents.IsInvalid)
+            {
+                failure = new InvalidOperationException($"Could not watch input-desktop transitions: {Marshal.GetLastWin32Error()}.");
+                return;
+            }
+
             _hook = PInvoke.SetWindowsHookEx(
                 WINDOWS_HOOK_ID.WH_KEYBOARD_LL, &Callback, (SafeHandle?)null, 0);
 
@@ -212,6 +233,13 @@ public sealed class KeyboardSource : IDisposable
         }
         finally
         {
+            if (failure is not null)
+            {
+                _hook?.Dispose();
+                _hook = null;
+                _desktopEvents?.Dispose();
+                _desktopEvents = null;
+            }
             ready.Set();
         }
 
@@ -227,6 +255,21 @@ public sealed class KeyboardSource : IDisposable
 
         _hook?.Dispose();
         _hook = null;
+        // WinEvent hooks are removed on their installing thread.
+        _desktopEvents?.Dispose();
+        _desktopEvents = null;
+    }
+
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
+    private static unsafe void DesktopChanged(HWINEVENTHOOK hook, uint eventId, HWND window,
+        int objectId, int childId, uint threadId, uint eventTime)
+    {
+        KeyboardSource? source = s_instance;
+        // A callback queued by a source being disposed must not reset its successor.
+        if (source?._desktopEvents is not { IsClosed: false } registered ||
+            (nint)hook.Value != registered.DangerousGetHandle()) return;
+        Array.Clear(source._owners);
+        Interlocked.Increment(ref source._desktopResets);
     }
 
     /// <summary>Removes up to <paramref name="max"/> queued keystrokes.</summary>
@@ -290,7 +333,19 @@ public sealed class KeyboardSource : IDisposable
         catch
         {
             KeyboardSource? source = s_instance;
-            if (source is not null) Interlocked.Increment(ref source._faults);
+            if (source is not null)
+            {
+                Interlocked.Increment(ref source._faults);
+                // Fail-open must forward the matching release too. Otherwise a
+                // throwing repeat probe leaked a down while its up stayed swallowed.
+                if (nCode >= 0 && lParam.Value != 0)
+                {
+                    uint key = ((KBDLLHOOKSTRUCT*)lParam.Value)->vkCode;
+                    if (key < source._owners.Length)
+                        source._owners[key] = (uint)wParam.Value is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN
+                            ? KeyOwner.Application : KeyOwner.None;
+                }
+            }
 
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
         }
@@ -310,21 +365,20 @@ public sealed class KeyboardSource : IDisposable
         uint message = (uint)wParam.Value;
         bool isKeyDown = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
         var virtualKey = (ushort)info->vkCode;
+        KeyOwner owner = source._owners[virtualKey];
 
-        // A key-up must be swallowed if its key-down was, or the application is left
-        // believing the key is still held. Tracked rather than re-evaluated, because
-        // the modifiers may have been released between the two edges - which would
-        // make the combination look unbound on the way up.
+        // Route the release to the same recipient as the press. Re-evaluating the
+        // binding here can swallow an application's release after a modifier changes,
+        // leaving that application believing the key is still held.
         //
         // Decided before the modifiers are read, because a release does not need them
         // and roughly half of all events are releases. Reading them first meant every
         // one paid for a result that was thrown away.
         if (!isKeyDown)
         {
-            if (source.WasSwallowed(virtualKey))
+            source._owners[virtualKey] = KeyOwner.None;
+            if (owner == KeyOwner.Shubbak)
             {
-                source.ClearSwallowed(virtualKey);
-
                 // A binding that runs on release wants this edge delivered, not only
                 // swallowed. The modifiers are read now, for a swallowed key only, so a
                 // release with the modifier already let go is a release of a different
@@ -350,17 +404,33 @@ public sealed class KeyboardSource : IDisposable
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
         }
 
+        // A repeat belongs to whoever received the original down. Re-evaluating an
+        // application's held key after Ctrl/Alt or a binding changed stole its up,
+        // leaving the application with a stuck key. This path also avoids modifier
+        // reads and binding lookups for ordinary application auto-repeat.
+        if (owner == KeyOwner.Application)
+            return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+
         KeyModifiers modifiers = ReadModifiers();
 
         bool bound = source._probe is { } probe && probe(virtualKey, modifiers, true);
 
         if (bound)
         {
+            // A key already held when the hook was installed belongs to the previous
+            // input path (notably on resume). The async state is still the state
+            // before THIS event, so a fresh bound press does not satisfy this.
+            if (owner == KeyOwner.None && IsHeld((VIRTUAL_KEY)virtualKey))
+            {
+                source._owners[virtualKey] = KeyOwner.Application;
+                return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+            }
+
             // Auto-repeat arrives as repeated key-downs with no release between them,
             // and the swallow flag is exactly that state: set by the first press and
             // cleared by the release. A press that finds it already set is therefore a
             // repeat, at no cost - the array is already here for another reason.
-            bool repeat = source.WasSwallowed(virtualKey);
+            bool repeat = owner == KeyOwner.Shubbak;
 
             var key = new KeyEvent(
                 virtualKey,
@@ -370,7 +440,7 @@ public sealed class KeyboardSource : IDisposable
                 repeat);
 
             source.Enqueue(in key);
-            source.MarkSwallowed(virtualKey);
+            source._owners[virtualKey] = KeyOwner.Shubbak;
 
             // Swallow, so the focused application never sees the keystroke.
             //
@@ -380,6 +450,12 @@ public sealed class KeyboardSource : IDisposable
             return new LRESULT(1);
         }
 
+        // The inverse case: a claimed press must not leak its repeat when a modifier
+        // is released. Its release will still be swallowed, so leaking only the down
+        // would leave the application believing the key remained held forever.
+        if (owner == KeyOwner.Shubbak) return new LRESULT(1);
+
+        source._owners[virtualKey] = KeyOwner.Application;
         return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
     }
 
@@ -494,46 +570,6 @@ public sealed class KeyboardSource : IDisposable
     private static bool IsHeld(VIRTUAL_KEY key) =>
         (PInvoke.GetAsyncKeyState((int)key) & 0x8000) != 0;
 
-    /// <summary>Records that a key's press was swallowed, so its release is too.</summary>
-    private void MarkSwallowed(ushort virtualKey) => _swallowed[virtualKey] = true;
-
-    private bool WasSwallowed(ushort virtualKey) => _swallowed[virtualKey];
-
-    private void ClearSwallowed(ushort virtualKey) => _swallowed[virtualKey] = false;
-
-    /// <summary>
-    /// Forgets every swallowed press, so no release is swallowed on its behalf.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// A press is remembered so its release can be swallowed too. That pairing assumes
-    /// the release arrives, and there are several ways it does not: a low-level hook
-    /// receives no input on the secure desktop, so Ctrl+Alt+Del or a UAC prompt landing
-    /// between the two edges strands the flag, as does a foreground process at a higher
-    /// integrity level, as does Windows unhooking us for exceeding LowLevelHooksTimeout.
-    /// </para>
-    /// <para>
-    /// A stranded flag does nothing until that key is next pressed while <i>unbound</i> -
-    /// after a mode change, or a reload that removed the binding. Then the press passes
-    /// through to the application and the release is swallowed on the strength of a flag
-    /// set minutes earlier. The application sees a key that went down and never came up:
-    /// stuck, and auto-repeating. The flag clears on the way, so it happens once and
-    /// cannot be reproduced.
-    /// </para>
-    /// <para>
-    /// Clearing it whenever the set of bindings changes removes the whole class, because
-    /// those are exactly the moments a key stops being bound. Two hundred and fifty six
-    /// bytes is not a cost worth reasoning about.
-    /// </para>
-    /// <para>
-    /// Called from the daemon thread while the hook thread may be writing. Benign: each
-    /// entry is a byte and is independently either set or cleared, so no torn value is
-    /// possible, and the worst outcome is one keystroke's flag going the wrong way in a
-    /// window of microseconds - which is the same thing this repairs.
-    /// </para>
-    /// </remarks>
-    public void ForgetSwallowed() => Array.Clear(_swallowed);
-
     /// <summary>Signalled after a keystroke is queued, so a waiting pump wakes at once.</summary>
     /// <remarks>
     /// Runs inside the hook callback, so it must be as cheap as everything else there:
@@ -560,7 +596,14 @@ public sealed class KeyboardSource : IDisposable
         _ring[(int)(write & _mask)] = key;
         Volatile.Write(ref _write, write + 1);
 
-        WorkQueued?.Invoke();
+        try { WorkQueued?.Invoke(); }
+        catch
+        {
+            // The ring publication cannot be rolled back: its consumer may already
+            // have read the command. Keep the key claimed rather than both executing
+            // it and forwarding it through the callback's fail-open path.
+            Interlocked.Increment(ref _faults);
+        }
     }
 
     public void Dispose()
