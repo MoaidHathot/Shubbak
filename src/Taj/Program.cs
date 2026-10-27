@@ -282,7 +282,7 @@ internal static class Program
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Each bar gets its own model and its own connection, so a profile rule that
+    /// Each bar gets its own model and a view of the shared connection, so a profile rule that
     /// depends on the active workspace can resolve differently per monitor - which is
     /// the whole point of per-workspace bar profiles on a multi-monitor setup.
     /// </para>
@@ -334,7 +334,7 @@ internal static class Program
 
 
         var window = new BarWindow(model, deviceId, config.DpiScaling);
-        var connection = new WmConnection(model, deviceId);
+        var connection = new WmConnection(model, deviceId, s_bars.FirstOrDefault()?.Connection);
 
         var bar = new Bar
         {

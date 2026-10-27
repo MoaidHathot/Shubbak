@@ -76,6 +76,7 @@ Everything over one connection, in any mix:
 | You want to | Send | It answers |
 |---|---|---|
 | know what is on the desktop | `query state`, `windows`, `workspaces`, `monitors`, `focused`, `contexts`, `rules`, `bindings`, `arrangements`, `tree` | JSON, or text for `tree` |
+| read companion state efficiently | `query bar-state`, `palette`, `palette-all` | `bar-state` has the state shape with an empty `windows` list; palette reads include `state`, `windows`, `skipped`, `commands`, `layouts`, `bindings`, `contexts`, `arrangements` in one reply. `skipped` is populated by `palette-all`. |
 | know which config file is in effect, and its text | `query config-path`, `query config` | `{"path","stale"}`; the file |
 | do anything a key can do | `command <verb> ...` — forty verbs, the same syntax a binding uses | ok, or why not |
 | be told when something changes | `subscribe <topics>` — thirty topics | a stream of `{"topic","data"}` |

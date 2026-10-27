@@ -52,3 +52,32 @@ Four reversed-order native pairs, 20,000 identical 4 KiB exchanges per run:
 The fresh keyboard baseline itself varied: animation p99 3.14–5.44 ms, and one paced
 IPC run had a 76 ms maximum. These pre-optimization tails are retained. Background
 work is real, so a later isolated maximum cannot by itself establish a regression.
+
+## Companion state reads
+
+Taj's display models share one subscription and command connection (two pipes total,
+instead of four on this two-monitor PC). A ready event burst is applied immediately,
+then refreshed once, with a 64-event batch bound. No debounce timer is added. A real
+pipe regression queues 50 changes while a read is held, verifies 2–4 total reads
+rather than 50 per display, independent monitor output, and continued updates after
+the original display's view is removed. Icon requests/cache are shared and generation
+checked so an old completion cannot repopulate a removed/reused handle's entry.
+
+Dalil reads `palette`/`palette-all` once, replacing nine/ten sequential queries. Desktop
+discovery stays off the loop; the loop captures coherent values and serialization
+continues on the pipe task. Static command/layout descriptions are cached. `bar-state`
+omits the unused full window list. Workspace counts use one allocation-free traversal.
+
+Four paired native query runs versus the **preceding IPC step**, 200 palette reads:
+
+- Median data-read latency: **0.931–0.974 -> 0.614–0.669 ms**.
+- Daemon CPU: **156–203 -> 125–141 ms** per 200 reads.
+- Client allocation: **75,715–75,721 -> 57,690–57,934 B/read**.
+- p99: before **1.45–1.62 ms**; after **1.06–2.17 ms**, retaining the first after
+  run's slower tail. These are data-read times, not complete palette paint latency.
+
+Empty-desktop bar queries intentionally remove the window-list saving: 10,000 reads
+had roughly the same ~6.8 KiB client allocation each. The benefit there is fewer reads
+per action, demonstrated by the multi-display burst test; it is not claimed as a
+per-query allocation win with no windows to omit. The full coverage suite passed
+**3,632 cases** including real-daemon compact/palette state consistency and updates.

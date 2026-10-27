@@ -22,7 +22,7 @@ internal static class StateProjection
         window.Identity.Title,
         window.Identity.ClassName,
         window.Identity.ProcessName,
-        window.State.ToString().ToLowerInvariant(),
+        StateName(window.State),
         ReferenceEquals(window, focused),
         window.Rect.X,
         window.Rect.Y,
@@ -31,18 +31,42 @@ internal static class StateProjection
         window.IsNativeFullscreen);
 
     public static WorkspaceInfo Describe(
-        WorkspaceNode workspace, int monitorIndex = -1, WorkspaceNode? focused = null) => new(
+        WorkspaceNode workspace, int monitorIndex = -1, WorkspaceNode? focused = null)
+    {
+        int count = CountWindows(workspace);
+        return new(
         workspace.Id.Value,
         workspace.Name,
         workspace.Label,
         workspace.IsActive,
-        !workspace.HasNoWindows,
+        count != 0,
         workspace.Monitor?.DeviceId ?? string.Empty,
         workspace.Layout.Name,
-        workspace.DescendantWindows().Count(),
+        count,
         workspace.SortIndex,
         monitorIndex,
         ReferenceEquals(workspace, focused));
+    }
+
+    private static int CountWindows(Node node)
+    {
+        if (node is WindowNode) return 1;
+        int count = 0;
+        IReadOnlyList<Node> children = node.Children;
+        for (int i = 0; i < children.Count; i++) count += CountWindows(children[i]);
+        return count;
+    }
+
+    private static string StateName(WindowState state) => state switch
+    {
+        WindowState.Tiling => "tiling",
+        WindowState.Floating => "floating",
+        WindowState.Fullscreen => "fullscreen",
+        WindowState.MonitorFullscreen => "monitorfullscreen",
+        WindowState.Maximised => "maximised",
+        WindowState.Minimised => "minimised",
+        _ => state.ToString().ToLowerInvariant(),
+    };
 
     public static MonitorInfoDto Describe(MonitorNode monitor) => new(
         monitor.Id.Value,
@@ -60,14 +84,15 @@ internal static class StateProjection
         monitor.Names);
 
     public static StateSnapshot Snapshot(
-        WindowManager wm, bool suspended = false, SessionInfo? session = null, IReadOnlyList<string>? contexts = null)
+        WindowManager wm, bool suspended = false, SessionInfo? session = null, IReadOnlyList<string>? contexts = null,
+        bool includeWindows = true)
     {
         WindowNode? focused = wm.FocusedWindow;
 
         return new StateSnapshot(
             [.. wm.Root.Monitors.Select(Describe)],
             [.. DescribeWorkspaces(wm)],
-            [.. wm.Root.DescendantWindows().Select(w => Describe(w, focused))],
+            includeWindows ? [.. wm.Root.DescendantWindows().Select(w => Describe(w, focused))] : [],
             focused is null ? null : Describe(focused, focused),
             wm.BindingMode,
             wm.IsPaused,

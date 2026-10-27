@@ -314,9 +314,24 @@ public sealed class WindowManagerSmokeTests : IDisposable
         Assert.True(workspace.HasWindows, "the workspace does not report a window");
         Assert.Equal(1, workspace.WindowCount);
 
+        // Companions read a compact, coherent snapshot rather than independently
+        // querying fields that can come from different state-machine turns.
+        StateSnapshot bar = Query("bar-state", IpcJsonContext.Default.StateSnapshot);
+        Assert.Empty(bar.Windows);
+        Assert.Equal(workspace, Assert.Single(bar.Workspaces, ws => ws.Name == "e2e"));
+        PaletteSnapshot palette = Query("palette", IpcJsonContext.Default.PaletteSnapshot);
+        Assert.Contains(palette.Windows, w => w.Handle == tiled.Handle && w.Managed);
+        Assert.Empty(palette.Skipped);
+        Assert.Equal(workspace, Assert.Single(palette.State.Workspaces, ws => ws.Name == "e2e"));
+        Assert.NotEmpty(palette.Commands);
+        Assert.Contains("splith", palette.Layouts);
+
         // And a command over the pipe does what a key would.
         Assert.True(Send("command", "toggle-floating").Ok);
         WaitForWindow(w => w.Handle == tiled.Handle && w.State.Equals("floating", StringComparison.OrdinalIgnoreCase), "the window to float on command");
+        PaletteSnapshot floated = Query("palette-all", IpcJsonContext.Default.PaletteSnapshot);
+        Assert.Contains(floated.Windows, w => w.Handle == tiled.Handle && w.State == "floating");
+        Assert.Contains(floated.Skipped, w => w.Handle == tiled.Handle);
         Assert.True(Send("command", "toggle-floating").Ok);
         WaitForWindow(w => w.Handle == tiled.Handle && w.State.Equals("tiling", StringComparison.OrdinalIgnoreCase), "the window to tile again on command");
 

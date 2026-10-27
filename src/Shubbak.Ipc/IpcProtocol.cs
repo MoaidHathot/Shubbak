@@ -566,6 +566,17 @@ public sealed record StateSnapshot(
     // predates contexts, empty when none hold.
     IReadOnlyList<string>? Contexts = null);
 
+/// <summary>One coherent palette read, with desktop discovery performed off the daemon loop.</summary>
+public sealed record PaletteSnapshot(
+    StateSnapshot State,
+    IReadOnlyList<WindowCandidate> Windows,
+    IReadOnlyList<WindowCandidate> Skipped,
+    IReadOnlyList<CommandInfo> Commands,
+    IReadOnlyList<string> Layouts,
+    IReadOnlyList<BindingInfo> Bindings,
+    IReadOnlyList<ContextReport> Contexts,
+    IReadOnlyList<ArrangementInfo> Arrangements);
+
 /// <summary>
 /// Source-generated JSON serialisation for the IPC protocol.
 /// </summary>
@@ -589,6 +600,7 @@ public sealed record StateSnapshot(
 [JsonSerializable(typeof(CommandInfo))]
 [JsonSerializable(typeof(BindingInfo))]
 [JsonSerializable(typeof(StateSnapshot))]
+[JsonSerializable(typeof(PaletteSnapshot))]
 [JsonSerializable(typeof(WindowReport))]
 [JsonSerializable(typeof(ManagedWindowReport))]
 [JsonSerializable(typeof(RuleReport))]

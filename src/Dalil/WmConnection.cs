@@ -29,6 +29,8 @@ public readonly record struct SignalRaised(string Signal, IReadOnlyList<string> 
 /// </remarks>
 public sealed class WmConnection : IAsyncDisposable
 {
+    /// <summary>The daemon pipe, or an isolated pipe for an integration test.</summary>
+    public string PipeName { get; init; } = IpcProtocol.PipeName;
     /// <summary>
     /// The topics worth reloading the window list for.
     /// </summary>
@@ -89,7 +91,7 @@ public sealed class WmConnection : IAsyncDisposable
     {
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
             IpcResponse response = await client
@@ -133,7 +135,7 @@ public sealed class WmConnection : IAsyncDisposable
 
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
             foreach (long handle in handles)
@@ -190,7 +192,7 @@ public sealed class WmConnection : IAsyncDisposable
 
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
             IpcResponse response = await client
@@ -249,7 +251,7 @@ public sealed class WmConnection : IAsyncDisposable
     {
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
             IReadOnlyList<ContextReport> contexts = await QueryAsync(
@@ -293,7 +295,7 @@ public sealed class WmConnection : IAsyncDisposable
 
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
             IpcResponse response = await client
@@ -355,7 +357,7 @@ public sealed class WmConnection : IAsyncDisposable
 
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
             IpcResponse response = await client.SendAsync(method, payload, _stopping.Token).ConfigureAwait(false);
@@ -384,11 +386,9 @@ public sealed class WmConnection : IAsyncDisposable
 
     /// <summary>Reads everything the palette can offer.</summary>
     /// <remarks>
-    /// Several queries rather than one. They are asked together and only when the
-    /// palette opens, so the cost is one round trip's worth of latency for a list that
-    /// is current rather than remembered - and remembering it would mean an incremental
-    /// update path, which is a whole class of bugs for a list that is on screen for a
-    /// couple of seconds at a time.
+    /// One snapshot rather than nine sequential round trips. The daemon joins the
+    /// desktop discovery to its state in one loop turn, so workspaces, focus, bindings
+    /// and contexts agree even while the user is switching between them.
     /// </remarks>
     /// <param name="includeUnmanaged">Whether the ordinary window list offers them.</param>
     /// <param name="macros">The user's own named sequences, which come from the config.</param>
@@ -419,51 +419,22 @@ public sealed class WmConnection : IAsyncDisposable
     {
         try
         {
-            await using IpcClient client = new();
+            await using IpcClient client = new() { PipeName = PipeName };
             await client.ConnectAsync(TimeSpan.FromSeconds(5), _stopping.Token).ConfigureAwait(false);
 
-            IReadOnlyList<WindowCandidate> windows = await QueryAsync(
-                client, "all-windows", IpcJsonContext.Default.IReadOnlyListWindowCandidate) ?? [];
-
-            // The wider list is asked for separately and only when wanted. It is the
-            // ordinary list plus the windows the filter turned down for their shape,
-            // which on a real desktop is dozens of rows nobody asked to search through.
-            IReadOnlyList<WindowCandidate> skipped = everyWindow
-                ? await QueryAsync(client, "every-window", IpcJsonContext.Default.IReadOnlyListWindowCandidate) ?? windows
-                : windows;
-
-            IReadOnlyList<CommandInfo> commands = await QueryAsync(
-                client, "commands", IpcJsonContext.Default.IReadOnlyListCommandInfo) ?? [];
-
-            IReadOnlyList<WorkspaceInfo> workspaces = await QueryAsync(
-                client, "workspaces", IpcJsonContext.Default.IReadOnlyListWorkspaceInfo) ?? [];
-
-            IReadOnlyList<string> layouts = await QueryAsync(
-                client, "layouts", IpcJsonContext.Default.IReadOnlyListString) ?? [];
-
-            IReadOnlyList<BindingInfo> bindings = await QueryAsync(
-                client, "bindings", IpcJsonContext.Default.IReadOnlyListBindingInfo) ?? [];
-
-            IReadOnlyList<MonitorInfoDto> monitors = await QueryAsync(
-                client, "monitors", IpcJsonContext.Default.IReadOnlyListMonitorInfoDto) ?? [];
-
-            // Not for a list of its own: this is how the palette learns that tiling is
-            // paused, that a binding mode is swallowing keys, or that the manager has
-            // let go of the keyboard altogether. All three make it look broken, and all
-            // three were invisible here.
-            StateSnapshot? state = await QueryAsync(
-                client, "state", IpcJsonContext.Default.StateSnapshot);
-
-            // Every context the configuration declares, for completing the context verb
-            // and for a prompt written from="contexts". The snapshot names only the ones
-            // that hold, and the verb is how the others are turned on.
-            IReadOnlyList<ContextReport> contexts = await QueryAsync(
-                client, "contexts", IpcJsonContext.Default.IReadOnlyListContextReport) ?? [];
-
-            // Every saved arrangement, for completing the arrangement verb and for a
-            // prompt written from="arrangements".
-            IReadOnlyList<ArrangementInfo> arrangements = await QueryAsync(
-                client, "arrangements", IpcJsonContext.Default.IReadOnlyListArrangementInfo) ?? [];
+            PaletteSnapshot? snapshot = await QueryAsync(client, everyWindow ? "palette-all" : "palette",
+                IpcJsonContext.Default.PaletteSnapshot).ConfigureAwait(false);
+            if (snapshot is null) return PaletteSources.Offline;
+            StateSnapshot state = snapshot.State;
+            IReadOnlyList<WindowCandidate> windows = snapshot.Windows;
+            IReadOnlyList<WindowCandidate> skipped = everyWindow ? snapshot.Skipped : windows;
+            IReadOnlyList<CommandInfo> commands = snapshot.Commands;
+            IReadOnlyList<WorkspaceInfo> workspaces = state.Workspaces;
+            IReadOnlyList<MonitorInfoDto> monitors = state.Monitors;
+            IReadOnlyList<string> layouts = snapshot.Layouts;
+            IReadOnlyList<BindingInfo> bindings = snapshot.Bindings;
+            IReadOnlyList<ContextReport> contexts = snapshot.Contexts;
+            IReadOnlyList<ArrangementInfo> arrangements = snapshot.Arrangements;
 
             // The focused workspace is what "bring it here" means, and only the
             // workspace list knows which it is. Its monitor is what "near me" means.
@@ -582,6 +553,7 @@ public sealed class WmConnection : IAsyncDisposable
     private EventPump BuildPump() => new(Topics)
     {
         ProgramName = "dalil",
+        PipeName = PipeName,
         ConnectTimeout = TimeSpan.FromSeconds(5),
 
         // The subscription is in place, which is all a read needs - and the read

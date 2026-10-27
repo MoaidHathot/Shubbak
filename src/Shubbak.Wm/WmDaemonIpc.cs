@@ -24,6 +24,10 @@ internal sealed partial class WmDaemonIpc
     /// asks each of them once every half minute rather than once per focus change.
     /// </summary>
     private readonly WindowIconCache _icons = new();
+    private static readonly IReadOnlyList<CommandInfo> Commands = Describe();
+    private static readonly IReadOnlyList<string> LayoutNames = [.. Core.Layouts.LayoutRegistry.CanonicalNames];
+    private static readonly string CommandsJson = JsonSerializer.Serialize(Commands, IpcJsonContext.Default.IReadOnlyListCommandInfo);
+    private static readonly string LayoutsJson = JsonSerializer.Serialize(LayoutNames, IpcJsonContext.Default.IReadOnlyListString);
 
     public WmDaemonIpc(WmDaemon daemon) => _daemon = daemon;
 
@@ -385,6 +389,8 @@ internal sealed partial class WmDaemonIpc
     private Task<IpcResponse> QueryAsync(IpcRequest request)
     {
         string what = request.Payload ?? "state";
+        if (what is "palette" or "palette-all") return ReadPaletteAsync(request, what == "palette-all");
+        if (what == "bar-state") return ReadBarAsync(request);
 
         // Answered before the message loop is involved at all.
         //
@@ -410,8 +416,9 @@ internal sealed partial class WmDaemonIpc
         if (what is "commands")
         {
             return Task.FromResult(new IpcResponse(request.Id, true,
-                JsonSerializer.Serialize(Describe(), IpcJsonContext.Default.IReadOnlyListCommandInfo)));
+                CommandsJson));
         }
+        if (what == "layouts") return Task.FromResult(new IpcResponse(request.Id, true, LayoutsJson));
 
         // The file as it is on disk, off the loop: the path is fixed for the life of
         // the process, and a read of the file is the one thing the tick must not wait
@@ -448,10 +455,6 @@ internal sealed partial class WmDaemonIpc
                         StateProjection.Describe(focused, focused), IpcJsonContext.Default.WindowInfo)
                     : "null",
 
-                "layouts" => JsonSerializer.Serialize(
-                    (IReadOnlyList<string>)[.. Core.Layouts.LayoutRegistry.CanonicalNames],
-                    IpcJsonContext.Default.IReadOnlyListString),
-
                 "bindings" => JsonSerializer.Serialize(
                     _daemon.DescribeBindings(), IpcJsonContext.Default.IReadOnlyListBindingInfo),
 
@@ -483,6 +486,30 @@ internal sealed partial class WmDaemonIpc
                     "monitors, focused, layouts, commands, bindings, contexts, arrangements, rules, config, config-path")
                 : new IpcResponse(request.Id, true, json);
         });
+    }
+
+    private async Task<IpcResponse> ReadBarAsync(IpcRequest request)
+    {
+        StateSnapshot snapshot = await _daemon.InvokeAsync(() => StateProjection.Snapshot(
+            _daemon.Manager, _daemon.IsSuspended, _daemon.Session, _daemon.ActiveContexts, includeWindows: false)).ConfigureAwait(false);
+        return new IpcResponse(request.Id, true, JsonSerializer.Serialize(snapshot, IpcJsonContext.Default.StateSnapshot));
+    }
+
+    private async Task<IpcResponse> ReadPaletteAsync(IpcRequest request, bool everyWindow)
+    {
+        List<WindowCatalogue.Discovered> discovered = WindowCatalogue.Discover(everything: false);
+        List<WindowCatalogue.Discovered>? every = everyWindow ? WindowCatalogue.Discover(everything: true) : null;
+        PaletteSnapshot snapshot = await _daemon.InvokeAsync(() =>
+        {
+            IReadOnlyList<WindowCandidate> windows = WindowCatalogue.Join(discovered, _daemon.Manager, _daemon.Windows);
+            return new PaletteSnapshot(
+                StateProjection.Snapshot(_daemon.Manager, _daemon.IsSuspended, _daemon.Session, _daemon.ActiveContexts, includeWindows: false),
+                windows, every is null ? [] : WindowCatalogue.Join(every, _daemon.Manager, _daemon.Windows),
+                Commands, LayoutNames, _daemon.DescribeBindings(), _daemon.ReportContexts(), _daemon.DescribeArrangements());
+        }).ConfigureAwait(false);
+        // The loop only captures values. Serializing the larger palette response
+        // must not delay the next keyboard-command drain or animation frame.
+        return new IpcResponse(request.Id, true, JsonSerializer.Serialize(snapshot, IpcJsonContext.Default.PaletteSnapshot));
     }
 
     /// <summary>

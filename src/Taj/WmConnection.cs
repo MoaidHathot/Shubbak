@@ -27,7 +27,7 @@ namespace Taj;
 /// nothing.
 /// </para>
 /// </remarks>
-public sealed class WmConnection : IAsyncDisposable
+public sealed partial class WmConnection : IAsyncDisposable
 {
     private readonly BarModel _model;
 
@@ -62,7 +62,8 @@ public sealed class WmConnection : IAsyncDisposable
     private IReadOnlyList<MonitorInfoDto>? _lastMonitors;
 
     private IpcClient? _client;
-    private EventPump? _pump;
+    private readonly Group _group;
+    private bool _disposed;
 
     /// <summary>
     /// The window in front as last reported, so an icon that arrives after focus has
@@ -83,16 +84,16 @@ public sealed class WmConnection : IAsyncDisposable
     /// policy would be more code than the cache.
     /// </para>
     /// <para>
-    /// Written from the pump and from the fire-and-forget fetches, hence concurrent.
+    /// Shared by all bars and guarded by the group's gate, including fetch completion.
     /// </para>
     /// </remarks>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, (long ReadAt, string? Json)> _icons = new();
+    private readonly Dictionary<long, (long ReadAt, string? Json)> _icons;
 
     /// <summary>
     /// Windows whose icon is being fetched right now, so a burst of title changes in
     /// the moment after an entry expires costs one round trip rather than one each.
     /// </summary>
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, byte> _fetching = new();
+    private readonly Dictionary<long, long> _fetching;
 
     private static readonly TimeSpan IconLifetime = TimeSpan.FromSeconds(60);
     private const int IconCapacity = 64;
@@ -104,7 +105,7 @@ public sealed class WmConnection : IAsyncDisposable
     private const int IconSize = 32;
 
     /// <summary>
-    /// Every topic <see cref="HandleEventAsync"/> has a case for, and nothing else.
+    /// Every topic <see cref="HandleEvent"/> has a case for, and nothing else.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -194,6 +195,7 @@ public sealed class WmConnection : IAsyncDisposable
 
     /// <summary>The contexts as the window manager last listed them.</summary>
     private IReadOnlyList<string>? _lastContexts;
+    private BarReading? _lastReading;
 
     /// <summary>
     /// Raised when the active workspace changes, so profiles can switch.
@@ -235,11 +237,15 @@ public sealed class WmConnection : IAsyncDisposable
     /// display's workspaces, which is what makes a per-monitor bar useful rather than
     /// several identical copies of one list.
     /// </param>
-    public WmConnection(BarModel model, string deviceId)
+    /// <param name="shareWith">Another bar in this process whose connection/state reads are shared.</param>
+    public WmConnection(BarModel model, string deviceId, WmConnection? shareWith = null)
     {
         _model = model ?? throw new ArgumentNullException(nameof(model));
         ArgumentException.ThrowIfNullOrEmpty(deviceId);
         _deviceId = deviceId;
+        _group = shareWith?._group ?? new Group();
+        _icons = _group.Icons;
+        _fetching = _group.Fetching;
     }
 
     /// <summary>The display this connection filters for.</summary>
@@ -291,8 +297,8 @@ public sealed class WmConnection : IAsyncDisposable
     public void Start(bool listenForSignals = false)
     {
         ListensForSignals = listenForSignals;
-        _pump = BuildPump();
-        _pump.Start();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        _group.Add(this);
     }
 
     /// <summary>
@@ -317,11 +323,9 @@ public sealed class WmConnection : IAsyncDisposable
     /// </remarks>
     public void Restart(bool listenForSignals)
     {
-        if (_pump is { } pump) pump.DisposeAsync().AsTask().GetAwaiter().GetResult();
-
-        _client = null;
-        IsConnected = false;
-        Start(listenForSignals);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ListensForSignals = listenForSignals;
+        _group.UpdateSubscription();
     }
 
     /// <summary>Sends a command, for widget clicks.</summary>
@@ -360,67 +364,7 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// The subscription, reconnecting for as long as the bar lives. What is the bar's
-    /// about it: two connections, kept by choice now that one would do - the bar
-    /// re-reads the whole state on nearly every event and sends a command on every
-    /// click, and a connection of their own keeps a burst of events and a reply from
-    /// ever waiting on each other; a snapshot read once the subscription is in place;
-    /// and a give-up clock against a window manager that has gone, which closes the
-    /// bar.
-    /// </summary>
-    private EventPump BuildPump() => new(ListensForSignals ? SubscribedWithSignals : Subscribed)
-    {
-        ProgramName = "taj",
-        PipeName = PipeName,
-        ConnectTimeout = TimeSpan.FromSeconds(2),
-        OpensCommandsConnection = true,
-
-        Subscribed = async (connection, _) =>
-        {
-            _client = connection.Commands;
-            IsConnected = true;
-            _everConnected = true;
-            _model.SetValue(WindowManagerStatus.ConnectionKey, WindowManagerStatus.ConnectionLabel(connected: true, _everConnected));
-            await RefreshAsync(connection.Commands!).ConfigureAwait(false);
-
-            // After the subscription is in place, so the values a publisher says again
-            // arrive on this very connection. Only when something is listening: a bar
-            // with no signal source has nothing to be told, and a signal nobody
-            // subscribes to is a line in the window manager's log about a key that does
-            // nothing.
-            if (ListensForSignals)
-                await SendCommandAsync(SignalSource.AnnounceCommand).ConfigureAwait(false);
-        },
-
-        Event = (connection, notification, _) => HandleEventAsync(connection.Commands!, notification),
-
-        Disconnected = _ =>
-        {
-            _client = null;
-            IsConnected = false;
-
-            // Said on the bar as well as in the log. A window manager that has gone
-            // looks, from the bar, exactly like one that is fine and idle; the pill is
-            // the one thing that tells them apart without pressing a key.
-            _model.SetValue(WindowManagerStatus.ConnectionKey, WindowManagerStatus.ConnectionLabel(connected: false, _everConnected));
-        },
-
-        GiveUp = (everConnected, lostAtTicks) =>
-        {
-            if (!ReconnectPolicy.ShouldGiveUp(everConnected, lostAtTicks, Stopwatch.GetTimestamp(), WindowManagerTimeout))
-                return false;
-
-            Log.Info(LogCategory.Ipc,
-                $"no window manager for {WindowManagerTimeout!.Value.TotalSeconds:F0}s; closing the bar");
-
-            return true;
-        },
-
-        Stopped = () => WindowManagerStopped?.Invoke(),
-    };
-
-    private async Task HandleEventAsync(IpcClient client, IpcEvent notification)
+    private void HandleEvent(IpcClient client, IpcEvent notification)
     {
         switch (notification.Topic)
         {
@@ -445,14 +389,14 @@ public sealed class WmConnection : IAsyncDisposable
                 // between monitors is the ordinary case: both monitors' workspaces
                 // were already displayed, so nothing is activated and the only thing
                 // that changed is which one has the keyboard.
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             case "window.unmanaged":
                 // Its icon is forgotten along with it, so a handle Windows hands to the
                 // next window does not come with the last one's picture.
                 ForgetIcon(notification.Data);
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             case "workspace.activated":
@@ -466,7 +410,7 @@ public sealed class WmConnection : IAsyncDisposable
                 // list is re-queried rather than patched. It is a handful of entries;
                 // reconstructing it is cheaper than keeping a correct incremental
                 // model in step.
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             case "monitor.added":
@@ -477,7 +421,7 @@ public sealed class WmConnection : IAsyncDisposable
                 // coming or going changes the answer for every bar, not just the one
                 // on the monitor concerned. Used to be dropped by the default case
                 // below while the subscription was to everything.
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             case "binding_mode.changed":
@@ -505,11 +449,11 @@ public sealed class WmConnection : IAsyncDisposable
                 // arrivals would drift from it in order and, after a missed event, in
                 // content. Contexts flip seconds or minutes apart; one query each time
                 // costs nothing worth saving.
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             case "layout.changed":
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             case "config.reloaded":
@@ -523,7 +467,7 @@ public sealed class WmConnection : IAsyncDisposable
                 // Only ever arrives when this connection asked for the topic. Parsed
                 // here, once per bar, and handed up as words: the hub decides which
                 // sources want them. A payload that is not a signal is nothing.
-                if (SignalReceived is { } onSignal && SignalPayload.Parse(notification.Data) is { } signal)
+                if (ListensForSignals && SignalReceived is { } onSignal && SignalPayload.Parse(notification.Data) is { } signal)
                     onSignal(signal.Name, signal.Arguments);
                 break;
 
@@ -544,7 +488,7 @@ public sealed class WmConnection : IAsyncDisposable
                 // the bar is showing is older than the world. Re-reading is the whole
                 // point of being told.
                 Log.Warn(LogCategory.Ipc, "missed events; re-reading the window manager's state");
-                await RefreshAsync(client).ConfigureAwait(false);
+                _group.RequestRefresh();
                 break;
 
             default:
@@ -641,9 +585,10 @@ public sealed class WmConnection : IAsyncDisposable
         // and each retitle lands here; without this, the first retitle after an entry
         // expired would send a request, and every one behind it in the same instant
         // would send another - each a message into the window the user is typing in.
-        if (!_fetching.TryAdd(handle, 0)) return;
+        long generation = ++_group.IconGeneration;
+        if (!_fetching.TryAdd(handle, generation)) return;
 
-        _ = FetchIconAsync(client, handle);
+        _ = FetchIconAsync(client, handle, generation);
     }
 
     /// <summary>
@@ -656,7 +601,7 @@ public sealed class WmConnection : IAsyncDisposable
     /// behind it keep flowing. Which is why the guard at the end exists: two fetches
     /// can be in flight and finish out of order.
     /// </remarks>
-    private async Task FetchIconAsync(IpcClient client, long handle)
+    private async Task FetchIconAsync(IpcClient client, long handle, long generation)
     {
         string? json = null;
 
@@ -677,18 +622,22 @@ public sealed class WmConnection : IAsyncDisposable
                 Log.Debug(LogCategory.Ipc, $"could not fetch the icon of window {handle}: {ex.GetType().Name}: {ex.Message}");
             }
 
-            if (_icons.Count >= IconCapacity) _icons.Clear();
-            _icons[handle] = (Stopwatch.GetTimestamp(), json);
         }
         finally
         {
-            // After the entry is stored, so nobody arriving in between finds neither
-            // an answer nor a fetch in flight and starts another.
-            _fetching.TryRemove(handle, out _);
+            lock (_group.Gate)
+            {
+                // A window can disappear (and its handle be reused) while the reply
+                // is travelling. Do not repopulate its cache with the old picture.
+                if (_fetching.TryGetValue(handle, out long pending) && pending == generation)
+                {
+                    _fetching.Remove(handle);
+                    if (_icons.Count >= IconCapacity) _icons.Clear();
+                    _icons[handle] = (Stopwatch.GetTimestamp(), json);
+                    _group.ApplyIcon(handle, json);
+                }
+            }
         }
-
-        if (Volatile.Read(ref _focusedHandle) == handle)
-            _model.SetValue(FocusedWindow.IconKey, json ?? string.Empty);
     }
 
     /// <summary>Forgets the icon of a window the window manager has let go of.</summary>
@@ -697,7 +646,10 @@ public sealed class WmConnection : IAsyncDisposable
         try
         {
             if (JsonSerializer.Deserialize(json, IpcJsonContext.Default.WindowInfo) is { } window)
-                _icons.TryRemove(window.Handle, out _);
+            {
+                _icons.Remove(window.Handle);
+                _fetching.Remove(window.Handle);
+            }
         }
         catch (JsonException)
         {
@@ -705,18 +657,8 @@ public sealed class WmConnection : IAsyncDisposable
         }
     }
 
-    private async Task RefreshAsync(IpcClient client)
+    private void ApplySnapshot(IpcClient client, StateSnapshot state)
     {
-        try
-        {
-            IpcResponse response = await client.SendAsync("query", "state").ConfigureAwait(false);
-            if (!response.Ok || response.Data is null) return;
-
-            StateSnapshot? state = JsonSerializer.Deserialize(
-                response.Data, IpcJsonContext.Default.StateSnapshot);
-
-            if (state is null) return;
-
             // Everything the snapshot says about this display, decided in Taj.Core
             // where it is tested; see SnapshotProjection.
             BarReading reading = SnapshotProjection.Read(state, _deviceId, OwnMonitorOnly);
@@ -770,30 +712,18 @@ public sealed class WmConnection : IAsyncDisposable
                 ContextsChanged?.Invoke(contexts);
             }
 
-            if (reading.ActiveWorkspace.Length > 0)
+            if (reading.ActiveWorkspace.Length > 0 && (_lastReading is not { } previous ||
+                previous.ActiveWorkspace != reading.ActiveWorkspace || previous.MonitorIndex != reading.MonitorIndex ||
+                !previous.MonitorNames.SequenceEqual(reading.MonitorNames)))
                 ActiveWorkspaceChanged?.Invoke(reading.ActiveWorkspace, reading.MonitorIndex, reading.MonitorNames);
+            _lastReading = reading;
 
             if (SnapshotProjection.MonitorsDiffer(_lastMonitors, state.Monitors))
             {
                 _lastMonitors = state.Monitors;
                 MonitorsChanged?.Invoke(state.Monitors);
             }
-        }
-        catch (JsonException ex)
-        {
-            // A payload that will not parse is this one message's problem, so the
-            // connection carries on.
-            //
-            // Nothing else is caught here on purpose. A refresh that fails because the
-            // connection failed has to reach the pump, which reconnects; absorbing it
-            // would leave the bar streaming events it can no longer act on, refreshing
-            // nothing, and looking exactly as alive as it did before.
-            Log.Warn(LogCategory.Ipc, $"could not refresh state: {ex.Message}");
-        }
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        if (_pump is { } pump) await pump.DisposeAsync().ConfigureAwait(false);
-    }
+    public ValueTask DisposeAsync() => _group.RemoveAsync(this);
 }

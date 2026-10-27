@@ -433,6 +433,9 @@ public sealed class IpcClient : IAsyncDisposable
     /// <summary>How many events may wait for the consumer before the backlog is dropped. The server's figure.</summary>
     private const int MaxQueuedEvents = 512;
 
+    /// <summary>Whether a subscription already has another event ready, without waiting.</summary>
+    public bool HasQueuedEvents => _events?.Reader.TryPeek(out _) == true;
+
     /// <summary>Starts the loop that reads a subscribed connection. Under <see cref="_turn"/>.</summary>
     private void BeginReading()
     {

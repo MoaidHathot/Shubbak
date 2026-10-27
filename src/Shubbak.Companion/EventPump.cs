@@ -104,6 +104,12 @@ public sealed class EventPump : IAsyncDisposable
     /// <summary>Runs for every event.</summary>
     public Func<PumpConnection, IpcEvent, CancellationToken, Task>? Event { get; set; }
 
+    /// <summary>
+    /// Runs after the events already queued have been handled (at most 64 per batch).
+    /// State mirrors can refresh once per burst without delaying the first event.
+    /// </summary>
+    public Func<PumpConnection, CancellationToken, Task>? BatchCompleted { get; set; }
+
     /// <summary>Runs when a round ends, with why. Not for a refusal on a connection that never subscribed... see <see cref="DisconnectReason"/>.</summary>
     public Action<DisconnectReason>? Disconnected { get; set; }
 
@@ -217,10 +223,16 @@ public sealed class EventPump : IAsyncDisposable
                     if (Subscribed is { } onSubscribed)
                         await onSubscribed(connection, token).ConfigureAwait(false);
 
+                    int batch = 0;
                     await foreach (IpcEvent notification in events.ReadEventsAsync(token).ConfigureAwait(false))
                     {
                         if (Event is { } handler)
                             await handler(connection, notification, token).ConfigureAwait(false);
+                        if (BatchCompleted is { } flush && (++batch >= 64 || !events.HasQueuedEvents))
+                        {
+                            batch = 0;
+                            await flush(connection, token).ConfigureAwait(false);
+                        }
                     }
 
                     // A read that meets the closed end of a pipe reports the end of the
