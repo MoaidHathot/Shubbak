@@ -81,6 +81,7 @@ function End-Child($Child) {
     if ($null -eq $Child) { return }
     $p = $Child.Process
     if (-not $p.HasExited) {
+        if ($p.ProcessName -eq 'Shubbak.TestWindow') { $p.CloseMainWindow() | Out-Null }
         $p.StandardInput.Close()
         if (-not $p.WaitForExit(15000)) { $p.Kill($true); $p.WaitForExit(5000) | Out-Null }
     }
@@ -151,6 +152,7 @@ try {
                 Save-Text $configPath $config
                 $instance = "input-$([Guid]::NewGuid().ToString('N').Substring(0,12))"
                 $daemon = $null
+                $diagnosticFailure = $null
                 $loaders = [Collections.Generic.List[object]]::new()
                 $windows = [Collections.Generic.List[object]]::new()
                 try {
@@ -218,8 +220,15 @@ try {
                     }
                     finally { End-Child $measurement }
                     if ($null -ne $daemon) {
-                        $diagnosis = Invoke-Cli $instance @('diagnose')
-                        Save-Text (Join-Path $state 'diagnostic.md') $diagnosis.Text
+                        try {
+                            $diagnosis = Invoke-Cli $instance @('diagnose')
+                            if ($diagnosis.Code -ne 0) { throw $diagnosis.Error }
+                            Save-Text (Join-Path $state 'diagnostic.md') $diagnosis.Text
+                        }
+                        catch {
+                            $diagnosticFailure = $_.Exception.Message
+                            Save-Text (Join-Path $state 'diagnostic-error.txt') $diagnosticFailure
+                        }
                     }
                 }
                 finally {
@@ -235,15 +244,22 @@ try {
                         Save-Text (Join-Path $state "load-$loadIndex.txt") ($loader.Output.Result + $loader.Error.Result)
                         $loadIndex++
                     }
-                    if ($null -ne $daemon) {
-                        if (-not $daemon.Process.HasExited) { $null = Invoke-Cli $instance @('wm-exit') }
-                        End-Child $daemon
-                    }
                     foreach ($w in $windows) { End-Child $w }
+                    if ($null -ne $daemon) {
+                        try {
+                            if ($diagnosticFailure -and -not $daemon.Process.HasExited) {
+                                $afterLoad = Invoke-Cli $instance @('diagnose')
+                                Save-Text (Join-Path $state 'diagnostic-after-load.md') $afterLoad.Text
+                            }
+                            if (-not $daemon.Process.HasExited) { $null = Invoke-Cli $instance @('wm-exit') }
+                        }
+                        finally { End-Child $daemon }
+                    }
                 }
                 foreach ($loader in $loaders) {
                     if ($loader.ExitCode -ne 0) { throw "Load generator failed: $($loader.Output.Result) $($loader.Error.Result)" }
                 }
+                if ($diagnosticFailure) { throw $diagnosticFailure }
             }
         }
     }

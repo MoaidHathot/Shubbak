@@ -44,13 +44,14 @@ public readonly record struct KeyEvent(
 /// <para>
 /// The design is the one P0's S1 spike validated: the callback <b>allocates
 /// nothing</b>, writes a small struct into a pre-allocated ring buffer, and returns.
-/// A separate thread drains the buffer and does the real work. Measured under
-/// hostile GC load - ~1300 forced blocking compacting Gen2 collections and ~200 GB
-/// of allocation - the callback's p99.9 was <b>0.8-1.0 microseconds</b>, with a
-/// worst case of 2.99 ms across 4 million events.
+/// A separate thread drains the buffer and does the real work. P0's prototype
+/// measured a callback-body p99.9 of 0.8-1.0 microseconds under hostile GC load.
+/// That excludes the time waiting to enter the callback and is not a measurement of
+/// this production hook's input delivery. See <c>spikes/Shubbak.InputProbe</c> and
+/// <c>ideas/keyboard-latency.md</c> for production-path measurements.
 /// </para>
 /// <para>
-/// The rule that makes those numbers hold: <b>nothing in
+/// The hot-path constraint: <b>nothing in
 /// <see cref="Callback"/> may allocate</b> - no LINQ, no closures, no boxing, no
 /// string work (docs/adr/0001-language-choice.md, constraint 1).
 /// </para>

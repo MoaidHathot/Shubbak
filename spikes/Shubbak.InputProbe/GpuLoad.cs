@@ -53,6 +53,7 @@ internal static class GpuLoad
                 $"--user-data-dir={profile}", $"--app=http://127.0.0.1:{port}/{token}",
                 "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-sync",
                 "--disable-renderer-backgrounding", "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
                 "--window-size=1600,1000", $"--window-position={monitor.Bounds.X + 40},{monitor.Bounds.Y + 40}",
             }) info.ArgumentList.Add(arg);
             process = Process.Start(info) ?? throw new InvalidOperationException("Could not start graphics worker.");

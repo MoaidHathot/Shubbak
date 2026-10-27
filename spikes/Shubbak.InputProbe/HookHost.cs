@@ -16,6 +16,10 @@ internal sealed class HookHost
 {
     private readonly BindingTable _bindings = new();
     private readonly double[] _lookup = new double[1_000_000];
+    // Resolve the clock conversion on the controller thread. Deferring the first
+    // Frequency access until the first recorded callback measured 40 bytes of probe
+    // setup as hook allocation; counter warmup alone did not remove that increment.
+    private readonly double _millisecondsPerTick = 1000.0 / Stopwatch.Frequency;
     private int _seen, _count;
     private long _allocatedBefore, _allocatedAfter;
 
@@ -35,10 +39,11 @@ internal sealed class HookHost
         bool result = _bindings.IsBound(key, modifiers, down);
         long end = Stopwatch.GetTimestamp();
         int seen = ++_seen;
-        if (seen == 500) _allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        // Warm the measuring API as well as the lookup.
+        if (seen <= 500) _allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         if (seen > 500)
         {
-            if (_count < _lookup.Length) _lookup[_count++] = (end - start) * 1000.0 / Stopwatch.Frequency;
+            if (_count < _lookup.Length) _lookup[_count++] = (end - start) * _millisecondsPerTick;
             _allocatedAfter = GC.GetAllocatedBytesForCurrentThread();
         }
         return result;
