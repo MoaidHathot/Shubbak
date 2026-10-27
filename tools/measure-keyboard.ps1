@@ -1,0 +1,237 @@
+<#
+.SYNOPSIS
+  Measures tagged input delivery through native Shubbak builds, on an idle desktop.
+.DESCRIPTION
+  Uses test-owned windows and isolated daemon state. Stops the normal session for the
+  run and restores it afterwards. Results are JSONL plus per-case diagnostic reports.
+  Run this separately from builds/tests: those would be uncontrolled load.
+#>
+[CmdletBinding()]
+param(
+    [string] $Probe = (Join-Path $PSScriptRoot '../artifacts/input-probe-before/shubbak-input-probe.exe'),
+    [string] $Current = (Join-Path $PSScriptRoot '../dist/shubbak-wm.exe'),
+    [string] $Previous,
+    [string] $Output = (Join-Path $PSScriptRoot '../artifacts/keyboard-baseline'),
+    [ValidateRange(2, 1000000)] [int] $Samples = 20000,
+    [string[]] $Workloads = @('idle', 'cpu', 'animation', 'ipc'),
+    [ValidateRange(1, 10)] [int] $Rounds = 2,
+    [switch] $Bound
+)
+
+$ErrorActionPreference = 'Stop'
+if (($Samples % 2) -ne 0) { throw 'Samples must contain complete down/up pairs.' }
+if ($Bound -and 'suspended' -in $Workloads) { throw 'A suspended daemon intentionally does not handle bound keys.' }
+foreach ($workload in $Workloads) {
+    if ($workload -notin @('idle', 'cpu', 'animation', 'ipc', 'suspended', 'gpu', 'gpu-cpu')) { throw "Unknown workload: $workload" }
+}
+$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$Probe = [IO.Path]::GetFullPath($Probe)
+$Current = [IO.Path]::GetFullPath($Current)
+$Output = [IO.Path]::GetFullPath($Output)
+$cli = Join-Path $root 'dist/shubbak.exe'
+$window = Join-Path $root 'tests/Shubbak.TestWindow/bin/Release/net10.0-windows10.0.19041.0/win-x64/Shubbak.TestWindow.exe'
+foreach ($file in @($Probe, $Current, $cli, $window)) {
+    if (-not (Test-Path -LiteralPath $file)) { throw "Required binary missing: $file" }
+}
+if ($Previous) { $Previous = [IO.Path]::GetFullPath($Previous); if (-not (Test-Path $Previous)) { throw "Missing previous build: $Previous" } }
+New-Item -ItemType Directory -Path $Output -Force | Out-Null
+$results = Join-Path $Output 'results.jsonl'
+if (Test-Path $results) { throw "Refusing to overwrite an existing measurement: $results" }
+$metadata = @{
+    StartedUtc = [DateTime]::UtcNow.ToString('O')
+    OperatingSystem = [Environment]::OSVersion.VersionString
+    LogicalProcessors = [Environment]::ProcessorCount
+    Samples = $Samples; Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads
+    Probe = (Get-FileHash $Probe).Hash
+    Current = (Get-FileHash $Current).Hash
+    Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
+}
+[IO.File]::WriteAllText((Join-Path $Output 'metadata.json'), ($metadata | ConvertTo-Json).Replace("`r", ''), [Text.UTF8Encoding]::new($false))
+
+function Start-Child([string] $File, [string[]] $Arguments, [string] $Instance = '', [string] $State = '', [switch] $Ready) {
+    $info = [Diagnostics.ProcessStartInfo]::new($File)
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    foreach ($arg in $Arguments) { $info.ArgumentList.Add($arg) }
+    if ($Instance) { $info.Environment['SHUBBAK_INSTANCE'] = $Instance }
+    else { $info.Environment.Remove('SHUBBAK_INSTANCE') | Out-Null }
+    if ($State) { $info.Environment['SHUBBAK_STATE_DIR'] = $State }
+    $p = [Diagnostics.Process]::Start($info)
+    $errorText = $p.StandardError.ReadToEndAsync()
+    if ($Ready) {
+        $line = $p.StandardOutput.ReadLineAsync()
+        if (-not $line.Wait(15000) -or $line.Result -ne 'ready') {
+            if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit(5000) | Out-Null }
+            throw "Child failed to become ready: $File $Arguments; $($errorText.Result)"
+        }
+    }
+    [pscustomobject]@{ Process = $p; Output = $p.StandardOutput.ReadToEndAsync(); Error = $errorText; ExitCode = $null }
+}
+
+function End-Child($Child) {
+    if ($null -eq $Child) { return }
+    $p = $Child.Process
+    if (-not $p.HasExited) {
+        $p.StandardInput.Close()
+        if (-not $p.WaitForExit(5000)) { $p.Kill($true); $p.WaitForExit(5000) | Out-Null }
+    }
+    if ($p.HasExited) { $Child.ExitCode = $p.ExitCode }
+    $p.Dispose()
+}
+
+function Invoke-Cli([string] $Instance, [string[]] $Arguments) {
+    $child = Start-Child $cli $Arguments $Instance
+    try {
+        if (-not $child.Process.WaitForExit(15000)) { throw "CLI timed out: $Arguments" }
+        [pscustomobject]@{ Code = $child.Process.ExitCode; Text = $child.Output.Result; Error = $child.Error.Result }
+    }
+    finally { End-Child $child }
+}
+
+function Save-Text([string] $Path, [string] $Text) {
+    [IO.File]::WriteAllText($Path, $Text.Replace("`r", ''), [Text.UTF8Encoding]::new($false))
+}
+
+$config = @'
+general {
+    default-layout "splith"
+    reload-on-save #false
+}
+animation {
+    enabled #true
+    fps 60
+    window-move duration=140 curve="ease-out"
+}
+workspaces { workspace "input-probe"; }
+rules {
+    rule "only our noise windows" {
+        match { !process "Shubbak.TestWindow"; }
+        do { ignore; }
+    }
+}
+keybindings {
+    bind "f23" { signal "input-probe"; }
+    bind "f22" { wm-toggle-suspend; }
+'@
+foreach ($mod in @('alt', 'alt+shift', 'ctrl+alt', 'ctrl+shift')) {
+    foreach ($f in 1..24) { $config += "`n    bind `"$mod+f$f`" { signal `"unused`"; }" }
+}
+$config += "`n}`n"
+
+$normal = @(Get-Process -Name shubbak-wm -ErrorAction SilentlyContinue)
+foreach ($p in $normal) {
+    if ($p.Path -ne (Join-Path $root 'dist/shubbak-wm.exe')) { throw "Unexpected daemon running: $($p.Path)" }
+    $p.Dispose()
+}
+if ($normal.Count -gt 0) {
+    & $cli stop
+    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the normal session.' }
+}
+
+try {
+    foreach ($workload in $Workloads) {
+        for ($round = 0; $round -lt $Rounds; $round++) {
+            $versions = if ($Bound -or $workload -in @('animation', 'ipc', 'suspended')) { @('current') } else { @('off', 'current') }
+            if ($Previous -and $workload -ne 'suspended') { $versions = @($versions | Where-Object { $_ -ne 'current' }) + @('previous', 'current') }
+            if (($round % 2) -eq 1) { [Array]::Reverse($versions) }
+            foreach ($version in $versions) {
+                $label = "$workload-$version-r$round-$(if ($Bound) {'bound'} else {'pass'})"
+                $state = Join-Path $Output $label
+                New-Item -ItemType Directory -Path $state | Out-Null
+                $configPath = Join-Path $state 'config.kdl'
+                Save-Text $configPath $config
+                $instance = "input-$([Guid]::NewGuid().ToString('N').Substring(0,12))"
+                $daemon = $null
+                $loaders = [Collections.Generic.List[object]]::new()
+                $windows = [Collections.Generic.List[object]]::new()
+                try {
+                    if ($version -ne 'off') {
+                        if ($workload -eq 'animation') {
+                            foreach ($i in 1..2) { $windows.Add((Start-Child $window @('--test-window'))) }
+                        }
+                        $binary = if ($version -eq 'previous') { $Previous } else { $Current }
+                        $daemon = Start-Child $binary @('--config', $configPath, '--log-file') $instance $state
+                        $deadline = [Diagnostics.Stopwatch]::StartNew()
+                        do {
+                            if ($daemon.Process.HasExited) { throw "Daemon exited: $($daemon.Error.Result)" }
+                            $ready = Invoke-Cli $instance @('status')
+                            if ($ready.Code -eq 0) { break }
+                            Start-Sleep -Milliseconds 100
+                        } while ($deadline.Elapsed.TotalSeconds -lt 15)
+                        if ($ready.Code -ne 0) { throw 'Daemon did not start.' }
+                        # Allow its initial adoption/focus to settle before the ignored
+                        # receiver takes the keyboard. This is outside the measurement.
+                        Start-Sleep -Milliseconds 250
+                        if ($workload -eq 'suspended') {
+                            $suspend = Invoke-Cli $instance @('wm-suspend')
+                            if ($suspend.Code -ne 0) { throw $suspend.Error }
+                        }
+                    }
+                    if ($workload -in @('gpu', 'gpu-cpu')) {
+                        $loaders.Add((Start-Child $Probe @('gpu-load', '--seconds', '180', '--iterations', '128') -Ready))
+                        Start-Sleep -Seconds 2
+                        if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+                            $gpu = & nvidia-smi --query-gpu=name,utilization.gpu,power.draw --format=csv
+                            Save-Text (Join-Path $state 'gpu.csv') ($gpu -join "`n")
+                        }
+                    }
+                    if ($workload -in @('cpu', 'gpu-cpu')) {
+                        $loaders.Add((Start-Child $Probe @('cpu-load', '--threads', '28', '--seconds', '180') -Ready))
+                    }
+                    if ($workload -eq 'animation') {
+                        $loaders.Add((Start-Child $Probe @('churn', '--animate', '--instance', $instance, '--seconds', '180') -Ready))
+                    }
+                    if ($workload -eq 'ipc') {
+                        foreach ($i in 1..4) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180') -Ready)) }
+                    }
+
+                    $args = @('receive', '--samples', "$Samples", '--warmup', '1000', '--interval-us', '2000', '--label', $label, '--raw-output', (Join-Path $state 'events.csv'))
+                    if ($Bound) { $args += @('--bound', '--instance', $instance) }
+                    $measurement = Start-Child $Probe $args
+                    try {
+                        if (-not $measurement.Process.WaitForExit(120000)) { throw 'Input probe timed out.' }
+                        $text = $measurement.Output.Result.Trim()
+                        Save-Text (Join-Path $state 'result.json') $text
+                        if ($measurement.Process.ExitCode -ne 0) { throw "Invalid measurement $label`: $text $($measurement.Error.Result)" }
+                        foreach ($loader in $loaders) {
+                            if ($loader.Process.HasExited) { throw "Load generator exited early: $($loader.Error.Result) $($loader.Output.Result)" }
+                        }
+                        $result = $text | ConvertFrom-Json
+                        if ($result.Missing -ne 0 -or $result.WrongEdges -ne 0 -or $result.LeakedBoundEvents -ne 0) { throw "Input integrity failed: $text" }
+                        [IO.File]::AppendAllText($results, $text + "`n", [Text.UTF8Encoding]::new($false))
+                        Write-Output ("{0}: n={1}, p50={2:F3} ms, p99={3:F3}, p99.9={4:F3}, max={5:F3}" -f $label, $result.Delivery.Count, $result.Delivery.P50Ms, $result.Delivery.P99Ms, $result.Delivery.P999Ms, $result.Delivery.MaxMs)
+                    }
+                    finally { End-Child $measurement }
+                    if ($null -ne $daemon) {
+                        $diagnosis = Invoke-Cli $instance @('diagnose')
+                        Save-Text (Join-Path $state 'diagnostic.md') $diagnosis.Text
+                    }
+                }
+                finally {
+                    $loadIndex = 0
+                    foreach ($loader in $loaders) {
+                        End-Child $loader
+                        Save-Text (Join-Path $state "load-$loadIndex.txt") ($loader.Output.Result + $loader.Error.Result)
+                        $loadIndex++
+                    }
+                    if ($null -ne $daemon) {
+                        if (-not $daemon.Process.HasExited) { $null = Invoke-Cli $instance @('wm-exit') }
+                        End-Child $daemon
+                    }
+                    foreach ($w in $windows) { End-Child $w }
+                }
+                foreach ($loader in $loaders) {
+                    if ($loader.ExitCode -ne 0) { throw "Load generator failed: $($loader.Output.Result) $($loader.Error.Result)" }
+                }
+            }
+        }
+    }
+}
+finally {
+    # This task intentionally stopped the normal daemon before preparing the probe;
+    # restore it even if no normal daemon was running at this script's entry.
+    Start-Process -FilePath (Join-Path $root 'dist/shubbak-wm.exe') -WorkingDirectory (Join-Path $root 'dist')
+}

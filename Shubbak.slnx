@@ -4,6 +4,7 @@
     <Project Path="examples/Shubbak.Example.Hello/Shubbak.Example.Hello.csproj" />
   </Folder>
   <Folder Name="/spikes/">
+    <Project Path="spikes/Shubbak.InputProbe/Shubbak.InputProbe.csproj" />
     <Project Path="spikes/Shubbak.Spike/Shubbak.Spike.csproj" />
   </Folder>
   <Folder Name="/src/">
