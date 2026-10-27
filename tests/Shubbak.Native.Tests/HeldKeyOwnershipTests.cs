@@ -233,6 +233,29 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         finally { ReleaseAll(); }
     }
 
+    [Fact]
+    public void AFaultingReleaseProbeDoesNotLeakAnUnmatchedApplicationRelease()
+    {
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
+        using var source = new KeyboardSource();
+        source.Start((key, _, down) =>
+        {
+            if (key != Key) return false;
+            if (!down) throw new InvalidOperationException("deliberate release failure");
+            return true;
+        });
+        try
+        {
+            Send(Key, true);
+            Send(Key, false);
+            Flush(window);
+            Assert.Empty(window.KeyDowns);
+            Assert.Equal(1, source.Faults);
+        }
+        finally { ReleaseAll(); }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

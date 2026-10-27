@@ -265,11 +265,19 @@ public sealed class KeyboardSource : IDisposable
         int objectId, int childId, uint threadId, uint eventTime)
     {
         KeyboardSource? source = s_instance;
-        // A callback queued by a source being disposed must not reset its successor.
-        if (source?._desktopEvents is not { IsClosed: false } registered ||
-            (nint)hook.Value != registered.DangerousGetHandle()) return;
-        Array.Clear(source._owners);
-        Interlocked.Increment(ref source._desktopResets);
+        try
+        {
+            // A callback queued by a source being disposed must not reset its successor.
+            if (source?._desktopEvents is not { IsClosed: false } registered ||
+                (nint)hook.Value != registered.DangerousGetHandle()) return;
+            Array.Clear(source._owners);
+            Interlocked.Increment(ref source._desktopResets);
+        }
+        catch
+        {
+            // Like the keyboard callback, this unmanaged boundary must never unwind.
+            if (source is not null) Interlocked.Increment(ref source._faults);
+        }
     }
 
     /// <summary>Removes up to <paramref name="max"/> queued keystrokes.</summary>
@@ -342,8 +350,15 @@ public sealed class KeyboardSource : IDisposable
                 {
                     uint key = ((KBDLLHOOKSTRUCT*)lParam.Value)->vkCode;
                     if (key < source._owners.Length)
-                        source._owners[key] = (uint)wParam.Value is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN
-                            ? KeyOwner.Application : KeyOwner.None;
+                    {
+                        bool down = (uint)wParam.Value is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
+                        bool ownedRelease = !down && source._owners[key] == KeyOwner.Shubbak;
+                        source._owners[key] = down ? KeyOwner.Application : KeyOwner.None;
+                        // A release-probe failure must not send an application an up
+                        // for a down it never received. Passing a down on failure is
+                        // different: that transfers ownership, including its later up.
+                        if (ownedRelease) return new LRESULT(1);
+                    }
                 }
             }
 
@@ -376,7 +391,6 @@ public sealed class KeyboardSource : IDisposable
         // one paid for a result that was thrown away.
         if (!isKeyDown)
         {
-            source._owners[virtualKey] = KeyOwner.None;
             if (owner == KeyOwner.Shubbak)
             {
                 // A binding that runs on release wants this edge delivered, not only
@@ -398,9 +412,13 @@ public sealed class KeyboardSource : IDisposable
                     source.Enqueue(in release);
                 }
 
+                // Keep the owner available until the probe has succeeded: the fault
+                // guard needs it to suppress an owned release if that probe throws.
+                source._owners[virtualKey] = KeyOwner.None;
                 return new LRESULT(1);
             }
 
+            source._owners[virtualKey] = KeyOwner.None;
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
         }
 
