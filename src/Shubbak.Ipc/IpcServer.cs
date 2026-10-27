@@ -589,10 +589,7 @@ public sealed class IpcServer : IAsyncDisposable
             {
                 using var reading = CancellationTokenSource.CreateLinkedTokenSource(token);
                 using var reader = new BoundedLineReader(_pipe, IpcProtocol.MaxMessageBytes);
-                await using var writer = new StreamWriter(_pipe, new UTF8Encoding(false), leaveOpen: true)
-                {
-                    AutoFlush = false,
-                };
+                var writer = new Utf8LineWriter(_pipe);
 
                 Task<string?> readTask = reader.ReadLineAsync(reading.Token).AsTask();
                 Task pendingTask = _pending.WaitAsync(reading.Token);
@@ -646,7 +643,7 @@ public sealed class IpcServer : IAsyncDisposable
             }
         }
 
-        private async Task HandleLineAsync(string line, StreamWriter writer)
+        private async Task HandleLineAsync(string line, Utf8LineWriter writer)
         {
             if (line.Length == 0) return;
 
@@ -767,7 +764,7 @@ public sealed class IpcServer : IAsyncDisposable
             return null;
         }
 
-        private async Task FlushOutboxAsync(StreamWriter writer)
+        private async Task FlushOutboxAsync(Utf8LineWriter writer)
         {
             bool resync;
 
@@ -798,13 +795,9 @@ public sealed class IpcServer : IAsyncDisposable
             await writer.FlushAsync().ConfigureAwait(false);
         }
 
-        private static async Task WriteAsync(StreamWriter writer, IpcResponse response)
+        private static async Task WriteAsync(Utf8LineWriter writer, IpcResponse response)
         {
-            await writer.WriteLineAsync(
-                JsonSerializer.Serialize(response, IpcJsonContext.Default.IpcResponse))
-                .ConfigureAwait(false);
-
-            await writer.FlushAsync().ConfigureAwait(false);
+            await writer.WriteAsync(response, IpcJsonContext.Default.IpcResponse).ConfigureAwait(false);
         }
 
         public void Dispose()

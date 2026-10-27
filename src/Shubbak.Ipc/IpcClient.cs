@@ -33,7 +33,7 @@ public sealed class IpcClient : IAsyncDisposable
 {
     private NamedPipeClientStream? _pipe;
     private StreamReader? _reader;
-    private StreamWriter? _writer;
+    private Utf8LineWriter? _writer;
     private int _nextId;
 
     /// <summary>
@@ -173,7 +173,7 @@ public sealed class IpcClient : IAsyncDisposable
         await _pipe.ConnectAsync((int)timeout.TotalMilliseconds, token).ConfigureAwait(false);
 
         _reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
-        _writer = new StreamWriter(_pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true };
+        _writer = new Utf8LineWriter(_pipe);
     }
 
     /// <summary>Whether this connection is streaming a subscription.</summary>
@@ -346,9 +346,8 @@ public sealed class IpcClient : IAsyncDisposable
         }
     }
 
-    private Task WriteAsync(IpcRequest request, CancellationToken token) =>
-        _writer!.WriteLineAsync(
-            JsonSerializer.Serialize(request, IpcJsonContext.Default.IpcRequest).AsMemory(), token);
+    private ValueTask WriteAsync(IpcRequest request, CancellationToken token) =>
+        _writer!.WriteAsync(request, IpcJsonContext.Default.IpcRequest, token);
 
     /// <summary>
     /// How long to wait for a reply.

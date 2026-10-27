@@ -81,3 +81,20 @@ had roughly the same ~6.8 KiB client allocation each. The benefit there is fewer
 per action, demonstrated by the multi-display burst test; it is not claimed as a
 per-query allocation win with no windows to omit. The full coverage suite passed
 **3,632 cases** including real-daemon compact/palette state consistency and updates.
+
+## Direct UTF-8 framing
+
+Requests/replies serialize straight into a per-connection UTF-8 buffer, eliminating
+the intermediate UTF-16 envelope strings. Events retain batching and wire order;
+buffers above 16 KiB are discarded after writing so one large report does not remain
+retained on an idle connection. The existing JSON wire format and example scripts
+continue to work. A structured-payload protocol rewrite is unnecessary for this gain.
+
+Four paired runs against the **state-read step**, 20,000 equal 4 KiB exchanges:
+
+- Allocation: **53,936–53,941 -> 36,467–36,473 B/op**, another 32% reduction;
+  approximately **50% below the original baseline**.
+- CPU: **0.156–0.171 -> 0.084–0.094 ms/op**.
+- Elapsed: **1.99–2.01 -> 1.395–1.404 s**.
+- 56 IPC and 20 Taj integration tests pass, including reused-buffer Unicode escaping,
+  large-then-small messages, event/reply order and releasing oversized buffer capacity.
