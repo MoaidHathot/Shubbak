@@ -25,6 +25,7 @@ public sealed class IpcServer : IAsyncDisposable
 {
     private readonly CancellationTokenSource _shutdown = new();
     private readonly List<ClientConnection> _clients = [];
+    private volatile ClientConnection[] _publishedClients = [];
     private readonly Lock _gate = new();
 
     private Task? _acceptLoop;
@@ -164,8 +165,7 @@ public sealed class IpcServer : IAsyncDisposable
     /// </remarks>
     public void Publish(string topic, string json)
     {
-        ClientConnection[] clients;
-        lock (_gate) clients = [.. _clients];
+        ClientConnection[] clients = _publishedClients;
 
         if (clients.Length == 0) return;
 
@@ -193,8 +193,18 @@ public sealed class IpcServer : IAsyncDisposable
                 // Bounded. Every connected client costs a lock taken on the daemon
                 // thread for every event published, so an unbounded set is a way for
                 // one runaway process to slow the window manager down for everybody.
+                var client = new ClientConnection(pipe, this);
                 bool room;
-                lock (_gate) room = _clients.Count < IpcProtocol.MaxClients;
+                lock (_gate)
+                {
+                    // The four listeners must reserve/add under the same lock.
+                    room = _clients.Count < IpcProtocol.MaxClients;
+                    if (room)
+                    {
+                        _clients.Add(client);
+                        _publishedClients = [.. _clients];
+                    }
+                }
 
                 if (!room)
                 {
@@ -205,10 +215,6 @@ public sealed class IpcServer : IAsyncDisposable
                     pipe = null;
                     continue;
                 }
-
-                var client = new ClientConnection(pipe, this);
-
-                lock (_gate) _clients.Add(client);
 
                 _ = client.RunAsync(_shutdown.Token);
                 pipe = null;
@@ -343,7 +349,11 @@ public sealed class IpcServer : IAsyncDisposable
         ForgetSubscriptions(client);
 
         bool removed;
-        lock (_gate) removed = _clients.Remove(client);
+        lock (_gate)
+        {
+            removed = _clients.Remove(client);
+            if (removed) _publishedClients = [.. _clients];
+        }
 
         // Once, however many paths noticed the disconnect: the read loop finishing and
         // disposal both arrive here, and a lease released twice is a lease released
@@ -368,7 +378,11 @@ public sealed class IpcServer : IAsyncDisposable
 
         await _shutdown.CancelAsync().ConfigureAwait(false);
 
-        lock (_gate) _clients.Clear();
+        lock (_gate)
+        {
+            _clients.Clear();
+            _publishedClients = [];
+        }
 
         foreach (ClientConnection client in clients) client.Dispose();
 
@@ -419,7 +433,8 @@ public sealed class IpcServer : IAsyncDisposable
         private readonly NamedPipeServerStream _pipe;
         private readonly IpcServer _server;
         private readonly HashSet<string> _subscriptions = new(StringComparer.Ordinal);
-        private readonly Queue<string> _outbox = new();
+        private Queue<string> _outbox = new();
+        private Queue<string> _sending = new();
         private readonly Lock _gate = new();
 
         private bool _subscribedToAll;
@@ -504,8 +519,10 @@ public sealed class IpcServer : IAsyncDisposable
 
         public void TryEnqueue(string message)
         {
+            bool wake;
             lock (_gate)
             {
+                wake = _outbox.Count == 0 && !_needsResync;
                 // Bounded, because the window manager must never be held hostage by a
                 // stalled bar.
                 //
@@ -519,14 +536,15 @@ public sealed class IpcServer : IAsyncDisposable
                 {
                     _outbox.Clear();
                     _needsResync = true;
-                    _pending.Release();
                     return;
                 }
 
                 _outbox.Enqueue(message);
             }
 
-            _pending.Release();
+            // Signal the empty -> nonempty transition. One token per event left
+            // hundreds of empty writer iterations after flushing a single burst.
+            if (wake) _pending.Release();
         }
 
         /// <summary>How many pushed events may wait before the backlog is dropped.</summary>
@@ -569,15 +587,18 @@ public sealed class IpcServer : IAsyncDisposable
         {
             try
             {
-                using var reader = new StreamReader(_pipe, Encoding.UTF8, leaveOpen: true);
+                using var reading = CancellationTokenSource.CreateLinkedTokenSource(token);
+                using var reader = new BoundedLineReader(_pipe, IpcProtocol.MaxMessageBytes);
                 await using var writer = new StreamWriter(_pipe, new UTF8Encoding(false), leaveOpen: true)
                 {
                     AutoFlush = false,
                 };
 
-                Task<string?> readTask = ReadBoundedLineAsync(reader, token);
-                Task pendingTask = _pending.WaitAsync(token);
+                Task<string?> readTask = reader.ReadLineAsync(reading.Token).AsTask();
+                Task pendingTask = _pending.WaitAsync(reading.Token);
 
+                try
+                {
                 while (!token.IsCancellationRequested && _pipe.IsConnected)
                 {
                     // Whichever comes first: a request to answer, or something to push.
@@ -590,16 +611,25 @@ public sealed class IpcServer : IAsyncDisposable
                         if (line is null) break;
 
                         await HandleLineAsync(line, writer).ConfigureAwait(false);
-                        readTask = ReadBoundedLineAsync(reader, token);
+                        readTask = reader.ReadLineAsync(reading.Token).AsTask();
                     }
                     else
                     {
                         // Recreated only when it actually fired, so a signal arriving
                         // while a request was being handled is not swallowed.
-                        pendingTask = _pending.WaitAsync(token);
+                        pendingTask = _pending.WaitAsync(reading.Token);
                     }
 
                     await FlushOutboxAsync(writer).ConfigureAwait(false);
+                }
+                }
+                finally
+                {
+                    // A connection can end with its next read/signal still pending.
+                    // Cancel and join before returning the reader's fragment buffer.
+                    await reading.CancelAsync().ConfigureAwait(false);
+                    try { await readTask.ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is OperationCanceledException or IOException or ObjectDisposedException) { }
                 }
             }
             catch (OperationCanceledException)
@@ -613,38 +643,6 @@ public sealed class IpcServer : IAsyncDisposable
             {
                 _server.Remove(this);
                 Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Reads one message, refusing one that never ends.
-        /// </summary>
-        /// <remarks>
-        /// A plain ReadLine waits for a newline that a hostile or broken client need
-        /// never send, growing its buffer until the window manager runs out of memory.
-        /// Returning null past the limit closes the connection, which is the only
-        /// answer available: the stream is no longer at a message boundary, so there
-        /// is nothing to resynchronise to.
-        /// </remarks>
-        private static async Task<string?> ReadBoundedLineAsync(StreamReader reader, CancellationToken token)
-        {
-            var builder = new StringBuilder();
-            var buffer = new char[1];
-
-            while (true)
-            {
-                int read = await reader.ReadAsync(buffer.AsMemory(0, 1), token).ConfigureAwait(false);
-
-                if (read == 0) return builder.Length > 0 ? builder.ToString() : null;
-
-                char c = buffer[0];
-
-                if (c == IpcProtocol.MessageTerminator) return builder.ToString();
-                if (c == '\r') continue;
-
-                if (builder.Length >= IpcProtocol.MaxMessageBytes) return null;
-
-                builder.Append(c);
             }
         }
 
@@ -771,7 +769,6 @@ public sealed class IpcServer : IAsyncDisposable
 
         private async Task FlushOutboxAsync(StreamWriter writer)
         {
-            string[] pending;
             bool resync;
 
             lock (_gate)
@@ -781,11 +778,12 @@ public sealed class IpcServer : IAsyncDisposable
 
                 if (!resync && _outbox.Count == 0) return;
 
-                pending = [.. _outbox];
-                _outbox.Clear();
+                // The writer owns this batch until the next swap. Producers use the
+                // empty second queue; no allocation or lock is held across pipe I/O.
+                (_sending, _outbox) = (_outbox, _sending);
             }
 
-            foreach (string message in pending)
+            while (_sending.TryDequeue(out string? message))
                 await writer.WriteLineAsync(message).ConfigureAwait(false);
 
             // Sent after whatever survived, so a client that acts on it re-reads a

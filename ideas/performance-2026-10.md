@@ -31,3 +31,24 @@ The IPC result justifies addressing its character-at-a-time reader before client
 refresh consolidation: the reader's async machinery is paid once per character.
 The native keyboard baseline additionally covers idle, animated windows and paced
 IPC queries in four rounds, retaining raw edges and process resource deltas.
+
+## Buffered IPC and publication
+
+`BoundedLineReader` reads UTF-8 chunks, handles split characters/frames and enforces
+the advertised byte limit (the old reader counted characters). Large fragments are
+returned after the line. Pending reads are cancelled/joined on disconnect. The event
+publisher uses a client snapshot rebuilt on connection changes; its writer swaps two
+bounded queues and signals an empty-to-nonempty transition rather than leaving one
+empty wake per event after a burst. The four acceptors' capacity check/add is atomic.
+
+Four reversed-order native pairs, 20,000 identical 4 KiB exchanges per run:
+
+- Allocation: **72,678–72,684 -> 53,936–53,941 B/op** (about 26% less).
+- CPU: **0.249–0.295 -> 0.156–0.171 ms/op**.
+- Elapsed: **3.67–4.13 -> 2.00–2.04 s**.
+- All replies validated; all 53 IPC tests passed, including fragmented UTF-8,
+  multibyte limits, burst/resync, concurrency, malformed requests and disposal.
+
+The fresh keyboard baseline itself varied: animation p99 3.14–5.44 ms, and one paced
+IPC run had a 76 ms maximum. These pre-optimization tails are retained. Background
+work is real, so a later isolated maximum cannot by itself establish a regression.
