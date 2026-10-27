@@ -17,6 +17,7 @@ param(
     [ValidateRange(0, 1000000)] [int] $IntervalUs = 2000,
     [ValidateRange(1, 64)] [int] $Burst = 1,
     [ValidateRange(16, 512)] [int] $GpuIterations = 512,
+    [ValidateRange(0, 10000)] [int] $IpcIntervalMs = 0,
     [string[]] $Workloads = @('idle', 'cpu', 'animation', 'ipc'),
     [ValidateRange(1, 10)] [int] $Rounds = 2,
     [switch] $Bound
@@ -47,7 +48,7 @@ $metadata = @{
     OperatingSystem = [Environment]::OSVersion.VersionString
     LogicalProcessors = [Environment]::ProcessorCount
     Samples = $Samples; Warmup = $Warmup; IntervalUs = $IntervalUs; Burst = $Burst; GpuIterations = $GpuIterations
-    Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads
+    Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads; IpcIntervalMs = $IpcIntervalMs
     Probe = (Get-FileHash $Probe).Hash
     Current = (Get-FileHash $Current).Hash
     Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
@@ -100,6 +101,17 @@ function Invoke-Cli([string] $Instance, [string[]] $Arguments) {
 
 function Save-Text([string] $Path, [string] $Text) {
     [IO.File]::WriteAllText($Path, $Text.Replace("`r", ''), [Text.UTF8Encoding]::new($false))
+}
+
+function Process-Counters {
+    $snapshot = @{}
+    foreach ($p in [Diagnostics.Process]::GetProcesses()) {
+        try { $snapshot[$p.Id] = @{ Name=$p.ProcessName; CpuMs=$p.TotalProcessorTime.TotalMilliseconds; PrivateBytes=$p.PrivateMemorySize64 } }
+        catch [ComponentModel.Win32Exception] { }
+        catch [InvalidOperationException] { }
+        finally { $p.Dispose() }
+    }
+    return $snapshot
 }
 
 $config = @'
@@ -193,7 +205,7 @@ try {
                         $loaders.Add((Start-Child $Probe @('churn', '--animate', '--instance', $instance, '--seconds', '180') -Ready))
                     }
                     if ($workload -eq 'ipc') {
-                        foreach ($i in 1..4) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180') -Ready)) }
+                        foreach ($i in 1..4) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180', '--interval-ms', "$IpcIntervalMs") -Ready)) }
                     }
                     if ($workload -in @('gpu', 'gpu-cpu')) {
                         # Start cadence recording after all load workers have started;
@@ -204,6 +216,7 @@ try {
 
                     $args = @('receive', '--samples', "$Samples", '--warmup', "$Warmup", '--interval-us', "$IntervalUs", '--burst', "$Burst", '--label', $label, '--raw-output', (Join-Path $state 'events.csv'))
                     if ($Bound) { $args += @('--bound', '--instance', $instance) }
+                    $beforeProcesses = Process-Counters
                     $measurement = Start-Child $Probe $args
                     try {
                         if (-not $measurement.Process.WaitForExit(120000)) { throw 'Input probe timed out.' }
@@ -215,7 +228,16 @@ try {
                         }
                         $result = $text | ConvertFrom-Json
                         if ($result.Missing -ne 0 -or $result.WrongEdges -ne 0 -or $result.LeakedBoundEvents -ne 0) { throw "Input integrity failed: $text" }
-                        [IO.File]::AppendAllText($results, $text + "`n", [Text.UTF8Encoding]::new($false))
+                        $afterProcesses = Process-Counters
+                        $resources = foreach ($id in $afterProcesses.Keys) {
+                            if ($beforeProcesses.ContainsKey($id)) {
+                                $cpu = $afterProcesses[$id].CpuMs - $beforeProcesses[$id].CpuMs
+                                if ($cpu -gt 0 -or ($null -ne $daemon -and $id -eq $daemon.Process.Id)) {
+                                    [pscustomobject]@{ Id=$id; Name=$afterProcesses[$id].Name; CpuMs=$cpu; PrivateBytes=$afterProcesses[$id].PrivateBytes }
+                                }
+                            }
+                        }
+                        Save-Text (Join-Path $state 'resources.json') ($resources | Sort-Object CpuMs -Descending | ConvertTo-Json)
                         Write-Output ("{0}: n={1}, p50={2:F3} ms, p99={3:F3}, p99.9={4:F3}, max={5:F3}" -f $label, $result.Delivery.Count, $result.Delivery.P50Ms, $result.Delivery.P99Ms, $result.Delivery.P999Ms, $result.Delivery.MaxMs)
                     }
                     finally { End-Child $measurement }
@@ -260,6 +282,9 @@ try {
                     if ($loader.ExitCode -ne 0) { throw "Load generator failed: $($loader.Output.Result) $($loader.Error.Result)" }
                 }
                 if ($diagnosticFailure) { throw $diagnosticFailure }
+                # Only accepted cases enter the aggregate: teardown and diagnostic
+                # failures formerly left an apparently valid row behind.
+                [IO.File]::AppendAllText($results, $text + "`n", [Text.UTF8Encoding]::new($false))
             }
         }
     }

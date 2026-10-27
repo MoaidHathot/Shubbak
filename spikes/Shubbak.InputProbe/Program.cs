@@ -26,6 +26,7 @@ internal static class Program
                 "cpu-load" => Load.Run(args),
                 "churn" => Churn.Run(args).GetAwaiter().GetResult(),
                 "gpu-load" => GpuLoad.Run(args).GetAwaiter().GetResult(),
+                "perf" => PerformanceRun.Run(args).GetAwaiter().GetResult(),
                 _ => throw new ArgumentException("Unknown probe mode."),
             };
         }
@@ -97,4 +98,5 @@ internal sealed record ProbeReport
 }
 
 [JsonSerializable(typeof(ProbeReport))]
+[JsonSerializable(typeof(PerformanceReport))]
 internal sealed partial class ProbeJson : JsonSerializerContext;

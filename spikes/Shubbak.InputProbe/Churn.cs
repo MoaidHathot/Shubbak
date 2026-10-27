@@ -10,6 +10,7 @@ internal static class Churn
         string instance = Program.Text(args, "--instance") ?? throw new ArgumentException("Churn needs --instance.");
         int seconds = Program.Number(args, "--seconds", 120, 1, 3600);
         bool animate = args.Contains("--animate", StringComparer.Ordinal);
+        int intervalMs = Program.Number(args, "--interval-ms", animate ? 80 : 0, 0, 10_000);
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
         _ = Task.Run(() =>
         {
@@ -32,7 +33,7 @@ internal static class Churn
                     stop.Token).ConfigureAwait(false);
                 if (!reply.Ok) throw new InvalidOperationException(reply.Error);
                 count++;
-                if (animate) await Task.Delay(80, stop.Token).ConfigureAwait(false);
+                if (intervalMs > 0) await Task.Delay(intervalMs, stop.Token).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (stop.IsCancellationRequested) { }

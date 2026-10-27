@@ -52,6 +52,20 @@ The graphics worker starts rendering immediately but records cadence only after 
 
 ## Reading the results
 
+For equal-work CPU/allocation comparisons use `perf --kind ipc|layout|resize
+--operations 20000`. The IPC case exchanges 4 KiB requests and responses through the
+real client/server; layout cases arrange 32 mixed tiled/floating windows across nested
+containers and every registered layout. `resize` also exercises inverse sizing.
+They warm 1,000 operations, count process-wide allocations/collections and CPU, and
+retain a deterministic geometry checksum. A checksum mismatch invalidates a layout
+comparison. Small CPU times need longer runs to exceed process-counter granularity.
+`tools/measure-performance.ps1` interleaves native probes and records ambient process
+CPU deltas. The benchmark includes its own observer overhead equally in both builds.
+
+The keyboard controller accepts `-IpcIntervalMs` to pace query clients, in addition
+to the default saturation workload, and records process CPU/private bytes around each
+case. Only cases whose loaders and diagnostics also completed enter its aggregate.
+
 `results.jsonl` has counts, median/p95/p99/p99.9/max and counts over 1/4/8/16 ms.
 Each case also retains the daemon's diagnostics. Missing, duplicate, reordered or
 wrong-edge input invalidates a run. `AllocatedBytes` in a pass-through receiver is
