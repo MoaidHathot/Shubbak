@@ -150,4 +150,15 @@ public sealed class LogAllocationTests : IDisposable
 
         Assert.Equal(0, value.Renders);
     }
+
+    [Fact]
+    public void RingOnlyMessagesDoNotAllocateAnUnusedSinkQueue()
+    {
+        Log.Level = LogLevel.Information;
+        for (int i = 0; i < 1000; i++) Log.Info(LogCategory.Wm, "ring only");
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 10000; i++) Log.Info(LogCategory.Wm, "ring only");
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.Equal("ring only", Log.RecentEntries(1)[0].Message);
+    }
 }

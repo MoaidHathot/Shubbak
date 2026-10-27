@@ -38,7 +38,7 @@ public static class Log
 
     private static readonly Lock s_gate = new();
     private static StreamWriter? s_file;
-    private static string? s_filePath;
+    private static volatile string? s_filePath;
 
     // Kept small enough to be cheap and large enough to cover the seconds before a
     // failure, which is the window that actually matters.
@@ -296,6 +296,7 @@ public static class Log
         Interlocked.Increment(ref s_totalEntries);
 
         if (level < s_level) return;
+        if (!s_toConsole && s_filePath is null) return;
 
         // The entry is handed over unformatted. Formatting builds a string, and doing
         // that here would allocate on the caller - which is usually the window
@@ -370,12 +371,12 @@ public static class Log
 
         private static void Run()
         {
-            // Runs for the life of the process. A background thread, so it never
-            // holds the process open, and the timeout means a missed signal costs a
-            // quarter second of latency rather than a lost line.
+            // AutoResetEvent remembers a signal raised before the wait. Enqueue
+            // always signals after publication, so an idle writer needs no timeout.
+            // Shutdown/file rotation drain synchronously through the same gate.
             while (true)
             {
-                s_signal.WaitOne(250);
+                s_signal.WaitOne();
                 DrainOnce();
             }
         }

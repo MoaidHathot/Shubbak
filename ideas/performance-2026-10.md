@@ -138,3 +138,13 @@ kept 0 B/op and measured layout 0.193–0.195 s vs 0.193–0.199 s, inverse sizi
 0.429–0.431 s vs 0.427–0.461 s. The separate 1,024-window probe measured approximately
 30 us/layout and 31 us/layout-plus-resize, with zero warmed allocation. All 784 core
 cases pass. This fix is recorded separately from the original allocation refactor.
+
+## Idle logging
+
+The logger's writer now waits on its existing signal without the 250 ms polling
+timeout. Enqueue publishes before signaling; file rotation/shutdown still drain
+synchronously. Ring-only logging skips the unused sink queue/formatter when neither
+console nor file output is enabled. All 35 logging tests pass, including delivery of
+successive bursts without manually flushing and exactly zero allocation for warmed
+constant ring-only messages. This removes timeout wakeups in all resident programs;
+its CPU/RAM contribution will be reported from the final whole-stack measurement.

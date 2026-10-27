@@ -309,6 +309,32 @@ public sealed class LogTests : IDisposable
     }
 
     [Fact]
+    public async Task SignalsDeliverBurstsWithoutPollingOrAManualFlush()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"shubbak-wake-{Guid.NewGuid():N}.log");
+        string ReadLive()
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        }
+        try
+        {
+            Log.OpenFile(path);
+            for (int batch = 0; batch < 4; batch++)
+            {
+                for (int i = 0; i < 100; i++) Log.Info(LogCategory.Wm, $"batch-{batch}-{i}");
+                string marker = $"batch-{batch}-99";
+                long start = Stopwatch.GetTimestamp();
+                while (!ReadLive().Contains(marker, StringComparison.Ordinal) && Stopwatch.GetElapsedTime(start).TotalSeconds < 5)
+                    await Task.Delay(10);
+                Assert.Contains(marker, ReadLive(), StringComparison.Ordinal);
+            }
+        }
+        finally { Log.CloseFile(); File.Delete(path); }
+    }
+
+    [Fact]
     public void LoggingIsSafeFromManyThreads()
     {
         // The hook thread, the daemon thread and IPC threads all log.
