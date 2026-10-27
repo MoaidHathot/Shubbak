@@ -18,6 +18,7 @@ param(
     [ValidateRange(1, 64)] [int] $Burst = 1,
     [ValidateRange(16, 512)] [int] $GpuIterations = 512,
     [ValidateRange(0, 10000)] [int] $IpcIntervalMs = 0,
+    [ValidateRange(1, 24)] [int] $IpcClients = 4,
     [string[]] $Workloads = @('idle', 'cpu', 'animation', 'ipc'),
     [ValidateRange(1, 10)] [int] $Rounds = 2,
     [switch] $Bound
@@ -48,7 +49,7 @@ $metadata = @{
     OperatingSystem = [Environment]::OSVersion.VersionString
     LogicalProcessors = [Environment]::ProcessorCount
     Samples = $Samples; Warmup = $Warmup; IntervalUs = $IntervalUs; Burst = $Burst; GpuIterations = $GpuIterations
-    Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads; IpcIntervalMs = $IpcIntervalMs
+    Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads; IpcIntervalMs = $IpcIntervalMs; IpcClients = $IpcClients
     Probe = (Get-FileHash $Probe).Hash
     Current = (Get-FileHash $Current).Hash
     Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
@@ -205,7 +206,7 @@ try {
                         $loaders.Add((Start-Child $Probe @('churn', '--animate', '--instance', $instance, '--seconds', '180') -Ready))
                     }
                     if ($workload -eq 'ipc') {
-                        foreach ($i in 1..4) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180', '--interval-ms', "$IpcIntervalMs") -Ready)) }
+                        foreach ($i in 1..$IpcClients) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180', '--interval-ms', "$IpcIntervalMs") -Ready)) }
                     }
                     if ($workload -in @('gpu', 'gpu-cpu')) {
                         # Start cadence recording after all load workers have started;

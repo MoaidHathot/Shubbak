@@ -382,8 +382,7 @@ public sealed class WmDaemon : IDisposable
     /// concurrently with a mutation would observe a half-changed tree and produce
     /// geometry that is essentially impossible to reproduce or debug.
     /// </remarks>
-    private readonly Queue<Action> _inbox = new();
-    private readonly Lock _inboxGate = new();
+    private readonly WorkInbox _inbox = new();
 
     /// <summary>Where the session is stored; null uses the default location.</summary>
     private readonly string? _sessionPath;
@@ -1424,29 +1423,11 @@ public sealed class WmDaemon : IDisposable
     /// <returns>How many items were run, for the slow-tick report.</returns>
     private int DrainInbox()
     {
-        int ran = 0;
-
-        while (true)
-        {
-            Action? work;
-
-            lock (_inboxGate)
-            {
-                if (_inbox.Count == 0) return ran;
-                work = _inbox.Dequeue();
-            }
-
-            ran++;
-
-            try
-            {
-                work();
-            }
-            catch (Exception ex)
-            {
-                Log.Error(LogCategory.Ipc, "request handler failed", ex);
-            }
-        }
+        (int ran, bool more) = _inbox.Drain(static ex => Log.Error(LogCategory.Ipc, "request handler failed", ex));
+        // A producer can replenish the queue faster than it drains. Give keyboard,
+        // window events and a due frame another turn, then continue without sleeping.
+        if (more) _loop.Wake();
+        return ran;
     }
 
     /// <summary>
@@ -1456,14 +1437,11 @@ public sealed class WmDaemon : IDisposable
     {
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        lock (_inboxGate)
+        _inbox.Enqueue(() =>
         {
-            _inbox.Enqueue(() =>
-            {
-                try { completion.SetResult(work()); }
-                catch (Exception ex) { completion.SetException(ex); }
-            });
-        }
+            try { completion.SetResult(work()); }
+            catch (Exception ex) { completion.SetException(ex); }
+        });
 
         // The pump waits rather than polls, so a request arriving from a pipe thread
         // has to say so or it sits in the inbox until some unrelated timeout expires.

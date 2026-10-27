@@ -165,3 +165,18 @@ model snapshot rebuilt on attach/detach instead of an array per value change. Al
 637 Taj.Core and 20 Taj integration cases pass. Ayn's source loop was also reviewed:
 it already waits on registry/audio/power/theme events with deadlines only for pending
 work; it benefits from the shared IPC/logger changes without adding polling.
+
+## Fairness under replenished IPC load
+
+The daemon inbox previously drained until empty, so a producer replenishing it could
+extend the same turn indefinitely. It now takes only the initial batch (at most 32),
+yielding after two milliseconds between items, and re-signals the loop when work
+remains. FIFO and completion behavior are preserved; keyboard/window drains and due
+frames get another turn. A single slow operation is still indivisible. The production
+inbox is exercised by replenishing-producer, slow-item and fault/FIFO tests; all 276
+WM tests pass. Loaded native input/throughput checks are part of the final matrix.
+
+Focus-triggered geometry validation also repairs windows that move themselves while
+Shubbak is not subscribing to location-change floods (see WindowCommitterDriftTests).
+Skipping the whole pass would remove that behavior. The allocation-free geometry/
+commit paths retain the repair and overlapping-window stacking semantics.
