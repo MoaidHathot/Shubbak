@@ -24,11 +24,21 @@ internal static class GpuLoad
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         using var lifetime = new CancellationTokenSource(TimeSpan.FromSeconds(seconds + 20));
         var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var measuring = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var ready = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         var result = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = Task.Run(() => { Console.ReadLine(); stop.TrySetResult(); });
+        _ = Task.Run(() =>
+        {
+            string? line;
+            while ((line = Console.ReadLine()) is not null)
+            {
+                if (line == "measure") measuring.TrySetResult();
+                if (line == "stop") break;
+            }
+            stop.TrySetResult();
+        });
         string html = Page(token, iterations);
-        Task server = Serve(listener, token, html, stop.Task, ready, result, lifetime.Token);
+        Task server = Serve(listener, token, html, stop.Task, measuring.Task, ready, result, lifetime.Token);
         Process? process = null;
         try
         {
@@ -95,7 +105,7 @@ internal static class GpuLoad
         }
     }
 
-    private static async Task Serve(TcpListener listener, string token, string html, Task stop,
+    private static async Task Serve(TcpListener listener, string token, string html, Task stop, Task measuring,
         TaskCompletionSource<string> ready, TaskCompletionSource<string> result, CancellationToken cancel)
     {
         while (!cancel.IsCancellationRequested)
@@ -133,7 +143,7 @@ internal static class GpuLoad
                 if (path == $"/{token}") response = html;
                 else if (path == $"/{token}/ready") ready.TrySetResult(Encoding.UTF8.GetString(body));
                 else if (path == $"/{token}/result") result.TrySetResult(Encoding.UTF8.GetString(body));
-                else if (path == $"/{token}/status") response = stop.IsCompleted ? "stop" : "run";
+                else if (path == $"/{token}/status") response = stop.IsCompleted ? "stop" : measuring.IsCompleted ? "measure" : "warmup";
                 else found = false;
                 byte[] data = Encoding.UTF8.GetBytes(response);
                 byte[] header = Encoding.ASCII.GetBytes($"HTTP/1.1 {(found ? "200 OK" : "404 Not Found")}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {data.Length}\r\nConnection: close\r\n\r\n");
@@ -148,7 +158,7 @@ internal static class GpuLoad
     private static string Page(string token, int iterations) => $$$"""
         <!doctype html><meta charset="utf-8"><title>Shubbak GPU workload</title>
         <style>body{margin:0;background:#111}canvas{width:100vw;height:100vh}</style>
-        <canvas id="view" width="1920" height="1080"></canvas>
+        <canvas id="view" width="3840" height="2160"></canvas>
         <script>
         const base='/{{{token}}}';
         const gl=document.querySelector('canvas').getContext('webgl2',{antialias:false});
@@ -166,15 +176,15 @@ internal static class GpuLoad
         const program=gl.createProgram();gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);
         if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
         gl.useProgram(program);const phase=gl.getUniformLocation(program,'phase');
-        gl.viewport(0,0,1920,1080);
-        let last=0,count=0,frames=0,stop=false;const samples=new Float64Array(100000);
-        async function watch(){while(!stop){await new Promise(r=>setTimeout(r,500));stop=(await(await fetch(base+'/status')).text())==='stop';}}
+        gl.viewport(0,0,3840,2160);
+        let last=0,count=0,frames=0,stop=false,measuring=false;const samples=new Float64Array(100000);
+        async function watch(){while(!stop){await new Promise(r=>setTimeout(r,500));const state=await(await fetch(base+'/status')).text();stop=state==='stop';if(state==='measure'&&!measuring){measuring=true;last=0;count=0;} } }
         watch();
         function frame(t){
           if(stop){const sorted=Array.from(samples.subarray(0,count)).sort((a,b)=>a-b);
             const at=p=>sorted[Math.max(0,Math.ceil(sorted.length*p)-1)]||0;
             fetch(base+'/result',{method:'POST',body:JSON.stringify({Label:'webgl-frame-cadence',Renderer:renderer,Iterations:{{{iterations}}},Frames:count,Error:gl.getError(),P50Ms:at(.5),P99Ms:at(.99),MaxMs:at(1)})});return;}
-          if(frames>=30&&last&&count<samples.length)samples[count++]=t-last;last=t;
+          if(measuring&&last&&count<samples.length)samples[count++]=t-last;last=t;
           gl.uniform1f(phase,t*.0001);gl.drawArrays(gl.TRIANGLES,0,3);
           if(++frames===30)fetch(base+'/ready',{method:'POST',body:renderer});
           requestAnimationFrame(frame);

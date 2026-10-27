@@ -47,6 +47,8 @@ Modes in the executable:
 
 Child load modes print `ready`, and stop on stdin EOF or their time limit. The
 controller drains their pipes and cleans them up even when a measurement fails.
+The graphics worker starts rendering immediately but records cadence only after a
+`measure` line on stdin, so starting the CPU workers is outside the recorded interval.
 
 ## Reading the results
 

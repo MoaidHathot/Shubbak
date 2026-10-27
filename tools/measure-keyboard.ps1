@@ -13,6 +13,10 @@ param(
     [string] $Previous,
     [string] $Output = (Join-Path $PSScriptRoot '../artifacts/keyboard-baseline'),
     [ValidateRange(2, 1000000)] [int] $Samples = 20000,
+    [ValidateRange(0, 100000)] [int] $Warmup = 1000,
+    [ValidateRange(0, 1000000)] [int] $IntervalUs = 2000,
+    [ValidateRange(1, 64)] [int] $Burst = 1,
+    [ValidateRange(16, 512)] [int] $GpuIterations = 512,
     [string[]] $Workloads = @('idle', 'cpu', 'animation', 'ipc'),
     [ValidateRange(1, 10)] [int] $Rounds = 2,
     [switch] $Bound
@@ -20,6 +24,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 if (($Samples % 2) -ne 0) { throw 'Samples must contain complete down/up pairs.' }
+if (($Warmup % 2) -ne 0) { throw 'Warmup must contain complete down/up pairs.' }
 if ($Bound -and 'suspended' -in $Workloads) { throw 'A suspended daemon intentionally does not handle bound keys.' }
 foreach ($workload in $Workloads) {
     if ($workload -notin @('idle', 'cpu', 'animation', 'ipc', 'suspended', 'gpu', 'gpu-cpu')) { throw "Unknown workload: $workload" }
@@ -41,7 +46,8 @@ $metadata = @{
     StartedUtc = [DateTime]::UtcNow.ToString('O')
     OperatingSystem = [Environment]::OSVersion.VersionString
     LogicalProcessors = [Environment]::ProcessorCount
-    Samples = $Samples; Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads
+    Samples = $Samples; Warmup = $Warmup; IntervalUs = $IntervalUs; Burst = $Burst; GpuIterations = $GpuIterations
+    Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads
     Probe = (Get-FileHash $Probe).Hash
     Current = (Get-FileHash $Current).Hash
     Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
@@ -76,7 +82,7 @@ function End-Child($Child) {
     $p = $Child.Process
     if (-not $p.HasExited) {
         $p.StandardInput.Close()
-        if (-not $p.WaitForExit(5000)) { $p.Kill($true); $p.WaitForExit(5000) | Out-Null }
+        if (-not $p.WaitForExit(15000)) { $p.Kill($true); $p.WaitForExit(5000) | Out-Null }
     }
     if ($p.HasExited) { $Child.ExitCode = $p.ExitCode }
     $p.Dispose()
@@ -171,7 +177,7 @@ try {
                         }
                     }
                     if ($workload -in @('gpu', 'gpu-cpu')) {
-                        $loaders.Add((Start-Child $Probe @('gpu-load', '--seconds', '180', '--iterations', '128') -Ready))
+                        $loaders.Add((Start-Child $Probe @('gpu-load', '--seconds', '180', '--iterations', "$GpuIterations") -Ready))
                         Start-Sleep -Seconds 2
                         if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
                             $gpu = & nvidia-smi --query-gpu=name,utilization.gpu,power.draw --format=csv
@@ -187,8 +193,14 @@ try {
                     if ($workload -eq 'ipc') {
                         foreach ($i in 1..4) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180') -Ready)) }
                     }
+                    if ($workload -in @('gpu', 'gpu-cpu')) {
+                        # Start cadence recording after all load workers have started;
+                        # process startup/teardown is not a graphics frame measurement.
+                        $loaders[0].Process.StandardInput.WriteLine('measure')
+                        $loaders[0].Process.StandardInput.Flush()
+                    }
 
-                    $args = @('receive', '--samples', "$Samples", '--warmup', '1000', '--interval-us', '2000', '--label', $label, '--raw-output', (Join-Path $state 'events.csv'))
+                    $args = @('receive', '--samples', "$Samples", '--warmup', "$Warmup", '--interval-us', "$IntervalUs", '--burst', "$Burst", '--label', $label, '--raw-output', (Join-Path $state 'events.csv'))
                     if ($Bound) { $args += @('--bound', '--instance', $instance) }
                     $measurement = Start-Child $Probe $args
                     try {
@@ -211,6 +223,12 @@ try {
                     }
                 }
                 finally {
+                    # Tell every load to stop before waiting on any one. Leaving the
+                    # CPU saturator active while the browser shut down made a healthy
+                    # graphics worker exceed the old five-second teardown budget.
+                    foreach ($loader in $loaders) {
+                        if (-not $loader.Process.HasExited) { $loader.Process.StandardInput.Close() }
+                    }
                     $loadIndex = 0
                     foreach ($loader in $loaders) {
                         End-Child $loader
