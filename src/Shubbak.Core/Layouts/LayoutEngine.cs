@@ -183,8 +183,7 @@ public sealed class LayoutEngine
             total += children[i].SizeRatio;
         }
         if (tiled == 0) return;
-        if (tiled != count && total > double.Epsilon)
-            for (int i = 0; i < tiled; i++) weights[i] = Math.Clamp(weights[i] / total, Node.MinSizeRatio, 1.0);
+        if (tiled != count && total > double.Epsilon) NormaliseSubset(weights[..tiled], count, total);
         container.Layout.Arrange(weights[..tiled], area, in options, rects[..tiled]);
 
         // In a layout whose rectangles overlap, stacking is the only thing that
@@ -297,14 +296,14 @@ public sealed class LayoutEngine
         Span<double> weights = scratch.Slice(count * 2, count);
         Span<Rect> rects = rentedRects is null ? stackalloc Rect[count] : rentedRects.AsSpan(0, count);
         for (int i = 0; i < count; i++) saved[i] = children[i].SizeRatio;
-        Normalise(saved);
+        ShareMath.Normalise(saved);
 
         try
         {
             // The same bounds SetChildRatio clamps to, so every share measured here is
             // one that can actually be set.
-            double low = Node.MinSizeRatio;
-            double high = 1.0 - (Node.MinSizeRatio * (children.Count - 1));
+            double low = Node.MinimumShare(children.Count);
+            double high = 1.0 - (low * (children.Count - 1));
 
             int atLow = Measure(container, childIndex, axis, low, saved, trial, weights, rects, in options);
             int atHigh = Measure(container, childIndex, axis, high, saved, trial, weights, rects, in options);
@@ -343,10 +342,11 @@ public sealed class LayoutEngine
         double others = 0;
         for (int i = 0; i < saved.Length; i++) if (i != childIndex) others += saved[i];
         double scale = others <= double.Epsilon ? 0 : (1 - ratio) / others;
+        double minimum = Node.MinimumShare(saved.Length);
         for (int i = 0; i < saved.Length; i++)
             trial[i] = Math.Clamp(i == childIndex ? ratio : others <= double.Epsilon
-                ? (1 - ratio) / (saved.Length - 1) : saved[i] * scale, Node.MinSizeRatio, 1.0);
-        Normalise(trial);
+                ? (1 - ratio) / (saved.Length - 1) : saved[i] * scale, minimum, 1.0);
+        ShareMath.Normalise(trial);
         int count = 0, index = -1;
         double total = 0;
         for (int i = 0; i < saved.Length; i++)
@@ -356,19 +356,19 @@ public sealed class LayoutEngine
             weights[count++] = trial[i];
             total += trial[i];
         }
-        if (count != saved.Length && total > double.Epsilon)
-            for (int i = 0; i < count; i++) weights[i] = Math.Clamp(weights[i] / total, Node.MinSizeRatio, 1.0);
+        if (count != saved.Length && total > double.Epsilon) NormaliseSubset(weights[..count], saved.Length, total);
         container.Layout.Arrange(weights[..count], container.Rect, in options, rects[..count]);
         return index < 0 ? 0 : rects[index].Extent(axis);
     }
 
-    private static void Normalise(Span<double> ratios)
+    private static void NormaliseSubset(Span<double> weights, int siblings, double total)
     {
-        double total = 0;
-        foreach (double ratio in ratios) total += ratio;
-        if (Math.Abs(total - 1) < 1e-9) return;
-        for (int i = 0; i < ratios.Length; i++)
-            ratios[i] = Math.Clamp(total <= double.Epsilon ? 1.0 / ratios.Length : ratios[i] / total, Node.MinSizeRatio, 1.0);
+        // For ordinary trees the parent and subset have the same floor. Removing a
+        // child only scales the others up, so none can cross that floor. Wide trees
+        // can have a smaller parent floor and need the general constrained solution.
+        if (siblings < 100)
+            for (int i = 0; i < weights.Length; i++) weights[i] /= total;
+        else ShareMath.Normalise(weights);
     }
 
     /// <summary>

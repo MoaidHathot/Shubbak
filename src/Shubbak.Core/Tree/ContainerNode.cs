@@ -223,8 +223,9 @@ public class ContainerNode : Node
         }
 
         // Leave room for every sibling to keep at least its minimum.
-        double minForOthers = MinSizeRatio * (_children.Count - 1);
-        double target = Math.Clamp(ratio, MinSizeRatio, 1.0 - minForOthers);
+        double minimum = MinimumShare(_children.Count);
+        double minForOthers = minimum * (_children.Count - 1);
+        double target = Math.Clamp(ratio, minimum, 1.0 - minForOthers);
 
         double othersTotal = 0;
         foreach (Node sibling in _children)
@@ -304,8 +305,17 @@ public class ContainerNode : Node
 
         if (Math.Abs(total - 1.0) < 1e-9) return;
 
-        foreach (Node child in _children)
-            child.SizeRatio /= total;
+        double[]? rented = _children.Count > 128 ? System.Buffers.ArrayPool<double>.Shared.Rent(_children.Count) : null;
+        Span<double> shares = rented is null ? stackalloc double[_children.Count] : rented.AsSpan(0, _children.Count);
+        try
+        {
+            for (int i = 0; i < shares.Length; i++) shares[i] = _children[i].SizeRatio;
+            // Dividing then clamping each child independently could make the total
+            // exceed one again. Reserve the floor first, scaling the remaining mass.
+            ShareMath.Normalise(shares);
+            for (int i = 0; i < shares.Length; i++) _children[i].SizeRatio = shares[i];
+        }
+        finally { if (rented is not null) System.Buffers.ArrayPool<double>.Shared.Return(rented); }
     }
 
     public override string ToString() =>

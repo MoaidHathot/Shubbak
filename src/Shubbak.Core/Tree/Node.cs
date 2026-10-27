@@ -67,7 +67,7 @@ public abstract class Node
             if (!double.IsFinite(value))
                 throw new ArgumentOutOfRangeException(nameof(value), value, "Size ratio must be finite.");
 
-            _sizeRatio = Math.Clamp(value, MinSizeRatio, 1.0);
+            _sizeRatio = Math.Clamp(value, MinimumShare(ParentContainer?.Count ?? 0), 1.0);
         }
     }
 
@@ -77,6 +77,10 @@ public abstract class Node
     /// mouse.
     /// </summary>
     public const double MinSizeRatio = 0.01;
+
+    // A fixed 1% floor cannot sum to one beyond 100 siblings. Keep the existing
+    // floor for ordinary trees and leave one share of headroom in wide containers.
+    internal static double MinimumShare(int children) => children < 100 ? MinSizeRatio : 1.0 / (children + 1.0);
 
     /// <summary>
     /// The most recently computed rectangle for this node.

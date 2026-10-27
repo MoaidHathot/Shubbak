@@ -123,3 +123,18 @@ are 5x faster: native window positioning/composition are separate costs.
 The coverage-enabled suite passed **3,641 cases**. New guards verify zero warmed
 layout/resize/unchanged-native-commit allocation, mixed and nested output, and that
 the live tree remains unchanged even *during* a layout/inverse-size calculation.
+
+## Scaling correctness follow-up
+
+Wider checks reproduced an existing normalization defect: a fixed 1% minimum cannot
+sum to one with 128 or 256 children (observed totals 1.28 and 2.56), and inverse
+resizing stopped yielding an answer. The floor is now feasible for the sibling count;
+normalization reserves floor shares before distributing the rest. Tests also cover
+lopsided inputs, where dividing and then individually clamping could add extra mass.
+
+The first correct implementation cost ~5–10% in the new microbench. An ordinary-tree
+fast path removed that cost: three fresh paired 200k-operation runs matched geometry,
+kept 0 B/op and measured layout 0.193–0.195 s vs 0.193–0.199 s, inverse sizing
+0.429–0.431 s vs 0.427–0.461 s. The separate 1,024-window probe measured approximately
+30 us/layout and 31 us/layout-plus-resize, with zero warmed allocation. All 784 core
+cases pass. This fix is recorded separately from the original allocation refactor.
