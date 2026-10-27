@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace Shubbak.Core.Diagnostics;
 
 /// <summary>
@@ -107,13 +109,17 @@ public sealed class LatencyStats
     {
         if (_count == 0) return 0;
 
-        double[] sorted = new double[_count];
-        Array.Copy(_samples, sorted, _count);
-        Array.Sort(sorted);
-
-        int index = (int)Math.Ceiling(fraction * sorted.Length) - 1;
-
-        return sorted[Math.Clamp(index, 0, sorted.Length - 1)];
+        int count = _count;
+        double[] rented = ArrayPool<double>.Shared.Rent(count);
+        try
+        {
+            Span<double> sorted = rented.AsSpan(0, count);
+            _samples.AsSpan(0, count).CopyTo(sorted);
+            sorted.Sort();
+            int index = (int)Math.Ceiling(fraction * count) - 1;
+            return sorted[Math.Clamp(index, 0, count - 1)];
+        }
+        finally { ArrayPool<double>.Shared.Return(rented); }
     }
 
     /// <summary>How many samples exceeded a budget.</summary>

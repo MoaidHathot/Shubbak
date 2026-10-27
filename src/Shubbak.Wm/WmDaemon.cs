@@ -2203,6 +2203,7 @@ public sealed class WmDaemon : IDisposable
     /// </remarks>
     internal string BuildDiagnosticReport(string reason)
     {
+        double medianTickInterval = _tickInterval.Percentile(0.5);
         var report = new DiagnosticReport(reason).AddEnvironment();
 
         report.AddSection("Window manager", string.Join('\n', new[]
@@ -2265,9 +2266,9 @@ public sealed class WmDaemon : IDisposable
             // Over the most recent samples rather than the whole run, and said so
             // explicitly: these once described the first four thousand ticks and then
             // never moved, so a daemon up for an hour was quoting its own startup.
-            $"- **Tick interval** (last {_tickInterval.Count}): p50 {_tickInterval.Percentile(0.5):F2} ms, " +
+            $"- **Tick interval** (last {_tickInterval.Count}): p50 {medianTickInterval:F2} ms, " +
             $"p99 {_tickInterval.Percentile(0.99):F2} ms, max {_tickInterval.Max:F2} ms all-time " +
-            $"(~{(_tickInterval.Percentile(0.5) > 0 ? 1000.0 / _tickInterval.Percentile(0.5) : 0):F0} Hz)",
+            $"(~{(medianTickInterval > 0 ? 1000.0 / medianTickInterval : 0):F0} Hz)",
 
             $"- **Tick duration** (last {_tickDuration.Count}): p50 {_tickDuration.Percentile(0.5):F2} ms, " +
             $"p99 {_tickDuration.Percentile(0.99):F2} ms, max {_tickDuration.Max:F2} ms all-time",

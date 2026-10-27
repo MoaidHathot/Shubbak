@@ -193,3 +193,13 @@ The keyboard-language source also constructed CultureInfo and uppercase label st
 on each 250 ms poll. A bounded 32-language cache preserves known/unknown labels and
 measures zero warmed allocation for repeated label lookups. The necessary foreground
 layout reads still detect per-application language changes. All 26 Taj tests pass.
+
+## Diagnostic allocation audit
+
+Percentile reporting allocated a sorted 4,096-double copy for every percentile,
+including repeated reads of the same median in one report. A reproduced allocation
+test measured **6,558,400 B** for 100 median/p99 pairs. Sorted scratch is now rented
+and returned, with the original rolling samples untouched; the same warmed test
+measures **0 B**. The report computes its repeated tick median once. The existing
+bounded diagnostic sample rings are retained for evidence quality. All 787 core
+tests pass, including rolling percentile correctness and allocation guards.
