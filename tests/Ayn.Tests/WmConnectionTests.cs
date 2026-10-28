@@ -1,5 +1,6 @@
 using Ayn.Core;
 using Shubbak.Ipc;
+using System.Diagnostics;
 
 namespace Ayn.Tests;
 
@@ -11,6 +12,19 @@ public sealed class WmConnectionTests
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
 
     private static string IsolatedPipe() => $"shubbak-test-{Guid.NewGuid():N}";
+
+    private static async Task WaitForAsync(Func<bool> ready, string because)
+    {
+        // The pump and pipe continuations need pool workers. Blocking this async
+        // test in WaitOne/SpinUntil can starve their startup on the smaller ARM64
+        // runner. Keep the same bounded assertion while yielding the test worker.
+        long start = Stopwatch.GetTimestamp();
+        while (!ready())
+        {
+            Assert.True(Stopwatch.GetElapsedTime(start) < Timeout, because);
+            await Task.Delay(10);
+        }
+    }
 
     /// <summary>A window manager that accepts every context command and remembers them.</summary>
     private static async ValueTask<(IpcServer Server, List<string> Commands)> StartServerAsync(string pipe, string? refuse = null)
@@ -57,7 +71,7 @@ public sealed class WmConnectionTests
         Assert.Equal(SendOutcome.Unreachable, connection.Send("context --set \"camera-in-use\" --lease"));
 
         connection.Start();
-        Assert.True(connection.Found.WaitOne(Timeout), "Found was not raised when the pump connected");
+        await WaitForAsync(() => connection.Found.WaitOne(0), "Found was not raised when the pump connected");
 
         Assert.Equal(SendOutcome.Accepted, connection.Send("context --set \"camera-in-use\" --lease"));
         Assert.Equal(SendOutcome.Refused, connection.Send("context --set \"undeclared\" --lease"));
@@ -78,14 +92,14 @@ public sealed class WmConnectionTests
         await using var connection = new WmConnection(pipe);
         connection.Start();
 
-        Assert.True(connection.Found.WaitOne(Timeout), "the pump never connected");
+        await WaitForAsync(() => connection.Found.WaitOne(0), "the pump never connected");
         Assert.True(first.HasSubscribers("config.reloaded"), "Found was raised before the subscription was in place");
 
         Assert.Equal(SendOutcome.Accepted, connection.Send("context --set \"camera-in-use\" --lease"));
 
         await first.DisposeAsync();
 
-        Assert.True(connection.Lost.WaitOne(Timeout), "Lost was not raised when the window manager went");
+        await WaitForAsync(() => connection.Lost.WaitOne(0), "Lost was not raised when the window manager went");
 
         // Gone with it: a send between window managers reaches nothing, and the loop
         // forgets what it held so the next one is told everything again.
@@ -94,7 +108,7 @@ public sealed class WmConnectionTests
         (IpcServer second, List<string> commands) = await StartServerAsync(pipe);
         await using IpcServer keep = second;
 
-        Assert.True(connection.Found.WaitOne(Timeout), "the pump never reconnected");
+        await WaitForAsync(() => connection.Found.WaitOne(0), "the pump never reconnected");
         Assert.Equal(SendOutcome.Accepted, connection.Send("context --set \"camera-in-use\" --lease"));
 
         lock (commands) Assert.Single(commands);
@@ -111,16 +125,16 @@ public sealed class WmConnectionTests
         await using var connection = new WmConnection(pipe);
         connection.Start();
 
-        Assert.True(SpinWait.SpinUntil(() => server.HasSubscribers(IpcProtocol.SignalTopic), Timeout));
+        await WaitForAsync(() => server.HasSubscribers(IpcProtocol.SignalTopic), "the signal subscription was not established");
 
         server.Publish("config.reloaded", "{}");
-        Assert.True(connection.Reloaded.WaitOne(Timeout), "Reloaded was not raised");
+        await WaitForAsync(() => connection.Reloaded.WaitOne(0), "Reloaded was not raised");
 
         // Somebody else's signal is ignored; ours is queued, parsed.
         server.Publish(IpcProtocol.SignalTopic, """{"name":"palette","arguments":[]}""");
         server.Publish(IpcProtocol.SignalTopic, """{"name":"ayn","arguments":["microphone","toggle"]}""");
 
-        Assert.True(connection.Signalled.WaitOne(Timeout), "Signalled was not raised");
+        await WaitForAsync(() => connection.Signalled.WaitOne(0), "Signalled was not raised");
         Assert.True(connection.Requests.TryDequeue(out SignalRequest? request));
         Assert.Equal("toggle-mute", request!.Verb);
         Assert.False(connection.Requests.TryDequeue(out _));
@@ -140,13 +154,13 @@ public sealed class WmConnectionTests
         await using var connection = new WmConnection(pipe);
         connection.Start();
 
-        Assert.True(SpinWait.SpinUntil(() => server.HasSubscribers(IpcProtocol.SignalTopic), Timeout));
+        await WaitForAsync(() => server.HasSubscribers(IpcProtocol.SignalTopic), "the signal subscription was not established");
 
         Assert.False(connection.TakeAnnounceRequested());
 
         server.Publish(IpcProtocol.SignalTopic, """{"name":"palette","arguments":[]}""");
         server.Publish(IpcProtocol.SignalTopic, """{"name":"ayn","arguments":["microphone","mute"]}""");
-        Assert.True(connection.Signalled.WaitOne(Timeout), "Signalled was not raised for the mute request");
+        await WaitForAsync(() => connection.Signalled.WaitOne(0), "Signalled was not raised for the mute request");
         Assert.False(connection.TakeAnnounceRequested());
 
         server.Publish(IpcProtocol.SignalTopic, $$$"""{"name":"{{{IpcProtocol.AnnounceSignal}}}","arguments":[]}""");
@@ -156,7 +170,7 @@ public sealed class WmConnectionTests
         // A request behind them, so that its arrival proves all three announces have
         // been read: one connection delivers in order.
         server.Publish(IpcProtocol.SignalTopic, """{"name":"ayn","arguments":["microphone","unmute"]}""");
-        Assert.True(SpinWait.SpinUntil(() => connection.Requests.Count == 2, Timeout), "the sentinel request never arrived");
+        await WaitForAsync(() => connection.Requests.Count == 2, "the sentinel request never arrived");
 
         // Noted once, however many were published; the second look finds nothing.
         Assert.True(connection.TakeAnnounceRequested());
@@ -181,11 +195,11 @@ public sealed class WmConnectionTests
         await using var connection = new WmConnection(pipe);
         connection.Start();
 
-        Assert.True(SpinWait.SpinUntil(() => server.HasSubscribers(IpcProtocol.ShutdownTopic), Timeout));
+        await WaitForAsync(() => server.HasSubscribers(IpcProtocol.ShutdownTopic), "the shutdown subscription was not established");
 
         server.Publish(IpcProtocol.ShutdownTopic, """{"everything":true}""");
 
-        Assert.True(connection.Dismissed.WaitOne(Timeout), "Dismissed was not raised for exit-all");
+        await WaitForAsync(() => connection.Dismissed.WaitOne(0), "Dismissed was not raised for exit-all");
     }
 }
 

@@ -184,7 +184,7 @@ commit paths retain the repair and overlapping-window stacking semantics.
 ## Companion responsiveness follow-up
 
 A controlled real-pipe test reproduced Taj clicks waiting behind a held icon reply
-on the command/state connection. Icon fetching now uses a short-lived, round-cancelled
+on the command/state connection. Icon fetching now uses a short-lived, pump-cancelled
 connection while still sharing one in-flight request/cache across bars. The test
 holds the icon response and verifies the click completes independently. Real icon
 discovery has a bounded foreign-window wait, but that wait should not reach clicks.
@@ -340,3 +340,11 @@ The production path already allows for applications/shell startup lifting a cloa
 That scenario now uses the controlled foreign window, retaining the actual cloak,
 placement and release assertions. All seven veil cases and five additional isolated
 repetitions passed. Cloak waits now assert their timeout rather than silently returning.
+
+The following x64 job passed all tests, NativeAOT artifacts and installer checks.
+ARM64 exposed a separate test setup timeout before Ayn had subscribed: the async
+connection tests were blocking pool workers in WaitOne/SpinUntil while the pipe pump
+needed workers to make progress. Those waits now yield asynchronously with the same
+five-second deadline and readiness/delivery assertions. All 19 Ayn cases passed,
+followed by four repetitions of its five connection cases with the runtime limited
+to two reported processors. Hosted ARM64 verification follows this correction.
