@@ -65,6 +65,16 @@ CPU deltas. The benchmark includes its own observer overhead equally in both bui
 The keyboard controller accepts `-IpcIntervalMs` to pace query clients, in addition
 to the default saturation workload, and records process CPU/private bytes around each
 case. Only cases whose loaders and diagnostics also completed enter its aggregate.
+Animation cases additionally wait for both HWNDs/adoption, verify frame activity and
+record actual geometry changes from the foreign targets. A gaps-command loop without
+moving windows is invalid, even if its keyboard numbers look good.
+
+`palette-ui --target-pid PID --operations 100` checks the resident palette's normal
+`palette windows` signal, foreground arrival and Escape dismissal. Foreground is
+sampled at approximately 1 ms; this is readiness to receive input, not paint completion.
+`tools/measure-normal-stack.ps1` compares matching five-binary deployments with the
+normal configuration: idle resources, input delivery, repeated palette activation,
+reload retention, suspension and resume. It restores the final native stack on exit.
 
 `results.jsonl` has counts, median/p95/p99/p99.9/max and counts over 1/4/8/16 ms.
 Each case also retains the daemon's diagnostics. Missing, duplicate, reordered or

@@ -14,7 +14,8 @@ internal static class Program
         {
             if (args.Length == 0 || args[0] == "--help")
             {
-                Console.WriteLine("shubbak-input-probe receive|hook-host|cpu-load|churn|gpu-load [--samples 20000] [--warmup 1000] [--interval-us 2000] [--burst 1] [--label name] [--raw-output file] [--seconds 60] [--threads 28] [--gc] [--no-hook] [--bound --instance name] [--animate]");
+                Console.WriteLine("shubbak-input-probe receive|hook-host|cpu-load|churn|gpu-load|perf|palette-ui [--samples 20000] [--warmup 1000] [--interval-us 2000] [--burst 1] [--label name] [--raw-output file] [--seconds 60] [--threads 28] [--gc] [--no-hook] [--bound --instance name] [--animate]");
+                Console.WriteLine("perf: --kind ipc|layout|resize|query --operations 20000 [--windows 32] [--query name --instance name --target-pid PID]; palette-ui: --target-pid PID [--operations 100]");
                 return 0;
             }
 
@@ -27,6 +28,7 @@ internal static class Program
                 "churn" => Churn.Run(args).GetAwaiter().GetResult(),
                 "gpu-load" => GpuLoad.Run(args).GetAwaiter().GetResult(),
                 "perf" => PerformanceRun.Run(args).GetAwaiter().GetResult(),
+                "palette-ui" => PaletteRun.Run(args).GetAwaiter().GetResult(),
                 _ => throw new ArgumentException("Unknown probe mode."),
             };
         }
@@ -83,6 +85,7 @@ internal sealed record ProbeReport
     public int Duplicates { get; init; }
     public int OutOfOrder { get; init; }
     public int WrongEdges { get; init; }
+    public int GeometryChanges { get; init; }
     public int LeakedBoundEvents { get; init; }
     public long AllocatedBytes { get; init; }
     public double CpuMs { get; init; }

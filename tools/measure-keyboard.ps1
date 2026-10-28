@@ -56,7 +56,7 @@ $metadata = @{
 }
 [IO.File]::WriteAllText((Join-Path $Output 'metadata.json'), ($metadata | ConvertTo-Json).Replace("`r", ''), [Text.UTF8Encoding]::new($false))
 
-function Start-Child([string] $File, [string[]] $Arguments, [string] $Instance = '', [string] $State = '', [switch] $Ready) {
+function Start-Child([string] $File, [string[]] $Arguments, [string] $Instance = '', [string] $State = '', [switch] $Ready, [switch] $WindowReady) {
     $info = [Diagnostics.ProcessStartInfo]::new($File)
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
@@ -69,14 +69,17 @@ function Start-Child([string] $File, [string[]] $Arguments, [string] $Instance =
     if ($State) { $info.Environment['SHUBBAK_STATE_DIR'] = $State }
     $p = [Diagnostics.Process]::Start($info)
     $errorText = $p.StandardError.ReadToEndAsync()
-    if ($Ready) {
+    $windowHandle = 0L
+    if ($Ready -or $WindowReady) {
         $line = $p.StandardOutput.ReadLineAsync()
-        if (-not $line.Wait(15000) -or $line.Result -ne 'ready') {
+        $valid = $line.Wait(15000)
+        if ($valid) { $valid = if ($WindowReady) { [long]::TryParse($line.Result, [ref]$windowHandle) -and $windowHandle -ne 0 } else { $line.Result -eq 'ready' } }
+        if (-not $valid) {
             if (-not $p.HasExited) { $p.Kill($true); $p.WaitForExit(5000) | Out-Null }
             throw "Child failed to become ready: $File $Arguments; $($errorText.Result)"
         }
     }
-    [pscustomobject]@{ Process = $p; Output = $p.StandardOutput.ReadToEndAsync(); Error = $errorText; ExitCode = $null }
+    [pscustomobject]@{ Process = $p; Output = $p.StandardOutput.ReadToEndAsync(); Error = $errorText; ExitCode = $null; WindowHandle = $windowHandle }
 }
 
 function End-Child($Child) {
@@ -171,7 +174,7 @@ try {
                 try {
                     if ($version -ne 'off') {
                         if ($workload -eq 'animation') {
-                            foreach ($i in 1..2) { $windows.Add((Start-Child $window @('--test-window'))) }
+                            foreach ($i in 1..2) { $windows.Add((Start-Child $window @('--test-window') -WindowReady)) }
                         }
                         $binary = if ($version -eq 'previous') { $Previous } else { $Current }
                         $daemon = Start-Child $binary @('--config', $configPath, '--log-file') $instance $state
@@ -186,6 +189,18 @@ try {
                         # Allow its initial adoption/focus to settle before the ignored
                         # receiver takes the keyboard. This is outside the measurement.
                         Start-Sleep -Milliseconds 250
+                        if ($workload -eq 'animation') {
+                            $adoption = [Diagnostics.Stopwatch]::StartNew()
+                            do {
+                                foreach ($w in $windows) { if ($w.Process.HasExited) { throw "A window helper exited: $($w.Error.Result)" } }
+                                $query = Invoke-Cli $instance @('query','windows')
+                                $present = @($query.Text | ConvertFrom-Json | ForEach-Object { $_.handle })
+                                $missing = @($windows | Where-Object { $_.WindowHandle -notin $present })
+                                if ($query.Code -eq 0 -and $missing.Count -eq 0 -and $present.Count -eq 2) { break }
+                                if ($adoption.Elapsed.TotalSeconds -gt 10) { throw "The animation windows were not adopted: $($query.Text)" }
+                                Start-Sleep -Milliseconds 50
+                            } while ($true)
+                        }
                         if ($workload -eq 'suspended') {
                             $suspend = Invoke-Cli $instance @('wm-suspend')
                             if ($suspend.Code -ne 0) { throw $suspend.Error }
@@ -203,7 +218,8 @@ try {
                         $loaders.Add((Start-Child $Probe @('cpu-load', '--threads', '28', '--seconds', '180') -Ready))
                     }
                     if ($workload -eq 'animation') {
-                        $loaders.Add((Start-Child $Probe @('churn', '--animate', '--instance', $instance, '--seconds', '180') -Ready))
+                        $handles = ($windows | ForEach-Object WindowHandle) -join ','
+                        $loaders.Add((Start-Child $Probe @('churn', '--animate', '--handles', $handles, '--instance', $instance, '--seconds', '180') -Ready))
                     }
                     if ($workload -eq 'ipc') {
                         foreach ($i in 1..$IpcClients) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180', '--interval-ms', "$IpcIntervalMs") -Ready)) }
@@ -227,6 +243,7 @@ try {
                         foreach ($loader in $loaders) {
                             if ($loader.Process.HasExited) { throw "Load generator exited early: $($loader.Error.Result) $($loader.Output.Result)" }
                         }
+                        foreach ($w in $windows) { if ($w.Process.HasExited) { throw "An animation target exited early: $($w.Error.Result)" } }
                         $result = $text | ConvertFrom-Json
                         if ($result.Missing -ne 0 -or $result.WrongEdges -ne 0 -or $result.LeakedBoundEvents -ne 0) { throw "Input integrity failed: $text" }
                         $afterProcesses = Process-Counters
@@ -247,6 +264,12 @@ try {
                             $diagnosis = Invoke-Cli $instance @('diagnose')
                             if ($diagnosis.Code -ne 0) { throw $diagnosis.Error }
                             Save-Text (Join-Path $state 'diagnostic.md') $diagnosis.Text
+                            if ($workload -eq 'animation') {
+                                if ($diagnosis.Text -notmatch '\*\*Managed windows\*\*: 2\b' -or
+                                    $diagnosis.Text -notmatch 'frame p99 [^\r\n]*\((\d+) frames\)' -or [int]$Matches[1] -lt 30) {
+                                    throw 'Animation workload was not active: expected two managed windows and at least 30 animation-frame samples.'
+                                }
+                            }
                         }
                         catch {
                             $diagnosticFailure = $_.Exception.Message
@@ -267,7 +290,12 @@ try {
                         Save-Text (Join-Path $state "load-$loadIndex.txt") ($loader.Output.Result + $loader.Error.Result)
                         $loadIndex++
                     }
-                    foreach ($w in $windows) { End-Child $w }
+                    $windowIndex = 0
+                    foreach ($w in $windows) {
+                        End-Child $w
+                        Save-Text (Join-Path $state "window-$windowIndex.json") (@{ Handle=$w.WindowHandle; ExitCode=$w.ExitCode; Output=$w.Output.Result; Error=$w.Error.Result } | ConvertTo-Json)
+                        $windowIndex++
+                    }
                     if ($null -ne $daemon) {
                         try {
                             if ($diagnosticFailure -and -not $daemon.Process.HasExited) {
