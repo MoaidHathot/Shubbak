@@ -15,8 +15,32 @@ schedule and breaking either is a different kind of event:
 
 ## [Unreleased]
 
+### Changed
+
+- **Lower IPC, layout and companion overhead.** IPC uses bounded buffered UTF-8
+  framing and reusable write/event buffers. Core layout and inverse resizing use
+  read-only weights and allocation-free warmed scratch instead of temporary trees.
+  Taj shares state/icon reads across displays and coalesces ready event bursts;
+  Dalil reads one coherent palette snapshot. Native before/after measurements and
+  their limits are recorded in `ideas/performance-2026-10.md`.
+- **Less idle work.** Log writers wait for work without polling. Minute/second clocks
+  wake at display boundaries, react promptly to time changes/resume, and preserve
+  history sampling cadence. Repeated clock and keyboard-language values reuse their
+  strings; diagnostic percentile calculations reuse scratch storage.
+
 ### Fixed
 
+- **An in-flight source callback could overwrite a reloaded Taj source's value.**
+  Publication now validates the current source identity atomically with reload.
+  Empty clock output also remains an initialized empty string when reusing values.
+- **Sustained IPC traffic could monopolize a daemon turn.** The inbox now bounds a
+  batch and yields between items after its time budget, preserving FIFO while giving
+  keyboard/window work and due animation frames another turn.
+- **A slow icon request could hold up Taj clicks and state refreshes.** Icon reads
+  now use a separate short-lived connection, shared across the display models.
+- **Wide or lopsided layout shares could stop summing to one.** The minimum share
+  is feasible beyond 100 siblings, and normalization reserves minimum shares before
+  distributing the remainder. Wide-container resize/visibility regressions cover it.
 - **Held keys could get stuck when modifiers or bindings changed.** The hook could
   pass an application's key-down, then claim its repeat and swallow its key-up; the
   reverse transition could leak a repeat without its release. Each press now keeps

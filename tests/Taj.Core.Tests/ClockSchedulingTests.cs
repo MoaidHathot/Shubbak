@@ -5,6 +5,14 @@ namespace Taj.Core.Tests;
 public sealed class ClockSchedulingTests
 {
     [Fact]
+    public void AnEmptyFormattedValueIsPublishedRatherThanRemainingUninitialized()
+    {
+        using var clock = new ClockSource("clock", "''", TimeSpan.FromMilliseconds(500), timeProvider: new ManualTime());
+        clock.Start();
+        Assert.Equal(string.Empty, clock.Value);
+    }
+
+    [Fact]
     public void MinuteClocksWakeAtTheNextDisplayedBoundary()
     {
         var time = new ManualTime();

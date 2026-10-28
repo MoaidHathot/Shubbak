@@ -52,10 +52,30 @@ public sealed class SourceHubTests
             Changed?.Invoke(this);
         }
 
+        public Action DelayedPublication(string value)
+        {
+            Action<ISource>? captured = Changed;
+            return () => { _value = value; captured?.Invoke(this); };
+        }
+
         public void Dispose() => Disposed = true;
     }
 
     private static BarModel Model() => new(TajConfigLoader.CreateDefault().Default);
+
+    [Fact]
+    public void ACallbackAlreadyInFlightBeforeReloadCannotOverwriteTheReplacement()
+    {
+        using var hub = new SourceHub();
+        using BarModel model = Model();
+        var old = new Probe("clock", "old");
+        hub.Replace([old]);
+        hub.Attach(model);
+        Action late = old.DelayedPublication("late old result");
+        hub.Replace([new Probe("clock", "new")]);
+        late();
+        Assert.Equal("new", model.GetValue("clock"));
+    }
 
     [Fact]
     public void AValueReachesEveryAttachedModel()

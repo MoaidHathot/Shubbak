@@ -212,11 +212,17 @@ public sealed class SourceHub : IDisposable
 
     private void OnSourceChanged(ISource source)
     {
-        BarModel[] models = _publishedModels;
-
-        string? value = source.Value;
-
-        foreach (BarModel model in models) model.SetValue(source.Name, value);
+        // Unsubscribing cannot recall a delegate already captured by a timer or
+        // reader. Serialize identity validation and publication with replacement,
+        // so an old completion cannot overwrite the new source's value.
+        lock (_gate)
+        {
+            foreach (BarModel model in _publishedModels)
+            {
+                if (!_sources.TryGetValue(source.Name, out ISource? current) || !ReferenceEquals(current, source)) return;
+                model.SetValue(source.Name, source.Value);
+            }
+        }
     }
 
     /// <summary>Coalesced Windows time/settings notification, also after sleep/resume.</summary>

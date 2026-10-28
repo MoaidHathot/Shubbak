@@ -405,7 +405,7 @@ public sealed class ClockSource : SourceBase
             if (now.TryFormat(text, out int written, _format, _culture))
             {
                 ReadOnlySpan<char> value = text[..written];
-                Publish(value.SequenceEqual(Value) ? Value : new string(value));
+                Publish(Value is { } current && value.SequenceEqual(current) ? current : new string(value));
             }
             else Publish(now.ToString(_format, _culture));
         }

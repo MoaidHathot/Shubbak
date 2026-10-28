@@ -203,3 +203,17 @@ and returned, with the original rolling samples untouched; the same warmed test
 measures **0 B**. The report computes its repeated tick median once. The existing
 bounded diagnostic sample rings are retained for evidence quality. All 787 core
 tests pass, including rolling percentile correctness and allocation guards.
+
+## Final source review
+
+Two additional deterministic regressions were confirmed red before correction:
+an old source's already-captured callback could overwrite its replacement after a
+reload; and the clock string-reuse optimization confused an initial empty output
+with an uninitialized null. Source identity/publication are now serialized with
+replacement, and string reuse requires a previously initialized value. All 639
+Taj.Core and 26 Taj integration cases pass after these fixes.
+
+The first final full-suite run encountered Windows' lock screen and is excluded for
+desktop validation. After the user unlocked the PC, Native (290), Dalil (102) and
+end-to-end (7) all passed with coverage; the other projects had already passed. CI
+for the committed optimization set passed x64 and ARM64 in run 40610633992.
