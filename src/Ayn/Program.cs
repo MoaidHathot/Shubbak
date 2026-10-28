@@ -486,7 +486,7 @@ internal static class Program
 
             if (!location.Found || location.Path is not { } path) return new AynConfig();
 
-            AynConfigLoad load = AynConfigLoader.Validate(File.ReadAllText(path));
+            AynConfigLoad load = s_configCache.Read(path);
             ConfigDiagnostics.Report(load.Diagnostics, path, "the watcher's settings");
 
             // The parser's complaint is the window manager's to report; this is the one
@@ -502,6 +502,8 @@ internal static class Program
             return new AynConfig();
         }
     }
+
+    private static readonly ConfigurationCache s_configCache = new();
 
     private static int Report()
     {

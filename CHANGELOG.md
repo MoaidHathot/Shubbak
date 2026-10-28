@@ -27,6 +27,9 @@ schedule and breaking either is a different kind of event:
   wake at display boundaries, react promptly to time changes/resume, and preserve
   history sampling cadence. Repeated clock and keyboard-language values reuse their
   strings; diagnostic percentile calculations reuse scratch storage.
+- **Unchanged Ayn reloads reuse the parsed configuration.** A bounded content cache
+  compares decoded file chunks, preserving real edits, encoding and error behavior
+  while avoiding repeated large strings and parser allocations.
 
 ### Fixed
 

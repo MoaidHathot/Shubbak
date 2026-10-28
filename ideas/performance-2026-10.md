@@ -231,3 +231,82 @@ before window hooks were installed. A concurrent-startup regression created twel
 foreign windows and failed waiting for all twelve to be adopted. Subscribing before
 the snapshots fixes it; all eight end-to-end scenarios then passed with coverage.
 The corrected animation comparisons are run with ready windows for both versions.
+
+## Native input verification
+
+Four paired rounds per workload against the saved original native daemon; lower is
+better. Ranges are per-run p99 in milliseconds, not an average of pooled samples.
+
+| Workload | Original p99 | Optimized p99 |
+|---|---:|---:|
+| Idle | 1.41–1.59 | 1.39–1.50 |
+| Paced IPC queries | 1.51–1.98 | 1.47–1.61 |
+| Animation, corrected/qualified fixture | 4.11–4.51 | 4.04–4.28 |
+| CPU pressure, follow-up | 3.53–3.98 | 3.71–4.08 |
+| CPU + hardware graphics load | 2.52–3.20 | 2.27–3.05 |
+
+Every corrected animation case observed both target windows and hundreds of real
+geometry changes. The first CPU series had somewhat higher optimized tails; the
+follow-up's paired differences changed sign, with the stopped baseline also shifting
+under ambient load. These results do **not** justify claiming that every latency
+metric improved. The typical software delivery remains sub-millisecond while idle,
+and roughly 1–1.4 ms under the CPU loads. Occasional larger maxima remain in the raw
+data. The keyboard callback and binding lookup implementation were not changed.
+
+The clearest responsiveness gain is under **24 continuously querying clients**:
+bound key-to-signal p99 was **2.046–9.888 ms before vs 0.997–1.264 ms after** over four
+paired runs. Medians were about 0.2 ms in both. All notifications arrived and no
+bound input leaked through. Saturation is intentionally measured separately from
+fixed-work CPU/allocation comparisons; it can process different request counts.
+
+The native production-hook GC checks again reported zero warmed hook-thread bytes,
+faults and dropped events, including 77 forced full collections in each pressured
+hook run. No input-integrity failure occurred in the completed native matrices.
+
+The preceding-step comparison (`a37817e` vs `4b96a49`) also retained correct delivery;
+its animation p99 ranges were 4.61–5.42 vs 3.38–4.75 ms, paced IPC 1.75–2.26 vs
+1.93–1.95 ms. This is a different time window and is not mixed into the baseline
+table. Latest implementation CI passed both architectures in run 40614392106.
+
+## Normal four-program session
+
+The normal configuration was measured in baseline/current/current/baseline order,
+with 120-second idle samples, 20,000 application edges, 100 palette activations,
+40 explicit reloads, suspension and resume per session. All input checks passed.
+Ambient processes remained active; the first baseline had six managed windows and
+the other sessions seven, so these are whole-session observations, not an isolated
+CPU attribution experiment.
+
+| Observation | Original | Optimized |
+|---|---:|---:|
+| Application-delivery p99 | 2.25–2.30 ms | 2.08–2.17 ms |
+| Palette foreground median | 3.08–3.13 ms | 3.09–3.20 ms |
+| Palette foreground p99 (100 opens/run) | 5.48–5.59 ms | 6.54–7.55 ms |
+| Taj CPU per 120 s idle | 156–188 ms | 63–78 ms |
+| All four residents' CPU per 120 s idle | 250–375 ms | 141–234 ms |
+| Combined idle private memory | about 41–42 MiB | about 41 MiB |
+| Daemon private memory after 40 reloads | 37.6–38.1 MiB | 28.6–28.7 MiB |
+
+The palette's typical foreground readiness is similar, with higher p99 in the small
+initial samples; faster data acquisition is not presented as universally faster
+activation. Resume-with-no-discarded-warmup also retained larger isolated spikes in
+both versions. Exact distributions are retained under normal-stack-comparison.
+Handles/threads did not grow per reload. The daemon reported no hook faults/dropped
+keys. Frame allocation p99 remained zero; the whole-session maxima included 1,328 B
+in both versions, so cold cache growth is not described as an allocation-free frame.
+
+The reload audit also identified extra work in Ayn: it reparsed the entire unchanged
+file on every accepted daemon reload. A last-text parsed-result cache preserves the
+reconfiguration/device-observation path. File comparison uses decoded chunks to avoid
+another large string on a cache hit, detects same-length/same-mtime edits, and retains
+at most one source of 256 Ki characters. Encoding and I/O-error behavior are tested.
+Native retention follow-up compares this separately against the preceding Ayn build.
+
+Two reversed-order native pairs of **60 unchanged-config reloads** confirmed the Ayn
+change: private memory after the sequence was **9.15–9.16 MiB vs 28.55–28.85 MiB**.
+Handles stayed 245–250 and threads remained bounded. This is measured private memory,
+not an assertion that the earlier growth was an unreachable-object leak. CPU totals
+were small/noisy, so no standalone Ayn CPU speedup is claimed. A parse-only intermediate
+candidate reached ~15.3 MiB; decoded chunk comparison removed the remaining large
+unchanged-read strings. All 19 Ayn integration and 134 Ayn.Core cases pass, including
+same-stamp edits, UTF-16 BOM preservation, missing files and oversized-cache limits.
