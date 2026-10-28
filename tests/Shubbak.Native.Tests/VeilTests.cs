@@ -29,8 +29,12 @@ public sealed class VeilTests(ITestOutputHelper output)
     [Fact]
     public void AVeiledWindowIsConcealedAndTheLayoutsShowLeavesItSo()
     {
-        using var foreign = ForeignWindow.Acquire(output);
-        if (foreign is null) return;
+        // winver can reset its shell cloak while finishing startup, independently of
+        // Show. Use the test-owned window whose procedure never changes visibility.
+        DesktopLease.Acquire();
+        using var foreign = new Shubbak.TestWindow.ControlledWindow();
+        TestWindow.PumpUntil(() => Win32ApplicationView.HasView(foreign.Handle));
+        Assert.True(Win32ApplicationView.HasView(foreign.Handle), "the shell did not catalogue the controlled window");
 
         var committer = new WindowCommitter();
 
@@ -48,6 +52,7 @@ public sealed class VeilTests(ITestOutputHelper output)
         committer.Commit([Place(foreign.Handle, tile)], static p => (nint)p.Window.Handle);
 
         Assert.Equal(1, committer.VeiledCount);
+        Assert.True(committer.IsConcealing(foreign.Handle));
         Assert.Equal(Win32Window.CloakState.Shell, Win32Window.GetCloakState(foreign.Handle));
 
         // Lifted once the placement is seen to have landed, which for a responsive
@@ -223,5 +228,6 @@ public sealed class VeilTests(ITestOutputHelper output)
 
             Thread.Sleep(25);
         }
+        Assert.Equal(expected, Win32Window.GetCloakState(handle));
     }
 }

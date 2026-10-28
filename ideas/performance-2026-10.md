@@ -333,3 +333,10 @@ Four paired native animation/input runs against the preceding validated daemon:
 
 The complete Release suite with coverage subsequently passed **3,676 cases**, with
 zero failures or skips, including the final timer and configuration-cache changes.
+
+The next hosted run found one existing veil-fixture failure: winver's shell cloak
+was gone after the test posted a move while the committer still recorded the veil.
+The production path already allows for applications/shell startup lifting a cloak.
+That scenario now uses the controlled foreign window, retaining the actual cloak,
+placement and release assertions. All seven veil cases and five additional isolated
+repetitions passed. Cloak waits now assert their timeout rather than silently returning.
