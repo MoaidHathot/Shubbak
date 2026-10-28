@@ -55,33 +55,33 @@ public sealed class GridLayout : ILayout
         Span<int> widths = scratch[rows..];
         try
         {
-        LayoutMath.DistributeEvenly(Math.Max(0, area.Height - (gap * (rows - 1))), rowHeights);
+            LayoutMath.DistributeEvenly(Math.Max(0, area.Height - (gap * (rows - 1))), rowHeights);
 
-        int y = area.Y;
-        int placed = 0;
+            int y = area.Y;
+            int placed = 0;
 
-        // Allocated once, outside the loop: a stackalloc per row would grow the
-        // frame with the row count.
-        for (int row = 0; row < rows; row++)
-        {
-            // The last row may be short, and stretching its cells to fill the width
-            // looks far better than leaving a ragged gap.
-            int cellsInRow = Math.Min(columns, count - placed);
-            if (cellsInRow <= 0) break;
-
-            Span<int> rowWidths = widths[..cellsInRow];
-            LayoutMath.DistributeEvenly(Math.Max(0, area.Width - (gap * (cellsInRow - 1))), rowWidths);
-
-            int x = area.X;
-
-            for (int column = 0; column < cellsInRow; column++)
+            // Allocated once, outside the loop: a stackalloc per row would grow the
+            // frame with the row count.
+            for (int row = 0; row < rows; row++)
             {
-                destination[placed++] = new Rect(x, y, rowWidths[column], rowHeights[row]);
-                x += rowWidths[column] + gap;
-            }
+                // The last row may be short, and stretching its cells to fill the width
+                // looks far better than leaving a ragged gap.
+                int cellsInRow = Math.Min(columns, count - placed);
+                if (cellsInRow <= 0) break;
 
-            y += rowHeights[row] + gap;
-        }
+                Span<int> rowWidths = widths[..cellsInRow];
+                LayoutMath.DistributeEvenly(Math.Max(0, area.Width - (gap * (cellsInRow - 1))), rowWidths);
+
+                int x = area.X;
+
+                for (int column = 0; column < cellsInRow; column++)
+                {
+                    destination[placed++] = new Rect(x, y, rowWidths[column], rowHeights[row]);
+                    x += rowWidths[column] + gap;
+                }
+
+                y += rowHeights[row] + gap;
+            }
         }
         finally { if (rented is not null) System.Buffers.ArrayPool<int>.Shared.Return(rented); }
     }

@@ -66,21 +66,21 @@ public sealed class SplitLayout : ILayout
         Span<int> sizes = rented is null ? stackalloc int[count] : rented.AsSpan(0, count);
         try
         {
-        DistributeExact(weights, available, sizes);
+            DistributeExact(weights, available, sizes);
 
-        // If ratios alone would starve a tile, re-run with a guaranteed floor.
-        // Only when it is actually needed: applying the floor unconditionally would
-        // distort deliberately lopsided splits that were already perfectly legal.
-        int minimum = options.MinimumTileExtent;
-        if (minimum > 0 && available >= (long)minimum * count && AnyBelow(sizes, minimum))
-            DistributeExactWithFloor(weights, available, minimum, sizes);
+            // If ratios alone would starve a tile, re-run with a guaranteed floor.
+            // Only when it is actually needed: applying the floor unconditionally would
+            // distort deliberately lopsided splits that were already perfectly legal.
+            int minimum = options.MinimumTileExtent;
+            if (minimum > 0 && available >= (long)minimum * count && AnyBelow(sizes, minimum))
+                DistributeExactWithFloor(weights, available, minimum, sizes);
 
-        int origin = area.Origin(main);
-        for (int i = 0; i < count; i++)
-        {
-            destination[i] = area.WithAxis(main, origin, sizes[i]);
-            origin += sizes[i] + options.InnerGap;
-        }
+            int origin = area.Origin(main);
+            for (int i = 0; i < count; i++)
+            {
+                destination[i] = area.WithAxis(main, origin, sizes[i]);
+                origin += sizes[i] + options.InnerGap;
+            }
         }
         finally { if (rented is not null) System.Buffers.ArrayPool<int>.Shared.Return(rented); }
     }

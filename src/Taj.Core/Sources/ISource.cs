@@ -397,33 +397,33 @@ public sealed class ClockSource : SourceBase
     {
         lock (_clockGate)
         {
-        if (_stoodDown || _clockDisposed) return;
-        DateTimeOffset now = TimeZoneInfo.ConvertTime(_time.GetUtcNow(), _timeZone ?? _time.LocalTimeZone);
-        try
-        {
-            Span<char> text = stackalloc char[128];
-            if (now.TryFormat(text, out int written, _format, _culture))
+            if (_stoodDown || _clockDisposed) return;
+            DateTimeOffset now = TimeZoneInfo.ConvertTime(_time.GetUtcNow(), _timeZone ?? _time.LocalTimeZone);
+            try
             {
-                ReadOnlySpan<char> value = text[..written];
-                Publish(Value is { } current && value.SequenceEqual(current) ? current : new string(value));
+                Span<char> text = stackalloc char[128];
+                if (now.TryFormat(text, out int written, _format, _culture))
+                {
+                    ReadOnlySpan<char> value = text[..written];
+                    Publish(Value is { } current && value.SequenceEqual(current) ? current : new string(value));
+                }
+                else Publish(now.ToString(_format, _culture));
             }
-            else Publish(now.ToString(_format, _culture));
-        }
-        catch (FormatException ex)
-        {
-            Log.Error(LogCategory.Config, $"clock '{Name}' has an invalid format '{_format}'", ex);
-            Publish("!");
-        }
-        finally
-        {
-            if (!_stoodDown && !_clockDisposed)
+            catch (FormatException ex)
             {
-                TimeSpan due = _quantumTicks > 0 && _interval.Ticks <= _quantumTicks && !HasSamplingObservers
-                    ? TimeSpan.FromTicks(_quantumTicks - now.Ticks % _quantumTicks)
-                    : _interval;
-                _timer?.Change(due, Timeout.InfiniteTimeSpan);
+                Log.Error(LogCategory.Config, $"clock '{Name}' has an invalid format '{_format}'", ex);
+                Publish("!");
             }
-        }
+            finally
+            {
+                if (!_stoodDown && !_clockDisposed)
+                {
+                    TimeSpan due = _quantumTicks > 0 && _interval.Ticks <= _quantumTicks && !HasSamplingObservers
+                        ? TimeSpan.FromTicks(_quantumTicks - now.Ticks % _quantumTicks)
+                        : _interval;
+                    _timer?.Change(due, Timeout.InfiniteTimeSpan);
+                }
+            }
         }
     }
 

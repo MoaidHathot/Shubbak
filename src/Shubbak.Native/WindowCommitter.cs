@@ -792,181 +792,180 @@ public sealed class WindowCommitter
         int moveCount = 0, raiseCount = 0;
         try
         {
-
-        // Raises are separate from moves, and are applied even when nothing moved.
-        // Entering monocle changes no rectangle at all - every window already fills
-        // the area - so the stacking change is the entire visible effect.
-        for (int i = 0; i < placements.Count; i++)
-        {
-            Placement placement = placements[i];
-            nint handle = handleOf(placement);
-            if (handle == 0 || !Win32Window.Exists(handle)) continue;
-
-            if (!placement.Visible)
+            // Raises are separate from moves, and are applied even when nothing moved.
+            // Entering monocle changes no rectangle at all - every window already fills
+            // the area - so the stacking change is the entire visible effect.
+            for (int i = 0; i < placements.Count; i++)
             {
-                // Concealed, then still moved. A window on an inactive workspace has a
-                // rectangle like any other - the layout computes one precisely so that
-                // showing the workspace shows a finished arrangement rather than a
-                // frame of garbage.
+                Placement placement = placements[i];
+                nint handle = handleOf(placement);
+                if (handle == 0 || !Win32Window.Exists(handle)) continue;
+
+                if (!placement.Visible)
+                {
+                    // Concealed, then still moved. A window on an inactive workspace has a
+                    // rectangle like any other - the layout computes one precisely so that
+                    // showing the workspace shows a finished arrangement rather than a
+                    // frame of garbage.
+                    //
+                    // Returning here instead left every such window at whatever position
+                    // and stacking it had before Shubbak started. It was concealed there,
+                    // and the first time its workspace was shown it appeared at that stale
+                    // position - windows piled on top of one another - and only then slid
+                    // into place. Since z-order is never touched, nothing corrected the
+                    // stacking either.
+                    Hide(handle);
+                }
+                else
+                {
+                    Show(handle);
+
+                    if (placement.Raise) toRaise[raiseCount++] = handle;
+                }
+
+                // A maximised window is Windows's to size. The tree says Maximised for a
+                // window the user or a key maximised, and the honest way to fill the work
+                // area with a window and keep its frame is the maximise Windows already has
+                // - the compositor draws it without a shadow and with the frame off the top
+                // of the screen, which a window merely sized to the work area is not. So the
+                // flag is set if it is not already, and the window is never moved: SetWindowPos
+                // on a zoomed window is what puts a black strip along the top.
+                if (placement.Window.State == WindowState.Maximised)
+                {
+                    if (placement.Visible && !Win32Window.IsMaximised(handle))
+                        WindowActions.Maximise(handle);
+
+                    lock (_lastCommitted)
+                    {
+                        _lastCommitted[handle] = placement.Rect;
+                        _lastApplied[handle] = placement.Rect;
+
+                        // Nothing of ours is on its way to this window any more; the
+                        // maximise is Windows's to carry out.
+                        _posted.Remove(handle);
+                    }
+
+                    continue;
+                }
+
+                // Skip windows already where we want them. This is the difference
+                // between a relayout costing one SetWindowPos and costing dozens, and
+                // it also suppresses a large share of the LOCATIONCHANGE echo.
                 //
-                // Returning here instead left every such window at whatever position
-                // and stacking it had before Shubbak started. It was concealed there,
-                // and the first time its workspace was shown it appeared at that stale
-                // position - windows piled on top of one another - and only then slid
-                // into place. Since z-order is never touched, nothing corrected the
-                // stacking either.
-                Hide(handle);
-            }
-            else
-            {
-                Show(handle);
-
-                if (placement.Raise) toRaise[raiseCount++] = handle;
-            }
-
-            // A maximised window is Windows's to size. The tree says Maximised for a
-            // window the user or a key maximised, and the honest way to fill the work
-            // area with a window and keep its frame is the maximise Windows already has
-            // - the compositor draws it without a shadow and with the frame off the top
-            // of the screen, which a window merely sized to the work area is not. So the
-            // flag is set if it is not already, and the window is never moved: SetWindowPos
-            // on a zoomed window is what puts a black strip along the top.
-            if (placement.Window.State == WindowState.Maximised)
-            {
-                if (placement.Visible && !Win32Window.IsMaximised(handle))
-                    WindowActions.Maximise(handle);
+                // Judged on the target, not on an exact comparison with where the window
+                // actually is. That comparison was tried and reverted: a terminal snapping
+                // to whole character cells never lands precisely where it was put, so it
+                // failed on every pass and the window was moved again on every layout -
+                // and since focus changes trigger a layout, that was a visible jump every
+                // time focus moved.
+                //
+                // But the target alone is not enough either, and the comment that used to
+                // sit here said this case was "handled where it should be: the
+                // location-change event". It was not. That subscription was removed the
+                // following day, for its own good reasons, and nothing replaced it - so a
+                // window that moved itself was skipped here on every subsequent pass, for
+                // ever, because the target had not changed and therefore there was
+                // seemingly nothing to do.
+                //
+                // That is what left a browser restoring its remembered geometry sitting on
+                // the wrong monitor until the user pressed wm-redraw, which cures it only
+                // because Redraw forgets every cached rectangle.
+                //
+                // So the window is asked where it is, but only when it was about to be
+                // skipped, and only coarsely enough that character-cell rounding cannot
+                // trip it. See PlacementDrift - and HasWandered, which declines to ask at
+                // all while the previous placement is still on its way to the window.
+                bool alreadyCommanded;
 
                 lock (_lastCommitted)
                 {
-                    _lastCommitted[handle] = placement.Rect;
-                    _lastApplied[handle] = placement.Rect;
-
-                    // Nothing of ours is on its way to this window any more; the
-                    // maximise is Windows's to carry out.
-                    _posted.Remove(handle);
+                    alreadyCommanded = _lastCommitted.TryGetValue(handle, out Rect previous)
+                        && previous == placement.Rect
+                        && _lastApplied.ContainsKey(handle);
                 }
 
-                continue;
+                // The geometry read is outside the lock on purpose. It is a syscall, and
+                // holding a lock across one that every layout pass performs per window is
+                // how a cheap check becomes a contended one.
+                if (alreadyCommanded && !HasWandered(handle, placement)) continue;
+
+                toMove[moveCount++] = (handle, placement.Rect);
             }
 
-            // Skip windows already where we want them. This is the difference
-            // between a relayout costing one SetWindowPos and costing dozens, and
-            // it also suppresses a large share of the LOCATIONCHANGE echo.
-            //
-            // Judged on the target, not on an exact comparison with where the window
-            // actually is. That comparison was tried and reverted: a terminal snapping
-            // to whole character cells never lands precisely where it was put, so it
-            // failed on every pass and the window was moved again on every layout -
-            // and since focus changes trigger a layout, that was a visible jump every
-            // time focus moved.
-            //
-            // But the target alone is not enough either, and the comment that used to
-            // sit here said this case was "handled where it should be: the
-            // location-change event". It was not. That subscription was removed the
-            // following day, for its own good reasons, and nothing replaced it - so a
-            // window that moved itself was skipped here on every subsequent pass, for
-            // ever, because the target had not changed and therefore there was
-            // seemingly nothing to do.
-            //
-            // That is what left a browser restoring its remembered geometry sitting on
-            // the wrong monitor until the user pressed wm-redraw, which cures it only
-            // because Redraw forgets every cached rectangle.
-            //
-            // So the window is asked where it is, but only when it was about to be
-            // skipped, and only coarsely enough that character-cell rounding cannot
-            // trip it. See PlacementDrift - and HasWandered, which declines to ask at
-            // all while the previous placement is still on its way to the window.
-            bool alreadyCommanded;
-
-            lock (_lastCommitted)
+            toMove = toMove[..moveCount];
+            toRaise = toRaise[..raiseCount];
+            if (moveCount == 0)
             {
-                alreadyCommanded = _lastCommitted.TryGetValue(handle, out Rect previous)
-                    && previous == placement.Rect
-                    && _lastApplied.ContainsKey(handle);
+                RaiseAll(toRaise);
+                return 0;
             }
 
-            // The geometry read is outside the lock on purpose. It is a syscall, and
-            // holding a lock across one that every layout pass performs per window is
-            // how a cheap check becomes a contended one.
-            if (alreadyCommanded && !HasWandered(handle, placement)) continue;
-
-            toMove[moveCount++] = (handle, placement.Rect);
-        }
-
-        toMove = toMove[..moveCount];
-        toRaise = toRaise[..raiseCount];
-        if (moveCount == 0)
-        {
-            RaiseAll(toRaise);
-            return 0;
-        }
-
-        // Nothing is placed while Windows still believes it is maximised.
-        //
-        // The compositor draws a maximised window as though it fills the monitor - no
-        // shadow, and part of the frame deliberately off the top of the screen. Moved
-        // to half the screen with the flag still set, that frame lands back on screen
-        // as a black strip along the top, and the focus border is drawn around a shape
-        // that is not the window. Applications that reopen maximised, which is most of
-        // the Store ones, arrived that way and were tiled that way.
-        //
-        // Here rather than at adoption, because adoption is only one of the routes in.
-        // An application maximising itself, or a window the tree has just taken out of
-        // Maximised, both carry the flag into a placement that is not maximised, and
-        // this is the one place every rectangle passes through. A window the *user*
-        // maximised is also caught here if a pass happens to run before the daemon's
-        // detection has looked - at most one poll, a fifth of a second - and is then
-        // tiled; the next Win+Up is honoured, since the detection sees it first. The
-        // alternative, leaving a zoomed window alone here, was tried and made
-        // toggle-maximized a one-way door: the tree said Tiling, the window stayed
-        // zoomed, and the detection put the tree back to Maximised a second later.
-        //
-        // The cost is one IsZoomed per window actually being moved - windows already
-        // where they belong were skipped above - which is a style read beside a
-        // SetWindowPos that is about to cross a process boundary.
-        foreach ((nint handle, Rect rect) in toMove)
-        {
-            if (Win32Window.IsMaximised(handle))
-                WindowActions.Unmaximise(handle, Expand(handle, rect));
-        }
-
-        long now = Stopwatch.GetTimestamp();
-
-        try
-        {
+            // Nothing is placed while Windows still believes it is maximised.
+            //
+            // The compositor draws a maximised window as though it fills the monitor - no
+            // shadow, and part of the frame deliberately off the top of the screen. Moved
+            // to half the screen with the flag still set, that frame lands back on screen
+            // as a black strip along the top, and the focus border is drawn around a shape
+            // that is not the window. Applications that reopen maximised, which is most of
+            // the Store ones, arrived that way and were tiled that way.
+            //
+            // Here rather than at adoption, because adoption is only one of the routes in.
+            // An application maximising itself, or a window the tree has just taken out of
+            // Maximised, both carry the flag into a placement that is not maximised, and
+            // this is the one place every rectangle passes through. A window the *user*
+            // maximised is also caught here if a pass happens to run before the daemon's
+            // detection has looked - at most one poll, a fifth of a second - and is then
+            // tiled; the next Win+Up is honoured, since the detection sees it first. The
+            // alternative, leaving a zoomed window alone here, was tried and made
+            // toggle-maximized a one-way door: the tree said Tiling, the window stayed
+            // zoomed, and the detection put the tree back to Maximised a second later.
+            //
+            // The cost is one IsZoomed per window actually being moved - windows already
+            // where they belong were skipped above - which is a style read beside a
+            // SetWindowPos that is about to cross a process boundary.
             foreach ((nint handle, Rect rect) in toMove)
             {
-                // Read before the post, so the record says where the window was when
-                // it was asked to go; see Pending.Origin.
-                Rect origin = Win32Window.GetBounds(handle);
-
-                MoveSingle(handle, rect);
-
-                lock (_lastCommitted)
-                {
-                    _posted[handle] = new Pending(now, origin);
-
-                    // A direct placement supersedes whatever motion the window was in;
-                    // the next motion's first frame must not be judged against it.
-                    _inFlight.Remove(handle);
-                }
+                if (Win32Window.IsMaximised(handle))
+                    WindowActions.Unmaximise(handle, Expand(handle, rect));
             }
-        }
-        finally
-        {
-            lock (_lastCommitted)
+
+            long now = Stopwatch.GetTimestamp();
+
+            try
             {
                 foreach ((nint handle, Rect rect) in toMove)
                 {
-                    _lastCommitted[handle] = rect;
-                    _lastApplied[handle] = Expand(handle, rect);
+                    // Read before the post, so the record says where the window was when
+                    // it was asked to go; see Pending.Origin.
+                    Rect origin = Win32Window.GetBounds(handle);
+
+                    MoveSingle(handle, rect);
+
+                    lock (_lastCommitted)
+                    {
+                        _posted[handle] = new Pending(now, origin);
+
+                        // A direct placement supersedes whatever motion the window was in;
+                        // the next motion's first frame must not be judged against it.
+                        _inFlight.Remove(handle);
+                    }
                 }
             }
-        }
+            finally
+            {
+                lock (_lastCommitted)
+                {
+                    foreach ((nint handle, Rect rect) in toMove)
+                    {
+                        _lastCommitted[handle] = rect;
+                        _lastApplied[handle] = Expand(handle, rect);
+                    }
+                }
+            }
 
-        RaiseAll(toRaise);
+            RaiseAll(toRaise);
 
-        return moveCount;
+            return moveCount;
         }
         finally
         {

@@ -139,13 +139,13 @@ public sealed class MasterStackLayout : ILayout
         Span<int> sizes = rented is null ? stackalloc int[count] : rented.AsSpan(0, count);
         try
         {
-        int available = Math.Max(0, area.Extent(axis) - (gap * (count - 1)));
+            int available = Math.Max(0, area.Extent(axis) - (gap * (count - 1)));
 
-        // Evenly rather than by ratio: the stack's individual ratios are reserved
-        // for the master divider, and a stack whose members drift to different
-        // heights is more confusing than useful.
-        LayoutMath.DistributeEvenly(available, sizes);
-        LayoutMath.PlaceAlongAxis(area, axis, sizes, gap, destination[offset..(offset + count)]);
+            // Evenly rather than by ratio: the stack's individual ratios are reserved
+            // for the master divider, and a stack whose members drift to different
+            // heights is more confusing than useful.
+            LayoutMath.DistributeEvenly(available, sizes);
+            LayoutMath.PlaceAlongAxis(area, axis, sizes, gap, destination[offset..(offset + count)]);
         }
         finally { if (rented is not null) System.Buffers.ArrayPool<int>.Shared.Return(rented); }
     }

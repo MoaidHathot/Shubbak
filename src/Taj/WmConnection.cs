@@ -665,70 +665,70 @@ public sealed partial class WmConnection : IAsyncDisposable
 
     private void ApplySnapshot(IpcClient client, StateSnapshot state)
     {
-            // Everything the snapshot says about this display, decided in Taj.Core
-            // where it is tested; see SnapshotProjection.
-            BarReading reading = SnapshotProjection.Read(state, _deviceId, OwnMonitorOnly);
+        // Everything the snapshot says about this display, decided in Taj.Core
+        // where it is tested; see SnapshotProjection.
+        BarReading reading = SnapshotProjection.Read(state, _deviceId, OwnMonitorOnly);
 
-            _model.SetValue("workspaces", reading.Workspaces);
+        _model.SetValue("workspaces", reading.Workspaces);
 
-            // The one this display is showing, on its own, for a bar that wants its
-            // name as text rather than the list. Documented from the start; published
-            // from now.
-            _model.SetValue("workspace", reading.ActiveWorkspace);
-            _model.SetValue(FocusedWindow.TitleKey, state.FocusedWindow?.Title ?? string.Empty);
-            _model.SetValue(
-                FocusedWindow.ProcessKey, state.FocusedWindow?.ProcessName ?? string.Empty);
-            _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
-            _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
-            _model.SetValue("layout", reading.Layout);
+        // The one this display is showing, on its own, for a bar that wants its
+        // name as text rather than the list. Documented from the start; published
+        // from now.
+        _model.SetValue("workspace", reading.ActiveWorkspace);
+        _model.SetValue(FocusedWindow.TitleKey, state.FocusedWindow?.Title ?? string.Empty);
+        _model.SetValue(
+            FocusedWindow.ProcessKey, state.FocusedWindow?.ProcessName ?? string.Empty);
+        _model.SetValue(FocusedWindow.StateKey, state.FocusedWindow?.State ?? string.Empty);
+        _model.SetValue("binding_mode", state.BindingMode ?? string.Empty);
+        _model.SetValue("layout", reading.Layout);
 
-            // How many windows the shown workspace holds, for the layout thumbnail
-            // that follows it and for a template that wants the number. Refreshed by
-            // the same events as the rest, since a window opening or closing already
-            // asks for the state again.
-            _model.SetValue(LayoutWidget.WindowsKey, reading.WindowCount.ToString(CultureInfo.InvariantCulture));
+        // How many windows the shown workspace holds, for the layout thumbnail
+        // that follows it and for a template that wants the number. Refreshed by
+        // the same events as the rest, since a window opening or closing already
+        // asks for the state again.
+        _model.SetValue(LayoutWidget.WindowsKey, reading.WindowCount.ToString(CultureInfo.InvariantCulture));
 
-            // The icon too, from the snapshot as well as from the events, or a bar
-            // started with a window already in front would show its title alone until
-            // focus next moved.
-            TrackFocus(client, state.FocusedWindow?.Handle ?? 0);
+        // The icon too, from the snapshot as well as from the events, or a bar
+        // started with a window already in front would show its title alone until
+        // focus next moved.
+        TrackFocus(client, state.FocusedWindow?.Handle ?? 0);
 
-            // From the snapshot as well as from the events, because a bar that starts
-            // while Shubbak is already suspended would otherwise show nothing until
-            // the state next changed - which is precisely the moment somebody is
-            // looking at the bar wondering why their keys do nothing.
-            _paused = state.Paused;
-            _suspended = state.Suspended;
-            PublishStatus();
+        // From the snapshot as well as from the events, because a bar that starts
+        // while Shubbak is already suspended would otherwise show nothing until
+        // the state next changed - which is precisely the moment somebody is
+        // looking at the bar wondering why their keys do nothing.
+        _paused = state.Paused;
+        _suspended = state.Suspended;
+        PublishStatus();
 
-            // Before the workspace, so that a rule asking for both is judged with both
-            // known: the workspace handler picks the profile, and it reads the contexts
-            // the bar was last told about.
-            IReadOnlyList<string> contexts = state.Contexts ?? [];
-            _model.SetValue(ActiveContexts.Key, ActiveContexts.Label(contexts));
+        // Before the workspace, so that a rule asking for both is judged with both
+        // known: the workspace handler picks the profile, and it reads the contexts
+        // the bar was last told about.
+        IReadOnlyList<string> contexts = state.Contexts ?? [];
+        _model.SetValue(ActiveContexts.Key, ActiveContexts.Label(contexts));
 
-            if (!ActiveContexts.Same(_lastContexts, contexts))
-            {
-                // One value per context as well as the joined list, so a widget can
-                // show an icon for one of them; the model drops unchanged writes.
-                foreach ((string key, string value) in ActiveContexts.Changes(_lastContexts, contexts))
-                    _model.SetValue(key, value);
+        if (!ActiveContexts.Same(_lastContexts, contexts))
+        {
+            // One value per context as well as the joined list, so a widget can
+            // show an icon for one of them; the model drops unchanged writes.
+            foreach ((string key, string value) in ActiveContexts.Changes(_lastContexts, contexts))
+                _model.SetValue(key, value);
 
-                _lastContexts = contexts;
-                ContextsChanged?.Invoke(contexts);
-            }
+            _lastContexts = contexts;
+            ContextsChanged?.Invoke(contexts);
+        }
 
-            if (reading.ActiveWorkspace.Length > 0 && (_lastReading is not { } previous ||
-                previous.ActiveWorkspace != reading.ActiveWorkspace || previous.MonitorIndex != reading.MonitorIndex ||
-                !previous.MonitorNames.SequenceEqual(reading.MonitorNames)))
-                ActiveWorkspaceChanged?.Invoke(reading.ActiveWorkspace, reading.MonitorIndex, reading.MonitorNames);
-            _lastReading = reading;
+        if (reading.ActiveWorkspace.Length > 0 && (_lastReading is not { } previous ||
+            previous.ActiveWorkspace != reading.ActiveWorkspace || previous.MonitorIndex != reading.MonitorIndex ||
+            !previous.MonitorNames.SequenceEqual(reading.MonitorNames)))
+            ActiveWorkspaceChanged?.Invoke(reading.ActiveWorkspace, reading.MonitorIndex, reading.MonitorNames);
+        _lastReading = reading;
 
-            if (SnapshotProjection.MonitorsDiffer(_lastMonitors, state.Monitors))
-            {
-                _lastMonitors = state.Monitors;
-                MonitorsChanged?.Invoke(state.Monitors);
-            }
+        if (SnapshotProjection.MonitorsDiffer(_lastMonitors, state.Monitors))
+        {
+            _lastMonitors = state.Monitors;
+            MonitorsChanged?.Invoke(state.Monitors);
+        }
     }
 
     public ValueTask DisposeAsync() => _group.RemoveAsync(this);

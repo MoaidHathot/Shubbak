@@ -596,29 +596,29 @@ public sealed class IpcServer : IAsyncDisposable
 
                 try
                 {
-                while (!token.IsCancellationRequested && _pipe.IsConnected)
-                {
-                    // Whichever comes first: a request to answer, or something to push.
-                    // Neither costs anything while waiting.
-                    Task completed = await Task.WhenAny(readTask, pendingTask).ConfigureAwait(false);
-
-                    if (completed == readTask)
+                    while (!token.IsCancellationRequested && _pipe.IsConnected)
                     {
-                        string? line = await readTask.ConfigureAwait(false);
-                        if (line is null) break;
+                        // Whichever comes first: a request to answer, or something to push.
+                        // Neither costs anything while waiting.
+                        Task completed = await Task.WhenAny(readTask, pendingTask).ConfigureAwait(false);
 
-                        await HandleLineAsync(line, writer).ConfigureAwait(false);
-                        readTask = reader.ReadLineAsync(reading.Token).AsTask();
-                    }
-                    else
-                    {
-                        // Recreated only when it actually fired, so a signal arriving
-                        // while a request was being handled is not swallowed.
-                        pendingTask = _pending.WaitAsync(reading.Token);
-                    }
+                        if (completed == readTask)
+                        {
+                            string? line = await readTask.ConfigureAwait(false);
+                            if (line is null) break;
 
-                    await FlushOutboxAsync(writer).ConfigureAwait(false);
-                }
+                            await HandleLineAsync(line, writer).ConfigureAwait(false);
+                            readTask = reader.ReadLineAsync(reading.Token).AsTask();
+                        }
+                        else
+                        {
+                            // Recreated only when it actually fired, so a signal arriving
+                            // while a request was being handled is not swallowed.
+                            pendingTask = _pending.WaitAsync(reading.Token);
+                        }
+
+                        await FlushOutboxAsync(writer).ConfigureAwait(false);
+                    }
                 }
                 finally
                 {

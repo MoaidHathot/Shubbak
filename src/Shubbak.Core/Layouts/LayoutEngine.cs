@@ -174,57 +174,57 @@ public sealed class LayoutEngine
         Span<Rect> rects = onStack ? stackalloc Rect[count] : rentedRects.AsSpan(0, count);
         try
         {
-        int tiled = 0;
-        double total = 0;
-        for (int i = 0; i < count; i++)
-        {
-            if (!children[i].ParticipatesInTiling) continue;
-            weights[tiled++] = children[i].SizeRatio;
-            total += children[i].SizeRatio;
-        }
-        if (tiled == 0) return;
-        if (tiled != count && total > double.Epsilon) NormaliseSubset(weights[..tiled], count, total);
-        container.Layout.Arrange(weights[..tiled], area, in options, rects[..tiled]);
-
-        // In a layout whose rectangles overlap, stacking is the only thing that
-        // decides what the user sees, so the focused window has to be raised. Where
-        // rectangles are disjoint - every tiling layout - stacking is left alone,
-        // which keeps windows in whatever order the user put them.
-        bool overlapping = container.Layout.Overlaps;
-
-        int slot = 0;
-        for (int i = 0; i < count; i++)
-        {
-            Node node = children[i];
-            if (!node.ParticipatesInTiling) continue;
-            Rect tile = rects[slot++];
-            switch (node)
+            int tiled = 0;
+            double total = 0;
+            for (int i = 0; i < count; i++)
             {
-                case WindowNode window:
-                {
-                    // A window the application has taken full-screen keeps its slot -
-                    // the rectangle above was computed for it and its siblings were
-                    // divided around it - and is simply given the monitor instead. So
-                    // nothing else moves while it is full-screen, and when it stops
-                    // being full-screen it returns to a tile that was never
-                    // reallocated. See WindowNode.IsNativeFullscreen.
-                    bool native = window.IsNativeFullscreen;
-                    Rect rect = native ? monitorBounds : tile;
-
-                    window.Rect = rect;
-                    _placements.Add(new Placement(
-                        window,
-                        rect,
-                        visible,
-                        Raise: native || (overlapping && ReferenceEquals(window, _focused))));
-                    break;
-                }
-
-                case ContainerNode child:
-                    ArrangeContainer(child, tile, monitorBounds, visible, in options, depth + 1);
-                    break;
+                if (!children[i].ParticipatesInTiling) continue;
+                weights[tiled++] = children[i].SizeRatio;
+                total += children[i].SizeRatio;
             }
-        }
+            if (tiled == 0) return;
+            if (tiled != count && total > double.Epsilon) NormaliseSubset(weights[..tiled], count, total);
+            container.Layout.Arrange(weights[..tiled], area, in options, rects[..tiled]);
+
+            // In a layout whose rectangles overlap, stacking is the only thing that
+            // decides what the user sees, so the focused window has to be raised. Where
+            // rectangles are disjoint - every tiling layout - stacking is left alone,
+            // which keeps windows in whatever order the user put them.
+            bool overlapping = container.Layout.Overlaps;
+
+            int slot = 0;
+            for (int i = 0; i < count; i++)
+            {
+                Node node = children[i];
+                if (!node.ParticipatesInTiling) continue;
+                Rect tile = rects[slot++];
+                switch (node)
+                {
+                    case WindowNode window:
+                    {
+                        // A window the application has taken full-screen keeps its slot -
+                        // the rectangle above was computed for it and its siblings were
+                        // divided around it - and is simply given the monitor instead. So
+                        // nothing else moves while it is full-screen, and when it stops
+                        // being full-screen it returns to a tile that was never
+                        // reallocated. See WindowNode.IsNativeFullscreen.
+                        bool native = window.IsNativeFullscreen;
+                        Rect rect = native ? monitorBounds : tile;
+
+                        window.Rect = rect;
+                        _placements.Add(new Placement(
+                            window,
+                            rect,
+                            visible,
+                            Raise: native || (overlapping && ReferenceEquals(window, _focused))));
+                        break;
+                    }
+
+                    case ContainerNode child:
+                        ArrangeContainer(child, tile, monitorBounds, visible, in options, depth + 1);
+                        break;
+                }
+            }
         }
         finally
         {
