@@ -295,6 +295,16 @@ Handles/threads did not grow per reload. The daemon reported no hook faults/drop
 keys. Frame allocation p99 remained zero; the whole-session maxima included 1,328 B
 in both versions, so cold cache growth is not described as an allocation-free frame.
 
+A longer follow-up used **500 palette activations per run in four reversed-order
+pairs**, with all companions running. Original p99 was **6.17–14.16 ms**, optimized
+**7.29–8.60 ms**; the optimized value was lower in three of four pairs. Median ranges
+were **4.42–5.28 vs 4.71–5.09 ms**. The earlier small-sample tail did not reproduce
+as a consistent regression, and these overlapping observations still do not establish
+a universal activation speedup. Background browser/Teams work was substantial and
+is recorded per case. All **4,000 activations** succeeded. The initial background-only
+attempt lacked foreground permission and produced no accepted row; the successful
+fixture includes the same guarded receiver prerequisite as the normal-stack run.
+
 The reload audit also identified extra work in Ayn: it reparsed the entire unchanged
 file on every accepted daemon reload. A last-text parsed-result cache preserves the
 reconfiguration/device-observation path. File comparison uses decoded chunks to avoid
@@ -342,9 +352,63 @@ placement and release assertions. All seven veil cases and five additional isola
 repetitions passed. Cloak waits now assert their timeout rather than silently returning.
 
 The following x64 job passed all tests, NativeAOT artifacts and installer checks.
-ARM64 exposed a separate test setup timeout before Ayn had subscribed: the async
-connection tests were blocking pool workers in WaitOne/SpinUntil while the pipe pump
-needed workers to make progress. Those waits now yield asynchronously with the same
-five-second deadline and readiness/delivery assertions. All 19 Ayn cases passed,
-followed by four repetitions of its five connection cases with the runtime limited
-to two reported processors. Hosted ARM64 verification follows this correction.
+ARM64 exposed a separate test setup timeout before Ayn had subscribed. Its async
+connection tests were blocking pool workers in WaitOne/SpinUntil; yielding those
+waits avoids starving the pipe pump on a smaller runner. The five-second deadline
+and readiness/delivery assertions remain. All 19 Ayn cases passed, followed by four
+repetitions of its five connection cases with the runtime limited to two reported
+processors. [Hosted verification](https://github.com/MoaidHathot/Shubbak/actions/runs/40647266088)
+then passed **both x64 and ARM64**, including NativeAOT binaries and MSI checks.
+
+## Final comparison and deployment
+
+The final equal-work baseline rerun retained the earlier gains, using four reversed-
+order pairs and the same frozen baseline probe. All replies and geometry checksums
+matched. These figures include benchmark observation overhead in both versions.
+
+| Work | Original allocated B/op | Optimized allocated B/op | Original elapsed | Optimized elapsed |
+|---|---:|---:|---:|---:|
+| 20,000 × 4 KiB request/reply | 72,670–72,685 | 36,468–36,473 | 3.50–3.62 s | 1.35–1.37 s |
+| 200,000 × 32-window layout | 5,992 | 0 | 0.904–0.921 s | 0.193–0.196 s |
+| 200,000 × layout + inverse resize | 14,342 | 0 | 2.458–2.483 s | 0.426–0.433 s |
+
+IPC CPU was **0.229–0.247 -> 0.084–0.092 ms/op**. The frame-timer follow-up is
+reported separately above because its benefit is pacing rather than pure layout cost.
+
+The selected final native validation sets are `final-keyboard-baseline` (with the
+documented invalid animation case excluded), `final-keyboard-previous`,
+`final-bound-saturation`, `final-hook-pressure`, `verified-latency-followup`,
+`timer-comparison-retry`, `normal-stack-comparison`, `palette-long-comparison-retry`,
+and `deployed-smoke`. Together
+they contain **1,072,000 measured application edges across 108 runs**, **40,000 bound
+command notifications across eight runs**, and **4,410 palette activations across
+13 runs**. No
+missing, duplicate, reordered, wrong-edge or leaked-bound input was reported. Warmup
+events are additional and are not counted in these totals. These are tagged synthetic
+input/application observations, not measurements of physical USB or display latency.
+
+All five final native programs were installed in `dist`, and the normal four-process
+session was restored. The deployed-stack smoke measured application delivery at
+**0.636 ms median / 2.080 ms p99 / 3.986 ms p99.9**, maximum **5.342 ms**, over 10,000
+measured edges. Its ten palette opens had **3.022 ms median / 3.788 ms maximum**.
+Diagnostics confirmed the high-resolution timer, seven managed windows, no hook
+faults/dropped keys, and normal unpaused/unsuspended state. The owned comparison
+worktree and benchmark worker processes were cleaned up.
+
+The deployed executables contain the production changes through `63ebc66`. Subsequent
+commits refine test fixtures, evidence and source indentation; the production diff
+against the deployed revision is empty when whitespace-only changes are ignored.
+Final local checks also passed: version consistency, all 39 documentation snippets,
+all 30 example checks, the 174-code diagnostics catalogue, script parsing and the
+documented test-method count. Tracked text is LF-only; generated performance evidence
+was normalized to LF as well. No `nul` file or benchmark-owned worker remained.
+
+Deployed executable SHA-256 values (`artifacts/performance/deployed-smoke/binaries.json`):
+
+| Executable | SHA-256 |
+|---|---|
+| `shubbak-wm.exe` | `730761DC3F9CDC7FC8A52607BFE480EDE7489E2DCF82F9B3C5609F07306261F8` |
+| `shubbak.exe` | `1AB91F4E47CF823611ACB022DBE35EBF90399641971C7A74D5805D0776373D36` |
+| `taj.exe` | `E679D285018DA67C25BC53918D901ECF55853926AE180A0602D0C53BBEDFA3B9` |
+| `dalil.exe` | `F0D7C365C4BA93C786DF682D32BB38BA730A1EA1B813F986293B02597DE1A7E2` |
+| `ayn.exe` | `8CF94A0E9EC30C3483ED3B733E8246EF18FEC0E7280050CFCE9088A6A6457AD4` |

@@ -75,6 +75,9 @@ sampled at approximately 1 ms; this is readiness to receive input, not paint com
 `tools/measure-normal-stack.ps1` compares matching five-binary deployments with the
 normal configuration: idle resources, input delivery, repeated palette activation,
 reload retention, suspension and resume. It restores the final native stack on exit.
+`tools/measure-palette.ps1` provides longer paired activation samples with ambient CPU
+counters and matching full-stack deployments. Its guarded input prerequisite establishes
+foreground access before the timed opens; a failed prerequisite produces no latency row.
 
 `results.jsonl` has counts, median/p95/p99/p99.9/max and counts over 1/4/8/16 ms.
 Each case also retains the daemon's diagnostics. Missing, duplicate, reordered or
