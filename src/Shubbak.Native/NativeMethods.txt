@@ -367,3 +367,7 @@ STD_HANDLE
 // unless told to. A failure there is shown in a message box instead. See UserNotice.
 MessageBox
 MESSAGEBOX_STYLE
+CreateWaitableTimerEx
+SetWaitableTimerEx
+CancelWaitableTimer
+CREATE_WAITABLE_TIMER_HIGH_RESOLUTION

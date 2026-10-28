@@ -45,8 +45,10 @@ public sealed class MessageLoopTests
         return thread;
     }
 
-    [Fact]
-    public void WakingRunsAPassAlmostImmediately()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WakingRunsAPassAlmostImmediately(bool pacing)
     {
         // The property that matters for input: a keystroke queued from the hook must
         // not wait for a timer before anything looks at it.
@@ -55,7 +57,8 @@ public sealed class MessageLoopTests
         var ran = new ManualResetEventSlim(false);
         int passes = 0;
 
-        loop.NextTimeout = () => Timeout.InfiniteTimeSpan;
+        loop.IsPacingFrames = pacing;
+        loop.NextTimeout = () => pacing ? TimeSpan.FromSeconds(1) : Timeout.InfiniteTimeSpan;
         loop.Tick += () => { if (Interlocked.Increment(ref passes) > 1) ran.Set(); };
 
         Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(8));
@@ -278,12 +281,15 @@ public sealed class MessageLoopTests
         }
     }
 
-    [Fact]
-    public void StoppingEndsTheLoop()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StoppingEndsTheLoop(bool pacing)
     {
         using var loop = new MessageLoop();
 
-        loop.NextTimeout = () => Timeout.InfiniteTimeSpan;
+        loop.IsPacingFrames = pacing;
+        loop.NextTimeout = () => pacing ? TimeSpan.FromSeconds(30) : Timeout.InfiniteTimeSpan;
 
         Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(8));
 
@@ -291,6 +297,33 @@ public sealed class MessageLoopTests
 
         Assert.True(thread.Join(TimeSpan.FromSeconds(2)), "the loop did not exit");
         Assert.False(loop.IsRunning);
+    }
+
+    [Fact]
+    public void WarmPacedWaitsAllocateNothing()
+    {
+        using var loop = new MessageLoop { IsPacingFrames = true };
+        loop.NextTimeout = static () => TimeSpan.FromMilliseconds(1.5);
+        int ticks = 0;
+        long before = 0, allocated = -1;
+        loop.Tick += () =>
+        {
+            ticks++;
+            if (ticks == 200) before = GC.GetAllocatedBytesForCurrentThread();
+            if (ticks == 500)
+            {
+                allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                loop.Stop();
+            }
+        };
+        Thread thread = RunOn(loop, TimeSpan.FromMilliseconds(8));
+        try
+        {
+            Assert.True(thread.Join(TimeSpan.FromSeconds(15)), "paced loop did not finish");
+            Assert.Equal(0, allocated);
+            Assert.True(loop.WaitsTimedOut > 100);
+        }
+        finally { loop.Stop(); thread.Join(TimeSpan.FromSeconds(2)); }
     }
 
     [Fact]

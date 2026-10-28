@@ -40,6 +40,12 @@ public sealed class MessageLoop : IDisposable
     /// the pass is already running is remembered rather than lost.
     /// </remarks>
     private readonly AutoResetEvent _wake = new(false);
+    private Microsoft.Win32.SafeHandles.SafeFileHandle? _frameTimer;
+    private bool _frameTimerAttempted;
+    private bool _frameTimerArmed;
+
+    /// <summary>Whether this loop has successfully created a high-resolution frame timer.</summary>
+    public bool HasHighResolutionFrameTimer => _frameTimer is not null;
 
     private uint _threadId;
     private volatile bool _running;
@@ -113,7 +119,7 @@ public sealed class MessageLoop : IDisposable
     /// </remarks>
     public LatencyStats WakeOvershootIdle { get; } = new(4096, "wake overshoot idle");
 
-    /// <summary>Waits that ran to their timeout.</summary>
+    /// <summary>Waits completed by their timeout or frame timer.</summary>
     public long WaitsTimedOut => Interlocked.Read(ref _waitsTimedOut);
 
     /// <summary>
@@ -230,6 +236,7 @@ public sealed class MessageLoop : IDisposable
         }
         finally
         {
+            CancelFrameTimer();
             _running = false;
         }
     }
@@ -251,7 +258,7 @@ public sealed class MessageLoop : IDisposable
     /// </remarks>
     private unsafe void WaitForWork(TimeSpan requested, int defaultMs)
     {
-        // Rounded up, not truncated. The timeout is whole milliseconds and a frame
+        // The fallback timeout is rounded up, not truncated. It is whole milliseconds and a frame
         // interval usually is not: 60 fps is 16.6666 ms, which truncated to 16 meant
         // the pump woke reliably just before a frame was due.
         //
@@ -272,21 +279,30 @@ public sealed class MessageLoop : IDisposable
 
         if (timeout == 0) return;
 
-        HANDLE handle = (HANDLE)_wake.SafeWaitHandle.DangerousGetHandle();
-
+        HANDLE* handles = stackalloc HANDLE[2];
+        handles[0] = (HANDLE)_wake.SafeWaitHandle.DangerousGetHandle();
         long before = Stopwatch.GetTimestamp();
+        double requestedMs = Math.Min(requested.TotalMilliseconds, defaultMs * 1000.0);
+        bool precise = IsPacingFrames && requested > TimeSpan.Zero &&
+            TryArmFrameTimer(TimeSpan.FromMilliseconds(requestedMs));
+        // A reusable timer preserves fractional frame deadlines. The same message
+        // queue and wake event can still interrupt it immediately; there is no spin.
+        if (precise) handles[1] = (HANDLE)_frameTimer!.DangerousGetHandle();
+        else CancelFrameTimer();
 
         WAIT_EVENT result = PInvoke.MsgWaitForMultipleObjectsEx(
-            1,
-            &handle,
-            timeout,
+            precise ? 2u : 1u,
+            handles,
+            precise ? 0xFFFFFFFFu : timeout,
             QUEUE_STATUS_FLAGS.QS_ALLINPUT,
             MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX_FLAGS.MWMO_INPUTAVAILABLE);
 
         // The return value says why the wait ended, and was previously discarded.
         // Without it there is no way to tell a loop running late from a loop being
         // woken early, and those want opposite fixes.
-        if (result == WAIT_EVENT.WAIT_TIMEOUT)
+        bool frameDue = precise && result == (WAIT_EVENT)((uint)WAIT_EVENT.WAIT_OBJECT_0 + 1);
+        if (frameDue) _frameTimerArmed = false;
+        if (frameDue || result == WAIT_EVENT.WAIT_TIMEOUT)
         {
             Interlocked.Increment(ref _waitsTimedOut);
 
@@ -296,12 +312,40 @@ public sealed class MessageLoop : IDisposable
             // opposite questions and cancel each other out.
             LatencyStats sink = IsPacingFrames ? WakeOvershootPacing : WakeOvershootIdle;
 
-            sink.Record(elapsedMs - timeout);
+            sink.Record(elapsedMs - (precise ? requestedMs : timeout));
         }
         else
         {
             Interlocked.Increment(ref _waitsInterrupted);
         }
+    }
+
+    private unsafe bool TryArmFrameTimer(TimeSpan due)
+    {
+        if (!_frameTimerAttempted)
+        {
+            _frameTimerAttempted = true;
+            var timer = PInvoke.CreateWaitableTimerEx(null, null,
+                (uint)PInvoke.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, 0x001F0003);
+            if (timer.IsInvalid) timer.Dispose(); // Older supported Windows: retain the millisecond wait.
+            else _frameTimer = timer;
+        }
+        if (_frameTimer is null) return false;
+        long ticks = -Math.Max(1L, due.Ticks);
+        if (!PInvoke.SetWaitableTimerEx(_frameTimer, in ticks, 0, null, null, null, 0))
+        {
+            CancelFrameTimer();
+            return false;
+        }
+        _frameTimerArmed = true;
+        return true;
+    }
+
+    private void CancelFrameTimer()
+    {
+        if (!_frameTimerArmed || _frameTimer is null) return;
+        PInvoke.CancelWaitableTimer(_frameTimer);
+        _frameTimerArmed = false;
     }
 
     /// <summary>
@@ -325,6 +369,8 @@ public sealed class MessageLoop : IDisposable
         _disposed = true;
 
         _wake.Dispose();
+        _frameTimer?.Dispose();
+        _frameTimer = null;
     }
 }
 

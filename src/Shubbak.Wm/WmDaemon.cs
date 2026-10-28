@@ -2424,6 +2424,7 @@ public sealed class WmDaemon : IDisposable
             // what makes it meaningful, and the p10 overshoot below is what proves
             // it. Do not read this line on its own.
             $"- **Fine timer held while animating**: {_fineTimerHeldWhileAnimating}",
+            $"- **High-resolution frame timer**: {_loop.HasHighResolutionFrameTimer}",
         };
 
         if (_frameInterval.Count == 0)

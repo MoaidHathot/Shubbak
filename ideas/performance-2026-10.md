@@ -310,3 +310,26 @@ were small/noisy, so no standalone Ayn CPU speedup is claimed. A parse-only inte
 candidate reached ~15.3 MiB; decoded chunk comparison removed the remaining large
 unchanged-read strings. All 19 Ayn integration and 134 Ayn.Core cases pass, including
 same-stamp edits, UTF-16 BOM preservation, missing files and oversized-cache limits.
+
+## Fractional frame deadlines
+
+The frame review found a remaining quantization cost: the production message wait
+rounded a fractional 60 Hz deadline up to whole milliseconds. A reusable high-
+resolution waitable timer now participates in the same message/wake wait while
+pacing; it is cancelled on idle/exit. There is no busy wait or additional worker.
+Unsupported Windows falls back to the existing timeout behavior.
+
+Four paired native animation/input runs against the preceding validated daemon:
+
+- Median frame interval **17.42–17.45 -> 16.97–16.99 ms** (about 57.3 ->58.9 Hz).
+- Frame-interval p99 **18.74–19.15 -> 17.49–17.90 ms**.
+- Daemon CPU **22.8–28.0 ->18.3–25.4 ms per measured second**, overlapping ranges.
+- Zero frame allocations, collections, hook faults, dropped keys or input-integrity
+  failures in the candidate runs. Application-delivery tails remain mixed; this is
+  a frame-pacing improvement, not a claim that all keyboard percentiles improve.
+- All 12 message-loop cases passed, including immediate wake/stop during pacing and
+  zero warmed wait allocation. The first attempt had no foreground access and was
+  excluded; the successful dataset is timer-comparison-retry.
+
+The complete Release suite with coverage subsequently passed **3,676 cases**, with
+zero failures or skips, including the final timer and configuration-cache changes.

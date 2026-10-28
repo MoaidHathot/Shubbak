@@ -30,6 +30,9 @@ schedule and breaking either is a different kind of event:
 - **Unchanged Ayn reloads reuse the parsed configuration.** A bounded content cache
   compares decoded file chunks, preserving real edits, encoding and error behavior
   while avoiding repeated large strings and parser allocations.
+- **Finer animation pacing.** A reusable high-resolution timer preserves fractional
+  frame deadlines while still waking immediately for messages and queued work.
+  Platforms without that timer retain the previous millisecond timeout path.
 
 ### Fixed
 
