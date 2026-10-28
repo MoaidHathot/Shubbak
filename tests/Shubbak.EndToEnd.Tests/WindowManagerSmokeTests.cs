@@ -132,6 +132,43 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
     // ---- the scenario ----------------------------------------------------------------
 
+    [Fact]
+    public async Task WindowsOpeningAlongsideStartupAreAllAdopted()
+    {
+        File.WriteAllText(_config, """
+            general { reload-on-save #false; }
+            animation { enabled #false; }
+            workspaces { workspace "startup"; }
+            rules { rule "only helpers" { match { !process "Shubbak.TestWindow"; } do { ignore; } } }
+            """);
+        var helpers = new List<(Process Process, Task<string?> Handle)>();
+        Process? daemon = null;
+        for (int i = 0; i < 12; i++)
+        {
+            if (i == 4) daemon = StartDaemon();
+            Process helper = Process.Start(new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "Shubbak.TestWindow.exe"))
+            {
+                ArgumentList = { "--test-window" }, UseShellExecute = false, CreateNoWindow = true,
+                RedirectStandardOutput = true, RedirectStandardError = true,
+            }) ?? throw new InvalidOperationException("Could not start the test window.");
+            _started.Add(helper);
+            helpers.Add((helper, helper.StandardOutput.ReadLineAsync()));
+            _ = helper.StandardError.ReadToEndAsync();
+            Thread.Sleep(1);
+        }
+        var handles = new HashSet<long>();
+        foreach ((Process helper, Task<string?> handle) in helpers)
+        {
+            string? reported = await handle.WaitAsync(StartupTimeout);
+            Assert.True(long.TryParse(reported, CultureInfo.InvariantCulture, out long value), "a startup helper did not create its window");
+            handles.Add(value);
+            Assert.False(helper.HasExited);
+        }
+        WaitFor(() => IpcClient.IsServerRunning(_pipe), StartupTimeout, "the startup daemon", daemon);
+        WaitFor(() => Query("windows", IpcJsonContext.Default.IReadOnlyListWindowInfo).Count(w => handles.Contains(w.Handle)) == handles.Count,
+            ManageTimeout, "every window opened during startup to be adopted", daemon);
+    }
+
     [Theory]
     [InlineData(140, true)]
     [InlineData(1000, true)]

@@ -448,16 +448,17 @@ public sealed class WmDaemon : IDisposable
         SyncMonitors();
         phase = ReportPhase("monitors", phase);
 
-        AdoptExistingWindows();
-        phase = ReportPhase("adopting windows", phase);
-
-        // After the windows, before the hooks: the desktop as it is now goes into the
-        // context engine, and the hooks keep it current from here.
-        SeedContextFacts();
-
+        // Subscribe before taking either desktop snapshot. A window appearing
+        // between enumeration and hook installation was in neither and could stay
+        // unmanaged indefinitely. Queued notifications reconcile the snapshots once
+        // the pump starts, as they already do on resume.
         _winEvents = new WinEventSource { WorkQueued = _loop.Wake };
         _winEvents.Start();
         phase = ReportPhase("window event hooks", phase);
+
+        AdoptExistingWindows();
+        phase = ReportPhase("adopting windows", phase);
+        SeedContextFacts();
 
         _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
         _keyboard.Start(_bindings.IsBound);

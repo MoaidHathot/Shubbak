@@ -30,6 +30,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A window appearing during startup could be missed indefinitely.** Window hooks
+  are now installed before desktop adoption/context snapshots, closing the gap in
+  which a new window belonged to neither the snapshot nor the event stream.
 - **An in-flight source callback could overwrite a reloaded Taj source's value.**
   Publication now validates the current source identity atomically with reload.
   Empty clock output also remains an initialized empty string when reusing values.

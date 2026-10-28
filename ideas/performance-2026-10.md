@@ -217,3 +217,17 @@ The first final full-suite run encountered Windows' lock screen and is excluded 
 desktop validation. After the user unlocked the PC, Native (290), Dalil (102) and
 end-to-end (7) all passed with coverage; the other projects had already passed. CI
 for the committed optimization set passed x64 and ARM64 in run 40610633992.
+
+## Animation qualification and startup race
+
+Reviewing a suspiciously *good* final animation result found an invalid workload:
+`final-keyboard-baseline/animation-current-r1-pass` managed no test windows and recorded
+no animation frames. Its input data is retained, but excluded from animation evidence.
+The fixture now waits for helper HWNDs, verifies adoption, checks frame samples and
+observes real foreign-window geometry changes. Helper exit/output is retained too.
+
+That investigation exposed a real startup gap: desktop adoption/context seeding ran
+before window hooks were installed. A concurrent-startup regression created twelve
+foreign windows and failed waiting for all twelve to be adopted. Subscribing before
+the snapshots fixes it; all eight end-to-end scenarios then passed with coverage.
+The corrected animation comparisons are run with ready windows for both versions.
