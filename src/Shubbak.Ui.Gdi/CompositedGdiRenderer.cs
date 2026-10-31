@@ -208,10 +208,7 @@ public sealed unsafe class CompositedGdiRenderer : IRenderer, IImageRenderer, IS
                 bottom = local.Bottom,
             };
 
-            fixed (char* p = text)
-            {
-                PInvoke.DrawText(_glyphs.Dc, p, text.Length, ref native, GdiText.DrawFlags);
-            }
+            GdiText.Draw(_glyphs.Dc, text, ref native);
         }
         finally
         {

@@ -36,6 +36,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Taj no longer shows boxed direction markers in window titles.** Firefox page
+  titles can contain invisible Unicode isolates around the page name. The shared
+  GDI renderer now omits these unsupported markers when measuring and drawing, so
+  titles also keep the correct spacing and ellipsis.
 - **A window appearing during startup could be missed indefinitely.** Window hooks
   are now installed before desktop adoption/context snapshots, closing the gap in
   which a new window belonged to neither the snapshot nor the event stream.

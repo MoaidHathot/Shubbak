@@ -209,16 +209,7 @@ public sealed class GdiRenderer : IRenderer, IImageRenderer
                 bottom = local.Bottom,
             };
 
-            unsafe
-            {
-                fixed (char* p = text)
-                {
-                    // Clipped and single-line: the layout engine has already decided
-                    // how much room this text gets, and letting it spill over a
-                    // neighbour would be worse than cutting it off.
-                    PInvoke.DrawText(_memoryDc, p, text.Length, ref native, GdiText.DrawFlags);
-                }
-            }
+            GdiText.Draw(_memoryDc, text, ref native);
         }
         finally
         {

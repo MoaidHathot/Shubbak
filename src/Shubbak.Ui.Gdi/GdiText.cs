@@ -7,7 +7,7 @@ using Windows.Win32.Graphics.Gdi;
 namespace Shubbak.Ui.Gdi;
 
 /// <summary>
-/// What the two GDI renderers share about text: making a font, and measuring in it.
+/// What the two GDI renderers share about text: making a font, measuring and drawing.
 /// </summary>
 /// <remarks>
 /// Split out when the composited renderer arrived rather than written twice. The
@@ -22,7 +22,7 @@ internal static class GdiText
     /// this text gets, and letting it spill over a neighbour would be worse than
     /// cutting it off.
     /// </remarks>
-    public const DRAW_TEXT_FORMAT DrawFlags =
+    private const DRAW_TEXT_FORMAT DrawFlags =
         DRAW_TEXT_FORMAT.DT_SINGLELINE |
         DRAW_TEXT_FORMAT.DT_VCENTER |
         DRAW_TEXT_FORMAT.DT_LEFT |
@@ -64,6 +64,51 @@ internal static class GdiText
     public static (string Family, int Size, bool Bold, bool Italic) Key(FontStyle font) =>
         (string.IsNullOrEmpty(font.Family) ? "Segoe UI" : font.Family, (int)Math.Round(font.Size), font.Bold, font.Italic);
 
+    /// <summary>Draws one clipped line in the font and colour selected into the device context.</summary>
+    public static unsafe void Draw(HDC dc, string text, ref RECT rect)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+
+        text = WithoutDirectionalIsolates(text);
+        if (text.Length == 0) return;
+
+        fixed (char* p = text)
+        {
+            PInvoke.DrawText(dc, p, text.Length, ref rect, DrawFlags);
+        }
+    }
+
+    /// <summary>Omits the bidi isolate controls that GDI renders as visible glyphs.</summary>
+    /// <remarks>
+    /// Firefox titles can contain FSI/PDI around a page name. DrawText displays these
+    /// as labelled boxes and counts their width. Both measuring and drawing must use
+    /// the same text or the title still takes too much room or gains an early ellipsis.
+    /// Only LRI/RLI/FSI/PDI are omitted here: stripping all Unicode format characters
+    /// would also remove joiners used by Arabic and emoji, and older bidi controls
+    /// that GDI understands. Ordinary text reuses its string without allocating.
+    /// </remarks>
+    private static string WithoutDirectionalIsolates(string text)
+    {
+        int first = text.AsSpan().IndexOfAnyInRange('\u2066', '\u2069');
+        if (first < 0) return text;
+
+        int length = text.Length;
+        for (int i = first; i < text.Length; i++)
+            if (text[i] is >= '\u2066' and <= '\u2069') length--;
+
+        return string.Create(length, (Text: text, First: first), static (result, state) =>
+        {
+            state.Text.AsSpan(0, state.First).CopyTo(result);
+            int at = state.First;
+
+            for (int i = state.First; i < state.Text.Length; i++)
+            {
+                char ch = state.Text[i];
+                if (ch is < '\u2066' or > '\u2069') result[at++] = ch;
+            }
+        });
+    }
+
     /// <summary>How much room a string needs, in the font it will be drawn in.</summary>
     /// <remarks>
     /// <para>
@@ -88,6 +133,9 @@ internal static class GdiText
     public static Size Measure(HDC dc, HFONT handle, string text, FontStyle font)
     {
         if (string.IsNullOrEmpty(text)) return Size.Empty;
+
+        text = WithoutDirectionalIsolates(text);
+        if (text.Length == 0) return Size.Empty;
 
         HGDIOBJ previous = PInvoke.SelectObject(dc, handle);
 
