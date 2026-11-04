@@ -221,10 +221,30 @@ internal sealed class InputRun : IDisposable
         try
         {
             long focusDeadline = Stopwatch.GetTimestamp();
-            while (PInvoke.GetForegroundWindow() != _window)
+            long foregroundSince = 0;
+            long lastRequest = focusDeadline;
+            while (true)
             {
-                if (Stopwatch.GetElapsedTime(focusDeadline).TotalSeconds > 5) throw new TimeoutException("Receiver never became foreground.");
-                Thread.Sleep(5);
+                long now = Stopwatch.GetTimestamp();
+                if (Stopwatch.GetElapsedTime(focusDeadline, now).TotalSeconds > 10)
+                    throw new TimeoutException("Receiver never held a stable foreground before measurement.");
+                if (PInvoke.GetForegroundWindow() == _window)
+                {
+                    if (foregroundSince == 0) foregroundSince = now;
+                    if (Stopwatch.GetElapsedTime(foregroundSince, now).TotalMilliseconds >= 750) break;
+                }
+                else
+                {
+                    foregroundSince = 0;
+                    if (Stopwatch.GetElapsedTime(lastRequest, now).TotalMilliseconds >= 100)
+                    {
+                        _ = WindowActions.Focus((nint)_window.Value);
+                        lastRequest = now;
+                    }
+                }
+                // Setup only. A late activation from the normal session's teardown
+                // must settle before timing starts; never repair focus during a run.
+                Thread.Sleep(10);
             }
             // A held physical modifier would change what our synthetic key means.
             foreach (int key in new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C })
@@ -237,7 +257,12 @@ internal sealed class InputRun : IDisposable
             for (int first = 0; first < _sent.Length;)
             {
                 if (_stopping) throw new OperationCanceledException("Receiver was closed during injection.");
-                if (PInvoke.GetForegroundWindow() != _window) throw new InvalidOperationException("Foreground changed during input measurement.");
+                if (PInvoke.GetForegroundWindow() != _window)
+                {
+                    nint holder = (nint)PInvoke.GetForegroundWindow().Value;
+                    string? process = Path.GetFileName(Win32Window.GetProcessPath(Win32Window.GetProcessId(holder)));
+                    throw new InvalidOperationException($"Foreground changed after {first} tagged edges / {Stopwatch.GetElapsedTime(start).TotalSeconds:F2}s to {process} [{Win32Window.GetClassName(holder)}].");
+                }
                 int count = Math.Min(_burst * 2, _sent.Length - first);
                 int written = 0;
                 for (int j = 0; j < count; j += 2)
