@@ -36,6 +36,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **AltGr typing in Dalil no longer invokes Ctrl editing shortcuts.** Copy,
+  selection navigation and clear-query now distinguish Ctrl from Ctrl+Alt, including
+  shifted AltGr text. All palette key actions share a tested modifier decision.
 - **Binding-mode validation checks reachable exits.** Shadowed escape bindings,
   self-loops and closed cycles no longer pass as usable ways out of a mode that
   swallows the keyboard. Validation follows runtime precedence and command order.

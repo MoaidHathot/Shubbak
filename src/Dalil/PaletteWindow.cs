@@ -634,9 +634,9 @@ public sealed class PaletteWindow : CompanionWindow
             return true;
         }
 
-        switch (key)
+        switch (PaletteInput.ActionFor(key, control, shift, alt))
         {
-            case VIRTUAL_KEY.VK_ESCAPE:
+            case PaletteKeyAction.Escape:
                 // Backs out of the frame rather than dismissing. Escape means "not
                 // that" one level at a time; throwing the whole palette away because
                 // somebody changed their mind about an action would mean starting the
@@ -646,36 +646,32 @@ public sealed class PaletteWindow : CompanionWindow
 
                 return true;
 
-            case VIRTUAL_KEY.VK_RETURN when alt:
-                return TryChord(key, control, shift, alt);
-
-            case VIRTUAL_KEY.VK_RETURN when control:
+            case PaletteKeyAction.Actions:
                 EnterActions();
                 return true;
 
-            case VIRTUAL_KEY.VK_RETURN:
+            case PaletteKeyAction.Choose:
                 Choose();
                 return true;
 
-            case VIRTUAL_KEY.VK_SPACE when control && !alt:
+            case PaletteKeyAction.Mark:
                 Mark();
                 return true;
 
-            case VIRTUAL_KEY.VK_C when control:
+            case PaletteKeyAction.Copy:
                 Copy(everything: shift);
                 return true;
 
             // Both spellings of paste. Ctrl+V's character is a control character and
             // used to be dropped on the floor, so a command copied from the docs had to
             // be retyped into the one text field on the machine that would not take it.
-            case VIRTUAL_KEY.VK_V when control && !shift && !alt:
-            case VIRTUAL_KEY.VK_INSERT when shift && !control && !alt:
+            case PaletteKeyAction.Paste:
                 Paste();
                 return true;
 
             // Plain Ctrl+A selects the term, so the next key starts over. Ctrl+Shift+A
             // is an action chord and falls through to TryChord below.
-            case VIRTUAL_KEY.VK_A when control && !shift && !alt:
+            case PaletteKeyAction.SelectAll:
                 _model.SelectAll();
                 Repaint();
                 return true;
@@ -683,89 +679,77 @@ public sealed class PaletteWindow : CompanionWindow
             // Alt+F4 closes the popup, not the program. Left to DefWindowProc it
             // became WM_CLOSE and the palette process left, taking the keybinding that
             // opens it with it until the window manager was restarted.
-            case VIRTUAL_KEY.VK_F4 when alt:
+            case PaletteKeyAction.Close:
                 if (_overlays.Count > 0) Pop();
                 else Close();
 
                 return true;
 
-            case VIRTUAL_KEY.VK_BACK:
+            case PaletteKeyAction.Backspace:
                 // Empty and inside a frame, Backspace has nothing to delete, so it
                 // goes back instead. Escape already did, but Backspace is what a hand
                 // reaches for when the thing on screen arrived by pressing Enter -
                 // and doing nothing at all was the least useful of the three options.
                 if (_model.Query.Length == 0 && _overlays.Count > 0) Pop();
-                else Edit(() => _model.DeleteBack(wholeWord: control));
+                else Edit(() => _model.DeleteBack(wholeWord: control && !alt));
 
                 return true;
 
-            case VIRTUAL_KEY.VK_DELETE:
+            case PaletteKeyAction.Delete:
                 Edit(_model.DeleteForward);
                 return true;
 
-            case VIRTUAL_KEY.VK_LEFT:
+            case PaletteKeyAction.CaretLeft:
                 _model.MoveCaret(-1);
                 Repaint();
                 return true;
 
-            case VIRTUAL_KEY.VK_RIGHT:
+            case PaletteKeyAction.CaretRight:
                 _model.MoveCaret(1);
                 Repaint();
                 return true;
 
-            case VIRTUAL_KEY.VK_HOME when !control:
+            case PaletteKeyAction.CaretHome:
                 _model.CaretToEdge(end: false);
                 Repaint();
                 return true;
 
-            case VIRTUAL_KEY.VK_END when !control:
+            case PaletteKeyAction.CaretEnd:
                 _model.CaretToEdge(end: true);
                 Repaint();
                 return true;
 
-            case VIRTUAL_KEY.VK_UP:
+            case PaletteKeyAction.Previous:
                 Move(-1);
                 return true;
 
-            case VIRTUAL_KEY.VK_DOWN:
+            case PaletteKeyAction.Next:
                 Move(1);
                 return true;
 
-            case VIRTUAL_KEY.VK_PRIOR:
+            case PaletteKeyAction.PageUp:
                 Move(-_rowsShown);
                 return true;
 
-            case VIRTUAL_KEY.VK_NEXT:
+            case PaletteKeyAction.PageDown:
                 Move(_rowsShown);
                 return true;
 
-            case VIRTUAL_KEY.VK_HOME when control:
+            case PaletteKeyAction.First:
                 _model.SelectEdge(last: false);
                 Repaint();
                 return true;
 
-            case VIRTUAL_KEY.VK_END when control:
+            case PaletteKeyAction.Last:
                 _model.SelectEdge(last: true);
                 Repaint();
                 return true;
 
-            case VIRTUAL_KEY.VK_TAB:
+            case PaletteKeyAction.CycleMode:
                 SwitchTo(_model.NextMode(forward: !shift));
                 return true;
 
-            // The Emacs-style pair, because a palette is a text field and every other
-            // text field on the machine honours them.
-            case VIRTUAL_KEY.VK_N when control:
-            case VIRTUAL_KEY.VK_J when control:
-                Move(1);
-                return true;
-
-            case VIRTUAL_KEY.VK_P when control:
-            case VIRTUAL_KEY.VK_K when control:
-                Move(-1);
-                return true;
-
-            case VIRTUAL_KEY.VK_U when control:
+            case PaletteKeyAction.ClearTerm:
                 Edit(_model.ClearTerm);
                 return true;
 

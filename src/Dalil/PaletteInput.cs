@@ -52,6 +52,14 @@ internal enum PaletteChoice
 /// <param name="Active">Whether it is drawn as the key that matters most here.</param>
 internal readonly record struct Hint(string Key, string Label, bool Active = false);
 
+/// <summary>Palette-local actions, after exact modifier matching.</summary>
+internal enum PaletteKeyAction
+{
+    Chord, Escape, Actions, Choose, Mark, Copy, Paste, SelectAll, Close,
+    Backspace, Delete, CaretLeft, CaretRight, CaretHome, CaretEnd,
+    Previous, Next, PageUp, PageDown, First, Last, CycleMode, ClearTerm,
+}
+
 /// <summary>
 /// What a keystroke means, decided without reference to a window.
 /// </summary>
@@ -71,6 +79,41 @@ internal readonly record struct Hint(string Key, string Label, bool Active = fal
 /// </remarks>
 internal static class PaletteInput
 {
+    /// <summary>
+    /// Ctrl+Alt belongs to text (including AltGr), not to Ctrl editing shortcuts.
+    /// Kept with the other input decisions so every shortcut uses the same policy.
+    /// </summary>
+    internal static PaletteKeyAction ActionFor(VIRTUAL_KEY key, bool control, bool shift, bool alt) => key switch
+    {
+        VIRTUAL_KEY.VK_ESCAPE => PaletteKeyAction.Escape,
+        VIRTUAL_KEY.VK_RETURN when alt => PaletteKeyAction.Chord,
+        VIRTUAL_KEY.VK_RETURN when control => PaletteKeyAction.Actions,
+        VIRTUAL_KEY.VK_RETURN => PaletteKeyAction.Choose,
+        VIRTUAL_KEY.VK_SPACE when control && !alt => PaletteKeyAction.Mark,
+        VIRTUAL_KEY.VK_C when control && !alt => PaletteKeyAction.Copy,
+        VIRTUAL_KEY.VK_V when control && !shift && !alt => PaletteKeyAction.Paste,
+        VIRTUAL_KEY.VK_INSERT when shift && !control && !alt => PaletteKeyAction.Paste,
+        VIRTUAL_KEY.VK_A when control && !shift && !alt => PaletteKeyAction.SelectAll,
+        VIRTUAL_KEY.VK_F4 when alt && !control => PaletteKeyAction.Close,
+        VIRTUAL_KEY.VK_BACK => PaletteKeyAction.Backspace,
+        VIRTUAL_KEY.VK_DELETE => PaletteKeyAction.Delete,
+        VIRTUAL_KEY.VK_LEFT => PaletteKeyAction.CaretLeft,
+        VIRTUAL_KEY.VK_RIGHT => PaletteKeyAction.CaretRight,
+        VIRTUAL_KEY.VK_HOME when !control => PaletteKeyAction.CaretHome,
+        VIRTUAL_KEY.VK_END when !control => PaletteKeyAction.CaretEnd,
+        VIRTUAL_KEY.VK_UP => PaletteKeyAction.Previous,
+        VIRTUAL_KEY.VK_DOWN => PaletteKeyAction.Next,
+        VIRTUAL_KEY.VK_PRIOR => PaletteKeyAction.PageUp,
+        VIRTUAL_KEY.VK_NEXT => PaletteKeyAction.PageDown,
+        VIRTUAL_KEY.VK_HOME when control && !alt => PaletteKeyAction.First,
+        VIRTUAL_KEY.VK_END when control && !alt => PaletteKeyAction.Last,
+        VIRTUAL_KEY.VK_TAB => PaletteKeyAction.CycleMode,
+        VIRTUAL_KEY.VK_N or VIRTUAL_KEY.VK_J when control && !alt => PaletteKeyAction.Next,
+        VIRTUAL_KEY.VK_P or VIRTUAL_KEY.VK_K when control && !alt => PaletteKeyAction.Previous,
+        VIRTUAL_KEY.VK_U when control && !alt => PaletteKeyAction.ClearTerm,
+        _ => PaletteKeyAction.Chord,
+    };
+
     /// <summary>The chord that inspects the selected window.</summary>
     internal const string InspectChord = "Ctrl+Shift+I";
 

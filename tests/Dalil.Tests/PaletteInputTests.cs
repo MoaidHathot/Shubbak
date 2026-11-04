@@ -15,6 +15,35 @@ namespace Dalil.Tests;
 /// </remarks>
 public class PaletteInputTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AltGrLettersNeverRunEditingNavigationOrActionShortcuts(bool shift)
+    {
+        foreach (char letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        {
+            var key = (VIRTUAL_KEY)letter;
+            Assert.Equal(PaletteKeyAction.Chord, PaletteInput.ActionFor(key, control: true, shift, alt: true));
+            Assert.Null(PaletteInput.ChordFor(key, control: true, shift, alt: true));
+        }
+    }
+
+    [Theory]
+    [InlineData('C', "Copy")]
+    [InlineData('N', "Next")]
+    [InlineData('J', "Next")]
+    [InlineData('P', "Previous")]
+    [InlineData('K', "Previous")]
+    [InlineData('U', "ClearTerm")]
+    [InlineData('V', "Paste")]
+    [InlineData('A', "SelectAll")]
+    public void CtrlEditingShortcutsStillWorkAndOrdinaryLettersRemainText(char letter, string action)
+    {
+        var key = (VIRTUAL_KEY)letter;
+        Assert.Equal(action, PaletteInput.ActionFor(key, control: true, shift: false, alt: false).ToString());
+        Assert.Equal(PaletteKeyAction.Chord, PaletteInput.ActionFor(key, control: false, shift: false, alt: false));
+    }
+
     private static PaletteEntry Entry(
         string primary = "a window",
         string secondary = "",
