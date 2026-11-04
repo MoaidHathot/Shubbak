@@ -42,7 +42,7 @@ public sealed class ModifierDerivationTests
         // The whole point. Left Control plus right Alt is what the layout emits for
         // AltGr, so it must reach no binding at all and pass through to the
         // application, which is the only thing that can turn it into a character.
-        Assert.Equal(KeyModifiers.None, Derive(leftControl: true, rightAlt: true));
+        Assert.Equal(KeyModifiers.AltGraph, Derive(leftControl: true, rightAlt: true));
     }
 
     [Fact]
@@ -55,6 +55,7 @@ public sealed class ModifierDerivationTests
 
         Assert.False(altGr.HasFlag(KeyModifiers.Alt));
         Assert.False(altGr.HasFlag(KeyModifiers.Control));
+        Assert.True(altGr.HasFlag(KeyModifiers.AltGraph));
     }
 
     [Fact]
@@ -92,7 +93,7 @@ public sealed class ModifierDerivationTests
         // AltGr accounts for the right Alt and the left Control. Anything held over
         // and above that is the user's, and must survive.
         Assert.Equal(
-            KeyModifiers.Alt,
+            KeyModifiers.Alt | KeyModifiers.AltGraph,
             Derive(leftAlt: true, rightAlt: true, leftControl: true));
     }
 
@@ -100,7 +101,7 @@ public sealed class ModifierDerivationTests
     public void HoldingRightControlAsWellAsAltGrIsStillControl()
     {
         Assert.Equal(
-            KeyModifiers.Control,
+            KeyModifiers.Control | KeyModifiers.AltGraph,
             Derive(leftControl: true, rightAlt: true, rightControl: true));
     }
 
@@ -110,7 +111,7 @@ public sealed class ModifierDerivationTests
         // AltGr+Shift+key is an ordinary way to reach a third character level, so
         // Shift must still be reported even while Alt and Control are being withheld.
         Assert.Equal(
-            KeyModifiers.Shift,
+            KeyModifiers.Shift | KeyModifiers.AltGraph,
             Derive(leftControl: true, rightAlt: true, shift: true));
 
         Assert.Equal(
@@ -130,7 +131,7 @@ public sealed class ModifierDerivationTests
         // Both sides of both keys: AltGr is satisfied by the left Control and right
         // Alt, and the left Alt and right Control that remain are genuine.
         Assert.Equal(
-            KeyModifiers.Alt | KeyModifiers.Control | KeyModifiers.Shift | KeyModifiers.Windows,
+            KeyModifiers.Alt | KeyModifiers.Control | KeyModifiers.Shift | KeyModifiers.Windows | KeyModifiers.AltGraph,
             Derive(
                 leftAlt: true,
                 rightAlt: true,

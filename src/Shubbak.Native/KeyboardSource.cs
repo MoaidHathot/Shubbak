@@ -17,6 +17,8 @@ public enum KeyModifiers
     Control = 1 << 1,
     Shift = 1 << 2,
     Windows = 1 << 3,
+    /// <summary>Text-producing AltGr; distinct from both Ctrl+Alt and no modifiers.</summary>
+    AltGraph = 1 << 4,
 }
 
 /// <summary>A keystroke as seen by the low-level hook.</summary>
@@ -576,7 +578,9 @@ public sealed class KeyboardSource : IDisposable
         bool alt = altGr ? leftAlt : leftAlt || rightAlt;
         bool control = altGr ? rightControl : leftControl || rightControl;
 
-        KeyModifiers modifiers = KeyModifiers.None;
+        // Removing the synthetic pair must not turn AltGr+Q into a plain Q binding.
+        // An unspellable modifier bit keeps text distinct even in bare-letter modes.
+        KeyModifiers modifiers = altGr ? KeyModifiers.AltGraph : KeyModifiers.None;
 
         if (alt) modifiers |= KeyModifiers.Alt;
         if (control) modifiers |= KeyModifiers.Control;

@@ -36,6 +36,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **AltGr text cannot masquerade as an unmodified shortcut.** The synthetic Ctrl+Alt
+  pair now has its own identity, protecting both plain and Shift-only bindings in
+  default and pass-through modes. Blocking modes still block text without running
+  an unrelated command.
 - **AltGr typing in Dalil no longer invokes Ctrl editing shortcuts.** Copy,
   selection navigation and clear-query now distinguish Ctrl from Ctrl+Alt, including
   shifted AltGr text. All palette key actions share a tested modifier decision.
