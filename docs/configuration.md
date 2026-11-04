@@ -157,6 +157,12 @@ use. A binding with no commands is a warning here — pressing it would do nothi
 and a tool inside a context's `bindings`, where laying an empty binding over a key is
 how the key is disarmed while the context holds.
 
+The first press captures its binding and mode. Queued work, repeats and the final
+release keep that binding even if a reload or context changes the keymap. Repeats
+run only while the original modifiers are held and the binding permits repeating.
+With `release=#true`, the command runs once when the main key comes up, whichever
+modifier was released first. It cannot turn into a different shortcut on release.
+
 ### `for-each` — stop copy-pasting
 
 Nineteen workspaces is forty near-identical lines in most window managers, and every

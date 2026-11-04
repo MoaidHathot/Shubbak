@@ -15,8 +15,66 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
     private const ushort Key = 0x87;
     private const ushort Barrier = 0x86;
     private const ushort Control = 0xA2;
+    private static readonly KeyboardBinding Bound = new();
     private static readonly bool[] PassedSequence = [true, true, false];
     private readonly nint _original = Win32Window.GetForeground();
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void AReleaseKeepsItsPressBindingAcrossModifierOrderAndReload(bool modifierFirst, bool reload)
+    {
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
+        var original = new KeyboardBinding(release: true);
+        var replacement = new KeyboardBinding(release: true);
+        KeyboardBinding current = original;
+        using var source = new KeyboardSource();
+        source.Start((key, _) => key == Key ? Volatile.Read(ref current) : null);
+        try
+        {
+            Send(Control, true);
+            Send(Key, true);
+            Flush(window);
+            if (reload) Volatile.Write(ref current, replacement);
+            if (modifierFirst) Send(Control, false);
+            Send(Key, false);
+            if (!modifierFirst) Send(Control, false);
+            Flush(window);
+            var events = new KeyEvent[8];
+            Assert.Equal(1, source.Drain(events, events.Length));
+            Assert.False(events[0].IsKeyDown);
+            Assert.Equal(KeyModifiers.Control, events[0].Modifiers);
+            Assert.Same(original, events[0].Binding);
+            Assert.Empty(window.KeyDowns);
+        }
+        finally { ReleaseAll(); }
+    }
+
+    [Fact]
+    public void NonRepeatingHoldsDoNotFillTheQueueOrWakeTheConsumer()
+    {
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
+        var binding = new KeyboardBinding(repeat: false);
+        int wakes = 0;
+        using var source = new KeyboardSource(8) { WorkQueued = () => Interlocked.Increment(ref wakes) };
+        source.Start((key, _) => key == Key ? binding : null);
+        try
+        {
+            Send(Key, true);
+            for (int i = 0; i < 1000; i++) Send(Key, true);
+            Send(Key, false);
+            Flush(window);
+            Assert.Equal(1, source.Drain(new KeyEvent[8], 8));
+            Assert.Equal(1, wakes);
+            Assert.Equal(0, source.Dropped);
+            Assert.Empty(window.KeyDowns);
+        }
+        finally { ReleaseAll(); }
+    }
 
     [Fact]
     public void ReleasingAModifierCannotLeakAClaimedKeysRepeatWithoutItsRelease()
@@ -24,7 +82,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         using var window = new TestWindow();
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         using var source = new KeyboardSource();
-        source.Start((key, modifiers, down) => key == Key && down && (modifiers & KeyModifiers.Control) != 0);
+        source.Start((key, modifiers) => key == Key && (modifiers & KeyModifiers.Control) != 0 ? Bound : null);
 
         try
         {
@@ -48,7 +106,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         using var window = new TestWindow();
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         using var source = new KeyboardSource();
-        source.Start((key, modifiers, down) => key == Key && down && (modifiers & KeyModifiers.Control) != 0);
+        source.Start((key, modifiers) => key == Key && (modifiers & KeyModifiers.Control) != 0 ? Bound : null);
 
         try
         {
@@ -75,7 +133,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         bool claim = initiallyClaimed;
         using var source = new KeyboardSource();
-        source.Start((key, _, down) => key == Key && down && Volatile.Read(ref claim));
+        source.Start((key, _) => key == Key && Volatile.Read(ref claim) ? Bound : null);
 
         try
         {
@@ -101,7 +159,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
             Send(Key, true);
             Flush(window);
             using var source = new KeyboardSource();
-            source.Start((key, _, down) => key == Key && down);
+            source.Start((key, _) => key == Key ? Bound : null);
             Send(Key, true);
             Send(Key, false);
             Flush(window);
@@ -119,7 +177,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         using var second = new TestWindow();
         Assert.True(first.Activate(), Desktop.WhyNotInFront("the first receiver"));
         using var source = new KeyboardSource();
-        source.Start((key, _, down) => key == Key && down);
+        source.Start((key, _) => key == Key ? Bound : null);
         try
         {
             Send(Key, true);
@@ -146,7 +204,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         bool claim = true;
         using var source = new KeyboardSource();
-        source.Start((key, _, down) => key == Key && down && Volatile.Read(ref claim));
+        source.Start((key, _) => key == Key && Volatile.Read(ref claim) ? Bound : null);
         try
         {
             Send(Key, true);
@@ -187,17 +245,17 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
     }
 
     [Fact]
-    public void AFaultingRepeatProbeCannotLeaveItsForwardedPressStuck()
+    public void RepeatsDoNotRequeryAPotentiallyChangedOrFaultingProbe()
     {
         using var window = new TestWindow();
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         bool fail = false;
         using var source = new KeyboardSource();
-        source.Start((key, _, down) =>
+        source.Start((key, _) =>
         {
-            if (key != Key || !down) return false;
+            if (key != Key) return null;
             if (Volatile.Read(ref fail)) throw new InvalidOperationException("deliberate repeat failure");
-            return true;
+            return Bound;
         });
         try
         {
@@ -207,8 +265,9 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
             Send(Key, true);
             Send(Key, false);
             Flush(window);
-            Assert.Equal([true, false], window.KeyDowns);
-            Assert.Equal(1, source.Faults);
+            Assert.Empty(window.KeyDowns);
+            Assert.Equal(0, source.Faults);
+            Assert.Equal(2, source.Drain(new KeyEvent[8], 8));
         }
         finally { ReleaseAll(); }
     }
@@ -219,7 +278,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         using var window = new TestWindow();
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         using var source = new KeyboardSource();
-        source.Start((key, _, down) => key == Key && down);
+        source.Start((key, _) => key == Key ? Bound : null);
         source.WorkQueued = () => throw new InvalidOperationException("deliberate wake failure");
         try
         {
@@ -234,16 +293,18 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
     }
 
     [Fact]
-    public void AFaultingReleaseProbeDoesNotLeakAnUnmatchedApplicationRelease()
+    public void ReleasesUseTheCapturedBindingWithoutRequeryingTheProbe()
     {
         using var window = new TestWindow();
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         using var source = new KeyboardSource();
-        source.Start((key, _, down) =>
+        int probes = 0;
+        var binding = new KeyboardBinding(release: true);
+        source.Start((key, _) =>
         {
-            if (key != Key) return false;
-            if (!down) throw new InvalidOperationException("deliberate release failure");
-            return true;
+            if (key != Key) return null;
+            if (++probes > 1) throw new InvalidOperationException("unexpected second lookup");
+            return binding;
         });
         try
         {
@@ -251,7 +312,11 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
             Send(Key, false);
             Flush(window);
             Assert.Empty(window.KeyDowns);
-            Assert.Equal(1, source.Faults);
+            Assert.Equal(0, source.Faults);
+            var events = new KeyEvent[8];
+            Assert.Equal(1, source.Drain(events, events.Length));
+            Assert.False(events[0].IsKeyDown);
+            Assert.Same(binding, events[0].Binding);
         }
         finally { ReleaseAll(); }
     }
@@ -265,11 +330,11 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
         long allocatedAtBarrier = 0;
         using var source = new KeyboardSource();
-        source.Start((key, _, down) =>
+        source.Start((key, _) =>
         {
-            if (key == Barrier && down)
+            if (key == Barrier)
                 Volatile.Write(ref allocatedAtBarrier, GC.GetAllocatedBytesForCurrentThread());
-            return key == Key && down && claimed;
+            return key == Key && claimed ? Bound : null;
         });
         try
         {
@@ -297,7 +362,8 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
         Send(Barrier, true);
         Send(Barrier, false);
         TestWindow.PumpUntil(() => window.KeyboardBarriers >= next);
-        Assert.Equal(next, window.KeyboardBarriers);
+        Assert.True(window.KeyboardBarriers == next,
+            $"Expected input barrier {next}, received {window.KeyboardBarriers}. {Desktop.WhyNotInFront("the receiver")}");
     }
 
     private static void Send(ushort key, bool down)

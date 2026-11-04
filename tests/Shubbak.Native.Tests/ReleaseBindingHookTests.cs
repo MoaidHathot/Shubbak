@@ -10,15 +10,13 @@ namespace Shubbak.Native.Tests;
 /// </summary>
 /// <remarks>
 /// <para>
-/// A release binding is two decisions in the hook: the press is claimed and swallowed
-/// like any binding's, and the release - which the hook used to swallow silently - is
-/// delivered as an event when the table says a release binding is there. The table's
+/// A release binding claims the press and delivers only the actionable release edge.
+/// Its captured binding survives changes to the lookup table. The table's
 /// half is tested in <c>Shubbak.Wm.Tests</c>; this is the hook, with real input
 /// through the real low-level hook, on the F24 key nothing else uses.
 /// </para>
 /// <para>
-/// The probe stands in for the binding table: it is asked on the way down and on the
-/// way up, and what it answers on the way up decides whether a release event exists.
+/// The probe stands in for the binding table and is asked only on the first press.
 /// </para>
 /// </remarks>
 [Collection(SharedKeyboardHook.Name)]
@@ -65,18 +63,18 @@ public sealed class ReleaseBindingHookTests
     {
         using var source = new KeyboardSource();
 
-        // Claimed both ways: a release binding on F24.
-        source.Start((vk, _, _) => vk == VkF24);
+        var binding = new KeyboardBinding(release: true);
+        source.Start((vk, _) => vk == VkF24 ? binding : null);
 
         PressAndReleaseF24();
 
-        List<KeyEvent> events = DrainAll(source, expected: 2);
+        List<KeyEvent> events = DrainAll(source, expected: 1);
 
-        Assert.Equal(2, events.Count);
-        Assert.True(events[0].IsKeyDown, "the press comes first");
-        Assert.False(events[1].IsKeyDown, "the release is delivered as an event");
-        Assert.Equal(VkF24, events[1].VirtualKey);
-        Assert.False(events[1].IsRepeat);
+        KeyEvent released = Assert.Single(events);
+        Assert.False(released.IsKeyDown, "only the actionable edge is queued");
+        Assert.Equal(VkF24, released.VirtualKey);
+        Assert.False(released.IsRepeat);
+        Assert.Same(binding, released.Binding);
     }
 
     [Fact]
@@ -85,7 +83,8 @@ public sealed class ReleaseBindingHookTests
         using var source = new KeyboardSource();
 
         // Claimed on the way down only, which is every binding that runs on press.
-        source.Start((vk, _, isKeyDown) => vk == VkF24 && isKeyDown);
+        var binding = new KeyboardBinding();
+        source.Start((vk, _) => vk == VkF24 ? binding : null);
 
         PressAndReleaseF24();
 
@@ -103,12 +102,12 @@ public sealed class ReleaseBindingHookTests
         // probe is not consulted for it at all.
         using var source = new KeyboardSource();
 
-        int askedOnRelease = 0;
+        int probes = 0;
 
-        source.Start((vk, _, isKeyDown) =>
+        source.Start((vk, _) =>
         {
-            if (vk == VkF24 && !isKeyDown) Interlocked.Increment(ref askedOnRelease);
-            return false;
+            if (vk == VkF24) Interlocked.Increment(ref probes);
+            return null;
         });
 
         PressAndReleaseF24();
@@ -116,6 +115,6 @@ public sealed class ReleaseBindingHookTests
         List<KeyEvent> events = DrainAll(source, expected: 0);
 
         Assert.Empty(events);
-        Assert.Equal(0, askedOnRelease);
+        Assert.Equal(1, probes);
     }
 }

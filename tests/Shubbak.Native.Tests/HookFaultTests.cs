@@ -55,7 +55,7 @@ public sealed class HookFaultTests
         // at all is most of what is being asserted.
         using var source = new KeyboardSource();
 
-        source.Start((_, _, _) => throw new InvalidOperationException("deliberate"));
+        source.Start((_, _) => throw new InvalidOperationException("deliberate"));
 
         PressF24();
 
@@ -76,7 +76,7 @@ public sealed class HookFaultTests
         // nothing was enqueued, and the swallow bookkeeping never ran either.
         using var source = new KeyboardSource();
 
-        source.Start((_, _, _) => throw new InvalidOperationException("deliberate"));
+        source.Start((_, _) => throw new InvalidOperationException("deliberate"));
 
         PressF24();
 
@@ -94,7 +94,8 @@ public sealed class HookFaultTests
         // or a non-zero reading in `diagnose` says nothing.
         using var source = new KeyboardSource();
 
-        source.Start((vk, _, _) => vk == VkF24);
+        var binding = new KeyboardBinding();
+        source.Start((vk, _) => vk == VkF24 ? binding : null);
 
         PressF24();
 

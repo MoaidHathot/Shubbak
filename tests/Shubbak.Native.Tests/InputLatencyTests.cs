@@ -31,7 +31,7 @@ public sealed class InputLatencyTests
     /// <summary>
     /// A probe that never claims a key, so nothing is swallowed while testing.
     /// </summary>
-    private static bool NeverBound(ushort virtualKey, KeyModifiers modifiers, bool isKeyDown) => false;
+    private static KeyboardBinding? NeverBound(ushort virtualKey, KeyModifiers modifiers) => null;
 
     [Fact]
     public void TheHookRunsOnItsOwnThread()

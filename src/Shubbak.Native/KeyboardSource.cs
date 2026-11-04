@@ -27,12 +27,27 @@ public enum KeyModifiers
 /// <param name="IsKeyDown">False for key-up.</param>
 /// <param name="IsInjected">True when synthesised by software rather than typed.</param>
 /// <param name="IsRepeat">True when this is auto-repeat rather than a fresh press.</param>
+/// <param name="Binding">The immutable binding captured at the first key-down.</param>
 public readonly record struct KeyEvent(
     ushort VirtualKey,
     KeyModifiers Modifiers,
     bool IsKeyDown,
     bool IsInjected,
-    bool IsRepeat);
+    bool IsRepeat,
+    KeyboardBinding? Binding = null);
+
+/// <summary>
+/// A prebuilt binding captured on the first press. Hosts may derive from this to
+/// carry their immutable command data; the hook never constructs a binding.
+/// </summary>
+public class KeyboardBinding(bool release = false, bool repeat = true)
+{
+    public bool Release { get; } = release;
+    public bool Repeat { get; } = repeat && !release;
+
+    /// <summary>A blocking mode claims a key without queueing work.</summary>
+    public static KeyboardBinding Suppress { get; } = new(repeat: false);
+}
 
 /// <summary>
 /// A global low-level keyboard hook.
@@ -63,13 +78,13 @@ public sealed class KeyboardSource : IDisposable
     private static KeyboardSource? s_instance;
 
     /// <summary>
-    /// Decides whether a keystroke is bound, and therefore whether to swallow it.
+    /// Captures a prebuilt binding on the first press, or null to pass the key through.
     /// </summary>
     /// <remarks>
     /// Runs <b>inside</b> the hook callback, so it must be allocation-free and
     /// return in microseconds. In practice it is a lookup in a pre-built table.
     /// </remarks>
-    public delegate bool BindingProbe(ushort virtualKey, KeyModifiers modifiers, bool isKeyDown);
+    public delegate KeyboardBinding? BindingProbe(ushort virtualKey, KeyModifiers modifiers);
 
     private readonly KeyEvent[] _ring;
     private readonly int _mask;
@@ -87,6 +102,8 @@ public sealed class KeyboardSource : IDisposable
     /// only from the hook thread, so no synchronisation is needed.
     /// </remarks>
     private readonly KeyOwner[] _owners = new KeyOwner[256];
+    private readonly KeyboardBinding?[] _pressBindings = new KeyboardBinding?[256];
+    private readonly KeyModifiers[] _pressModifiers = new KeyModifiers[256];
 
     private UnhookWindowsHookExSafeHandle? _hook;
     private UnhookWinEventSafeHandle? _desktopEvents;
@@ -274,6 +291,7 @@ public sealed class KeyboardSource : IDisposable
             if (source?._desktopEvents is not { IsClosed: false } registered ||
                 (nint)hook.Value != registered.DangerousGetHandle()) return;
             Array.Clear(source._owners);
+            Array.Clear(source._pressBindings);
             Interlocked.Increment(ref source._desktopResets);
         }
         catch
@@ -295,6 +313,8 @@ public sealed class KeyboardSource : IDisposable
         while (count < limit && read < write)
         {
             destination[count++] = _ring[(int)(read & _mask)];
+            // Old bindings must not keep obsolete configs alive until this slot wraps.
+            _ring[(int)(read & _mask)] = default;
             read++;
         }
 
@@ -357,6 +377,7 @@ public sealed class KeyboardSource : IDisposable
                         bool down = (uint)wParam.Value is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
                         bool ownedRelease = !down && source._owners[key] == KeyOwner.Shubbak;
                         source._owners[key] = down ? KeyOwner.Application : KeyOwner.None;
+                        source._pressBindings[key] = null;
                         // A release-probe failure must not send an application an up
                         // for a down it never received. Passing a down on failure is
                         // different: that transfers ownership, including its later up.
@@ -396,32 +417,32 @@ public sealed class KeyboardSource : IDisposable
         {
             if (owner == KeyOwner.Shubbak)
             {
-                // A binding that runs on release wants this edge delivered, not only
-                // swallowed. The modifiers are read now, for a swallowed key only, so a
-                // release with the modifier already let go is a release of a different
-                // combination and fires nothing - the one reading of "alt+tab on
-                // release" that cannot fire twice.
-                KeyModifiers held = ReadModifiers();
-
-                if (source._probe is { } releaseProbe && releaseProbe(virtualKey, held, false))
+                // Release belongs to the original chord, regardless of which modifier
+                // came up first, or which mode/config is now active. No lookup or
+                // keyboard-state reads on this edge.
+                KeyboardBinding? binding = source._pressBindings[virtualKey];
+                if (binding is { Release: true })
                 {
                     var release = new KeyEvent(
                         virtualKey,
-                        held,
+                        source._pressModifiers[virtualKey],
                         IsKeyDown: false,
                         (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0,
-                        IsRepeat: false);
+                        IsRepeat: false,
+                        binding);
 
                     source.Enqueue(in release);
                 }
 
-                // Keep the owner available until the probe has succeeded: the fault
-                // guard needs it to suppress an owned release if that probe throws.
+                // Keep the owner until publication succeeds so the fault guard can
+                // suppress an owned release rather than leak an unmatched key-up.
                 source._owners[virtualKey] = KeyOwner.None;
+                source._pressBindings[virtualKey] = null;
                 return new LRESULT(1);
             }
 
             source._owners[virtualKey] = KeyOwner.None;
+            source._pressBindings[virtualKey] = null;
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
         }
 
@@ -432,11 +453,25 @@ public sealed class KeyboardSource : IDisposable
         if (owner == KeyOwner.Application)
             return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
 
+        if (owner == KeyOwner.Shubbak)
+        {
+            KeyboardBinding? binding = source._pressBindings[virtualKey];
+            if (binding is { Repeat: true } && ReadModifiers() == source._pressModifiers[virtualKey])
+            {
+                var repeat = new KeyEvent(virtualKey, source._pressModifiers[virtualKey], true,
+                    (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0, true, binding);
+                source.Enqueue(in repeat);
+            }
+            // A repeat never changes binding or recipient. Non-repeating shortcuts
+            // do no modifier reads, lookup, enqueue or worker wake at all.
+            return new LRESULT(1);
+        }
+
         KeyModifiers modifiers = ReadModifiers();
 
-        bool bound = source._probe is { } probe && probe(virtualKey, modifiers, true);
+        KeyboardBinding? bound = source._probe?.Invoke(virtualKey, modifiers);
 
-        if (bound)
+        if (bound is not null)
         {
             // A key already held when the hook was installed belongs to the previous
             // input path (notably on resume). The async state is still the state
@@ -447,21 +482,15 @@ public sealed class KeyboardSource : IDisposable
                 return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
             }
 
-            // Auto-repeat arrives as repeated key-downs with no release between them,
-            // and the swallow flag is exactly that state: set by the first press and
-            // cleared by the release. A press that finds it already set is therefore a
-            // repeat, at no cost - the array is already here for another reason.
-            bool repeat = owner == KeyOwner.Shubbak;
-
-            var key = new KeyEvent(
-                virtualKey,
-                modifiers,
-                IsKeyDown: true,
-                (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0,
-                repeat);
-
-            source.Enqueue(in key);
+            if (!bound.Release && !ReferenceEquals(bound, KeyboardBinding.Suppress))
+            {
+                var key = new KeyEvent(virtualKey, modifiers, true,
+                    (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0, false, bound);
+                source.Enqueue(in key);
+            }
             source._owners[virtualKey] = KeyOwner.Shubbak;
+            source._pressBindings[virtualKey] = bound;
+            source._pressModifiers[virtualKey] = modifiers;
 
             // Swallow, so the focused application never sees the keystroke.
             //
@@ -470,11 +499,6 @@ public sealed class KeyboardSource : IDisposable
             // through being held, which is worse than either behaviour on its own.
             return new LRESULT(1);
         }
-
-        // The inverse case: a claimed press must not leak its repeat when a modifier
-        // is released. Its release will still be swallowed, so leaking only the down
-        // would leave the application believing the key remained held forever.
-        if (owner == KeyOwner.Shubbak) return new LRESULT(1);
 
         source._owners[virtualKey] = KeyOwner.Application;
         return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);

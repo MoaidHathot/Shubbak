@@ -3,6 +3,14 @@ using Shubbak.Native;
 
 namespace Shubbak.Wm;
 
+/// <summary>The command and mode captured by the hook, before either can change.</summary>
+public sealed class BoundShortcut(Keybinding binding, string? mode)
+    : KeyboardBinding(binding.Release, binding.RepeatsOnHold)
+{
+    public Keybinding Binding { get; } = binding;
+    public string? Mode { get; } = mode;
+}
+
 /// <summary>
 /// Matches keystrokes to bindings, honouring the active binding mode.
 /// </summary>
@@ -47,7 +55,7 @@ public sealed class BindingTable
     /// </para>
     /// </remarks>
     private sealed record Snapshot(
-        Dictionary<int, Keybinding> Default,
+        Dictionary<int, BoundShortcut> Default,
         Dictionary<string, ModeTable> Modes,
         ModeTable? ActiveMode,
         string? ActiveModeName);
@@ -58,7 +66,7 @@ public sealed class BindingTable
         null,
         null);
 
-    private sealed record ModeTable(Dictionary<int, Keybinding> Bindings, bool PassThrough);
+    private sealed record ModeTable(Dictionary<int, BoundShortcut> Bindings, bool PassThrough);
 
     /// <summary>
     /// Rebuilds the table from config, keeping the active mode if it still exists.
@@ -93,16 +101,16 @@ public sealed class BindingTable
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        Dictionary<int, Keybinding> defaults = [];
+        Dictionary<int, BoundShortcut> defaults = [];
         foreach (Keybinding binding in config.Keybindings)
-            defaults.TryAdd(Pack(binding.Key), binding);
+            defaults.TryAdd(Pack(binding.Key), new BoundShortcut(binding, null));
 
         Dictionary<string, ModeTable> modes = new(StringComparer.OrdinalIgnoreCase);
         foreach (BindingMode mode in config.BindingModes)
         {
-            Dictionary<int, Keybinding> bindings = [];
+            Dictionary<int, BoundShortcut> bindings = [];
             foreach (Keybinding binding in mode.Keybindings)
-                bindings.TryAdd(Pack(binding.Key), binding);
+                bindings.TryAdd(Pack(binding.Key), new BoundShortcut(binding, mode.Name));
 
             modes[mode.Name] = new ModeTable(bindings, mode.PassThrough);
         }
@@ -128,7 +136,7 @@ public sealed class BindingTable
     }
 
     /// <summary>The default bindings as the config wrote them, before any overlay.</summary>
-    private Dictionary<int, Keybinding> _baseDefaults = [];
+    private Dictionary<int, BoundShortcut> _baseDefaults = [];
 
     /// <summary>The bindings the active contexts lay over the defaults, in order.</summary>
     private IReadOnlyList<Keybinding> _overlay = [];
@@ -169,14 +177,14 @@ public sealed class BindingTable
     /// <summary>How many bindings the overlay in force contributes.</summary>
     public int OverlayCount => _overlay.Count;
 
-    private static Dictionary<int, Keybinding> Merge(Dictionary<int, Keybinding> defaults, IReadOnlyList<Keybinding> overlay)
+    private static Dictionary<int, BoundShortcut> Merge(Dictionary<int, BoundShortcut> defaults, IReadOnlyList<Keybinding> overlay)
     {
         if (overlay.Count == 0) return defaults;
 
-        Dictionary<int, Keybinding> merged = new(defaults);
+        Dictionary<int, BoundShortcut> merged = new(defaults);
 
         foreach (Keybinding binding in overlay)
-            merged[Pack(binding.Key)] = binding;
+            merged[Pack(binding.Key)] = new BoundShortcut(binding, null);
 
         return merged;
     }
@@ -203,7 +211,7 @@ public sealed class BindingTable
     public IEnumerable<string> ModeNames => _state.Modes.Keys;
 
     /// <summary>
-    /// Whether a keystroke is bound. Called from the hook callback.
+    /// Whether the current table claims this edge. The hook captures on key-down.
     /// </summary>
     /// <remarks>
     /// Key-down is claimed for every binding. Key-up for the same combination is
@@ -213,6 +221,13 @@ public sealed class BindingTable
     /// </remarks>
     public bool IsBound(ushort virtualKey, KeyModifiers modifiers, bool isKeyDown)
     {
+        KeyboardBinding? binding = Capture(virtualKey, modifiers);
+        return isKeyDown ? binding is not null : binding?.Release == true;
+    }
+
+    /// <summary>One snapshot lookup, performed only on a fresh press.</summary>
+    public KeyboardBinding? Capture(ushort virtualKey, KeyModifiers modifiers)
+    {
         int key = Pack((int)modifiers, virtualKey);
 
         // Read once. Re-reading would reintroduce exactly what the snapshot removes:
@@ -221,18 +236,9 @@ public sealed class BindingTable
         Snapshot state = _state;
         ModeTable? mode = state.ActiveMode;
 
-        if (!isKeyDown)
-        {
-            Keybinding? bound = mode is not null
-                ? mode.Bindings.GetValueOrDefault(key)
-                : state.Default.GetValueOrDefault(key);
-
-            return bound?.Release == true;
-        }
-
         if (mode is not null)
         {
-            if (mode.Bindings.ContainsKey(key)) return true;
+            if (mode.Bindings.TryGetValue(key, out BoundShortcut? binding)) return binding;
 
             // A non-pass-through mode swallows everything. That is the entire point
             // of a `pause` mode: it exists to make the keyboard inert apart from the
@@ -244,10 +250,10 @@ public sealed class BindingTable
             // very next keystroke reports no modifiers held - and a mode whose only
             // way out is alt+shift+p can then never match it. The keyboard was inert
             // with no way back, which is the worst failure this program can have.
-            return !mode.PassThrough && !IsModifierKey(virtualKey);
+            return !mode.PassThrough && !IsModifierKey(virtualKey) ? KeyboardBinding.Suppress : null;
         }
 
-        return state.Default.ContainsKey(key);
+        return state.Default.GetValueOrDefault(key);
     }
 
     /// <summary>Whether a key is a modifier, and so never a binding by itself.</summary>
@@ -260,21 +266,10 @@ public sealed class BindingTable
         _ => false,
     };
 
-    /// <summary>Resolves a keystroke to its binding, on the worker thread.</summary>
+    /// <summary>Inspects the current binding; dispatch uses the captured binding instead.</summary>
     public Keybinding? Resolve(ushort virtualKey, KeyModifiers modifiers)
     {
-        int key = Pack((int)modifiers, virtualKey);
-
-        // Read once. Re-reading would reintroduce exactly what the snapshot removes:
-        // a reload landing between two reads and answering half of one question with
-        // the old table and half with the new.
-        Snapshot state = _state;
-        ModeTable? mode = state.ActiveMode;
-
-        if (mode is not null)
-            return mode.Bindings.GetValueOrDefault(key);
-
-        return state.Default.GetValueOrDefault(key);
+        return (Capture(virtualKey, modifiers) as BoundShortcut)?.Binding;
     }
 
     private static int Pack(KeyBinding binding) => binding.Identity;

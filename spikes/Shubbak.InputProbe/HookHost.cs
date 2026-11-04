@@ -31,12 +31,12 @@ internal sealed class HookHost
         _bindings.Load(new ShubbakConfig { Keybindings = bindings });
     }
 
-    private bool Probe(ushort key, KeyModifiers modifiers, bool down)
+    private KeyboardBinding? Probe(ushort key, KeyModifiers modifiers)
     {
-        if (key != 0x87 || !down) return _bindings.IsBound(key, modifiers, down);
+        if (key != 0x87) return _bindings.Capture(key, modifiers);
 
         long start = Stopwatch.GetTimestamp();
-        bool result = _bindings.IsBound(key, modifiers, down);
+        KeyboardBinding? result = _bindings.Capture(key, modifiers);
         long end = Stopwatch.GetTimestamp();
         int seen = ++_seen;
         // Warm the measuring API as well as the lookup.

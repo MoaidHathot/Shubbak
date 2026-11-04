@@ -461,7 +461,7 @@ public sealed class WmDaemon : IDisposable
         SeedContextFacts();
 
         _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
-        _keyboard.Start(_bindings.IsBound);
+        _keyboard.Start(_bindings.Capture);
         phase = ReportPhase("keyboard hook", phase);
 
         // The one question the monitor poll asks of the shell, moved off this thread:
@@ -1310,54 +1310,16 @@ public sealed class WmDaemon : IDisposable
         for (int i = 0; i < count; i++)
         {
             KeyEvent key = _keyScratch[i];
+            _keyScratch[i] = default;
 
-            Keybinding? binding = _bindings.Resolve(key.VirtualKey, key.Modifiers);
-
-            // A binding that runs on release is fired by the key coming up and not by
-            // it going down; every other binding the other way round. The hook only
-            // delivers a release for a binding that asked for one, so a release here
-            // with no binding, or with a press binding, is a change of table between
-            // the two edges and is left alone.
-            if (binding is not null && key.IsKeyDown == binding.Release)
-            {
-                if (key.IsKeyDown && Log.IsEnabled(LogLevel.Trace))
-                    Log.Trace(LogCategory.Hook, $"{binding.Key.Display} pressed; runs on release");
-
-                continue;
-            }
-
-            if (!key.IsKeyDown && binding is null) continue;
-
-            if (binding is null)
-            {
-                // Reaching here means the hook claimed the keystroke but nothing
-                // resolved it - almost always a non-pass-through binding mode
-                // swallowing keys, which is worth being able to see.
-                if (Log.IsEnabled(LogLevel.Trace))
-                    Log.Trace(LogCategory.Hook,
-                        $"swallowed vk=0x{key.VirtualKey:X2} mods={key.Modifiers} (no binding)");
-
-                continue;
-            }
+            // The producer has already selected the actionable edge and repeat
+            // policy. Looking up the current table here could execute a different
+            // command after a mode/context transition or reload.
+            if (key.Binding is not BoundShortcut captured) continue;
+            Keybinding binding = captured.Binding;
 
             if (Log.IsEnabled(LogLevel.Debug))
                 Log.Debug(LogCategory.Hook, $"{binding.Key.Display} -> {binding.Commands.Describe()}");
-
-            // Auto-repeat. Windows sends repeated key-downs with no release between,
-            // and every one of them used to be executed: holding the close key closed
-            // everything on the workspace, and holding a shell-exec key started a
-            // process per repeat.
-            //
-            // Skipped after the resolve rather than before it, so the trace above still
-            // shows the key being held - which is the one thing that makes "why did
-            // that happen thirty times" answerable.
-            if (key.IsRepeat && !binding.RepeatsOnHold)
-            {
-                if (Log.IsEnabled(LogLevel.Trace))
-                    Log.Trace(LogCategory.Hook, $"{binding.Key.Display}: ignoring auto-repeat");
-
-                continue;
-            }
 
             // Before the commands run, so the announcement precedes its consequences on
             // the wire and names the mode the chord resolved in - which the chord itself
@@ -1368,7 +1330,7 @@ public sealed class WmDaemon : IDisposable
             {
                 Publish(new WmResult(true, [new BindingFired(
                     binding.Key.Display,
-                    _wm.BindingMode,
+                    captured.Mode,
                     [.. binding.Commands.Select(c => c.Name)])]));
             }
 
@@ -5088,7 +5050,7 @@ public sealed class WmDaemon : IDisposable
         _winEvents.Start();
 
         _keyboard = new KeyboardSource { WorkQueued = _loop.Wake };
-        _keyboard.Start(_bindings.IsBound);
+        _keyboard.Start(_bindings.Capture);
 
         // Whatever opened, closed or moved while nobody was looking.
         SyncMonitors();
