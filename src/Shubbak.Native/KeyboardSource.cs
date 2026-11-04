@@ -172,6 +172,7 @@ public sealed class KeyboardSource : IDisposable
     private long _menuMaskFailures;
     // One bit per Alt/Win side. Assume a modifier may predate hook installation.
     private byte _unmaskedMenuKeys = 0x0F;
+    private byte _consumedMenuKeys;
     private const nuint MenuMaskMarker = 0x53484D4B;
     private const ushort MenuMaskKey = 0xE8; // Unassigned; never synthesize Ctrl/Alt.
 
@@ -317,6 +318,7 @@ public sealed class KeyboardSource : IDisposable
             Array.Clear(source._pressBindings);
             source._reservedReleases = 0;
             source._unmaskedMenuKeys = 0x0F;
+            source._consumedMenuKeys = 0;
             source._rightAltLayout = KeyboardLayouts.ForegroundLayout();
             _ = source._layouts.UsesAltGr(source._rightAltLayout);
             if (source._layouts.RefreshPending) source.NotifyWork();
@@ -452,8 +454,23 @@ public sealed class KeyboardSource : IDisposable
         byte menuKey = virtualKey switch { 0xA4 => 1, 0xA5 => 2, 0x12 => 3, 0x5B => 4, 0x5C => 8, _ => 0 };
         if (menuKey != 0)
         {
-            if (isKeyDown) source._unmaskedMenuKeys |= menuKey;
-            else source._unmaskedMenuKeys &= (byte)~menuKey;
+            if (isKeyDown)
+            {
+                // A repeated modifier down can re-arm Start after the mask. Injecting
+                // another mask here runs BEFORE this event completes, so cannot fix
+                // it. Suppress only the redundant repeat of a consumed gesture; its
+                // original down and final up still reach the application together.
+                if (source._owners[virtualKey] != KeyOwner.None && (source._consumedMenuKeys & menuKey) != 0)
+                    return new LRESULT(1);
+                source._unmaskedMenuKeys |= menuKey;
+                if (source._owners[virtualKey] == KeyOwner.None)
+                    source._consumedMenuKeys &= (byte)~menuKey;
+            }
+            else
+            {
+                source._unmaskedMenuKeys &= (byte)~menuKey;
+                source._consumedMenuKeys &= (byte)~menuKey;
+            }
         }
         // The grammar never binds a modifier by itself. Forward it without reading
         // seven states or querying a keymap, including in blocking modes.
@@ -720,6 +737,8 @@ public sealed class KeyboardSource : IDisposable
     private void MaskMenus(KeyModifiers modifiers)
     {
         byte mask = 0;
+        if ((modifiers & KeyModifiers.Alt) != 0) _consumedMenuKeys |= 3;
+        if ((modifiers & KeyModifiers.Windows) != 0) _consumedMenuKeys |= 12;
         if ((modifiers & (KeyModifiers.Alt | KeyModifiers.Control)) == KeyModifiers.Alt) mask |= 3;
         if ((modifiers & KeyModifiers.Windows) != 0) mask |= 12;
         if ((_unmaskedMenuKeys & mask) == 0) return;

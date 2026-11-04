@@ -24,6 +24,22 @@ namespace Shubbak.Native.Tests;
 /// </remarks>
 internal static class Keyboard
 {
+    public static void Chord(VIRTUAL_KEY modifier, VIRTUAL_KEY key)
+    {
+        Span<INPUT> inputs = stackalloc INPUT[4];
+        inputs.Clear();
+        for (int i = 0; i < inputs.Length; i++)
+        {
+            inputs[i].type = INPUT_TYPE.INPUT_KEYBOARD;
+            inputs[i].Anonymous.ki.wVk = i is 0 or 3 ? modifier : key;
+            inputs[i].Anonymous.ki.dwExtraInfo = TestWindow.KeyboardMarker;
+            if (i >= 2) inputs[i].Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
+            if (i is 0 or 3 && modifier is VIRTUAL_KEY.VK_RMENU or VIRTUAL_KEY.VK_RCONTROL or VIRTUAL_KEY.VK_LWIN or VIRTUAL_KEY.VK_RWIN)
+                inputs[i].Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_EXTENDEDKEY;
+        }
+        Assert.Equal(4u, PInvoke.SendInput(inputs, Marshal.SizeOf<INPUT>()));
+    }
+
     public static void Press(VIRTUAL_KEY key) => Send(key, up: false);
 
     public static void Release(VIRTUAL_KEY key) => Send(key, up: true);

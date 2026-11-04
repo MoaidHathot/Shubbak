@@ -41,6 +41,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Repeating Win itself after a consumed shortcut cannot re-arm Start.** The
+  modifier's consumed state survives main-key release, and redundant modifier downs
+  are suppressed. Batched-input and modifier-repeat regressions exercise Windows'
+  actual menu/foreground behavior.
 - **Left-Ctrl + Right-Alt works on layouts without AltGr.** The foreground layout's
   text mappings distinguish genuine Ctrl+Alt from AltGr. Metadata is cached off the
   hook thread, refreshed on demand, and queried without changing dead-key state.
