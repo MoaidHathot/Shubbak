@@ -36,6 +36,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Binding-mode validation checks reachable exits.** Shadowed escape bindings,
+  self-loops and closed cycles no longer pass as usable ways out of a mode that
+  swallows the keyboard. Validation follows runtime precedence and command order.
 - **Equivalent shortcuts now produce duplicate warnings.** Modifier order, case and
   aliases share the runtime's chord identity. Modes are checked independently, and
   context warnings correctly describe their last-binding-wins precedence.

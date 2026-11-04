@@ -1293,6 +1293,7 @@ public sealed class ConfigLoader
     {
         List<BindingMode> modes = [];
         if (node is null) return modes;
+        Dictionary<string, (BindingMode Mode, TextSpan Span)> effective = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (KdlNode child in node.ChildrenNamed("mode"))
         {
@@ -1309,30 +1310,56 @@ public sealed class ConfigLoader
             string name = nameValue.AsString();
             bool passThrough = Bool(child, "pass-through", false);
 
-            // A mode that swallows every keystroke and has no binding that leaves it
-            // is a trap: once entered, the keyboard is inert and no key can undo it.
-            // Caught here, where it is a typo being pointed at, rather than at two in
-            // the morning with no way to type.
-            if (!passThrough && !LeavesTheMode(bindings))
-            {
-                Report(Diagnostic.Error(
-                    "SHB0425",
-                    $"Binding mode '{name}' swallows every key and has no binding that leaves it.",
-                    child.Span,
-                    "Add a way out, e.g. bind \"escape\" { wm-disable-binding-mode }, " +
-                    "or set pass-through #true so unbound keys still reach applications."));
-            }
+            var mode = new BindingMode(name, bindings, passThrough);
+            modes.Add(mode);
+            effective[name] = (mode, child.Span);
+        }
 
-            modes.Add(new BindingMode(name, bindings, passThrough));
+        // Use the same winners as BindingTable: last mode declaration, first chord.
+        // Seeing an exit in a shadowed binding, or an edge round a closed cycle, is
+        // not evidence that a person can actually leave the mode.
+        HashSet<string> escapable = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, List<string>> edges = new(StringComparer.OrdinalIgnoreCase);
+        foreach ((string name, (BindingMode mode, _)) in effective)
+        {
+            if (mode.PassThrough) escapable.Add(name);
+            HashSet<int> seen = [];
+            List<string> targets = [];
+            foreach (Keybinding binding in mode.Keybindings)
+            {
+                if (!seen.Add(binding.Key.Identity)) continue;
+                // Commands run in order: disable followed by enable is not an exit.
+                WmCommand? last = binding.Commands.LastOrDefault(c =>
+                    c is DisableBindingModeCommand or EnableBindingModeCommand);
+                if (last is DisableBindingModeCommand) escapable.Add(name);
+                else if (last is EnableBindingModeCommand enter) targets.Add(enter.Mode);
+            }
+            edges[name] = targets;
+        }
+
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach ((string name, List<string> targets) in edges)
+                if (!escapable.Contains(name) && targets.Any(escapable.Contains))
+                    changed |= escapable.Add(name);
+        } while (changed);
+
+        foreach ((string name, (_, TextSpan span)) in effective)
+        {
+            if (escapable.Contains(name)) continue;
+            Report(Diagnostic.Error(
+                "SHB0425",
+                $"Binding mode '{name}' swallows every key and has no reachable binding that leaves it.",
+                span,
+                "Add a way out, e.g. bind \"escape\" { wm-disable-binding-mode }, " +
+                "or set pass-through #true so unbound keys still reach applications. " +
+                "An exit must not be shadowed, and mode transitions must reach an exit rather than a closed cycle."));
         }
 
         return modes;
     }
-
-    /// <summary>Whether any binding in a mode returns to the default set.</summary>
-    private static bool LeavesTheMode(List<Keybinding> bindings) =>
-        bindings.Any(b => b.Commands.Any(
-            c => c is DisableBindingModeCommand or EnableBindingModeCommand));
 
     // ---- monitors ------------------------------------------------------------
 

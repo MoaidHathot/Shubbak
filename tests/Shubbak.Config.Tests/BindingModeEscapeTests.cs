@@ -11,6 +11,50 @@ namespace Shubbak.Config.Tests;
 /// </remarks>
 public sealed class BindingModeEscapeTests
 {
+    [Theory]
+    [InlineData("bind \"escape\" { signal \"stays\"; }; bind \"esc\" { wm-disable-binding-mode; };")]
+    [InlineData("bind \"escape\" { wm-enable-binding-mode --name trap; };")]
+    [InlineData("bind \"escape\" { wm-disable-binding-mode; wm-enable-binding-mode --name trap; };")]
+    [InlineData("bind \"escape\" { wm-enable-binding-mode --name missing; };")]
+    public void AnUnusableExitDoesNotMakeASwallowingModeSafe(string bindings)
+    {
+        ConfigLoadResult result = ConfigLoader.Load($$"""
+            binding-modes { mode "trap" { {{bindings}} }; }
+            """);
+
+        Assert.Contains(result.Errors, d => d.Code == "SHB0425");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AModeCycleNeedsAReachableExit(bool withExit)
+    {
+        string exit = withExit ? "bind \"enter\" { wm-disable-binding-mode; };" : string.Empty;
+        ConfigLoadResult result = ConfigLoader.Load($$"""
+            binding-modes {
+                mode "one" { bind "escape" { wm-enable-binding-mode --name TWO; }; }
+                mode "two" { bind "escape" { wm-enable-binding-mode --name one; }; {{exit}} }
+            }
+            """);
+
+        Assert.Equal(withExit ? 0 : 2, result.Errors.Count(d => d.Code == "SHB0425"));
+    }
+
+    [Fact]
+    public void OnlyTheLastDefinitionOfAModeDeterminesItsReachability()
+    {
+        ConfigLoadResult result = ConfigLoader.Load("""
+            binding-modes {
+                mode "one" { bind "escape" { wm-enable-binding-mode --name two; }; }
+                mode "two" pass-through=#true { }
+                mode "TWO" { bind "escape" { wm-enable-binding-mode --name one; }; }
+            }
+            """);
+
+        Assert.Equal(2, result.Errors.Count(d => d.Code == "SHB0425"));
+    }
+
     [Fact]
     public void ASwallowingModeWithNoWayOutIsRejected()
     {
