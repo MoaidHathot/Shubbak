@@ -19,6 +19,80 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
     private static readonly bool[] PassedSequence = [true, true, false];
     private readonly nint _original = Win32Window.GetForeground();
 
+    [Fact]
+    public void APartialDrainRearmsTheCoalescedWakeUntilTheQueueIsEmpty()
+    {
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
+        using var wake = new AutoResetEvent(false);
+        using var source = new KeyboardSource { WorkQueued = () => wake.Set() };
+        source.Start((key, _) => key == Key ? Bound : null);
+        try
+        {
+            for (int i = 0; i < 193; i++) { Send(Key, true); Send(Key, false); }
+            Flush(window);
+            var scratch = new KeyEvent[64];
+            int total = 0;
+            while (total < 193)
+            {
+                Assert.True(wake.WaitOne(TimeSpan.FromSeconds(1)), "queued work lost its wake");
+                total += source.Drain(scratch, scratch.Length);
+            }
+            Assert.Equal(193, total);
+            Assert.False(wake.WaitOne(0));
+            Assert.Equal(0, source.Dropped);
+        }
+        finally { ReleaseAll(); }
+    }
+
+    [Fact]
+    public void OverflowPassesAFreshPressAndItsReleaseTogether()
+    {
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
+        using var source = new KeyboardSource(1);
+        source.Start((key, _) => key == Key ? Bound : null);
+        try
+        {
+            Send(Key, true);
+            Send(Key, false);
+            Send(Key, true);
+            Send(Key, false);
+            Flush(window);
+            Assert.Equal([true, false], window.KeyDowns);
+            Assert.Equal(1, source.Drain(new KeyEvent[1], 1));
+            Assert.Equal(1, source.Dropped);
+        }
+        finally { ReleaseAll(); }
+    }
+
+    [Fact]
+    public void AClaimedReleaseKeepsItsQueueSlotDuringOverflow()
+    {
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the key receiver"));
+        var onRelease = new KeyboardBinding(release: true);
+        using var source = new KeyboardSource(1);
+        source.Start((key, _) => key == Key ? onRelease : key == Barrier ? Bound : null);
+        try
+        {
+            Send(Key, true);
+            // The ring has room only for the promised F24 release, so F23 must pass.
+            Send(Barrier, true);
+            Send(Barrier, false);
+            Send(Key, false);
+            TestWindow.PumpUntil(() => window.KeyboardBarriers > 0);
+            var events = new KeyEvent[1];
+            Assert.True(SpinWait.SpinUntil(() => source.Drain(events, 1) == 1, TimeSpan.FromSeconds(2)));
+            Assert.Equal(Key, events[0].VirtualKey);
+            Assert.False(events[0].IsKeyDown);
+            Assert.Same(onRelease, events[0].Binding);
+            Assert.Equal(1, source.Dropped);
+            Assert.Empty(window.KeyDowns);
+        }
+        finally { ReleaseAll(); }
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

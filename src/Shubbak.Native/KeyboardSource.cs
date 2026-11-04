@@ -91,6 +91,7 @@ public sealed class KeyboardSource : IDisposable
     private long _write;
     private long _read;
     private long _dropped;
+    private int _reservedReleases;
 
     private enum KeyOwner : byte { None, Application, Shubbak }
 
@@ -292,6 +293,7 @@ public sealed class KeyboardSource : IDisposable
                 (nint)hook.Value != registered.DangerousGetHandle()) return;
             Array.Clear(source._owners);
             Array.Clear(source._pressBindings);
+            source._reservedReleases = 0;
             Interlocked.Increment(ref source._desktopResets);
         }
         catch
@@ -319,6 +321,9 @@ public sealed class KeyboardSource : IDisposable
         }
 
         Volatile.Write(ref _read, read);
+        // AutoResetEvent coalesces producer wakes. A bounded drain must keep the
+        // remaining work ready rather than leave it behind the daemon's idle timer.
+        if (read < Volatile.Read(ref _write)) NotifyWork();
         return count;
     }
 
@@ -377,6 +382,7 @@ public sealed class KeyboardSource : IDisposable
                         bool down = (uint)wParam.Value is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
                         bool ownedRelease = !down && source._owners[key] == KeyOwner.Shubbak;
                         source._owners[key] = down ? KeyOwner.Application : KeyOwner.None;
+                        if (source._pressBindings[key] is { Release: true }) source._reservedReleases--;
                         source._pressBindings[key] = null;
                         // A release-probe failure must not send an application an up
                         // for a down it never received. Passing a down on failure is
@@ -423,6 +429,8 @@ public sealed class KeyboardSource : IDisposable
                 KeyboardBinding? binding = source._pressBindings[virtualKey];
                 if (binding is { Release: true })
                 {
+                    source._reservedReleases--;
+                    source._pressBindings[virtualKey] = null;
                     var release = new KeyEvent(
                         virtualKey,
                         source._pressModifiers[virtualKey],
@@ -482,11 +490,27 @@ public sealed class KeyboardSource : IDisposable
                 return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
             }
 
-            if (!bound.Release && !ReferenceEquals(bound, KeyboardBinding.Suppress))
+            if (bound.Release)
+            {
+                // Reserve its eventual actionable edge before swallowing the press.
+                // Once owned, a key-up cannot safely fail open to an application.
+                if (!source.HasRoom())
+                {
+                    Interlocked.Increment(ref source._dropped);
+                    source._owners[virtualKey] = KeyOwner.Application;
+                    return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+                }
+                source._reservedReleases++;
+            }
+            else if (!ReferenceEquals(bound, KeyboardBinding.Suppress))
             {
                 var key = new KeyEvent(virtualKey, modifiers, true,
                     (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0, false, bound);
-                source.Enqueue(in key);
+                if (!source.Enqueue(in key))
+                {
+                    source._owners[virtualKey] = KeyOwner.Application;
+                    return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+                }
             }
             source._owners[virtualKey] = KeyOwner.Shubbak;
             source._pressBindings[virtualKey] = bound;
@@ -619,7 +643,7 @@ public sealed class KeyboardSource : IDisposable
 
     /// <summary>Signalled after a keystroke is queued, so a waiting pump wakes at once.</summary>
     /// <remarks>
-    /// Runs inside the hook callback, so it must be as cheap as everything else there:
+    /// Runs inside the hook callback and after a partial drain, so it must be cheap:
     /// one SetEvent, no allocation, about a microsecond. That is what stops a keystroke
     /// waiting on a timer before anything looks at it.
     /// </remarks>
@@ -627,22 +651,30 @@ public sealed class KeyboardSource : IDisposable
 
     /// <summary>Single-producer enqueue. Wait-free and allocation-free.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void Enqueue(in KeyEvent key)
+    private bool Enqueue(in KeyEvent key)
     {
         long write = _write;
         long read = Volatile.Read(ref _read);
 
-        if (write - read >= _ring.Length)
+        if (write - read >= _ring.Length - _reservedReleases)
         {
             // Full. Drop rather than block: blocking here would hit the 300 ms
             // unhook threshold and disable every keybinding.
             Interlocked.Increment(ref _dropped);
-            return;
+            return false;
         }
 
         _ring[(int)(write & _mask)] = key;
         Volatile.Write(ref _write, write + 1);
 
+        NotifyWork();
+        return true;
+    }
+
+    private bool HasRoom() => _write - Volatile.Read(ref _read) < _ring.Length - _reservedReleases;
+
+    private void NotifyWork()
+    {
         try { WorkQueued?.Invoke(); }
         catch
         {

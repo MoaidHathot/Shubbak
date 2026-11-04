@@ -36,6 +36,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Keyboard bursts stay ready until their bounded queue is drained.** Coalesced
+  wake signals no longer leave queued commands waiting for the idle timer. Queue
+  overflow passes a fresh press and its release together; release bindings reserve
+  their eventual command slot before claiming a key.
 - **A shortcut keeps its press-time binding through dispatch and release.** Modifier
   release order, context changes and reloads can no longer redirect a queued key to
   another command. Release bindings fire once when the main key comes up, including
