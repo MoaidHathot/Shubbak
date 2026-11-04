@@ -2284,6 +2284,7 @@ public sealed class WmDaemon : IDisposable
             $"  - frame p99 {_frameAllocation.Percentile(0.99):F0} B, max {_frameAllocation.Max:F0} B " +
             $"({_frameAllocation.Count} frames)",
             $"- **Dropped keystrokes**: {_keyboard?.Dropped ?? 0}",
+            $"- **Menu masks / failures**: {_keyboard?.MenuMasks ?? 0} / {_keyboard?.MenuMaskFailures ?? 0}",
 
             // A process-level fact, so it belongs here rather than beside the animation
             // figures - where it was first put, and where nobody saw it, because that

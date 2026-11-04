@@ -44,7 +44,10 @@ internal static class Keyboard
     {
         var input = new INPUT { type = INPUT_TYPE.INPUT_KEYBOARD };
         input.Anonymous.ki.wVk = key;
-        if (up) input.Anonymous.ki.dwFlags = KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
+        input.Anonymous.ki.dwExtraInfo = TestWindow.KeyboardMarker;
+        if (key is VIRTUAL_KEY.VK_RMENU or VIRTUAL_KEY.VK_RCONTROL or VIRTUAL_KEY.VK_LWIN or VIRTUAL_KEY.VK_RWIN)
+            input.Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_EXTENDEDKEY;
+        if (up) input.Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
 
         Span<INPUT> one = [input];
 

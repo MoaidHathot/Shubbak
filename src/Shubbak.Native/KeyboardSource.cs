@@ -157,6 +157,15 @@ public sealed class KeyboardSource : IDisposable
     public long Faults => Interlocked.Read(ref _faults);
 
     private long _faults;
+    private long _menuMasks;
+    private long _menuMaskFailures;
+    // One bit per Alt/Win side. Assume a modifier may predate hook installation.
+    private byte _unmaskedMenuKeys = 0x0F;
+    private const nuint MenuMaskMarker = 0x53484D4B;
+    private const ushort MenuMaskKey = 0xE8; // Unassigned; never synthesize Ctrl/Alt.
+
+    public long MenuMasks => Interlocked.Read(ref _menuMasks);
+    public long MenuMaskFailures => Interlocked.Read(ref _menuMaskFailures);
 
     /// <summary>
     /// Installs the hook on a dedicated thread and begins delivering keystrokes.
@@ -294,6 +303,7 @@ public sealed class KeyboardSource : IDisposable
             Array.Clear(source._owners);
             Array.Clear(source._pressBindings);
             source._reservedReleases = 0;
+            source._unmaskedMenuKeys = 0x0F;
             Interlocked.Increment(ref source._desktopResets);
         }
         catch
@@ -407,9 +417,21 @@ public sealed class KeyboardSource : IDisposable
 
         var info = (KBDLLHOOKSTRUCT*)lParam.Value;
 
+        // Our neutral mask must reach Windows even inside a blocking mode. Other
+        // injected input still follows the normal binding/ownership rules.
+        if (info->vkCode == MenuMaskKey && info->dwExtraInfo == MenuMaskMarker &&
+            (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0)
+            return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
+
         uint message = (uint)wParam.Value;
         bool isKeyDown = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
         var virtualKey = (ushort)info->vkCode;
+        byte menuKey = virtualKey switch { 0xA4 => 1, 0xA5 => 2, 0x12 => 3, 0x5B => 4, 0x5C => 8, _ => 0 };
+        if (menuKey != 0)
+        {
+            if (isKeyDown) source._unmaskedMenuKeys |= menuKey;
+            else source._unmaskedMenuKeys &= (byte)~menuKey;
+        }
         KeyOwner owner = source._owners[virtualKey];
 
         // Route the release to the same recipient as the press. Re-evaluating the
@@ -515,6 +537,7 @@ public sealed class KeyboardSource : IDisposable
             source._owners[virtualKey] = KeyOwner.Shubbak;
             source._pressBindings[virtualKey] = bound;
             source._pressModifiers[virtualKey] = modifiers;
+            source.MaskMenus(modifiers);
 
             // Swallow, so the focused application never sees the keystroke.
             //
@@ -640,6 +663,32 @@ public sealed class KeyboardSource : IDisposable
 
     private static bool IsHeld(VIRTUAL_KEY key) =>
         (PInvoke.GetAsyncKeyState((int)key) & 0x8000) != 0;
+
+    /// <summary>
+    /// Make a consumed Alt/Win gesture visible to Windows as a chord, not a bare
+    /// modifier tap. Once per held modifier gesture, never on ordinary typing or
+    /// each auto-repeat. The tagged neutral pair cannot alter any modifier state.
+    /// </summary>
+    private void MaskMenus(KeyModifiers modifiers)
+    {
+        byte mask = 0;
+        if ((modifiers & (KeyModifiers.Alt | KeyModifiers.Control)) == KeyModifiers.Alt) mask |= 3;
+        if ((modifiers & KeyModifiers.Windows) != 0) mask |= 12;
+        if ((_unmaskedMenuKeys & mask) == 0) return;
+
+        Span<INPUT> inputs = stackalloc INPUT[2];
+        inputs.Clear();
+        inputs[0].type = inputs[1].type = INPUT_TYPE.INPUT_KEYBOARD;
+        inputs[0].Anonymous.ki.wVk = inputs[1].Anonymous.ki.wVk = (VIRTUAL_KEY)MenuMaskKey;
+        inputs[0].Anonymous.ki.dwExtraInfo = inputs[1].Anonymous.ki.dwExtraInfo = MenuMaskMarker;
+        inputs[1].Anonymous.ki.dwFlags = KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
+        if (PInvoke.SendInput(inputs, Marshal.SizeOf<INPUT>()) == 2)
+        {
+            _unmaskedMenuKeys &= (byte)~mask;
+            Interlocked.Increment(ref _menuMasks);
+        }
+        else Interlocked.Increment(ref _menuMaskFailures);
+    }
 
     /// <summary>Signalled after a keystroke is queued, so a waiting pump wakes at once.</summary>
     /// <remarks>

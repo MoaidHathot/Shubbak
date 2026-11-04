@@ -36,6 +36,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Consumed Alt/Win shortcuts no longer look like bare modifier taps to Windows.**
+  A tagged neutral input pair prevents accidental menu-bar/Start activation while
+  genuine Alt/Win taps keep their native behavior. Masking runs once per consumed
+  modifier gesture; it does not synthesize modifier presses or releases.
 - **Keyboard bursts stay ready until their bounded queue is drained.** Coalesced
   wake signals no longer leave queued commands waiting for the idle timer. Queue
   overflow passes a fresh press and its release together; release bindings reserve

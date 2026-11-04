@@ -43,6 +43,9 @@ internal sealed class TestWindow : IDisposable
     private readonly List<bool> _keyDowns = new(64);
     private readonly Lock _keyGate = new();
     private int _keyboardBarriers;
+    private int _keyMenus;
+    private readonly bool _observeKeyMenus;
+    public int KeyMenus => Volatile.Read(ref _keyMenus);
     private volatile bool _keyboardFault;
 
     public bool[] KeyDowns
@@ -75,9 +78,11 @@ internal sealed class TestWindow : IDisposable
         bool visible = true,
         WINDOW_STYLE style = DefaultStyle,
         WINDOW_EX_STYLE exStyle = 0,
-        TestWindow? owner = null)
+        TestWindow? owner = null,
+        bool observeKeyMenus = false)
     {
         FailIfAWindowManagerIsRunning();
+        _observeKeyMenus = observeKeyMenus;
 
         HWND ownerHandle = owner?._handle ?? HWND.Null;
 
@@ -423,6 +428,16 @@ internal sealed class TestWindow : IDisposable
         TestWindow? window = null;
         try
         {
+            if (message == PInvoke.WM_SYSCOMMAND && (wParam.Value & 0xFFF0) == 0xF100)
+            {
+                lock (s_gate) s_windows.TryGetValue(hwnd, out window);
+                if (window?._observeKeyMenus == true)
+                {
+                    Interlocked.Increment(ref window._keyMenus);
+                    // Observe the actual menu command without entering a modal menu loop.
+                    return new LRESULT(0);
+                }
+            }
             if (message is PInvoke.WM_KEYDOWN or PInvoke.WM_KEYUP or PInvoke.WM_SYSKEYDOWN or PInvoke.WM_SYSKEYUP &&
                 (nuint)PInvoke.GetMessageExtraInfo().Value == KeyboardMarker)
             {
