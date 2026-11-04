@@ -41,6 +41,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Binding-table updates snapshot caller-owned lists.** Re-submitting an edited
+  overlay list applies the edit, while mutations that have not been submitted cannot
+  silently change the defaults or overlay used by a later rebuild.
 - **Repeating Win itself after a consumed shortcut cannot re-arm Start.** The
   modifier's consumed state survives main-key release, and redundant modifier downs
   are suppressed. Batched-input and modifier-repeat regressions exercise Windows'

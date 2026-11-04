@@ -123,7 +123,9 @@ public sealed class BindingTable
             ? kept
             : null;
 
-        _baseDefaults = config.Keybindings;
+        // IReadOnlyList can still be a caller-owned mutable List. Later overlay
+        // compilation must use the defaults that were actually loaded.
+        _baseDefaults = config.Keybindings.ToArray();
         _baseMap = Compile(_baseDefaults, [], null);
 
         // The overlay in force survives a reload, as the mode does: a reload is not a
@@ -137,11 +139,11 @@ public sealed class BindingTable
     }
 
     /// <summary>The default bindings as the config wrote them, before any overlay.</summary>
-    private IReadOnlyList<Keybinding> _baseDefaults = [];
+    private Keybinding[] _baseDefaults = [];
     private KeyMap _baseMap = new([], KeyParser.BasicMask);
 
     /// <summary>The bindings the active contexts lay over the defaults, in order.</summary>
-    private IReadOnlyList<Keybinding> _overlay = [];
+    private Keybinding[] _overlay = [];
 
     /// <summary>
     /// Lays a set of bindings over the default table, or takes the overlay off.
@@ -170,19 +172,19 @@ public sealed class BindingTable
     {
         ArgumentNullException.ThrowIfNull(overlay);
 
-        if (ReferenceEquals(_overlay, overlay)) return;
-
-        _overlay = overlay;
+        // Re-submitting the same list can carry new contents. Snapshot them here,
+        // not during a later reload, and never publish caller-owned storage.
+        _overlay = overlay.Count == 0 ? [] : overlay.ToArray();
 
         Snapshot state = _state;
-        _state = state with { Default = Merge(overlay) };
+        _state = state with { Default = Merge(_overlay) };
     }
 
-    private KeyMap Merge(IReadOnlyList<Keybinding> overlay) =>
-        overlay.Count == 0 ? _baseMap : Compile(_baseDefaults, overlay, null);
+    private KeyMap Merge(Keybinding[] overlay) =>
+        overlay.Length == 0 ? _baseMap : Compile(_baseDefaults, overlay, null);
 
     /// <summary>How many bindings the overlay in force contributes.</summary>
-    public int OverlayCount => _overlay.Count;
+    public int OverlayCount => _overlay.Length;
 
     /// <summary>Switches binding mode; null returns to the default set.</summary>
     /// <returns>False when no such mode is declared, in which case nothing changed.</returns>

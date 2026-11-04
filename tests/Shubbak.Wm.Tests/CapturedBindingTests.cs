@@ -7,6 +7,47 @@ namespace Shubbak.Wm.Tests;
 public sealed class CapturedBindingTests
 {
     [Fact]
+    public void ResubmittingAMutableOverlayAppliesItsNewContents()
+    {
+        var table = new BindingTable();
+        ShubbakConfig config = ConfigLoader.Load("keybindings { bind \"alt+x\" { close; }; }").Config;
+        table.Load(config);
+        Keybinding close = Assert.Single(config.Keybindings);
+        List<Keybinding> overlay = [close with { Commands = [] }];
+        table.SetOverlay(overlay);
+        Assert.Empty(table.Resolve(0x58, KeyModifiers.Alt)!.Commands);
+        overlay.Clear();
+        table.SetOverlay(overlay);
+        Assert.IsType<CloseWindowCommand>(Assert.Single(table.Resolve(0x58, KeyModifiers.Alt)!.Commands));
+    }
+
+    [Fact]
+    public void OverlayCompilationCannotReadLaterMutationsOfTheLoadedDefaults()
+    {
+        var table = new BindingTable();
+        Keybinding original = Assert.Single(ConfigLoader.Load("keybindings { bind \"alt+x\" { close; }; }").Config.Keybindings);
+        List<Keybinding> defaults = [original];
+        table.Load(new ShubbakConfig { Keybindings = defaults });
+        defaults.Clear();
+        Keybinding overlay = original with { Key = original.Key with { VirtualKey = 0x59 } };
+        table.SetOverlay([overlay]);
+        Assert.Same(original, table.Resolve(0x58, KeyModifiers.Alt));
+    }
+
+    [Fact]
+    public void AReloadKeepsThePublishedOverlayRatherThanAnUnsubmittedMutation()
+    {
+        var table = new BindingTable();
+        ShubbakConfig config = ConfigLoader.Load("keybindings { bind \"alt+x\" { close; }; }").Config;
+        table.Load(config);
+        List<Keybinding> overlay = [config.Keybindings[0] with { Commands = [] }];
+        table.SetOverlay(overlay);
+        overlay.Clear();
+        table.Load(config);
+        Assert.Empty(table.Resolve(0x58, KeyModifiers.Alt)!.Commands);
+    }
+
+    [Fact]
     public void QueuedCommandsAndTheirReportedModeSurviveTableReplacement()
     {
         var table = new BindingTable();
