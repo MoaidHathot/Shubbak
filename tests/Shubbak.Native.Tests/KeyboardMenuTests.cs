@@ -10,6 +10,33 @@ public sealed class KeyboardMenuTests : IDisposable
     private bool _shellGesture;
     private static readonly KeyboardBinding Bound = new(repeat: false);
 
+    [Fact]
+    public void MaskedAltChordsAllocateNothingOnTheHookThreadAfterWarmup()
+    {
+        using var window = new TestWindow(observeKeyMenus: true);
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the allocation receiver"));
+        long allocated = 0;
+        using var source = new KeyboardSource();
+        source.Start((key, _) =>
+        {
+            if (key == 0x86) Volatile.Write(ref allocated, GC.GetAllocatedBytesForCurrentThread());
+            return key == 0x87 ? Bound : null;
+        });
+        for (int i = 0; i < 32; i++)
+        {
+            Keyboard.Chord(VIRTUAL_KEY.VK_LMENU, VIRTUAL_KEY.VK_F24);
+            Flush(window);
+        }
+        long before = Volatile.Read(ref allocated);
+        for (int i = 0; i < 64; i++) Keyboard.Chord(VIRTUAL_KEY.VK_LMENU, VIRTUAL_KEY.VK_F24);
+        Flush(window);
+        Assert.Equal(0, Volatile.Read(ref allocated) - before);
+        Assert.Equal(96, source.MenuMasks);
+        Assert.Equal(0, source.MenuMaskFailures);
+        Assert.Equal(0, source.Dropped);
+        Assert.Equal(0, window.KeyMenus);
+    }
+
     [Theory]
     [InlineData(0xA4)]
     [InlineData(0x5B)]

@@ -21,7 +21,9 @@ param(
     [ValidateRange(1, 24)] [int] $IpcClients = 4,
     [string[]] $Workloads = @('idle', 'cpu', 'animation', 'ipc'),
     [ValidateRange(1, 10)] [int] $Rounds = 2,
-    [switch] $Bound
+    [switch] $Bound,
+    [ValidateSet('', 'alt', 'ctrl', 'shift', 'win', 'ctrl+shift')]
+    [string] $Modifier = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,7 +51,7 @@ $metadata = @{
     OperatingSystem = [Environment]::OSVersion.VersionString
     LogicalProcessors = [Environment]::ProcessorCount
     Samples = $Samples; Warmup = $Warmup; IntervalUs = $IntervalUs; Burst = $Burst; GpuIterations = $GpuIterations
-    Rounds = $Rounds; Bound = [bool]$Bound; Workloads = $Workloads; IpcIntervalMs = $IpcIntervalMs; IpcClients = $IpcClients
+    Rounds = $Rounds; Bound = [bool]$Bound; Modifier = $Modifier; Workloads = $Workloads; IpcIntervalMs = $IpcIntervalMs; IpcClients = $IpcClients
     Probe = (Get-FileHash $Probe).Hash
     Current = (Get-FileHash $Current).Hash
     Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
@@ -139,8 +141,12 @@ keybindings {
     bind "f23" { signal "input-probe"; }
     bind "f22" { wm-toggle-suspend; }
 '@
+if ($Modifier) { $config += "`n    bind `"$Modifier+f23`" { signal `"input-probe`"; }" }
 foreach ($mod in @('alt', 'alt+shift', 'ctrl+alt', 'ctrl+shift')) {
-    foreach ($f in 1..24) { $config += "`n    bind `"$mod+f$f`" { signal `"unused`"; }" }
+    foreach ($f in 1..24) {
+        if ($Modifier -and (($f -eq 24 -and -not $Bound) -or ($f -eq 23 -and $mod -eq $Modifier))) { continue }
+        $config += "`n    bind `"$mod+f$f`" { signal `"unused`"; }"
+    }
 }
 $config += "`n}`n"
 
@@ -233,6 +239,7 @@ try {
 
                     $args = @('receive', '--samples', "$Samples", '--warmup', "$Warmup", '--interval-us', "$IntervalUs", '--burst', "$Burst", '--label', $label, '--raw-output', (Join-Path $state 'events.csv'))
                     if ($Bound) { $args += @('--bound', '--instance', $instance) }
+                    if ($Modifier) { $args += @('--modifier', $Modifier) }
                     $beforeProcesses = Process-Counters
                     $measurement = Start-Child $Probe $args
                     try {

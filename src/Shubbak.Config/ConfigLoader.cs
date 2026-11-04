@@ -1270,6 +1270,7 @@ public sealed class ConfigLoader
     private void WarnOnDuplicates(List<Keybinding> bindings, bool lastWins = false)
     {
         Dictionary<int, Keybinding> seen = [];
+        string winner = lastWins ? "last" : "first";
 
         foreach (Keybinding binding in bindings)
         {
@@ -1277,7 +1278,7 @@ public sealed class ConfigLoader
             {
                 Report(Diagnostic.Warning(
                     "SHB0409",
-                    $"'{binding.Key.Display}' is bound more than once; the {(lastWins ? "last" : "first")} binding wins.",
+                    $"'{binding.Key.Display}' is bound more than once; the {winner} binding wins.",
                     binding.Span,
                     $"The earlier binding is at line {first.Span.Start.Line}."));
             }

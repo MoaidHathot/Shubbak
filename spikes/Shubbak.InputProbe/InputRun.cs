@@ -27,6 +27,7 @@ internal sealed class InputRun : IDisposable
     private readonly string _label;
     private readonly bool _bound;
     private readonly ushort _key;
+    private readonly VIRTUAL_KEY[] _modifiers;
     private readonly string? _instance;
     private readonly string? _rawOutput;
     private readonly CancellationTokenSource _signalStop = new();
@@ -41,6 +42,7 @@ internal sealed class InputRun : IDisposable
     private long _allocatedBefore, _allocatedAfter;
     private double _seconds;
     private int _sendCount;
+    private int _menuRequests;
 
     private InputRun(string[] args)
     {
@@ -55,6 +57,15 @@ internal sealed class InputRun : IDisposable
         _label = Program.Text(args, "--label") ?? "input-delivery";
         _bound = args.Contains("--bound", StringComparer.Ordinal);
         _key = _bound ? (ushort)0x86 : (ushort)0x87;
+        _modifiers = (Program.Text(args, "--modifier") ?? "").Split('+', StringSplitOptions.RemoveEmptyEntries)
+            .Select(name => name switch
+            {
+                "alt" => VIRTUAL_KEY.VK_LMENU,
+                "ctrl" => VIRTUAL_KEY.VK_LCONTROL,
+                "shift" => VIRTUAL_KEY.VK_LSHIFT,
+                "win" => VIRTUAL_KEY.VK_LWIN,
+                _ => throw new ArgumentException($"Unsupported probe modifier: {name}"),
+            }).ToArray();
         _instance = Program.Text(args, "--instance");
         _rawOutput = Program.Text(args, "--raw-output");
         if (_rawOutput is not null && File.Exists(_rawOutput)) throw new IOException("Raw output already exists.");
@@ -127,6 +138,7 @@ internal sealed class InputRun : IDisposable
                 Sent = Expected, Received = _receivedCount, Missing = missing,
                 Duplicates = _duplicates, OutOfOrder = _outOfOrder, WrongEdges = _wrongEdges,
                 LeakedBoundEvents = _leakedBound,
+                MenuRequests = _menuRequests,
                 AllocatedBytes = _allocatedAfter - _allocatedBefore,
                 CpuMs = (process.TotalProcessorTime - cpu).TotalMilliseconds,
                 PrivateMiB = process.PrivateMemorySize64 / 1048576.0,
@@ -205,6 +217,7 @@ internal sealed class InputRun : IDisposable
 
     private unsafe void Inject()
     {
+        bool sentAny = false;
         try
         {
             long focusDeadline = Stopwatch.GetTimestamp();
@@ -218,27 +231,33 @@ internal sealed class InputRun : IDisposable
                 if ((PInvoke.GetAsyncKeyState(key) & 0x8000) != 0) throw new InvalidOperationException("A modifier is held; measurement is not isolated.");
 
             using var timer = new Pacer();
-            Span<INPUT> inputs = stackalloc INPUT[_burst * 2];
+            int chordSize = 2 + _modifiers.Length * 2;
+            Span<INPUT> inputs = stackalloc INPUT[_burst * chordSize];
             long start = Stopwatch.GetTimestamp();
             for (int first = 0; first < _sent.Length;)
             {
                 if (_stopping) throw new OperationCanceledException("Receiver was closed during injection.");
                 if (PInvoke.GetForegroundWindow() != _window) throw new InvalidOperationException("Foreground changed during input measurement.");
-                int count = Math.Min(inputs.Length, _sent.Length - first);
-                for (int j = 0; j < count; j++)
+                int count = Math.Min(_burst * 2, _sent.Length - first);
+                int written = 0;
+                for (int j = 0; j < count; j += 2)
                 {
-                    int index = first + j;
-                    inputs[j] = new INPUT { type = INPUT_TYPE.INPUT_KEYBOARD };
-                    inputs[j].Anonymous.ki.wVk = (VIRTUAL_KEY)_key;
-                    inputs[j].Anonymous.ki.dwFlags = (index & 1) != 0 ? KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP : 0;
-                    inputs[j].Anonymous.ki.dwExtraInfo = (nuint)(Marker | (uint)index);
-                    Volatile.Write(ref _sent[index], Stopwatch.GetTimestamp());
+                    foreach (VIRTUAL_KEY modifier in _modifiers) inputs[written++] = Input(modifier, up: false);
+                    for (int edge = 0; edge < 2; edge++)
+                    {
+                        int index = first + j + edge;
+                        inputs[written] = Input((VIRTUAL_KEY)_key, up: edge != 0);
+                        inputs[written++].Anonymous.ki.dwExtraInfo = (nuint)(Marker | (uint)index);
+                        Volatile.Write(ref _sent[index], Stopwatch.GetTimestamp());
+                    }
+                    for (int m = _modifiers.Length - 1; m >= 0; m--) inputs[written++] = Input(_modifiers[m], up: true);
                 }
 
                 long sentAt = Stopwatch.GetTimestamp();
-                uint inserted = PInvoke.SendInput(inputs[..count], sizeof(INPUT));
+                sentAny = true;
+                uint inserted = PInvoke.SendInput(inputs[..written], sizeof(INPUT));
                 _sendCalls[_sendCount++] = Stopwatch.GetElapsedTime(sentAt).TotalMilliseconds;
-                if (inserted != count) throw new InvalidOperationException($"SendInput accepted {inserted}/{count} events.");
+                if (inserted != written) throw new InvalidOperationException($"SendInput accepted {inserted}/{written} events.");
                 first += count;
                 if (first / (_bound ? 2 : 1) - Volatile.Read(ref _receivedCount) > 1024) throw new InvalidOperationException("Receiver fell over 1024 events behind.");
                 if (_intervalUs > 0) timer.Wait(_intervalUs);
@@ -261,13 +280,34 @@ internal sealed class InputRun : IDisposable
             release.Anonymous.ki.wVk = (VIRTUAL_KEY)_key;
             release.Anonymous.ki.dwFlags = KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
             PInvoke.SendInput(new ReadOnlySpan<INPUT>(in release), sizeof(INPUT));
+            for (int i = sentAny ? _modifiers.Length - 1 : -1; i >= 0; i--)
+            {
+                release = Input(_modifiers[i], up: true);
+                PInvoke.SendInput(new ReadOnlySpan<INPUT>(in release), sizeof(INPUT));
+            }
             PInvoke.PostMessage(_window, PInvoke.WM_CLOSE, default, default);
         }
+    }
+
+    private static INPUT Input(VIRTUAL_KEY key, bool up)
+    {
+        var input = new INPUT { type = INPUT_TYPE.INPUT_KEYBOARD };
+        input.Anonymous.ki.wVk = key;
+        if (up) input.Anonymous.ki.dwFlags = KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
+        if (key == VIRTUAL_KEY.VK_LWIN) input.Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_EXTENDEDKEY;
+        return input;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
     private static LRESULT WindowProc(HWND hwnd, uint message, WPARAM wParam, LPARAM lParam)
     {
+        if (s_current is { } menuRun && message == PInvoke.WM_SYSCOMMAND && (wParam.Value & 0xFFF0) == 0xF100)
+        {
+            // Count the old Alt bug, but do not benchmark an application's modal
+            // menu loop in one version against a normal message loop in the other.
+            menuRun._menuRequests++;
+            return new LRESULT(0);
+        }
         if (s_current is { } run && message is PInvoke.WM_KEYDOWN or PInvoke.WM_KEYUP or PInvoke.WM_SYSKEYDOWN or PInvoke.WM_SYSKEYUP)
         {
             ulong tag = unchecked((ulong)PInvoke.GetMessageExtraInfo().Value);

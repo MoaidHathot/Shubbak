@@ -15,7 +15,7 @@ internal static class Program
             if (args.Length == 0 || args[0] == "--help")
             {
                 Console.WriteLine("shubbak-input-probe receive|hook-host|cpu-load|churn|gpu-load|perf|palette-ui [--samples 20000] [--warmup 1000] [--interval-us 2000] [--burst 1] [--label name] [--raw-output file] [--seconds 60] [--threads 28] [--gc] [--no-hook] [--bound --instance name] [--animate]");
-                Console.WriteLine("perf: --kind ipc|layout|resize|query --operations 20000 [--windows 32] [--query name --instance name --target-pid PID]; palette-ui: --target-pid PID [--operations 100]");
+                Console.WriteLine("receive: [--modifier alt|ctrl|shift|win|ctrl+shift]; perf: --kind ipc|layout|resize|query --operations 20000 [--windows 32] [--query name --instance name --target-pid PID]; palette-ui: --target-pid PID [--operations 100]");
                 return 0;
             }
 
@@ -87,6 +87,7 @@ internal sealed record ProbeReport
     public int WrongEdges { get; init; }
     public int GeometryChanges { get; init; }
     public int LeakedBoundEvents { get; init; }
+    public int MenuRequests { get; init; }
     public long AllocatedBytes { get; init; }
     public double CpuMs { get; init; }
     public double PrivateMiB { get; init; }

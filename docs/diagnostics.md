@@ -73,7 +73,7 @@ code, not the page.
 | `SHB0406` | Warning | for-each "workspace" produced no bindings because no workspaces are declared. |
 | `SHB0407` | Error | A binding must name a key combination. |
 | `SHB0408` | Warning | Binding '{keyText}' runs no commands, so pressing it will do nothing. |
-| `SHB0409` | Warning | '{binding.Key.Display}' is bound more than once; the first binding wins. |
+| `SHB0409` | Warning | '{binding.Key.Display}' is bound more than once; the {winner} binding wins. |
 | `SHB0410` | Error | A binding mode must be named. |
 | `SHB0411` | Error | An app definition must be named. |
 | `SHB0412` | Warning | App '{name}' defines no conditions, so it will never match. |
@@ -89,7 +89,7 @@ code, not the page.
 | `SHB0422` | Error | Unknown log level '{text}'. |
 | `SHB0423` | Error | Unknown hide method '{text}'. |
 | `SHB0424` | Error | Unknown setting '{text}' for unmanaged-window-commands. |
-| `SHB0425` | Error | Binding mode '{name}' swallows every key and has no binding that leaves it. |
+| `SHB0425` | Error | Binding mode '{name}' swallows every key and has no reachable binding that leaves it. |
 | `SHB0426` | Error | Unknown matcher '{child.Name}'. |
 | `SHB0427` | Warning | Unknown top-level section; it will be ignored. |
 | `SHB0428` | Warning | Unknown setting in a section ('general', 'gaps', 'window-effects' and the like); it will be ignored. |
