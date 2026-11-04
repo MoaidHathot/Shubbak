@@ -78,8 +78,16 @@ WM_KEYDOWN
 WM_KEYUP
 WM_SYSKEYDOWN
 WM_SYSKEYUP
+WM_CHAR
 WM_SYSCOMMAND
 GetAsyncKeyState
+LoadKeyboardLayout
+UnloadKeyboardLayout
+GetKeyboardLayoutList
+GetKeyboardLayout
+ActivateKeyboardLayout
+ToUnicodeEx
+MapVirtualKeyEx
 CreateDesktop
 OpenInputDesktop
 SwitchDesktop

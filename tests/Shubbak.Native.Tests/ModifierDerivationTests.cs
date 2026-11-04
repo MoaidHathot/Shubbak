@@ -27,6 +27,12 @@ namespace Shubbak.Native.Tests;
 /// </remarks>
 public sealed class ModifierDerivationTests
 {
+    [Fact]
+    public void LeftControlAndRightAltRemainARealChordOnANonAltGrLayout()
+    {
+        Assert.Equal(KeyModifiers.Control | KeyModifiers.Alt,
+            KeyboardSource.DeriveModifiers(false, true, true, false, false, false, layoutHasAltGr: false));
+    }
     private static KeyModifiers Derive(
         bool leftAlt = false,
         bool rightAlt = false,

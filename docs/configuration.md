@@ -163,6 +163,11 @@ run only while the original modifiers are held and the binding permits repeating
 With `release=#true`, the command runs once when the main key comes up, whichever
 modifier was released first. It cannot turn into a different shortcut on release.
 
+AltGr text is distinct from Ctrl+Alt shortcuts. This follows the foreground keyboard
+layout: Left-Ctrl + Right-Alt is a normal Ctrl+Alt chord on US, but the AltGr pair on
+German, Polish and other layouts with AltGr text. A newly installed layout is
+protected conservatively until its metadata has been refreshed off the hook thread.
+
 ### `for-each` — stop copy-pasting
 
 Nineteen workspaces is forty near-identical lines in most window managers, and every

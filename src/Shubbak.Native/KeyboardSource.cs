@@ -105,6 +105,8 @@ public sealed class KeyboardSource : IDisposable
     private readonly KeyOwner[] _owners = new KeyOwner[256];
     private readonly KeyboardBinding?[] _pressBindings = new KeyboardBinding?[256];
     private readonly KeyModifiers[] _pressModifiers = new KeyModifiers[256];
+    private readonly KeyboardLayouts _layouts = new();
+    private nint _rightAltLayout;
 
     private UnhookWindowsHookExSafeHandle? _hook;
     private UnhookWinEventSafeHandle? _desktopEvents;
@@ -200,6 +202,8 @@ public sealed class KeyboardSource : IDisposable
             throw new InvalidOperationException("A KeyboardSource is already active in this process.");
 
         _probe = probe;
+        _layouts.Refresh();
+        _rightAltLayout = KeyboardLayouts.ForegroundLayout();
 
         using var ready = new ManualResetEventSlim(false);
         Exception? failure = null;
@@ -304,6 +308,9 @@ public sealed class KeyboardSource : IDisposable
             Array.Clear(source._pressBindings);
             source._reservedReleases = 0;
             source._unmaskedMenuKeys = 0x0F;
+            source._rightAltLayout = KeyboardLayouts.ForegroundLayout();
+            _ = source._layouts.UsesAltGr(source._rightAltLayout);
+            if (source._layouts.RefreshPending) source.NotifyWork();
             Interlocked.Increment(ref source._desktopResets);
         }
         catch
@@ -316,6 +323,7 @@ public sealed class KeyboardSource : IDisposable
     /// <summary>Removes up to <paramref name="max"/> queued keystrokes.</summary>
     public int Drain(Span<KeyEvent> destination, int max)
     {
+        if (_layouts.RefreshPending) _layouts.Refresh();
         int limit = Math.Min(max, destination.Length);
         int count = 0;
 
@@ -426,6 +434,12 @@ public sealed class KeyboardSource : IDisposable
         uint message = (uint)wParam.Value;
         bool isKeyDown = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
         var virtualKey = (ushort)info->vkCode;
+        if (virtualKey == 0xA5 && isKeyDown)
+        {
+            source._rightAltLayout = KeyboardLayouts.ForegroundLayout();
+            _ = source._layouts.UsesAltGr(source._rightAltLayout);
+            if (source._layouts.RefreshPending) source.NotifyWork();
+        }
         byte menuKey = virtualKey switch { 0xA4 => 1, 0xA5 => 2, 0x12 => 3, 0x5B => 4, 0x5C => 8, _ => 0 };
         if (menuKey != 0)
         {
@@ -486,7 +500,7 @@ public sealed class KeyboardSource : IDisposable
         if (owner == KeyOwner.Shubbak)
         {
             KeyboardBinding? binding = source._pressBindings[virtualKey];
-            if (binding is { Repeat: true } && ReadModifiers() == source._pressModifiers[virtualKey])
+            if (binding is { Repeat: true } && source.ReadModifiers() == source._pressModifiers[virtualKey])
             {
                 var repeat = new KeyEvent(virtualKey, source._pressModifiers[virtualKey], true,
                     (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0, true, binding);
@@ -497,7 +511,7 @@ public sealed class KeyboardSource : IDisposable
             return new LRESULT(1);
         }
 
-        KeyModifiers modifiers = ReadModifiers();
+        KeyModifiers modifiers = source.ReadModifiers();
 
         KeyboardBinding? bound = source._probe?.Invoke(virtualKey, modifiers);
 
@@ -576,13 +590,17 @@ public sealed class KeyboardSource : IDisposable
     /// recognise AltGr - see <see cref="DeriveModifiers"/>.
     /// </para>
     /// </remarks>
-    private static KeyModifiers ReadModifiers() => DeriveModifiers(
-        leftAlt: IsHeld(VIRTUAL_KEY.VK_LMENU),
-        rightAlt: IsHeld(VIRTUAL_KEY.VK_RMENU),
-        leftControl: IsHeld(VIRTUAL_KEY.VK_LCONTROL),
-        rightControl: IsHeld(VIRTUAL_KEY.VK_RCONTROL),
-        shift: IsHeld(VIRTUAL_KEY.VK_SHIFT),
-        windows: IsHeld(VIRTUAL_KEY.VK_LWIN) || IsHeld(VIRTUAL_KEY.VK_RWIN));
+    private KeyModifiers ReadModifiers()
+    {
+        bool rightAlt = IsHeld(VIRTUAL_KEY.VK_RMENU);
+        bool leftControl = IsHeld(VIRTUAL_KEY.VK_LCONTROL);
+        return DeriveModifiers(
+            leftAlt: IsHeld(VIRTUAL_KEY.VK_LMENU), rightAlt, leftControl,
+            rightControl: IsHeld(VIRTUAL_KEY.VK_RCONTROL),
+            shift: IsHeld(VIRTUAL_KEY.VK_SHIFT),
+            windows: IsHeld(VIRTUAL_KEY.VK_LWIN) || IsHeld(VIRTUAL_KEY.VK_RWIN),
+            layoutHasAltGr: !rightAlt || !leftControl || _layouts.UsesAltGr(_rightAltLayout));
+    }
 
     /// <summary>
     /// Turns the physical key states into the modifier set a binding is matched on.
@@ -614,12 +632,9 @@ public sealed class KeyboardSource : IDisposable
     /// then switched layout.
     /// </para>
     /// <para>
-    /// What it costs is that left Control with right Alt can no longer be typed as
-    /// Control+Alt. On a layout with AltGr that combination is not typeable in the
-    /// first place - it is exactly what the layout emits - and on one without it,
-    /// left Alt or right Control reaches the same binding. This is the side to err
-    /// on: the failure it removes breaks typing everywhere, and the one it introduces
-    /// leaves a keybinding with three other ways to be pressed.
+    /// The pair is AltGr only on a layout that produces AltGr text. US-layout
+    /// left Control + right Alt remains Control+Alt. Layout capability is cached
+    /// outside the hook; the foreground layout is sampled on right Alt's press.
     /// </para>
     /// <para>
     /// The injected flag is deliberately not used for this, though the hook records
@@ -640,9 +655,10 @@ public sealed class KeyboardSource : IDisposable
         bool leftControl,
         bool rightControl,
         bool shift,
-        bool windows)
+        bool windows,
+        bool layoutHasAltGr = true)
     {
-        bool altGr = leftControl && rightAlt;
+        bool altGr = layoutHasAltGr && leftControl && rightAlt;
 
         // Whatever is held over and above AltGr still counts, so a user pressing
         // AltGr and left Alt together gets Alt.

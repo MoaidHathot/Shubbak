@@ -36,6 +36,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Left-Ctrl + Right-Alt works on layouts without AltGr.** The foreground layout's
+  text mappings distinguish genuine Ctrl+Alt from AltGr. Metadata is cached off the
+  hook thread, refreshed on demand, and queried without changing dead-key state.
 - **Consumed Alt/Win shortcuts no longer look like bare modifier taps to Windows.**
   A tagged neutral input pair prevents accidental menu-bar/Start activation while
   genuine Alt/Win taps keep their native behavior. Masking runs once per consumed

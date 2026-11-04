@@ -171,6 +171,10 @@ KBDLLHOOKSTRUCT_FLAGS
 GetAsyncKeyState
 VIRTUAL_KEY
 MapVirtualKey
+MapVirtualKeyEx
+GetKeyboardLayout
+GetKeyboardLayoutList
+ToUnicodeEx
 MAP_VIRTUAL_KEY_TYPE
 
 // The one chord a suspended window manager still listens for.

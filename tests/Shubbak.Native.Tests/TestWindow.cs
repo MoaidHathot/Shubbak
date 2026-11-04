@@ -41,6 +41,9 @@ internal sealed class TestWindow : IDisposable
     // Only the test's tagged F24 stream is recorded; ordinary user input is ignored.
     internal const nuint KeyboardMarker = 0x53484B54;
     private readonly List<bool> _keyDowns = new(64);
+    private readonly List<char> _typed = [];
+    private readonly bool _observeText;
+    public string TypedText { get { lock (_keyGate) return new string([.. _typed]); } }
     private readonly Lock _keyGate = new();
     private int _keyboardBarriers;
     private int _keyMenus;
@@ -79,10 +82,12 @@ internal sealed class TestWindow : IDisposable
         WINDOW_STYLE style = DefaultStyle,
         WINDOW_EX_STYLE exStyle = 0,
         TestWindow? owner = null,
-        bool observeKeyMenus = false)
+        bool observeKeyMenus = false,
+        bool observeText = false)
     {
         FailIfAWindowManagerIsRunning();
         _observeKeyMenus = observeKeyMenus;
+        _observeText = observeText;
 
         HWND ownerHandle = owner?._handle ?? HWND.Null;
 
@@ -428,6 +433,13 @@ internal sealed class TestWindow : IDisposable
         TestWindow? window = null;
         try
         {
+            // TranslateMessage's posted WM_CHAR does not retain the input marker.
+            // Text observation is opt-in and confined to this test-owned window.
+            if (message == PInvoke.WM_CHAR)
+            {
+                lock (s_gate) s_windows.TryGetValue(hwnd, out window);
+                if (window?._observeText == true) { lock (window._keyGate) window._typed.Add((char)wParam.Value); }
+            }
             if (message == PInvoke.WM_SYSCOMMAND && (wParam.Value & 0xFFF0) == 0xF100)
             {
                 lock (s_gate) s_windows.TryGetValue(hwnd, out window);
