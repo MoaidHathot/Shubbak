@@ -1323,11 +1323,10 @@ public sealed class ConfigLoader
         foreach ((string name, (BindingMode mode, _)) in effective)
         {
             if (mode.PassThrough) escapable.Add(name);
-            HashSet<int> seen = [];
             List<string> targets = [];
-            foreach (Keybinding binding in mode.Keybindings)
+            var compiled = BindingChords.Compile(mode.Keybindings, [], static b => b);
+            foreach (Keybinding binding in compiled.Bindings.Values.Distinct())
             {
-                if (!seen.Add(binding.Key.Identity)) continue;
                 // Commands run in order: disable followed by enable is not an exit.
                 WmCommand? last = binding.Commands.LastOrDefault(c =>
                     c is DisableBindingModeCommand or EnableBindingModeCommand);

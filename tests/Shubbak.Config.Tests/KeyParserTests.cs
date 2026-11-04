@@ -18,6 +18,22 @@ namespace Shubbak.Config.Tests;
 /// </remarks>
 public sealed class KeyParserTests
 {
+    [Theory]
+    [InlineData("lctrl+h", "leftcontrol+H", KeyParser.ModControl | KeyParser.LeftControl)]
+    [InlineData("rctrl+h", "rightctrl+h", KeyParser.ModControl | KeyParser.RightControl)]
+    [InlineData("lalt+h", "leftalt+h", KeyParser.ModAlt | KeyParser.LeftAlt)]
+    [InlineData("ralt+h", "rightalt+h", KeyParser.ModAlt | KeyParser.RightAlt)]
+    [InlineData("lshift+h", "leftshift+h", KeyParser.ModShift | KeyParser.LeftShift)]
+    [InlineData("rshift+h", "rightshift+h", KeyParser.ModShift | KeyParser.RightShift)]
+    [InlineData("lwin+h", "leftwin+h", KeyParser.ModWindows | KeyParser.LeftWindows)]
+    [InlineData("rwin+h", "rightwin+h", KeyParser.ModWindows | KeyParser.RightWindows)]
+    [InlineData("altgr+h", "ALTGR+H", KeyParser.ModAltGraph)]
+    public void SidedAndAltGrModifiersHaveCanonicalAliases(string first, string second, int modifiers)
+    {
+        Assert.Equal(modifiers, Parse(first).Modifiers);
+        Assert.Equal(Parse(first).Identity, Parse(second).Identity);
+    }
+
     private static KeyBinding Parse(string text)
     {
         Assert.True(

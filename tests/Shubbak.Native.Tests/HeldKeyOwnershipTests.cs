@@ -120,7 +120,7 @@ public sealed class HeldKeyOwnershipTests(ITestOutputHelper output) : IDisposabl
             var events = new KeyEvent[8];
             Assert.Equal(1, source.Drain(events, events.Length));
             Assert.False(events[0].IsKeyDown);
-            Assert.Equal(KeyModifiers.Control, events[0].Modifiers);
+            Assert.Equal(KeyModifiers.Control | KeyModifiers.LeftControl, events[0].Modifiers);
             Assert.Same(original, events[0].Binding);
             Assert.Empty(window.KeyDowns);
         }

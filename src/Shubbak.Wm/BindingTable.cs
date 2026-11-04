@@ -5,7 +5,8 @@ namespace Shubbak.Wm;
 
 /// <summary>The command and mode captured by the hook, before either can change.</summary>
 public sealed class BoundShortcut(Keybinding binding, string? mode)
-    : KeyboardBinding(binding.Release, binding.RepeatsOnHold)
+    : KeyboardBinding(binding.Release, binding.RepeatsOnHold,
+        (KeyModifiers)(KeyParser.BasicMask | (binding.Key.Modifiers & KeyParser.SideMask)))
 {
     public Keybinding Binding { get; } = binding;
     public string? Mode { get; } = mode;
@@ -55,18 +56,25 @@ public sealed class BindingTable
     /// </para>
     /// </remarks>
     private sealed record Snapshot(
-        Dictionary<int, BoundShortcut> Default,
+        KeyMap Default,
         Dictionary<string, ModeTable> Modes,
         ModeTable? ActiveMode,
         string? ActiveModeName);
 
     private volatile Snapshot _state = new(
-        [],
+        new KeyMap([], KeyParser.BasicMask),
         new Dictionary<string, ModeTable>(StringComparer.OrdinalIgnoreCase),
         null,
         null);
 
-    private sealed record ModeTable(Dictionary<int, BoundShortcut> Bindings, bool PassThrough);
+    private sealed record KeyMap(Dictionary<int, BoundShortcut> Bindings, int ModifierMask);
+    private sealed record ModeTable(KeyMap Keys, bool PassThrough);
+
+    private static KeyMap Compile(IReadOnlyList<Keybinding> defaults, IReadOnlyList<Keybinding> overlay, string? mode)
+    {
+        var compiled = BindingChords.Compile(defaults, overlay, b => new BoundShortcut(b, mode));
+        return new KeyMap(compiled.Bindings, compiled.ModifierMask);
+    }
 
     /// <summary>
     /// Rebuilds the table from config, keeping the active mode if it still exists.
@@ -101,18 +109,10 @@ public sealed class BindingTable
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        Dictionary<int, BoundShortcut> defaults = [];
-        foreach (Keybinding binding in config.Keybindings)
-            defaults.TryAdd(Pack(binding.Key), new BoundShortcut(binding, null));
-
         Dictionary<string, ModeTable> modes = new(StringComparer.OrdinalIgnoreCase);
         foreach (BindingMode mode in config.BindingModes)
         {
-            Dictionary<int, BoundShortcut> bindings = [];
-            foreach (Keybinding binding in mode.Keybindings)
-                bindings.TryAdd(Pack(binding.Key), new BoundShortcut(binding, mode.Name));
-
-            modes[mode.Name] = new ModeTable(bindings, mode.PassThrough);
+            modes[mode.Name] = new ModeTable(Compile(mode.Keybindings, [], mode.Name), mode.PassThrough);
         }
 
         string? wasActive = _state.ActiveModeName;
@@ -123,12 +123,13 @@ public sealed class BindingTable
             ? kept
             : null;
 
-        _baseDefaults = defaults;
+        _baseDefaults = config.Keybindings;
+        _baseMap = Compile(_baseDefaults, [], null);
 
         // The overlay in force survives a reload, as the mode does: a reload is not a
         // request to leave the context you are in. The daemon re-applies the effective
         // config straight after, which replaces it anyway.
-        _state = new Snapshot(Merge(defaults, _overlay), modes, active, active is null ? null : wasActive);
+        _state = new Snapshot(Merge(_overlay), modes, active, active is null ? null : wasActive);
 
         // A mode that has been deleted from the config leaves the keyboard on the
         // defaults, and everything that reports the mode has to be told so.
@@ -136,7 +137,8 @@ public sealed class BindingTable
     }
 
     /// <summary>The default bindings as the config wrote them, before any overlay.</summary>
-    private Dictionary<int, BoundShortcut> _baseDefaults = [];
+    private IReadOnlyList<Keybinding> _baseDefaults = [];
+    private KeyMap _baseMap = new([], KeyParser.BasicMask);
 
     /// <summary>The bindings the active contexts lay over the defaults, in order.</summary>
     private IReadOnlyList<Keybinding> _overlay = [];
@@ -168,26 +170,19 @@ public sealed class BindingTable
     {
         ArgumentNullException.ThrowIfNull(overlay);
 
+        if (ReferenceEquals(_overlay, overlay)) return;
+
         _overlay = overlay;
 
         Snapshot state = _state;
-        _state = state with { Default = Merge(_baseDefaults, overlay) };
+        _state = state with { Default = Merge(overlay) };
     }
+
+    private KeyMap Merge(IReadOnlyList<Keybinding> overlay) =>
+        overlay.Count == 0 ? _baseMap : Compile(_baseDefaults, overlay, null);
 
     /// <summary>How many bindings the overlay in force contributes.</summary>
     public int OverlayCount => _overlay.Count;
-
-    private static Dictionary<int, BoundShortcut> Merge(Dictionary<int, BoundShortcut> defaults, IReadOnlyList<Keybinding> overlay)
-    {
-        if (overlay.Count == 0) return defaults;
-
-        Dictionary<int, BoundShortcut> merged = new(defaults);
-
-        foreach (Keybinding binding in overlay)
-            merged[Pack(binding.Key)] = new BoundShortcut(binding, null);
-
-        return merged;
-    }
 
     /// <summary>Switches binding mode; null returns to the default set.</summary>
     /// <returns>False when no such mode is declared, in which case nothing changed.</returns>
@@ -228,17 +223,17 @@ public sealed class BindingTable
     /// <summary>One snapshot lookup, performed only on a fresh press.</summary>
     public KeyboardBinding? Capture(ushort virtualKey, KeyModifiers modifiers)
     {
-        int key = Pack((int)modifiers, virtualKey);
-
         // Read once. Re-reading would reintroduce exactly what the snapshot removes:
         // a reload landing between two reads and answering half of one question with
         // the old table and half with the new.
         Snapshot state = _state;
         ModeTable? mode = state.ActiveMode;
+        KeyMap map = mode?.Keys ?? state.Default;
+        int key = Pack((int)modifiers & map.ModifierMask, virtualKey);
 
         if (mode is not null)
         {
-            if (mode.Bindings.TryGetValue(key, out BoundShortcut? binding)) return binding;
+            if (map.Bindings.TryGetValue(key, out BoundShortcut? binding)) return binding;
 
             // A non-pass-through mode swallows everything. That is the entire point
             // of a `pause` mode: it exists to make the keyboard inert apart from the
@@ -253,7 +248,7 @@ public sealed class BindingTable
             return !mode.PassThrough && !IsModifierKey(virtualKey) ? KeyboardBinding.Suppress : null;
         }
 
-        return state.Default.GetValueOrDefault(key);
+        return map.Bindings.GetValueOrDefault(key);
     }
 
     /// <summary>Whether a key is a modifier, and so never a binding by itself.</summary>
@@ -271,8 +266,6 @@ public sealed class BindingTable
     {
         return (Capture(virtualKey, modifiers) as BoundShortcut)?.Binding;
     }
-
-    private static int Pack(KeyBinding binding) => binding.Identity;
 
     /// <summary>Packs modifiers and key into one integer, so lookup is one hash.</summary>
     private static int Pack(int modifiers, ushort virtualKey) => (modifiers << 16) | virtualKey;

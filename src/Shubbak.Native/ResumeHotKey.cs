@@ -57,6 +57,9 @@ public sealed class ResumeHotKey : IDisposable
     /// <summary>The chord as it was written in the config, for logging.</summary>
     public string? Display { get; private set; }
 
+    /// <summary>RegisterHotKey cannot distinguish sides or AltGr from Ctrl+Alt.</summary>
+    public static bool Supports(KeyModifiers modifiers) => ((int)modifiers & ~0x0F) == 0;
+
     /// <summary>
     /// Asks the system to watch for a chord.
     /// </summary>
@@ -73,6 +76,7 @@ public sealed class ResumeHotKey : IDisposable
     public bool Register(KeyModifiers modifiers, ushort virtualKey, string display)
     {
         Unregister();
+        if (!Supports(modifiers)) return false;
 
         HOT_KEY_MODIFIERS flags = Translate(modifiers);
 

@@ -168,6 +168,13 @@ layout: Left-Ctrl + Right-Alt is a normal Ctrl+Alt chord on US, but the AltGr pa
 German, Polish and other layouts with AltGr text. A newly installed layout is
 protected conservatively until its metadata has been refreshed off the hook thread.
 
+Use `lctrl`/`rctrl`, `lalt`/`ralt`, `lshift`/`rshift` and `lwin`/`rwin` to require
+a particular side. Generic modifiers accept either side or both. More-specific
+bindings take precedence, with file order breaking ties; context overlays still win
+in cascade order. `altgr+q` explicitly binds AltGr text if that is intentional.
+Windows' native resume hotkey cannot express sides or AltGr: provide an additional
+generic `wm-resume`/`wm-toggle-suspend` binding to resume by keyboard in that case.
+
 ### `for-each` — stop copy-pasting
 
 Nineteen workspaces is forty near-identical lines in most window managers, and every

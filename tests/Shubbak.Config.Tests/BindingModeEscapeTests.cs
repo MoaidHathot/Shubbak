@@ -11,6 +11,21 @@ namespace Shubbak.Config.Tests;
 /// </remarks>
 public sealed class BindingModeEscapeTests
 {
+    [Fact]
+    public void SideSpecificBindingsCanShadowAllWaysToTypeAGenericExit()
+    {
+        ConfigLoadResult result = ConfigLoader.Load("""
+            binding-modes {
+                mode "trap" {
+                    bind "ctrl+escape" { wm-disable-binding-mode }
+                    bind "lctrl+escape" { signal "left" }
+                    bind "rctrl+escape" { signal "right" }
+                }
+            }
+            """);
+        Assert.Contains(result.Errors, d => d.Code == "SHB0425");
+    }
+
     [Theory]
     [InlineData("bind \"escape\" { signal \"stays\"; }; bind \"esc\" { wm-disable-binding-mode; };")]
     [InlineData("bind \"escape\" { wm-enable-binding-mode --name trap; };")]

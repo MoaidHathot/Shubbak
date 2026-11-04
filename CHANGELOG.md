@@ -17,6 +17,11 @@ schedule and breaking either is a different kind of event:
 
 ### Changed
 
+- **Shortcuts can distinguish left/right modifiers and explicitly bind AltGr.**
+  Sided combinations are expanded when loading the config, preserving one lookup
+  per fresh key press. Generic modifiers remain fallbacks; context disarming and
+  mode-exit validation use the same compiled map. Modifier-only events take a direct
+  pass-through path. Native suspend/resume never broadens a sided chord silently.
 - **Lower IPC, layout and companion overhead.** IPC uses bounded buffered UTF-8
   framing and reusable write/event buffers. Core layout and inverse resizing use
   read-only weights and allocation-free warmed scratch instead of temporary trees.

@@ -5094,6 +5094,9 @@ public sealed class WmDaemon : IDisposable
                    "`shubbak wm-resume`";
         }
 
+        if (!ResumeHotKey.Supports((KeyModifiers)binding.Key.Modifiers))
+            return "Windows cannot register a sided/AltGr resume chord; add a generic wm-resume binding, or use `shubbak wm-resume`";
+
         bool ok = _resumeHotKey.Register(
             (KeyModifiers)binding.Key.Modifiers, binding.Key.VirtualKey, binding.Key.Display);
 
@@ -5104,9 +5107,17 @@ public sealed class WmDaemon : IDisposable
     }
 
     /// <summary>The binding that will be used to come back, if there is one.</summary>
-    private Keybinding? FindResumeBinding() =>
-        _config.Keybindings.FirstOrDefault(binding =>
-            binding.Commands.Any(command => command is ToggleSuspendCommand or ResumeCommand));
+    private Keybinding? FindResumeBinding()
+    {
+        Keybinding? unsupported = null;
+        foreach (Keybinding binding in _config.Keybindings)
+        {
+            if (!binding.Commands.Any(command => command is ToggleSuspendCommand or ResumeCommand)) continue;
+            if (ResumeHotKey.Supports((KeyModifiers)binding.Key.Modifiers)) return binding;
+            unsupported ??= binding;
+        }
+        return unsupported;
+    }
 
     /// <summary>
     /// Notices the resume chord, which arrives as a thread message.

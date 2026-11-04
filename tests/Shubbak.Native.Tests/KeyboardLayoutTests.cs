@@ -9,6 +9,48 @@ public sealed class KeyboardLayoutTests : IDisposable
 {
     private readonly nint _original = Win32Window.GetForeground();
 
+    [Theory]
+    [Trait("Requires", Desktop.RequiresForeground)]
+    [InlineData(0xA2, KeyModifiers.Control | KeyModifiers.LeftControl)]
+    [InlineData(0xA3, KeyModifiers.Control | KeyModifiers.RightControl)]
+    [InlineData(0xA4, KeyModifiers.Alt | KeyModifiers.LeftAlt)]
+    [InlineData(0xA5, KeyModifiers.Alt | KeyModifiers.RightAlt)]
+    [InlineData(0xA0, KeyModifiers.Shift | KeyModifiers.LeftShift)]
+    [InlineData(0xA1, KeyModifiers.Shift | KeyModifiers.RightShift)]
+    [InlineData(0x5B, KeyModifiers.Windows | KeyModifiers.LeftWindows)]
+    [InlineData(0x5C, KeyModifiers.Windows | KeyModifiers.RightWindows)]
+    public void TheHookReportsTheActualModifierSide(int modifier, KeyModifiers expected)
+    {
+        using var layout = new LoadedKeyboardLayout("00000409");
+        using var window = new TestWindow(observeKeyMenus: true);
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the sided-key receiver"));
+        nint previous = KeyboardLayouts.ForegroundLayout();
+        window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(layout.Handle), 0));
+        var binding = new KeyboardBinding(repeat: false);
+        using var source = new KeyboardSource();
+        source.Start((key, _) => key == 0x87 ? binding : null);
+        try
+        {
+            Keyboard.Press((VIRTUAL_KEY)modifier);
+            Keyboard.Press(VIRTUAL_KEY.VK_F24);
+            Keyboard.Release(VIRTUAL_KEY.VK_F24);
+            Keyboard.Release((VIRTUAL_KEY)modifier);
+            Keyboard.Press(VIRTUAL_KEY.VK_F23);
+            Keyboard.Release(VIRTUAL_KEY.VK_F23);
+            TestWindow.PumpUntil(() => window.KeyboardBarriers > 0);
+            var events = new KeyEvent[8];
+            Assert.Equal(1, source.Drain(events, 8));
+            Assert.Equal(expected, events[0].Modifiers);
+            Assert.Empty(window.KeyDowns);
+        }
+        finally
+        {
+            Keyboard.Release(VIRTUAL_KEY.VK_F24);
+            Keyboard.Release((VIRTUAL_KEY)modifier);
+            window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(previous), 0));
+        }
+    }
+
     [Fact]
     public unsafe void DetectingAltGrDoesNotConsumeAPendingDeadKey()
     {
@@ -98,7 +140,7 @@ public sealed class KeyboardLayoutTests : IDisposable
             TestWindow.PumpUntil(() => window.KeyboardBarriers > 0);
             var events = new KeyEvent[8];
             Assert.Equal(1, source.Drain(events, 8));
-            Assert.Equal(KeyModifiers.Control | KeyModifiers.Alt, events[0].Modifiers);
+            Assert.Equal(KeyModifiers.Control | KeyModifiers.Alt | KeyModifiers.LeftControl | KeyModifiers.RightAlt, events[0].Modifiers);
         }
         finally
         {

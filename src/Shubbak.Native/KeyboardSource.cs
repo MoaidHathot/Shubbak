@@ -19,6 +19,14 @@ public enum KeyModifiers
     Windows = 1 << 3,
     /// <summary>Text-producing AltGr; distinct from both Ctrl+Alt and no modifiers.</summary>
     AltGraph = 1 << 4,
+    LeftAlt = 1 << 5,
+    RightAlt = 1 << 6,
+    LeftControl = 1 << 7,
+    RightControl = 1 << 8,
+    LeftShift = 1 << 9,
+    RightShift = 1 << 10,
+    LeftWindows = 1 << 11,
+    RightWindows = 1 << 12,
 }
 
 /// <summary>A keystroke as seen by the low-level hook.</summary>
@@ -40,10 +48,11 @@ public readonly record struct KeyEvent(
 /// A prebuilt binding captured on the first press. Hosts may derive from this to
 /// carry their immutable command data; the hook never constructs a binding.
 /// </summary>
-public class KeyboardBinding(bool release = false, bool repeat = true)
+public class KeyboardBinding(bool release = false, bool repeat = true, KeyModifiers comparisonMask = (KeyModifiers)0x1FFF)
 {
     public bool Release { get; } = release;
     public bool Repeat { get; } = repeat && !release;
+    public KeyModifiers ComparisonMask { get; } = comparisonMask;
 
     /// <summary>A blocking mode claims a key without queueing work.</summary>
     public static KeyboardBinding Suppress { get; } = new(repeat: false);
@@ -434,7 +443,7 @@ public sealed class KeyboardSource : IDisposable
         uint message = (uint)wParam.Value;
         bool isKeyDown = message is PInvoke.WM_KEYDOWN or PInvoke.WM_SYSKEYDOWN;
         var virtualKey = (ushort)info->vkCode;
-        if (virtualKey == 0xA5 && isKeyDown)
+        if (virtualKey == 0xA5 && isKeyDown && source._owners[virtualKey] == KeyOwner.None)
         {
             source._rightAltLayout = KeyboardLayouts.ForegroundLayout();
             _ = source._layouts.UsesAltGr(source._rightAltLayout);
@@ -445,6 +454,13 @@ public sealed class KeyboardSource : IDisposable
         {
             if (isKeyDown) source._unmaskedMenuKeys |= menuKey;
             else source._unmaskedMenuKeys &= (byte)~menuKey;
+        }
+        // The grammar never binds a modifier by itself. Forward it without reading
+        // seven states or querying a keymap, including in blocking modes.
+        if (virtualKey is >= 0x10 and <= 0x12 or >= 0xA0 and <= 0xA5 or 0x5B or 0x5C)
+        {
+            source._owners[virtualKey] = isKeyDown ? KeyOwner.Application : KeyOwner.None;
+            return PInvoke.CallNextHookEx(HHOOK.Null, nCode, wParam, lParam);
         }
         KeyOwner owner = source._owners[virtualKey];
 
@@ -500,7 +516,8 @@ public sealed class KeyboardSource : IDisposable
         if (owner == KeyOwner.Shubbak)
         {
             KeyboardBinding? binding = source._pressBindings[virtualKey];
-            if (binding is { Repeat: true } && source.ReadModifiers() == source._pressModifiers[virtualKey])
+            if (binding is { Repeat: true } &&
+                (source.ReadModifiers() & binding.ComparisonMask) == (source._pressModifiers[virtualKey] & binding.ComparisonMask))
             {
                 var repeat = new KeyEvent(virtualKey, source._pressModifiers[virtualKey], true,
                     (info->flags & KBDLLHOOKSTRUCT_FLAGS.LLKHF_INJECTED) != 0, true, binding);
@@ -592,14 +609,29 @@ public sealed class KeyboardSource : IDisposable
     /// </remarks>
     private KeyModifiers ReadModifiers()
     {
+        bool leftAlt = IsHeld(VIRTUAL_KEY.VK_LMENU);
         bool rightAlt = IsHeld(VIRTUAL_KEY.VK_RMENU);
         bool leftControl = IsHeld(VIRTUAL_KEY.VK_LCONTROL);
-        return DeriveModifiers(
-            leftAlt: IsHeld(VIRTUAL_KEY.VK_LMENU), rightAlt, leftControl,
-            rightControl: IsHeld(VIRTUAL_KEY.VK_RCONTROL),
-            shift: IsHeld(VIRTUAL_KEY.VK_SHIFT),
-            windows: IsHeld(VIRTUAL_KEY.VK_LWIN) || IsHeld(VIRTUAL_KEY.VK_RWIN),
+        bool rightControl = IsHeld(VIRTUAL_KEY.VK_RCONTROL);
+        bool shift = IsHeld(VIRTUAL_KEY.VK_SHIFT);
+        // Ordinary typing retains the single merged Shift read. Side reads are only
+        // needed while it is actually held.
+        bool leftShift = shift && IsHeld(VIRTUAL_KEY.VK_LSHIFT);
+        bool rightShift = shift && (!leftShift || IsHeld(VIRTUAL_KEY.VK_RSHIFT));
+        bool leftWindows = IsHeld(VIRTUAL_KEY.VK_LWIN);
+        bool rightWindows = IsHeld(VIRTUAL_KEY.VK_RWIN);
+        KeyModifiers modifiers = DeriveModifiers(leftAlt, rightAlt, leftControl, rightControl, shift, leftWindows || rightWindows,
             layoutHasAltGr: !rightAlt || !leftControl || _layouts.UsesAltGr(_rightAltLayout));
+        bool altGr = (modifiers & KeyModifiers.AltGraph) != 0;
+        if (leftAlt) modifiers |= KeyModifiers.LeftAlt;
+        if (rightAlt && !altGr) modifiers |= KeyModifiers.RightAlt;
+        if (leftControl && !altGr) modifiers |= KeyModifiers.LeftControl;
+        if (rightControl) modifiers |= KeyModifiers.RightControl;
+        if (leftShift) modifiers |= KeyModifiers.LeftShift;
+        if (rightShift) modifiers |= KeyModifiers.RightShift;
+        if (leftWindows) modifiers |= KeyModifiers.LeftWindows;
+        if (rightWindows) modifiers |= KeyModifiers.RightWindows;
+        return modifiers;
     }
 
     /// <summary>
@@ -666,7 +698,7 @@ public sealed class KeyboardSource : IDisposable
         bool control = altGr ? rightControl : leftControl || rightControl;
 
         // Removing the synthetic pair must not turn AltGr+Q into a plain Q binding.
-        // An unspellable modifier bit keeps text distinct even in bare-letter modes.
+        // Its own modifier bit keeps text distinct even in bare-letter modes.
         KeyModifiers modifiers = altGr ? KeyModifiers.AltGraph : KeyModifiers.None;
 
         if (alt) modifiers |= KeyModifiers.Alt;

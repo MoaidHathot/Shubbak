@@ -20,6 +20,16 @@ namespace Shubbak.Native.Tests;
 /// </remarks>
 public sealed class ResumeHotKeyTests
 {
+    [Theory]
+    [InlineData(KeyModifiers.Control | KeyModifiers.LeftControl)]
+    [InlineData(KeyModifiers.AltGraph)]
+    public void UnsupportedSpecificityIsNotBroadenedIntoAnotherHotkey(KeyModifiers modifiers)
+    {
+        using var hotKey = new ResumeHotKey();
+        Assert.False(ResumeHotKey.Supports(modifiers));
+        Assert.False(hotKey.Register(modifiers, F24, "specific"));
+        Assert.False(hotKey.IsRegistered);
+    }
     /// <summary>
     /// A chord unlikely to be taken by anything else on a build agent.
     /// </summary>

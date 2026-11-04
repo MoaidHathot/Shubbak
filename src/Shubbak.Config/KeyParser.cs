@@ -35,6 +35,17 @@ public static class KeyParser
     public const int ModControl = 1 << 1;
     public const int ModShift = 1 << 2;
     public const int ModWindows = 1 << 3;
+    public const int ModAltGraph = 1 << 4;
+    public const int BasicMask = (1 << 5) - 1;
+    public const int LeftAlt = 1 << 5;
+    public const int RightAlt = 1 << 6;
+    public const int LeftControl = 1 << 7;
+    public const int RightControl = 1 << 8;
+    public const int LeftShift = 1 << 9;
+    public const int RightShift = 1 << 10;
+    public const int LeftWindows = 1 << 11;
+    public const int RightWindows = 1 << 12;
+    public const int SideMask = ((1 << 13) - 1) & ~BasicMask;
 
     private static readonly Dictionary<string, ushort> s_namedKeys = BuildNamedKeys();
 
@@ -183,6 +194,15 @@ public static class KeyParser
                 case "ctrl" or "control": modifiers |= ModControl; continue;
                 case "shift": modifiers |= ModShift; continue;
                 case "win" or "super" or "meta" or "cmd": modifiers |= ModWindows; continue;
+                case "altgr": modifiers |= ModAltGraph; continue;
+                case "lalt" or "leftalt": modifiers |= ModAlt | LeftAlt; continue;
+                case "ralt" or "rightalt": modifiers |= ModAlt | RightAlt; continue;
+                case "lctrl" or "lcontrol" or "leftctrl" or "leftcontrol": modifiers |= ModControl | LeftControl; continue;
+                case "rctrl" or "rcontrol" or "rightctrl" or "rightcontrol": modifiers |= ModControl | RightControl; continue;
+                case "lshift" or "leftshift": modifiers |= ModShift | LeftShift; continue;
+                case "rshift" or "rightshift": modifiers |= ModShift | RightShift; continue;
+                case "lwin" or "leftwin": modifiers |= ModWindows | LeftWindows; continue;
+                case "rwin" or "rightwin": modifiers |= ModWindows | RightWindows; continue;
             }
 
             if (haveKey)
