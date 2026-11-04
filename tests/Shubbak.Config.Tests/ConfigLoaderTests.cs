@@ -287,6 +287,62 @@ public sealed class ConfigLoaderTests
         Assert.Contains("line 2", warning.Hint!, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("ctrl+alt+h", "alt+control+H")]
+    [InlineData("win+enter", "super+return")]
+    [InlineData("alt+;", "alt+oem_1")]
+    public void EquivalentChordsAreDuplicatesRegardlessOfSpelling(string first, string second)
+    {
+        ConfigLoadResult result = ConfigLoader.Load($$"""
+            keybindings {
+                bind "{{first}}" { signal "first" }
+                bind "{{second}}" { signal "second" }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(result.Diagnostics, d => d.Code == "SHB0409");
+        Assert.Contains("line 2", warning.Hint!, StringComparison.Ordinal);
+        Assert.Contains("first binding wins", warning.Message, StringComparison.Ordinal);
+        Assert.Equal(second, result.Config.Keybindings[1].Key.Display);
+    }
+
+    [Fact]
+    public void DuplicateModeBindingsAreDiagnosedWithinTheirOwnMode()
+    {
+        ConfigLoadResult result = ConfigLoader.Load("""
+            keybindings { bind "ctrl+h" { signal "default"; }; }
+            binding-modes {
+                mode "one" pass-through=#true {
+                    bind "ctrl+h" { signal "first" }
+                    bind "control+H" { signal "second" }
+                }
+                mode "two" pass-through=#true { bind "ctrl+h" { signal "other"; }; }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(result.Diagnostics, d => d.Code == "SHB0409");
+        Assert.Contains("line 4", warning.Hint!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DuplicateContextBindingsDescribeTheRuntimeLastWinner()
+    {
+        ConfigLoadResult result = ConfigLoader.Load("""
+            contexts {
+                context "one" {
+                    when { workspace "1"; }
+                    bindings {
+                        bind "ctrl+h" { signal "first" }
+                        bind "control+H" { signal "second" }
+                    }
+                }
+            }
+            """);
+
+        Diagnostic warning = Assert.Single(result.Diagnostics, d => d.Code == "SHB0409");
+        Assert.Contains("last binding wins", warning.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void ResizePercentagesBecomeRatios()
     {

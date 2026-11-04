@@ -11,6 +11,9 @@ namespace Shubbak.Config;
 /// <param name="Display">The binding as written, for diagnostics and the bar.</param>
 public readonly record struct KeyBinding(int Modifiers, ushort VirtualKey, string Display)
 {
+    /// <summary>The chord's identity, independent of aliases, case and modifier order.</summary>
+    public int Identity => (Modifiers << 16) | VirtualKey;
+
     public override string ToString() => Display;
 }
 

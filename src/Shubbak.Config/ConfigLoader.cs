@@ -1267,23 +1267,23 @@ public sealed class ConfigLoader
     /// Silent shadowing is a genuinely difficult problem to debug: the binding
     /// appears in the config, looks correct, and simply never fires.
     /// </remarks>
-    private void WarnOnDuplicates(List<Keybinding> bindings)
+    private void WarnOnDuplicates(List<Keybinding> bindings, bool lastWins = false)
     {
-        Dictionary<KeyBinding, Keybinding> seen = [];
+        Dictionary<int, Keybinding> seen = [];
 
         foreach (Keybinding binding in bindings)
         {
-            if (seen.TryGetValue(binding.Key, out Keybinding? first))
+            if (seen.TryGetValue(binding.Key.Identity, out Keybinding? first))
             {
                 Report(Diagnostic.Warning(
                     "SHB0409",
-                    $"'{binding.Key.Display}' is bound more than once; the first binding wins.",
+                    $"'{binding.Key.Display}' is bound more than once; the {(lastWins ? "last" : "first")} binding wins.",
                     binding.Span,
                     $"The earlier binding is at line {first.Span.Start.Line}."));
             }
             else
             {
-                seen[binding.Key] = binding;
+                seen[binding.Key.Identity] = binding;
             }
         }
     }
@@ -1304,6 +1304,7 @@ public sealed class ConfigLoader
 
             List<Keybinding> bindings = [];
             CollectBindings(child, workspaces, bindings);
+            WarnOnDuplicates(bindings);
 
             string name = nameValue.AsString();
             bool passThrough = Bool(child, "pass-through", false);
@@ -1606,7 +1607,7 @@ public sealed class ConfigLoader
             if (child.Child("bindings") is { } bindingsNode)
             {
                 CollectBindings(bindingsNode, workspaces, bindings, allowEmpty: true);
-                WarnOnDuplicates(bindings);
+                WarnOnDuplicates(bindings, lastWins: true);
             }
 
             var effects = new ContextEffects(

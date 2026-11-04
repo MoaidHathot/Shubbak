@@ -277,7 +277,7 @@ public sealed class BindingTable
         return state.Default.GetValueOrDefault(key);
     }
 
-    private static int Pack(KeyBinding binding) => Pack(binding.Modifiers, binding.VirtualKey);
+    private static int Pack(KeyBinding binding) => binding.Identity;
 
     /// <summary>Packs modifiers and key into one integer, so lookup is one hash.</summary>
     private static int Pack(int modifiers, ushort virtualKey) => (modifiers << 16) | virtualKey;

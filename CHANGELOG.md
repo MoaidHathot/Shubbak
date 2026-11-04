@@ -36,6 +36,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Equivalent shortcuts now produce duplicate warnings.** Modifier order, case and
+  aliases share the runtime's chord identity. Modes are checked independently, and
+  context warnings correctly describe their last-binding-wins precedence.
 - **Taj no longer shows boxed direction markers in window titles.** Firefox page
   titles can contain invisible Unicode isolates around the page name. The shared
   GDI renderer now omits these unsupported markers when measuring and drawing, so
