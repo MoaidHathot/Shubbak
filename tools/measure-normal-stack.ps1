@@ -3,6 +3,8 @@ Compare all five native binaries with the normal configuration, including idle,
 application input, palette activation and repeated configuration reloads.
 Only benchmark-owned deployment files/processes are changed. Final binaries are
 installed and the normal session restored on every exit.
+Use -IdleOnly for a reversed-order resource comparison that requires the same
+managed window handles and configuration throughout every case.
 #>
 [CmdletBinding()]
 param(
@@ -11,7 +13,8 @@ param(
     [Parameter(Mandatory)] [string] $Baseline,
     [Parameter(Mandatory)] [string] $Output,
     [int] $IdleSeconds = 120,
-    [int] $Rounds = 2
+    [int] $Rounds = 2,
+    [switch] $IdleOnly
 )
 $ErrorActionPreference = 'Stop'
 foreach ($name in @('Probe','CurrentRoot','Baseline','Output')) { Set-Variable $name ([IO.Path]::GetFullPath((Get-Variable $name -ValueOnly))) }
@@ -36,6 +39,11 @@ function Stop-Stack {
     & $cli stop
     if ($LASTEXITCODE -ne 0) { throw 'Could not stop the normal stack.' }
 }
+function Window-Signature {
+    $windows = & $cli query windows | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw 'Could not query the idle desktop.' }
+    return (@($windows | ForEach-Object handle | Sort-Object) -join ',')
+}
 function Start-Stack([string] $version) {
     Stop-Stack
     foreach ($name in $projects.Keys) {
@@ -55,6 +63,8 @@ function Start-Stack([string] $version) {
     Start-Sleep -Seconds 8
 }
 try {
+    $idleWindows = $null
+    $idleConfigHash = $null
     for ($round=0; $round -lt $Rounds; $round++) {
         $versions=@('baseline','current')
         if ($round % 2) { [Array]::Reverse($versions) }
@@ -65,6 +75,10 @@ try {
             Save (Join-Path $case 'binaries.json') @(Get-FileHash ($projects.Keys | ForEach-Object {Join-Path $dist "$_.exe"}) | Select-Object Path,Hash)
             & $cli diagnose -o (Join-Path $case 'before.md')
             if ($LASTEXITCODE -ne 0) { throw 'Initial diagnosis failed.' }
+            $windowsBefore = Window-Signature
+            $configPath = (& $cli query config-path | ConvertFrom-Json).path
+            if ($LASTEXITCODE -ne 0) { throw 'Could not query the configuration path.' }
+            $configHash = (Get-FileHash $configPath).Hash
             $before=Counters
             $watch=[Diagnostics.Stopwatch]::StartNew()
             Start-Sleep -Seconds $IdleSeconds
@@ -80,6 +94,17 @@ try {
                 }
             }
             Save (Join-Path $case 'idle.json') @($rows | Sort-Object CpuMs -Descending)
+            $windowsAfter = Window-Signature
+            Save (Join-Path $case 'idle-environment.json') @{Before=$windowsBefore;After=$windowsAfter;ConfigHash=$configHash}
+            if ($IdleOnly) {
+                if ($windowsBefore -ne $windowsAfter -or ($null -ne $idleWindows -and $idleWindows -ne $windowsBefore) -or
+                    ($null -ne $idleConfigHash -and $idleConfigHash -ne $configHash) -or
+                    (Get-FileHash $configPath).Hash -ne $configHash) { throw 'The desktop/config changed during the paired idle measurement.' }
+                $idleWindows = $windowsBefore
+                $idleConfigHash = $configHash
+                Write-Output "$version r$round completed $([Math]::Round($seconds, 2))s idle with a stable desktop."
+                continue
+            }
             $inputResult=& $Probe receive --samples 20000 --warmup 1000 --interval-us 2000 --label "normal-$version-r$round" --raw-output (Join-Path $case 'events.csv')
             if ($LASTEXITCODE -ne 0) { throw "Normal-session input failed: $inputResult" }
             [IO.File]::WriteAllText((Join-Path $case 'input.json'),($inputResult -join "`n"))

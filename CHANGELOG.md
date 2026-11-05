@@ -22,6 +22,8 @@ schedule and breaking either is a different kind of event:
   per fresh key press. Generic modifiers remain fallbacks; context disarming and
   mode-exit validation use the same compiled map. Modifier-only events take a direct
   pass-through path. Native suspend/resume never broadens a sided chord silently.
+  Correctness regressions and native timing/resource evidence are recorded in
+  `ideas/keyboard-modifiers-2026-11.md`.
 - **Lower IPC, layout and companion overhead.** IPC uses bounded buffered UTF-8
   framing and reusable write/event buffers. Core layout and inverse resizing use
   read-only weights and allocation-free warmed scratch instead of temporary trees.
