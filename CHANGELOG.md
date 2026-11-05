@@ -41,6 +41,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A language change during Ctrl+Right-Alt is honoured by the next key.** AltGr
+  classification samples the current foreground layout for that pair, rather than
+  retaining the layout from modifier-down. Cached translation remains off the hook
+  thread, with zero warmed allocation in the layout-sampling path.
 - **Binding-table updates snapshot caller-owned lists.** Re-submitting an edited
   overlay list applies the edit, while mutations that have not been submitted cannot
   silently change the defaults or overlay used by a later rebuild.

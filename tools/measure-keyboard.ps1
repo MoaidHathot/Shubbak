@@ -22,7 +22,7 @@ param(
     [string[]] $Workloads = @('idle', 'cpu', 'animation', 'ipc'),
     [ValidateRange(1, 10)] [int] $Rounds = 2,
     [switch] $Bound,
-    [ValidateSet('', 'alt', 'ctrl', 'shift', 'win', 'ctrl+shift')]
+    [ValidateSet('', 'alt', 'ctrl', 'shift', 'win', 'ctrl+shift', 'ctrl+ralt')]
     [string] $Modifier = ''
 )
 
@@ -142,6 +142,11 @@ keybindings {
     bind "f22" { wm-toggle-suspend; }
 '@
 if ($Modifier) { $config += "`n    bind `"$Modifier+f23`" { signal `"input-probe`"; }" }
+if ($Modifier -eq 'ctrl+ralt') {
+    # This pair is AltGr on some layouts. Exercise the same callback path without
+    # changing the user's input language; either classification emits our signal.
+    $config += "`n    bind `"altgr+f23`" { signal `"input-probe`"; }"
+}
 foreach ($mod in @('alt', 'alt+shift', 'ctrl+alt', 'ctrl+shift')) {
     foreach ($f in 1..24) {
         if ($Modifier -and (($f -eq 24 -and -not $Bound) -or ($f -eq 23 -and $mod -eq $Modifier))) { continue }

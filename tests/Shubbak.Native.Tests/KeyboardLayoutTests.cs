@@ -9,6 +9,108 @@ public sealed class KeyboardLayoutTests : IDisposable
 {
     private readonly nint _original = Win32Window.GetForeground();
 
+    [Fact]
+    [Trait("Requires", Desktop.RequiresForeground)]
+    public void CurrentLayoutSamplingAllocatesNothingOnTheHookThread()
+    {
+        using var us = new LoadedKeyboardLayout("00000409");
+        using var window = new TestWindow();
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the layout-allocation receiver"));
+        nint previous = KeyboardLayouts.ForegroundLayout();
+        window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(us.Handle), 0));
+        long allocated = 0;
+        var binding = new KeyboardBinding(repeat: false);
+        using var source = new KeyboardSource();
+        source.Start((key, _) =>
+        {
+            if (key == 0x86) Volatile.Write(ref allocated, GC.GetAllocatedBytesForCurrentThread());
+            return key == 0x87 ? binding : null;
+        });
+        try
+        {
+            Keyboard.Press(VIRTUAL_KEY.VK_LCONTROL);
+            Keyboard.Press(VIRTUAL_KEY.VK_RMENU);
+            for (int i = 0; i < 32; i++)
+            {
+                Keyboard.Press(VIRTUAL_KEY.VK_F24);
+                Keyboard.Release(VIRTUAL_KEY.VK_F24);
+                Barrier();
+            }
+            long before = Volatile.Read(ref allocated);
+            for (int i = 0; i < 200; i++)
+            {
+                Keyboard.Press(VIRTUAL_KEY.VK_F24);
+                Keyboard.Release(VIRTUAL_KEY.VK_F24);
+            }
+            Barrier();
+            Assert.Equal(0, Volatile.Read(ref allocated) - before);
+            Assert.Equal(0, source.Dropped);
+            Assert.Equal(0, source.Faults);
+        }
+        finally
+        {
+            Keyboard.Release(VIRTUAL_KEY.VK_F24);
+            Keyboard.Release(VIRTUAL_KEY.VK_RMENU);
+            Keyboard.Release(VIRTUAL_KEY.VK_LCONTROL);
+            window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(previous), 0));
+        }
+
+        void Barrier()
+        {
+            int next = window.KeyboardBarriers + 1;
+            Keyboard.Press(VIRTUAL_KEY.VK_F23);
+            Keyboard.Release(VIRTUAL_KEY.VK_F23);
+            TestWindow.PumpUntil(() => window.KeyboardBarriers >= next);
+            Assert.Equal(next, window.KeyboardBarriers);
+        }
+    }
+
+    [Theory]
+    [Trait("Requires", Desktop.RequiresForeground)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void HeldControlRightAltFollowsALanguageChangeBeforeTheMainKey(bool toGerman)
+    {
+        using var us = new LoadedKeyboardLayout("00000409");
+        using var german = new LoadedKeyboardLayout("00000407");
+        using var window = new TestWindow(observeText: true);
+        Assert.True(window.Activate(), Desktop.WhyNotInFront("the language-change receiver"));
+        nint previous = KeyboardLayouts.ForegroundLayout();
+        window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(toGerman ? us.Handle : german.Handle), 0));
+        var binding = new KeyboardBinding(repeat: false);
+        KeyModifiers observed = KeyModifiers.None;
+        using var source = new KeyboardSource();
+        source.Start((key, modifiers) =>
+        {
+            if (key != 0x51) return null;
+            observed = modifiers;
+            return (modifiers & KeyModifiers.AltGraph) == 0 ? binding : null;
+        });
+        try
+        {
+            Keyboard.Press(VIRTUAL_KEY.VK_LCONTROL);
+            Keyboard.Press(VIRTUAL_KEY.VK_RMENU);
+            window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(toGerman ? german.Handle : us.Handle), 0));
+            Keyboard.Press(VIRTUAL_KEY.VK_Q);
+            Keyboard.Release(VIRTUAL_KEY.VK_Q);
+            Keyboard.Release(VIRTUAL_KEY.VK_RMENU);
+            Keyboard.Release(VIRTUAL_KEY.VK_LCONTROL);
+            Keyboard.Press(VIRTUAL_KEY.VK_F23);
+            Keyboard.Release(VIRTUAL_KEY.VK_F23);
+            TestWindow.PumpUntil(() => window.KeyboardBarriers > 0);
+            Assert.Equal(toGerman, (observed & KeyModifiers.AltGraph) != 0);
+            Assert.Equal(toGerman ? 0 : 1, source.Drain(new KeyEvent[8], 8));
+            Assert.Equal(toGerman ? "@" : "", window.TypedText);
+        }
+        finally
+        {
+            Keyboard.Release(VIRTUAL_KEY.VK_Q);
+            Keyboard.Release(VIRTUAL_KEY.VK_RMENU);
+            Keyboard.Release(VIRTUAL_KEY.VK_LCONTROL);
+            window.Invoke(() => PInvoke.ActivateKeyboardLayout(new HKL(previous), 0));
+        }
+    }
+
     [Theory]
     [Trait("Requires", Desktop.RequiresForeground)]
     [InlineData(0xA2, KeyModifiers.Control | KeyModifiers.LeftControl)]

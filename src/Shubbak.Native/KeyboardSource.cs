@@ -115,7 +115,6 @@ public sealed class KeyboardSource : IDisposable
     private readonly KeyboardBinding?[] _pressBindings = new KeyboardBinding?[256];
     private readonly KeyModifiers[] _pressModifiers = new KeyModifiers[256];
     private readonly KeyboardLayouts _layouts = new();
-    private nint _rightAltLayout;
 
     private UnhookWindowsHookExSafeHandle? _hook;
     private UnhookWinEventSafeHandle? _desktopEvents;
@@ -213,7 +212,6 @@ public sealed class KeyboardSource : IDisposable
 
         _probe = probe;
         _layouts.Refresh();
-        _rightAltLayout = KeyboardLayouts.ForegroundLayout();
 
         using var ready = new ManualResetEventSlim(false);
         Exception? failure = null;
@@ -319,9 +317,7 @@ public sealed class KeyboardSource : IDisposable
             source._reservedReleases = 0;
             source._unmaskedMenuKeys = 0x0F;
             source._consumedMenuKeys = 0;
-            source._rightAltLayout = KeyboardLayouts.ForegroundLayout();
-            _ = source._layouts.UsesAltGr(source._rightAltLayout);
-            if (source._layouts.RefreshPending) source.NotifyWork();
+            _ = source.ForegroundUsesAltGr();
             Interlocked.Increment(ref source._desktopResets);
         }
         catch
@@ -447,9 +443,7 @@ public sealed class KeyboardSource : IDisposable
         var virtualKey = (ushort)info->vkCode;
         if (virtualKey == 0xA5 && isKeyDown && source._owners[virtualKey] == KeyOwner.None)
         {
-            source._rightAltLayout = KeyboardLayouts.ForegroundLayout();
-            _ = source._layouts.UsesAltGr(source._rightAltLayout);
-            if (source._layouts.RefreshPending) source.NotifyWork();
+            _ = source.ForegroundUsesAltGr();
         }
         byte menuKey = virtualKey switch { 0xA4 => 1, 0xA5 => 2, 0x12 => 3, 0x5B => 4, 0x5C => 8, _ => 0 };
         if (menuKey != 0)
@@ -638,7 +632,7 @@ public sealed class KeyboardSource : IDisposable
         bool leftWindows = IsHeld(VIRTUAL_KEY.VK_LWIN);
         bool rightWindows = IsHeld(VIRTUAL_KEY.VK_RWIN);
         KeyModifiers modifiers = DeriveModifiers(leftAlt, rightAlt, leftControl, rightControl, shift, leftWindows || rightWindows,
-            layoutHasAltGr: !rightAlt || !leftControl || _layouts.UsesAltGr(_rightAltLayout));
+            layoutHasAltGr: !rightAlt || !leftControl || ForegroundUsesAltGr());
         bool altGr = (modifiers & KeyModifiers.AltGraph) != 0;
         if (leftAlt) modifiers |= KeyModifiers.LeftAlt;
         if (rightAlt && !altGr) modifiers |= KeyModifiers.RightAlt;
@@ -649,6 +643,16 @@ public sealed class KeyboardSource : IDisposable
         if (leftWindows) modifiers |= KeyModifiers.LeftWindows;
         if (rightWindows) modifiers |= KeyModifiers.RightWindows;
         return modifiers;
+    }
+
+    private bool ForegroundUsesAltGr()
+    {
+        // A layout/foreground switch can happen while Ctrl+Right-Alt remain held.
+        // Only that pair needs a current layout query; ordinary typing and left-Alt
+        // shortcuts pay nothing. Translation stays in the consumer's metadata cache.
+        bool result = _layouts.UsesAltGr(KeyboardLayouts.ForegroundLayout());
+        if (_layouts.RefreshPending) NotifyWork();
+        return result;
     }
 
     /// <summary>
@@ -683,7 +687,8 @@ public sealed class KeyboardSource : IDisposable
     /// <para>
     /// The pair is AltGr only on a layout that produces AltGr text. US-layout
     /// left Control + right Alt remains Control+Alt. Layout capability is cached
-    /// outside the hook; the foreground layout is sampled on right Alt's press.
+    /// outside the hook; right Alt prefetches it, and each Ctrl+Right-Alt key samples
+    /// the current foreground layout so language changes during a hold are honoured.
     /// </para>
     /// <para>
     /// The injected flag is deliberately not used for this, though the hook records

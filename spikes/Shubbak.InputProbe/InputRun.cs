@@ -61,6 +61,7 @@ internal sealed class InputRun : IDisposable
             .Select(name => name switch
             {
                 "alt" => VIRTUAL_KEY.VK_LMENU,
+                "ralt" => VIRTUAL_KEY.VK_RMENU,
                 "ctrl" => VIRTUAL_KEY.VK_LCONTROL,
                 "shift" => VIRTUAL_KEY.VK_LSHIFT,
                 "win" => VIRTUAL_KEY.VK_LWIN,
@@ -319,7 +320,7 @@ internal sealed class InputRun : IDisposable
         var input = new INPUT { type = INPUT_TYPE.INPUT_KEYBOARD };
         input.Anonymous.ki.wVk = key;
         if (up) input.Anonymous.ki.dwFlags = KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
-        if (key == VIRTUAL_KEY.VK_LWIN) input.Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_EXTENDEDKEY;
+        if (key is VIRTUAL_KEY.VK_LWIN or VIRTUAL_KEY.VK_RMENU) input.Anonymous.ki.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_EXTENDEDKEY;
         return input;
     }
 
