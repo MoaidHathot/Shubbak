@@ -57,6 +57,12 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **`shubbak restore` no longer reveals a hidden helper belonging to the same application.**
+  Recovery requires the recorded window handle and application identity; title and
+  process-name guesses remain available for placing visible, restarted applications.
+- **Periodic session saves track replacement windows.** A new handle or owning
+  process is now saved even when the application's workspace and other placement
+  settings are unchanged.
 - **Disposing a source twice is harmless.** The disposal guard now runs before
   source-specific cleanup, avoiding cancellation against an already-disposed token
   source during repeated cleanup.

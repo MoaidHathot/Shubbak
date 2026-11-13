@@ -21,6 +21,10 @@ namespace Shubbak.Core.Wm;
 /// The native window handle, which is an exact identity for as long as the window
 /// exists.
 /// </param>
+/// <param name="ProcessId">
+/// The owning process, when recorded. A recycled handle in another instance of the
+/// same application must not count as a surviving window. Zero in older sessions.
+/// </param>
 /// <remarks>
 /// <para>
 /// The handle is the only field here that distinguishes two windows of the same
@@ -54,7 +58,8 @@ public sealed record RememberedWindow(
     IReadOnlyList<string> Tags,
     bool Sticky,
     string State,
-    long Handle = 0);
+    long Handle = 0,
+    int ProcessId = 0);
 
 /// <summary>Which workspace a monitor was showing.</summary>
 /// <param name="DeviceId">The monitor's GDI device name, <c>\\.\DISPLAY1</c>.</param>
@@ -115,11 +120,10 @@ public sealed partial class SessionJsonContext : JsonSerializerContext;
 /// single most annoying thing about running a tiling window manager on Windows.
 /// </para>
 /// <para>
-/// Windows are identified by <b>process name, class and a hash of the title</b>,
-/// scored rather than matched exactly. A window handle does not survive a restart,
-/// and a title alone is too volatile - a browser's title changes with every tab.
-/// Scoring means a browser still lands on the right workspace even though its title
-/// has changed since the session was saved.
+/// Surviving handles take precedence. Visible windows from a restarted application
+/// can fall back to process, class and a title hash, because their handles changed.
+/// That placement heuristic is not evidence that a hidden window belongs to us:
+/// recovery requires the recorded handle and agreeing application identity.
 /// </para>
 /// </remarks>
 public sealed class SessionStore
@@ -153,7 +157,8 @@ public sealed class SessionStore
                 [.. window.Tags],
                 window.IsSticky,
                 window.State.ToString(),
-                window.Handle));
+                window.Handle,
+                window.Identity.ProcessId));
         }
 
         List<RememberedMonitor> monitors = [];
@@ -315,6 +320,8 @@ public sealed class SessionStore
             builder.Append(window.Workspace).Append('\u001f')
                    .Append(window.ProcessName).Append('\u001f')
                    .Append(window.ClassName).Append('\u001f')
+                   .Append(window.Handle).Append('\u001f')
+                   .Append(window.ProcessId).Append('\u001f')
                    .Append(window.Sticky).Append('\u001f')
                    .Append(string.Join(',', window.Tags)).Append('\u001f')
                    .Append(window.State).Append('\u001e');
@@ -387,9 +394,9 @@ public sealed class SessionStore
     /// each other.
     /// </para>
     /// <para>
-    /// A handle is only trusted alongside an agreeing process and class, because
-    /// Windows reuses handle values. That does not make a stale match impossible, but
-    /// it confines the consequence to the case that was already being got wrong.
+    /// A handle is only trusted alongside an agreeing process, class and (when
+    /// recorded) process id, because Windows reuses handle values. Older sessions
+    /// still supply the handle, process name and class; title changes are harmless.
     /// </para>
     /// </remarks>
     /// <param name="session">The saved session to match against.</param>
@@ -400,8 +407,14 @@ public sealed class SessionStore
     /// match on and the bar can display - a handle is neither.
     /// </param>
     /// <param name="claimed">Entries already taken by an earlier window.</param>
+    /// <param name="requireHandleMatch">
+    /// True for concealed-window recovery. A process, class or title match alone is
+    /// only a placement hint for a visible window, never permission to reveal a hidden
+    /// helper. A legacy entry without a handle cannot justify recovery.
+    /// </param>
     public static RememberedWindow? Match(
-        Session session, WindowIdentity identity, long handle, HashSet<int> claimed)
+        Session session, WindowIdentity identity, long handle, HashSet<int> claimed,
+        bool requireHandleMatch = false)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(identity);
@@ -425,15 +438,19 @@ public sealed class SessionStore
             if (!string.Equals(candidate.ClassName, identity.ClassName, StringComparison.Ordinal))
                 continue;
 
-            // Process and class agreeing is enough to restore. Everything above that
-            // exists to decide between several windows of the same application, and
-            // the handle is the only one of them that is still true after the window
-            // has been used.
+            bool sameHandle = candidate.Handle != 0 && candidate.Handle == handle &&
+                (candidate.ProcessId == 0 || candidate.ProcessId == identity.ProcessId);
+
+            if (requireHandleMatch && !sameHandle) continue;
+
+            // Loose matching preserves placement across an application restart, but
+            // is never used to claim a concealed window. Teams has hidden helpers
+            // indistinguishable by process/class/title from its real windows.
             int score = 1;
 
             if (candidate.TitleHash == titleHash) score = 2;
 
-            if (candidate.Handle != 0 && candidate.Handle == handle) score = 3;
+            if (sameHandle) score = 3;
 
             if (score > bestScore)
             {

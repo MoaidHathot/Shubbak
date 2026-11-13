@@ -25,6 +25,61 @@ public sealed class WindowRecoveryTests
     private static Session SessionOf(params RememberedWindow[] windows) =>
         new(1, DateTimeOffset.Now, [.. windows]);
 
+    private static RememberedWindow Remember(nint handle)
+    {
+        WindowIdentity identity = Win32Window.BuildIdentity(handle);
+        return new RememberedWindow(
+            identity.ProcessName, identity.ClassName, 0, "chat", [], false, "Tiling", handle, identity.ProcessId);
+    }
+
+    [Fact]
+    public void AVisibleRememberedWindowDoesNotLendItsEntryToAHiddenHelper()
+    {
+        // The Teams shape: one process, one class, even the same title, but two HWNDs.
+        // The old standalone search enumerated only concealed windows and gave the
+        // visible window's session entry to its otherwise indistinguishable helper.
+        using var main = new TestWindow();
+        using var helper = new TestWindow(visible: false);
+
+        Assert.Empty(WindowRecovery.FindRemembered(SessionOf(Remember(main.Handle))));
+        Assert.False(helper.IsVisible);
+    }
+
+    [Fact]
+    public void OnlyTheRememberedHandleIsRecoveredWhenBothWindowsAreHidden()
+    {
+        using var main = new TestWindow(visible: false);
+        using var helper = new TestWindow(visible: false);
+
+        WindowRecovery.Candidate recovered = Assert.Single(
+            WindowRecovery.FindRemembered(SessionOf(Remember(main.Handle))));
+
+        Assert.Equal(main.Handle, recovered.Handle);
+        Assert.False(helper.IsVisible);
+    }
+
+    [Fact]
+    public void AHandlelessLegacySessionDoesNotGuessWhichHiddenWindowToReveal()
+    {
+        using var helper = new TestWindow(visible: false);
+
+        Assert.Empty(WindowRecovery.FindRemembered(
+            SessionOf(Remember(helper.Handle) with { Handle = 0 })));
+    }
+
+    [Fact]
+    public void AnExactRecoveryStillWorksWhenTheTitleHasChanged()
+    {
+        using var main = new TestWindow(visible: false);
+        Session session = SessionOf(Remember(main.Handle) with { TitleHash = 12345 });
+
+        List<WindowRecovery.Candidate> found = WindowRecovery.FindRemembered(session);
+        Assert.Equal(main.Handle, Assert.Single(found).Handle);
+        Assert.Equal(1, WindowRecovery.Revive(found));
+        TestWindow.PumpUntil(() => main.IsVisible);
+        Assert.True(main.IsVisible);
+    }
+
     [Fact]
     public void AHiddenWindowIsSeenAsConcealed()
     {

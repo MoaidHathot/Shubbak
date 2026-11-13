@@ -63,6 +63,37 @@ public sealed class SessionSaveTests : IDisposable
     }
 
     [Fact]
+    public void AReplacementWindowWithTheSamePlacementUpdatesItsRecordedHandle()
+    {
+        // A browser can replace its last window between periodic saves. Its process,
+        // class and placement are unchanged, but crash recovery needs the new HWND.
+        WindowManager wm = Create();
+        WindowNode original = Assert.Single(wm.Root.DescendantWindows());
+        Assert.True(SessionStore.Save(wm.Root, _path, routine: true));
+
+        wm.UnmanageWindow(original);
+        var replacement = new WindowNode(original.Handle + 1, original.Identity);
+        wm.ManageWindow(replacement);
+        Assert.True(SessionStore.Save(wm.Root, _path, routine: true));
+
+        Assert.Equal(replacement.Handle, Assert.Single(SessionStore.Load(_path)!.Windows).Handle);
+    }
+
+    [Fact]
+    public void ARecycledHandleWithANewProcessIdUpdatesTheSession()
+    {
+        WindowManager wm = Create();
+        WindowNode original = Assert.Single(wm.Root.DescendantWindows());
+        Assert.True(SessionStore.Save(wm.Root, _path, routine: true));
+
+        wm.UnmanageWindow(original);
+        wm.ManageWindow(new WindowNode(original.Handle, original.Identity with { ProcessId = 987 }));
+        Assert.True(SessionStore.Save(wm.Root, _path, routine: true));
+
+        Assert.Equal(987, Assert.Single(SessionStore.Load(_path)!.Windows).ProcessId);
+    }
+
+    [Fact]
     public void AWindowChangingWorkspaceIsWritten()
     {
         // The whole point of the file. Skipping this write would lose the one thing

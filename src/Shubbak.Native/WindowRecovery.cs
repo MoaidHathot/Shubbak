@@ -42,8 +42,9 @@ public static class WindowRecovery
     /// </summary>
     /// <remarks>
     /// The safe search, and the one <c>shubbak restore</c> uses by default. A window is
-    /// revived only if a remembered entry matches it, so windows an application hid for
-    /// its own reasons are never touched.
+    /// revived only if its handle and application identity agree with a remembered
+    /// entry. Placement's process/class/title fallback would revive hidden helpers
+    /// of the same application, even while the actual remembered window is visible.
     /// </remarks>
     public static List<Candidate> FindRemembered(Session session)
     {
@@ -54,7 +55,7 @@ public static class WindowRecovery
         {
             WindowIdentity identity = Win32Window.BuildIdentity(handle);
 
-            if (SessionStore.Match(session, identity, handle, claimed) is null) continue;
+            if (SessionStore.Match(session, identity, handle, claimed, requireHandleMatch: true) is null) continue;
 
             found.Add(Describe(handle));
         }
