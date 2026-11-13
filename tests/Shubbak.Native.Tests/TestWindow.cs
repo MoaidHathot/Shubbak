@@ -156,9 +156,7 @@ internal sealed class TestWindow : IDisposable
         // user's, which is the one to refuse.
         DesktopLease.Acquire();
 
-        if (Process.GetProcessesByName("shubbak-wm").Length == 0) return;
-
-        throw new InvalidOperationException(
+        Shubbak.TestWindow.WindowManagerGuard.RequireStopped(
             "shubbak-wm is running. These tests create real windows, which it will " +
             "manage, move and conceal - any result would be measuring the window " +
             "manager rather than the code under test. Stop it and run them again.");

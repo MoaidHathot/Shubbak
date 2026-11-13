@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Windows.Win32;
 using Windows.Win32.Foundation;
@@ -19,10 +18,7 @@ public sealed class AnimationPreferenceScope : IDisposable
 
     public AnimationPreferenceScope(bool enabled)
     {
-        Process[] running = Process.GetProcessesByName("shubbak-wm");
-        foreach (Process process in running) process.Dispose();
-        if (running.Length != 0)
-            throw new InvalidOperationException("Stop shubbak-wm before controlling the desktop's animation preference.");
+        WindowManagerGuard.RequireStopped("Stop shubbak-wm before controlling the desktop's animation preference.");
 
         OriginalEnabled = Read();
         if (OriginalEnabled == enabled) return;

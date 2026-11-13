@@ -15,9 +15,7 @@ public sealed class ControlledWindow : IDisposable
 
     public ControlledWindow(bool withHiddenHelper = false)
     {
-        Process[] running = Process.GetProcessesByName("shubbak-wm");
-        foreach (Process process in running) process.Dispose();
-        if (running.Length != 0) throw new InvalidOperationException("Stop shubbak-wm before testing foreign focus.");
+        WindowManagerGuard.RequireStopped("Stop shubbak-wm before testing foreign focus.");
 
         var info = new ProcessStartInfo(Path.Combine(AppContext.BaseDirectory, "Shubbak.TestWindow.exe"))
         {

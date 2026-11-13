@@ -193,3 +193,18 @@ The final normal-session report retained five managed windows and one Teams wind
 and reported frame allocation p99/max of 0 B. Raw resource snapshots cover the whole
 exercise, including diagnostics, transient input windows and configuration reloads;
 they are not an isolated idle-memory or CPU improvement measurement.
+
+## CI process-guard follow-up
+
+The first remote run passed all 23 end-to-end scenarios, but 86 native tests refused
+to run because their desktop guard found a `shubbak-wm` process entry. The guard
+checked only the length of an enumeration snapshot and did not report the PID or
+lifetime state. A local forced-order run confirmed the desktop lease serialises the
+hosts; its two failures were foreground contention with Firefox, not that CI refusal.
+
+The shared test-window/animation guards now check `HasExited`, release enumerated
+process components, and report PID, session, start time and path when a live or
+inaccessible process requires refusal. A deterministic regression keeps an enumerated
+child component across termination: the old count-only guard refused it after exit;
+the new guard still rejects it while alive and accepts it after exit. These changes
+are confined to test support. The additional regression passed locally.
