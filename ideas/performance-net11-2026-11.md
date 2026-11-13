@@ -256,3 +256,35 @@ this is not claimed as an idle-RAM improvement over the framework-only build.
 regression, substantially reduces reload/exit work and retention in this workload,
 and strengthens the existing worker-lifetime contract. Keyboard and full-stack
 combined validation remain required.
+
+## UTF-8 write buffers
+
+The writer now reuses its Utf8JsonWriter, retains at most 16 KiB per connection,
+and borrows temporary buffers up to 128 KiB. Larger requests are not retained in
+that pool. The larger temporary cap is necessary because Utf8JsonWriter can ask
+for about 74 KiB to encode 4 KiB of quote characters even though the wire frame is
+smaller. The initial 64 KiB cap failed the warmed allocation check (7,378,400 B for
+100 frames); 128 KiB passes with zero warmed allocation in that memory-stream case.
+
+The rented memory is returned only after WriteAsync completes, including failure.
+The JSON writer drops its borrowed span before a buffer can be returned. A held-
+write regression rents and overwrites competing pool buffers while I/O is pending;
+the captured frame still round-trips. Existing large/small, Unicode, ordering,
+malformed-frame, cancellation and subscriber tests also pass: **61 cases per IPC
+target**, plus the shared companion suite.
+
+Four reversed-order native pairs against the preceding qualified async build:
+
+| Work | Before B/op | After B/op | Before CPU ms/op | After CPU ms/op |
+|---|---:|---:|---:|---:|
+| Plain IPC | 35,864-35,868 | 35,624-35,626 | 0.0794-0.0842 | 0.0844-0.0862 |
+| Escaped IPC | 167,148-167,156 | **87,305-87,308** | 0.2313-0.2356 | **0.2258-0.2325** |
+
+Escaped elapsed falls 21.015-21.200 -> 20.448-20.881 seconds for 100,000 exchanges.
+Its allocation falls about 48%; decoded strings remain a substantial cost. Plain
+allocation improves only slightly and its CPU is higher in these pairs. The final
+combined baseline comparison must account for that trade rather than reporting all
+IPC as faster. Native stack/GC evidence is retained in `native-writer-escaped-profile`.
+
+**Step review:** retain the large allocation reduction provisionally and verify the
+combined plain/escaped workload and resident-memory effect before delivery.

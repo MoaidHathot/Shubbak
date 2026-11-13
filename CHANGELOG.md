@@ -17,6 +17,10 @@ schedule and breaking either is a different kind of event:
 
 ### Changed
 
+- **Less IPC allocation for escaped payloads.** Connections reuse their JSON
+  writer and small UTF-8 storage, borrowing bounded temporary buffers for larger
+  frames. Buffers stay owned through asynchronous write completion, and oversized
+  reports do not become permanent per-connection storage.
 - **Script workers stop promptly on reload and exit.** Taj's command sources and
   Dalil's script prompts use per-worker Windows jobs, with suspended starts ensuring
   descendants are included from the beginning. Shutdown no longer scans every
