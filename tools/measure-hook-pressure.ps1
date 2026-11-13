@@ -6,15 +6,16 @@ process that installs no hook. The input receiver and injector are outside that 
 param(
     [string] $Probe = (Join-Path $PSScriptRoot '../artifacts/input-probe/shubbak-input-probe.exe'),
     [string] $Output = (Join-Path $PSScriptRoot '../artifacts/hook-pressure'),
+    [string] $SessionDirectory = (Join-Path $PSScriptRoot '../dist'),
     [ValidateRange(2, 1000000)] [int] $Samples = 20000
 )
 $ErrorActionPreference = 'Stop'
-$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$SessionDirectory = [IO.Path]::GetFullPath($SessionDirectory)
 $Probe = [IO.Path]::GetFullPath($Probe)
 $Output = [IO.Path]::GetFullPath($Output)
 if (Test-Path $Output) { throw "Refusing to overwrite $Output" }
 New-Item -ItemType Directory -Path $Output | Out-Null
-& (Join-Path $root 'dist/shubbak.exe') stop
+& (Join-Path $SessionDirectory 'shubbak.exe') stop
 if ($LASTEXITCODE -ne 0) { throw 'Could not stop the normal session.' }
 try {
     foreach ($pressure in @($false, $true)) {
@@ -55,4 +56,4 @@ try {
         }
     }
 }
-finally { Start-Process -FilePath (Join-Path $root 'dist/shubbak-wm.exe') -WorkingDirectory (Join-Path $root 'dist') }
+finally { Start-Process -FilePath (Join-Path $SessionDirectory 'shubbak-wm.exe') -WorkingDirectory $SessionDirectory }

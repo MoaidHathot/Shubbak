@@ -17,7 +17,7 @@ internal static class PerformanceRun
         int count = Program.Number(args, "--operations", 20_000, 1, 1_000_000);
         int windows = Program.Number(args, "--windows", 32, 2, 1024);
         if (kind == "query") return await Queries(args, count).ConfigureAwait(false);
-        if (kind == "ipc") await Ipc(count, Program.Number(args, "--payload-size", 4096, 0, 100_000)).ConfigureAwait(false);
+        if (kind == "ipc") await Ipc(count, Program.Number(args, "--payload-size", 4096, 0, 100_000), args.Contains("--escaped", StringComparer.Ordinal)).ConfigureAwait(false);
         else Layout(kind, count, windows);
         return 0;
     }
@@ -72,10 +72,20 @@ internal static class PerformanceRun
         Report(kind, count, checksum, before, process);
     }
 
-    private static async Task Ipc(int count, int payloadSize)
+    private static async Task Ipc(int count, int payloadSize, bool escaped)
     {
         string pipe = $"shubbak-perf-{Guid.NewGuid():N}";
-        string payload = new('x', payloadSize);
+        // Nested JSON and non-ASCII window titles exercise the escaping paid by real
+        // state/icon replies. Freeze the same payload across runtime variants.
+        const string pattern = "{\"title\":\"شبّاك🙂\",\"path\":\"C:\\\\windows\"}\n";
+        string payload = escaped
+            ? string.Create(payloadSize, pattern, static (span, text) =>
+            {
+                for (int i = 0; i < span.Length; i++) span[i] = text[i % text.Length];
+                // Do not truncate a surrogate pair at the requested character count.
+                if (!span.IsEmpty && char.IsHighSurrogate(span[^1])) span[^1] = 'x';
+            })
+            : new string('x', payloadSize);
         string answer = JsonSerializer.Serialize(payload, IpcJsonContext.Default.String);
         await using var server = new IpcServer { PipeName = pipe };
         server.Start(request => Task.FromResult(new IpcResponse(request.Id, true, answer)));
@@ -90,7 +100,7 @@ internal static class PerformanceRun
             IpcResponse response = await client.SendAsync("query", payload, limit.Token).ConfigureAwait(false);
             if (!response.Ok || response.Data != answer) throw new InvalidOperationException("IPC response mismatch.");
         }
-        Report("ipc", count, (long)count * payloadSize, before, process);
+        Report(escaped ? "ipc-escaped" : "ipc", count, (long)count * payloadSize, before, process);
     }
 
     private readonly record struct Sample(long Time, long Allocated, double Cpu, int Gen0, int Gen1, int Gen2)

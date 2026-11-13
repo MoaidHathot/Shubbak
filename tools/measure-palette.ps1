@@ -8,6 +8,7 @@ param(
     [Parameter(Mandatory)] [string] $CurrentRoot,
     [Parameter(Mandatory)] [string] $Baseline,
     [Parameter(Mandatory)] [string] $Output,
+    [string] $SessionDirectory = (Join-Path $PSScriptRoot '../dist'),
     [ValidateRange(1, 10)] [int] $Rounds = 4,
     [ValidateRange(1, 1000)] [int] $Operations = 500
 )
@@ -15,8 +16,7 @@ $ErrorActionPreference = 'Stop'
 foreach ($name in @('Probe','CurrentRoot','Baseline','Output')) { Set-Variable $name ([IO.Path]::GetFullPath((Get-Variable $name -ValueOnly))) }
 if (Test-Path $Output) { throw "Refusing to overwrite $Output" }
 New-Item -ItemType Directory -Path $Output | Out-Null
-$root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$dist = Join-Path $root 'dist'
+$dist = [IO.Path]::GetFullPath($SessionDirectory)
 $cli = Join-Path $dist 'shubbak.exe'
 $projects = @{ 'shubbak-wm'='Shubbak.Wm'; 'shubbak'='Shubbak.Cli'; 'taj'='Taj'; 'dalil'='Dalil'; 'ayn'='Ayn' }
 function Save($path, $value) { [IO.File]::WriteAllText($path, ($value | ConvertTo-Json -Depth 7).Replace("`r", '')) }

@@ -12,6 +12,8 @@ param(
     [string] $Current = (Join-Path $PSScriptRoot '../dist/shubbak-wm.exe'),
     [string] $Previous,
     [string] $Output = (Join-Path $PSScriptRoot '../artifacts/keyboard-baseline'),
+    [string] $SessionDirectory = (Join-Path $PSScriptRoot '../dist'),
+    [string] $TestWindow,
     [ValidateRange(2, 1000000)] [int] $Samples = 20000,
     [ValidateRange(0, 100000)] [int] $Warmup = 1000,
     [ValidateRange(0, 1000000)] [int] $IntervalUs = 2000,
@@ -37,8 +39,9 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $Probe = [IO.Path]::GetFullPath($Probe)
 $Current = [IO.Path]::GetFullPath($Current)
 $Output = [IO.Path]::GetFullPath($Output)
-$cli = Join-Path $root 'dist/shubbak.exe'
-$window = Join-Path $root 'tests/Shubbak.TestWindow/bin/Release/net10.0-windows10.0.19041.0/win-x64/Shubbak.TestWindow.exe'
+$SessionDirectory = [IO.Path]::GetFullPath($SessionDirectory)
+$cli = Join-Path $SessionDirectory 'shubbak.exe'
+$window = if ($TestWindow) { [IO.Path]::GetFullPath($TestWindow) } else { Join-Path $root 'tests/Shubbak.TestWindow/bin/Release/net10.0-windows10.0.19041.0/win-x64/Shubbak.TestWindow.exe' }
 foreach ($file in @($Probe, $Current, $cli, $window)) {
     if (-not (Test-Path -LiteralPath $file)) { throw "Required binary missing: $file" }
 }
@@ -55,6 +58,7 @@ $metadata = @{
     Probe = (Get-FileHash $Probe).Hash
     Current = (Get-FileHash $Current).Hash
     Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
+    TestWindow = (Get-FileHash $window).Hash
 }
 [IO.File]::WriteAllText((Join-Path $Output 'metadata.json'), ($metadata | ConvertTo-Json).Replace("`r", ''), [Text.UTF8Encoding]::new($false))
 
@@ -155,17 +159,25 @@ foreach ($mod in @('alt', 'alt+shift', 'ctrl+alt', 'ctrl+shift')) {
 }
 $config += "`n}`n"
 
-$normal = @(Get-Process -Name shubbak-wm -ErrorAction SilentlyContinue)
-foreach ($p in $normal) {
-    if ($p.Path -ne (Join-Path $root 'dist/shubbak-wm.exe')) { throw "Unexpected daemon running: $($p.Path)" }
-    $p.Dispose()
-}
-if ($normal.Count -gt 0) {
-    & $cli stop
-    if ($LASTEXITCODE -ne 0) { throw 'Could not stop the normal session.' }
-}
-
+$desktop = [Threading.Mutex]::new($false, 'Local\shubbak-tests-the-desktop')
+try { $leased = $desktop.WaitOne([TimeSpan]::FromMinutes(2)) }
+catch [Threading.AbandonedMutexException] { $leased = $true }
+if (-not $leased) { $desktop.Dispose(); throw 'Desktop is in use by another Shubbak test run.' }
+$restoreSession = $false
 try {
+    $normal = @(Get-Process -Name shubbak-wm -ErrorAction SilentlyContinue)
+    foreach ($p in $normal) {
+        try {
+            if ($p.Path -ne (Join-Path $SessionDirectory 'shubbak-wm.exe')) { throw "Unexpected daemon running: $($p.Path)" }
+        }
+        finally { $p.Dispose() }
+    }
+    if ($normal.Count -gt 0) {
+        & $cli stop
+        if ($LASTEXITCODE -ne 0) { throw 'Could not stop the normal session.' }
+        $restoreSession = $true
+    }
+
     foreach ($workload in $Workloads) {
         for ($round = 0; $round -lt $Rounds; $round++) {
             $versions = if ($Bound -or $workload -in @('animation', 'ipc', 'suspended')) { @('current') } else { @('off', 'current') }
@@ -331,7 +343,8 @@ try {
     }
 }
 finally {
-    # This task intentionally stopped the normal daemon before preparing the probe;
-    # restore it even if no normal daemon was running at this script's entry.
-    Start-Process -FilePath (Join-Path $root 'dist/shubbak-wm.exe') -WorkingDirectory (Join-Path $root 'dist')
+    try {
+        if ($restoreSession) { Start-Process -FilePath (Join-Path $SessionDirectory 'shubbak-wm.exe') -WorkingDirectory $SessionDirectory }
+    }
+    finally { $desktop.ReleaseMutex(); $desktop.Dispose() }
 }

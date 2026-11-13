@@ -14,8 +14,8 @@ internal static class Program
         {
             if (args.Length == 0 || args[0] == "--help")
             {
-                Console.WriteLine("shubbak-input-probe receive|hook-host|cpu-load|churn|gpu-load|perf|palette-ui [--samples 20000] [--warmup 1000] [--interval-us 2000] [--burst 1] [--label name] [--raw-output file] [--seconds 60] [--threads 28] [--gc] [--no-hook] [--bound --instance name] [--animate]");
-                Console.WriteLine("receive: [--modifier alt|ctrl|shift|win|ctrl+shift|ctrl+ralt]; perf: --kind ipc|layout|resize|query --operations 20000 [--windows 32] [--query name --instance name --target-pid PID]; palette-ui: --target-pid PID [--operations 100]");
+                Console.WriteLine("shubbak-input-probe receive|hook-host|cpu-load|churn|gpu-load|perf|palette-ui|process-sources [--samples 20000] [--warmup 1000] [--interval-us 2000] [--burst 1] [--label name] [--raw-output file] [--seconds 60] [--threads 28] [--gc] [--no-hook] [--bound --instance name] [--animate]");
+                Console.WriteLine("receive: [--modifier alt|ctrl|shift|win|ctrl+shift|ctrl+ralt]; perf: --kind ipc|layout|resize|query --operations 20000 [--windows 32] [--payload-size 4096 --escaped] [--query name --instance name --target-pid PID]; palette-ui: --target-pid PID [--operations 100]; process-sources: --child PATH [--sources 16 --seconds 15]");
                 return 0;
             }
 
@@ -29,6 +29,8 @@ internal static class Program
                 "gpu-load" => GpuLoad.Run(args).GetAwaiter().GetResult(),
                 "perf" => PerformanceRun.Run(args).GetAwaiter().GetResult(),
                 "palette-ui" => PaletteRun.Run(args).GetAwaiter().GetResult(),
+                "process-sources" => ProcessSourcesRun.Run(args).GetAwaiter().GetResult(),
+                "source-child" => ProcessSourcesRun.Child(args),
                 _ => throw new ArgumentException("Unknown probe mode."),
             };
         }
@@ -103,4 +105,5 @@ internal sealed record ProbeReport
 
 [JsonSerializable(typeof(ProbeReport))]
 [JsonSerializable(typeof(PerformanceReport))]
+[JsonSerializable(typeof(ProcessSourcesReport))]
 internal sealed partial class ProbeJson : JsonSerializerContext;

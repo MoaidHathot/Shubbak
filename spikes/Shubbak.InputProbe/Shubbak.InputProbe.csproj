@@ -11,5 +11,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.298" PrivateAssets="all" />
     <ProjectReference Include="..\..\src\Shubbak.Wm\Shubbak.Wm.csproj" />
+    <ProjectReference Include="..\..\src\Taj.Core\Taj.Core.csproj" />
   </ItemGroup>
 </Project>

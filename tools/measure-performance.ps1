@@ -10,6 +10,8 @@ param(
     [ValidateRange(1, 20)] [int] $Rounds = 4,
     [ValidateRange(1, 1000000)] [int] $Operations = 20000,
     [ValidateRange(2, 1024)] [int] $Windows = 32,
+    [ValidateRange(0, 100000)] [int] $PayloadSize = 4096,
+    [switch] $Escaped,
     [string[]] $Kinds = @('ipc', 'layout', 'resize')
 )
 $ErrorActionPreference = 'Stop'
@@ -17,7 +19,7 @@ if (Test-Path $Output) { throw "Refusing to overwrite $Output" }
 New-Item -ItemType Directory -Path $Output | Out-Null
 $Probe = [IO.Path]::GetFullPath($Probe)
 if ($Previous) { $Previous = [IO.Path]::GetFullPath($Previous) }
-$meta = @{ Probe=(Get-FileHash $Probe).Hash; Previous=$(if ($Previous) { (Get-FileHash $Previous).Hash }); StartedUtc=[DateTime]::UtcNow.ToString('O'); Operations=$Operations; Windows=$Windows }
+$meta = @{ Probe=(Get-FileHash $Probe).Hash; Previous=$(if ($Previous) { (Get-FileHash $Previous).Hash }); StartedUtc=[DateTime]::UtcNow.ToString('O'); Operations=$Operations; Windows=$Windows; PayloadSize=$PayloadSize; Escaped=[bool]$Escaped }
 [IO.File]::WriteAllText((Join-Path $Output 'metadata.json'), ($meta | ConvertTo-Json).Replace("`r", ''))
 function Processes {
     $snapshot = @{}
@@ -38,7 +40,9 @@ foreach ($kind in $Kinds) {
             $binary = if ($version -eq 'previous') { $Previous } else { $Probe }
             $before = Processes
             $start = [Diagnostics.Stopwatch]::StartNew()
-            $text = & $binary perf --kind $kind --operations $Operations --windows $Windows
+            $arguments = @('perf', '--kind', $kind, '--operations', "$Operations", '--windows', "$Windows", '--payload-size', "$PayloadSize")
+            if ($Escaped) { $arguments += '--escaped' }
+            $text = & $binary @arguments
             if ($LASTEXITCODE -ne 0) { throw "Failed $kind $version`: $text" }
             $elapsed = $start.Elapsed.TotalSeconds
             $after = Processes

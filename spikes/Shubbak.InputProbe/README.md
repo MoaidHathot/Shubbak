@@ -62,6 +62,22 @@ comparison. Small CPU times need longer runs to exceed process-counter granulari
 `tools/measure-performance.ps1` interleaves native probes and records ambient process
 CPU deltas. The benchmark includes its own observer overhead equally in both builds.
 
+`perf --kind ipc --escaped` uses a fixed mixture of nested JSON, Arabic text and
+supplementary Unicode, in addition to the plain payload baseline. `--payload-size`
+selects the character count. Replies are validated on every measured exchange.
+
+`process-sources --child PATH --sources 16 --seconds 15` runs Taj's real
+`ProcessSource` against quiet child processes that report their pids once. Use the
+same frozen native probe for `--child` in every runtime variant. The report separates
+parent startup, idle CPU/allocation, private memory, working set, threads, handles
+and disposal. It fails unless all children become ready and exit during cleanup.
+Children have a bounded lifetime even if their parent is interrupted. Compare with
+`tools/measure-process-sources.ps1`, which reverses order and retains ambient CPU.
+
+For a worktree, `measure-keyboard.ps1` accepts `-SessionDirectory` for the installed
+stack and `-TestWindow` for a frozen helper. It takes the same desktop lease as native
+tests and restores the session only when it stopped one.
+
 The keyboard controller accepts `-IpcIntervalMs` to pace query clients, in addition
 to the default saturation workload, and records process CPU/private bytes around each
 case. Only cases whose loaders and diagnostics also completed enter its aggregate.
