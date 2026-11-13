@@ -373,3 +373,147 @@ pass integrity checks. Raw slower cases and ambient CPU are retained.
 accuracy and reduced overspeed. Keep the final combined keyboard/load matrix as
 the acceptance check for the delivered build; geometry cadence is not a claim
 about physical display presentation latency.
+
+## Hosted verification
+
+[Run 43486256144](https://github.com/MoaidHathot/Shubbak/actions/runs/43486256144)
+passed for candidate `81b0086`: x64 build/tests, native packaging and MSI
+install/uninstall, followed by native ARM64 tests, execution of the cross-built
+programs, and ARM64 MSI install/uninstall. The ARM64 job retains its documented
+foreground-test exclusion; the unlocked local x64 suite ran those tests.
+
+## Normal resident session
+
+The final candidate and the original .NET 10 source baseline were deployed in
+baseline/current/current/baseline order with the normal configuration. Each session
+included 120 seconds idle, input delivery, 100 palette activations, 40 reloads,
+suspension and resume. All operations and input-integrity checks passed; the window
+set was stable within each idle sample. Results are in `final-normal-stack`.
+
+| Observation | Original | Candidate |
+|---|---:|---:|
+| Four residents' idle private memory | 43.61-49.23 MiB | **42.71-42.90 MiB** |
+| Four residents' idle working set | 99.54-104.89 MiB | **98.73-98.78 MiB** |
+| Four residents' CPU per 120 s idle | 93.75-437.50 ms | 203.12-250.00 ms |
+| Normal-session input p99 | 1.88-2.14 ms | **about 1.71 ms** |
+| Palette foreground median | about 1.80-1.82 ms | about 1.77-1.78 ms |
+| Palette foreground p99 | about 3.34-3.51 ms | about 3.53-3.59 ms |
+| Private memory after 40 reloads | 81.59-88.09 MiB | 85.02-85.27 MiB |
+
+Idle CPU and post-reload memory overlap; neither supports a universal reduction.
+The small palette sample is foreground readiness, not paint completion, and its
+slightly higher tail is retained. The candidate's five native files total about
+31 MB and its x64 archive is 13.67 MB; distribution documentation now uses the
+measured size rather than the older 25 MB estimate. `final-binaries.json` verifies
+that the five executables installed in `dist` match the measured candidate.
+
+## Final native input matrix
+
+The principal final matrix contains **600,000 measured application edges** (including
+80,000 GC-pressure edges) and **144,000 command notifications** across 82 cases.
+All accepted runs preserve the tested counts/order/edge ownership, with no leaked
+bound input. Notifications with identical signal payloads establish counts, not
+independent per-notification identity. The receiver is frozen across daemon versions.
+
+Application-delivery p99 ranges, milliseconds:
+
+| Workload | Original | Candidate |
+|---|---:|---:|
+| Idle | 1.339-1.363 | 1.265-1.312 |
+| 28 CPU workers | 1.614-1.730 | 1.652-1.737 |
+| Animated windows | 3.605-3.688 | 3.375-3.459 |
+| Four saturated IPC clients, initial | 1.612-1.956 | 1.891-2.155 |
+| Hardware graphics + CPU load | 1.450-1.486 | 1.459-1.461 |
+
+Because the initial IPC tail is higher, an additional four reversed-order pairs
+were run both with paced requests and saturation (160,000 more edges). Paced p99
+is **1.296-1.387 vs 1.296-1.402 ms**; saturated p99 is **1.551-1.754 vs
+1.576-1.645 ms**. The initial tail increase does not persist in that comparison.
+Saturation can process different request counts; the equal-work CPU/allocation
+comparison is separate. A 24.18 ms idle candidate maximum is retained rather than
+hidden by its lower p99.
+
+Unmodified bound-command p99 is 0.745-0.963 vs 0.774-0.791 ms idle,
+1.111-1.170 vs 0.706-0.876 ms with CPU pressure, 2.017-2.534 vs 1.978-2.407 ms
+while animating, and 0.354-0.365 vs 0.347-0.356 ms with saturated IPC. Modified
+Alt, Ctrl+Shift, Ctrl+Right-Alt and Win delivery was checked too. Larger CPU-loaded
+tails on both versions prompted four additional pairs per modifier (96,000 more
+notifications). Those runs preserve correctness but have mixed tails, including
+slower candidate Alt rows; they do not justify claiming every shortcut percentile
+improves. These are command/IPC notification times, not callback execution times.
+
+The actual native hook host records **zero warmed hook-thread allocation** over
+20,000 measured lookups, zero faults and zero drops. Its pressured hooked runs
+include **159 forced blocking Gen2 collections**. Lookup p99 is about 1 microsecond;
+that instrumented figure is not substituted for end-to-end input delivery. The
+normal-session tests add 112,000 input edges, including suspension/resume, and 400
+successful palette activations.
+
+**Step review:** keyboard semantics remain protected by receiver-based regressions
+and native integrity checks. Typical delivery stays in the measured baseline range
+or improves; variable tail observations are reported explicitly. This establishes
+neither a hard latency bound nor physical USB/raw-input/game-to-photon timing.
+
+## Final original/candidate rerun
+
+Four reversed-order native pairs against the frozen .NET 10 source baseline, with
+all selected changes included, reproduce the IPC gains:
+
+| Work | Original B/op | Final B/op | Original CPU ms/op | Final CPU ms/op |
+|---|---:|---:|---:|---:|
+| Plain 4 KiB IPC | about 36,471 | **35,403-35,412** | 0.0852-0.0936 | **0.0788-0.0855** |
+| Escaped/Unicode IPC | 168,128-168,133 | **87,085-87,097** | 0.2338-0.2537 | **0.2103-0.2244** |
+
+Mean reductions are **6.4% CPU / 2.9% allocation / 3.9% elapsed** for plain IPC and
+**10.2% CPU / 48.2% allocation / 6.8% elapsed** for escaped IPC. CPU is equal or
+lower in every final pair. These are this machine's equal-work results, not a
+universal speedup promise. The earlier component-level plain-CPU cost is retained
+above; it does not become an overall regression in the final baseline comparison.
+
+Layout and inverse resize keep **0 B/op** and identical geometry checksums. Layout
+elapsed is 0.974-0.979 -> 0.948-0.973 s per million operations. Inverse resize has
+three faster pairs and one slower candidate row (2.239 vs 2.192 s), retained in
+`final-layout` rather than described as uniformly faster.
+
+The final 16-source lifecycle comparison against .NET 10 has **323.6-327.9 ms ->
+0.72-8.71 ms** disposal, with one slower candidate cleanup retained. Parent cycle
+allocation is **31.31-31.42 -> 0.69-0.72 MiB**, CPU **343.8-437.5 -> 31.3-62.5 ms**,
+and post-disposal private memory **25.82-26.47 -> 7.45-7.94 MiB**. All children
+started and stopped. Idle source memory overlaps; free worker retention varies.
+
+The final NativeAOT diagnostic builds were profiled after the ordinary timings.
+`final-escaped-profile` retains native stack/GC evidence for the combined IPC code.
+`final-worker-profile` no longer shows the repeated process-tree termination path;
+its remaining process-information samples are in the benchmark's own resource
+observer. Matching PDB/ASLR maps and the TraceEvent analyzer source are retained
+under the evidence directory's `profiling-tools`.
+
+**Final goal review:** the accepted changes reduce measured IPC and worker lifecycle
+costs, retain the allocation-free keyboard/frame paths, preserve input semantics,
+and make applied animation cadence substantially closer to its configured period.
+Idle CPU, some tail percentiles and post-reload whole-stack memory remain variable;
+the report makes no blanket improvement claim for them. The speed-oriented AOT
+build was rejected, and the invalid cached async comparison was excluded. The
+normal session uses the verified final five binaries, with original copies and
+state/config backups retained separately.
+
+### Stable-desktop resource follow-up
+
+Final review found two different window sets across the normal-session samples:
+the first baseline had five windows and the remaining sessions six. Although each
+individual idle sample was stable, that table is not a perfectly controlled RAM
+comparison. A separate baseline/current/current/baseline run therefore enforces
+identical window handles and configuration across every case (`final-stable-idle`).
+
+Across those 30-second samples, combined private memory is **43.70-43.93 ->
+42.86-43.61 MiB** and working set **99.25-99.41 -> 98.47-98.92 MiB**. The idle
+memory improvement is modest. CPU is **0-46.88 -> 62.50-93.75 ms**, in 15.625 ms
+counter increments; this short sample supports no idle-CPU reduction claim.
+The longer 120-second CPU ranges above overlap. All four final programs were
+restored, and no benchmark-owned probe/window process remained.
+
+The final review retains the improvements with their measured scope: appreciably
+less IPC/worker allocation, less active-work CPU, faster worker cleanup and more
+accurate frame cadence. It does not turn small idle measurements or mixed latency
+tails into an all-workloads performance guarantee. Source text and retained evidence
+are LF-normalized, and the workspace contains no `nul` file.

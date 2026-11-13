@@ -106,8 +106,8 @@ Not the obvious choice for a window manager, so it was measured rather than assu
   `DeferWindowPos` batching was the decisive factor was wrong - that API refuses the
   flags a window manager needs and the batch had never actually run; the ADR carries
   the correction and the re-measured table.
-- **Distribution** — five single-file NativeAOT executables, ~25 MB total, under
-  11 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
+- **Distribution** — five single-file NativeAOT executables, ~31 MB total, under
+  14 MB zipped, no runtime prerequisite, zero trim/AOT warnings.
 
 The measurements were made on x64. The code has no architecture-specific paths and
 ships for ARM64 as well; the numbers there have not been taken yet.

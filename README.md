@@ -32,7 +32,7 @@ on. There is no second project to install before it looks like yours.
 
 ## What's in the box
 
-Five small programs, compiled to native code. About 25 MB together, nothing to
+Five small programs, compiled to native code. About 31 MB together, nothing to
 install first.
 
 - **shubbak-wm**, the window manager. Eleven layouts that belong to containers rather
