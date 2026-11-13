@@ -319,3 +319,57 @@ wrong-edge input. Per-run p99 ranges (milliseconds): idle 1.348-1.490 -> 1.349-1
 animation 3.745-3.778 -> 3.694-3.710, IPC 1.572-1.595 -> 1.578-1.752, CPU pressure
 1.643-1.744 -> 1.641-1.651. The IPC tail is higher in one candidate row; this remains
 in the evidence. These preliminary runs do not replace the final combined matrix.
+
+## Combined correctness and packaging
+
+The assembled candidate passes **3,869 Release cases with coverage**, with zero
+failures/skips, including the native foreground/keyboard tests, the process-family
+tests, both IPC targets and the real-daemon scenarios. Both architectures publish
+as NativeAOT, including the uiAccess variants. The release script validates native
+headers, versions, manifests, MSIs, archives and the two IPC package assets. Local
+MSI installation/ICE validation requiring elevation is left to the hosted checks.
+
+The frame experiment and final native performance matrices are evaluated separately
+from this correctness result.
+
+## Frame deadline phase correction
+
+The high-resolution clock now retains its deadline phase across small wake errors.
+It corrects at most the smaller of one millisecond or 10% of a period; longer stalls
+rebase, avoiding adjacent catch-up frames. Input/IPC wakes cannot emit a frame early.
+The millisecond-timer fallback retains its prior policy. Actual elapsed time still
+advances the animation, and reset/rate-change/overdue cases have deterministic tests.
+
+Two foreign native window processes record their own applied rectangle changes
+into preallocated storage and write it after the run. The same helper and input
+probe are frozen across versions. Geometry is clipped to measured input timestamps;
+no long intervals are discarded. Initial comparisons have two reversed-order rounds
+per workload, including combined animation+IPC and animation+CPU pressure.
+
+| Target/workload | Mean interval before | Mean interval after | RMS period error before | After |
+|---|---:|---:|---:|---:|
+| 60 Hz, animation | 16.950-16.953 ms | **16.668 ms** | 0.501-0.547 ms | **0.389-0.521 ms** |
+| 60 Hz, animation+IPC | 15.701-15.703 ms | **16.667 ms** | 1.060-1.079 ms | **0.423-0.477 ms** |
+| 60 Hz, animation+CPU | 16.968-16.971 ms | **16.666-16.669 ms** | 0.593-0.646 ms | **0.455-0.579 ms** |
+| 144 Hz, animation | about 7.17-7.18 ms | **about 6.95 ms** | about 0.54-0.55 ms | about 0.52-0.56 ms |
+| 144 Hz, animation+IPC | about 5.98 ms | **about 6.94 ms** | about 1.07-1.09 ms | **about 0.46-0.51 ms** |
+
+The IPC rows correct **overspeed**, not just late frames: the previous one-millisecond
+early allowance made sustained IPC request more repaints than the configured rate.
+Their absolute p99 intervals increase with the corrected period, so they are not
+presented as lower latency. Plain 60 Hz geometry p99 improves from 18.00-18.40 to
+17.76-17.97 ms. There are no intervals over twice the period in the initial geometry
+matrix; the candidate has no under-half-period bursts.
+
+One initial 144 Hz input case had higher p99 (5.897 vs 3.818 ms) and a 20.575 ms
+maximum. Its daemon had zero collections, hook faults and dropped keys; the data
+does not identify the cause. A four-pair follow-up retains another slower first
+candidate p99 (4.320 vs 3.906), followed by three lower candidate p99 values
+(3.785/3.737/3.687 vs 3.907/3.846/3.750). The measurements do not establish that
+every tail is faster. All **320,000 measured input edges** in these frame comparisons
+pass integrity checks. Raw slower cases and ambient CPU are retained.
+
+**Step review:** retain the deadline correction for the demonstrated cadence
+accuracy and reduced overspeed. Keep the final combined keyboard/load matrix as
+the acceptance check for the delivered build; geometry cadence is not a claim
+about physical display presentation latency.

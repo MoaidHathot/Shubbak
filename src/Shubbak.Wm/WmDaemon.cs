@@ -729,6 +729,15 @@ public sealed class WmDaemon : IDisposable
             // describe neither.
             _loop.IsPacingFrames = true;
 
+            if (_loop.HasHighResolutionFrameTimer)
+            {
+                double remaining = _framePacer.Remaining(ClockMilliseconds(Stopwatch.GetTimestamp()), FrameInterval.TotalMilliseconds);
+                // Preserve a positive sub-tick remainder rather than turn it into a
+                // zero wait while the due check still says to wait.
+                return remaining <= 0 ? TimeSpan.Zero
+                    : TimeSpan.FromTicks(Math.Max(1L, (long)Math.Ceiling(remaining * TimeSpan.TicksPerMillisecond)));
+            }
+
             // Only what is left of the current frame, not a fresh one. The pump is
             // woken by keyboard and window events as well as by its own timeout - and
             // during a workspace switch, by a storm of cloak and uncloak events - so
@@ -1033,6 +1042,7 @@ public sealed class WmDaemon : IDisposable
                 // rather than waiting out a frame interval measured from the previous
                 // motion, which could have ended minutes ago.
                 _lastFrameTicks = 0;
+                _framePacer.Reset();
                 reported = ReportMotionEnded();
             }
 
@@ -1176,7 +1186,10 @@ public sealed class WmDaemon : IDisposable
             ? 0
             : (now - _lastFrameTicks) * 1000.0 / Stopwatch.Frequency;
 
-        if (!first && !IsFrameDue(sinceFrameMs, frameMs)) return;
+        double nowMs = ClockMilliseconds(now);
+        if (!first && (_loop.HasHighResolutionFrameTimer
+                ? _framePacer.Remaining(nowMs, frameMs) > 0
+                : !IsFrameDue(sinceFrameMs, frameMs))) return;
 
         if (!first)
         {
@@ -1193,13 +1206,17 @@ public sealed class WmDaemon : IDisposable
         AdvanceAnimation(sinceFrameMs, frameMs);
 
         _lastFrameTicks = now;
+        _framePacer.Commit(nowMs, frameMs);
     }
 
     /// <summary>When the last animation frame was committed. Zero between motions.</summary>
     private long _lastFrameTicks;
+    private FramePacer _framePacer;
+
+    private static double ClockMilliseconds(long ticks) => ticks * (1000.0 / Stopwatch.Frequency);
 
     /// <summary>
-    /// Whether enough time has passed since the last frame to commit another.
+    /// Whether the millisecond-timeout fallback may commit another frame.
     /// </summary>
     /// <remarks>
     /// A floor on the interval, not a ceiling. The pump's wait is only ever an upper
@@ -1232,7 +1249,7 @@ public sealed class WmDaemon : IDisposable
     /// How early a wake may be and still count as a frame.
     /// </summary>
     /// <remarks>
-    /// One millisecond, which is the resolution the pump can express a timeout in and
+    /// One millisecond, which is the resolution the fallback can express a timeout in and
     /// the resolution <c>TimerResolution</c> asks the system scheduler for while
     /// anything is animating. Asking for finer than the clock beneath it can deliver
     /// is how the rate got halved in the first place.

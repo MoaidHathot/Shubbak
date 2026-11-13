@@ -14,6 +14,8 @@ param(
     [string] $Output = (Join-Path $PSScriptRoot '../artifacts/keyboard-baseline'),
     [string] $SessionDirectory = (Join-Path $PSScriptRoot '../dist'),
     [string] $TestWindow,
+    [ValidateRange(15, 240)] [int] $FrameRate = 60,
+    [switch] $Geometry,
     [ValidateRange(2, 1000000)] [int] $Samples = 20000,
     [ValidateRange(0, 100000)] [int] $Warmup = 1000,
     [ValidateRange(0, 1000000)] [int] $IntervalUs = 2000,
@@ -33,7 +35,7 @@ if (($Samples % 2) -ne 0) { throw 'Samples must contain complete down/up pairs.'
 if (($Warmup % 2) -ne 0) { throw 'Warmup must contain complete down/up pairs.' }
 if ($Bound -and 'suspended' -in $Workloads) { throw 'A suspended daemon intentionally does not handle bound keys.' }
 foreach ($workload in $Workloads) {
-    if ($workload -notin @('idle', 'cpu', 'animation', 'ipc', 'suspended', 'gpu', 'gpu-cpu')) { throw "Unknown workload: $workload" }
+    if ($workload -notin @('idle', 'cpu', 'animation', 'animation-ipc', 'animation-cpu', 'ipc', 'suspended', 'gpu', 'gpu-cpu')) { throw "Unknown workload: $workload" }
 }
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $Probe = [IO.Path]::GetFullPath($Probe)
@@ -59,6 +61,7 @@ $metadata = @{
     Current = (Get-FileHash $Current).Hash
     Previous = $(if ($Previous) { (Get-FileHash $Previous).Hash } else { $null })
     TestWindow = (Get-FileHash $window).Hash
+    FrameRate = $FrameRate; Geometry = [bool]$Geometry
 }
 [IO.File]::WriteAllText((Join-Path $Output 'metadata.json'), ($metadata | ConvertTo-Json).Replace("`r", ''), [Text.UTF8Encoding]::new($false))
 
@@ -158,6 +161,7 @@ foreach ($mod in @('alt', 'alt+shift', 'ctrl+alt', 'ctrl+shift')) {
     }
 }
 $config += "`n}`n"
+$config = $config.Replace('fps 60', "fps $FrameRate")
 
 $desktop = [Threading.Mutex]::new($false, 'Local\shubbak-tests-the-desktop')
 try { $leased = $desktop.WaitOne([TimeSpan]::FromMinutes(2)) }
@@ -179,8 +183,9 @@ try {
     }
 
     foreach ($workload in $Workloads) {
+        $animated = $workload -in @('animation', 'animation-ipc', 'animation-cpu')
         for ($round = 0; $round -lt $Rounds; $round++) {
-            $versions = if ($Bound -or $workload -in @('animation', 'ipc', 'suspended')) { @('current') } else { @('off', 'current') }
+            $versions = if ($Bound -or $animated -or $workload -in @('ipc', 'suspended')) { @('current') } else { @('off', 'current') }
             if ($Previous -and $workload -ne 'suspended') { $versions = @($versions | Where-Object { $_ -ne 'current' }) + @('previous', 'current') }
             if (($round % 2) -eq 1) { [Array]::Reverse($versions) }
             foreach ($version in $versions) {
@@ -196,8 +201,12 @@ try {
                 $windows = [Collections.Generic.List[object]]::new()
                 try {
                     if ($version -ne 'off') {
-                        if ($workload -eq 'animation') {
-                            foreach ($i in 1..2) { $windows.Add((Start-Child $window @('--test-window') -WindowReady)) }
+                        if ($animated) {
+                            foreach ($i in 1..2) {
+                                $windowArgs = @('--test-window')
+                                if ($Geometry) { $windowArgs += @('--geometry-output', (Join-Path $state "geometry-$i.csv")) }
+                                $windows.Add((Start-Child $window $windowArgs -WindowReady))
+                            }
                         }
                         $binary = if ($version -eq 'previous') { $Previous } else { $Current }
                         $daemon = Start-Child $binary @('--config', $configPath, '--log-file') $instance $state
@@ -212,7 +221,7 @@ try {
                         # Allow its initial adoption/focus to settle before the ignored
                         # receiver takes the keyboard. This is outside the measurement.
                         Start-Sleep -Milliseconds 250
-                        if ($workload -eq 'animation') {
+                        if ($animated) {
                             $adoption = [Diagnostics.Stopwatch]::StartNew()
                             do {
                                 foreach ($w in $windows) { if ($w.Process.HasExited) { throw "A window helper exited: $($w.Error.Result)" } }
@@ -237,14 +246,14 @@ try {
                             Save-Text (Join-Path $state 'gpu.csv') ($gpu -join "`n")
                         }
                     }
-                    if ($workload -in @('cpu', 'gpu-cpu')) {
+                    if ($workload -in @('cpu', 'gpu-cpu', 'animation-cpu')) {
                         $loaders.Add((Start-Child $Probe @('cpu-load', '--threads', '28', '--seconds', '180') -Ready))
                     }
-                    if ($workload -eq 'animation') {
+                    if ($animated) {
                         $handles = ($windows | ForEach-Object WindowHandle) -join ','
                         $loaders.Add((Start-Child $Probe @('churn', '--animate', '--handles', $handles, '--instance', $instance, '--seconds', '180') -Ready))
                     }
-                    if ($workload -eq 'ipc') {
+                    if ($workload -in @('ipc', 'animation-ipc')) {
                         foreach ($i in 1..$IpcClients) { $loaders.Add((Start-Child $Probe @('churn', '--instance', $instance, '--seconds', '180', '--interval-ms', "$IpcIntervalMs") -Ready)) }
                     }
                     if ($workload -in @('gpu', 'gpu-cpu')) {
@@ -288,7 +297,7 @@ try {
                             $diagnosis = Invoke-Cli $instance @('diagnose')
                             if ($diagnosis.Code -ne 0) { throw $diagnosis.Error }
                             Save-Text (Join-Path $state 'diagnostic.md') $diagnosis.Text
-                            if ($workload -eq 'animation') {
+                            if ($animated) {
                                 if ($diagnosis.Text -notmatch '\*\*Managed windows\*\*: 2\b' -or
                                     $diagnosis.Text -notmatch 'frame p99 [^\r\n]*\((\d+) frames\)' -or [int]$Matches[1] -lt 30) {
                                     throw 'Animation workload was not active: expected two managed windows and at least 30 animation-frame samples.'
@@ -333,6 +342,9 @@ try {
                 }
                 foreach ($loader in $loaders) {
                     if ($loader.ExitCode -ne 0) { throw "Load generator failed: $($loader.Output.Result) $($loader.Error.Result)" }
+                }
+                foreach ($w in $windows) {
+                    if ($w.ExitCode -ne 0) { throw "Window helper failed: $($w.Output.Result) $($w.Error.Result)" }
                 }
                 if ($diagnosticFailure) { throw $diagnosticFailure }
                 # Only accepted cases enter the aggregate: teardown and diagnostic

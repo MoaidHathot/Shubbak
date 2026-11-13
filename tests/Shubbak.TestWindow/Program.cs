@@ -15,6 +15,7 @@ internal static class Program
 {
     private const string ClassName = "ShubbakControlledTestWindow";
     private static int s_foregroundCount;
+    private static GeometryTrace? s_geometry;
 
     private static unsafe int Main(string[] args)
     {
@@ -25,7 +26,8 @@ internal static class Program
             Thread.Sleep(TimeSpan.FromSeconds(90));
             return 0;
         }
-        if (args.Length != 1 || args[0] != "--test-window") return 1;
+        if (args is ["--test-window", "--geometry-output", var path]) s_geometry = new GeometryTrace(path);
+        else if (args is not ["--test-window"]) return 1;
 
         fixed (char* name = ClassName)
         {
@@ -78,18 +80,20 @@ internal static class Program
         finally
         {
             PInvoke.DestroyWindow(window);
+            s_geometry?.Save();
         }
 
         return 0;
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvStdcall)])]
-    private static LRESULT WindowProc(HWND window, uint message, WPARAM wParam, LPARAM lParam)
+    private static unsafe LRESULT WindowProc(HWND window, uint message, WPARAM wParam, LPARAM lParam)
     {
         // WM_SETFOCUS, and only when this really is the system foreground. Remembering
         // arrival lets the parent distinguish a missed activation from someone taking
         // focus elsewhere after it landed.
         if (message == 7 && PInvoke.GetForegroundWindow() == window) s_foregroundCount++;
+        if (message == 0x47) s_geometry?.Record((nint)window.Value); // WM_WINDOWPOSCHANGED
         return PInvoke.DefWindowProc(window, message, wParam, lParam);
     }
 }

@@ -82,6 +82,14 @@ For a worktree, `measure-keyboard.ps1` accepts `-SessionDirectory` for the insta
 stack and `-TestWindow` for a frozen helper. It takes the same desktop lease as native
 tests and restores the session only when it stopped one.
 
+`-Geometry -FrameRate 60` also records applied rectangles on each test window's
+own UI thread. Use the same newly built `Shubbak.TestWindow` executable for both
+daemon versions. `animation-ipc` and `animation-cpu` combine motion with pressure.
+`tools/summarise-frame-cadence.ps1 -Root RESULTS` clips those timestamps to the
+measured input window and reports interval percentiles and RMS error from the
+requested period. It includes every interval, including long gaps; these are
+geometry-delivery measurements, not compositor presentation or photon timings.
+
 The keyboard controller accepts `-IpcIntervalMs` to pace query clients, in addition
 to the default saturation workload, and records process CPU/private bytes around each
 case. Only cases whose loaders and diagnostics also completed enter its aggregate.

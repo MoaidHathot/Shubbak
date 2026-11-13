@@ -17,6 +17,9 @@ schedule and breaking either is a different kind of event:
 
 ### Changed
 
+- **Steadier animation deadlines.** Small timer delays no longer accumulate into a
+  slower animation cadence, and busy IPC traffic no longer drives frames faster
+  than the configured rate. Long stalls still skip ahead without catch-up bursts.
 - **Less IPC allocation for escaped payloads.** Connections reuse their JSON
   writer and small UTF-8 storage, borrowing bounded temporary buffers for larger
   frames. Buffers stay owned through asynchronous write completion, and oversized
