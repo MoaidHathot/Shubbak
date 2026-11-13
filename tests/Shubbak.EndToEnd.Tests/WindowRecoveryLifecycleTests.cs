@@ -73,6 +73,25 @@ public sealed partial class WindowManagerSmokeTests
     }
 
     [Fact]
+    public void TheStandaloneRestoreCommandRevealsOnlyTheRecordedWindow()
+    {
+        using var window = new ControlledWindow(withHiddenHelper: true);
+        SaveRecoverySession((window.Handle, "chat"));
+
+        (int exit, string output) = RunCli("restore", RequestTimeout);
+        Assert.True(exit == 0, output);
+        Assert.Contains("No concealed windows found.", output, StringComparison.Ordinal);
+        Assert.False(Win32Window.IsVisible(window.HelperHandle));
+
+        window.SetVisible(false);
+        (exit, output) = RunCli("restore", RequestTimeout);
+        Assert.True(exit == 0, output);
+        Assert.Contains("Restored 1 window(s).", output, StringComparison.Ordinal);
+        WaitFor(() => Win32Window.IsVisible(window.Handle), ManageTimeout, "standalone recovery of the real window", null);
+        Assert.False(Win32Window.IsVisible(window.HelperHandle));
+    }
+
+    [Fact]
     public void HiddenHelpersStayUnmanagedAcrossReloadResumeAndRestart()
     {
         ConfigureRecovery();

@@ -272,13 +272,17 @@ try {
                         if (-not $measurement.Process.WaitForExit(120000)) { throw 'Input probe timed out.' }
                         $text = $measurement.Output.Result.Trim()
                         Save-Text (Join-Path $state 'result.json') $text
-                        if ($measurement.Process.ExitCode -ne 0) { throw "Invalid measurement $label`: $text $($measurement.Error.Result)" }
+                        $errorText = $measurement.Error.Result
+                        if ($errorText) { Save-Text (Join-Path $state 'probe-error.txt') $errorText }
+                        if ($measurement.Process.ExitCode -ne 0) { throw "Invalid measurement $label`: $text $errorText" }
                         foreach ($loader in $loaders) {
                             if ($loader.Process.HasExited) { throw "Load generator exited early: $($loader.Error.Result) $($loader.Output.Result)" }
                         }
                         foreach ($w in $windows) { if ($w.Process.HasExited) { throw "An animation target exited early: $($w.Error.Result)" } }
                         $result = $text | ConvertFrom-Json
-                        if ($result.Missing -ne 0 -or $result.WrongEdges -ne 0 -or $result.LeakedBoundEvents -ne 0) { throw "Input integrity failed: $text" }
+                        if ($result.Missing -ne 0 -or $result.Duplicates -ne 0 -or $result.OutOfOrder -ne 0 -or
+                            $result.WrongEdges -ne 0 -or $result.LeakedBoundEvents -ne 0 -or
+                            ($Bound -and $result.MenuRequests -ne 0)) { throw "Input integrity failed: $text" }
                         $afterProcesses = Process-Counters
                         $resources = foreach ($id in $afterProcesses.Keys) {
                             if ($beforeProcesses.ContainsKey($id)) {
