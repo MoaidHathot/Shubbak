@@ -225,6 +225,11 @@ public sealed class IpcClient : IAsyncDisposable
 
         try
         {
+            // A subscribed reader can discard an abandoned reply, but it cannot
+            // repair a write cancelled halfway through a frame.
+            if (_broken)
+                throw new IOException("This connection was abandoned mid-message and cannot be reused.");
+
             IpcResponse response;
 
             if (_reading is not null)
@@ -233,13 +238,6 @@ public sealed class IpcClient : IAsyncDisposable
             }
             else
             {
-                // Checked under the turn, never before it: while a request is in flight
-                // the flag is true of that request rather than of the connection, so a
-                // caller reading it on the way in would refuse a connection that is
-                // perfectly well.
-                if (_broken)
-                    throw new IOException("This connection was abandoned mid-message and cannot be reused.");
-
                 response = await ExchangeAsync(method, payload, linked.Token).ConfigureAwait(false);
 
                 _broken = false;
@@ -279,10 +277,9 @@ public sealed class IpcClient : IAsyncDisposable
     /// whose position is unknown.
     /// </para>
     /// <para>
-    /// Only a connection that reads its own replies can be left so. On a subscribed
-    /// one the loop owns the stream and reads every line whether or not anybody is
-    /// still waiting for it, so a request that is given up on costs the caller its
-    /// answer and the connection nothing.
+    /// On a subscribed connection, abandoning only the reply wait is safe: the loop
+    /// still reads the late reply. Abandoning its write is different; the server may
+    /// already hold part of that frame, so the connection must end and reconnect.
     /// </para>
     /// </remarks>
     private bool _broken;
@@ -336,7 +333,20 @@ public sealed class IpcClient : IAsyncDisposable
 
         try
         {
-            await WriteAsync(request, token).ConfigureAwait(false);
+            try
+            {
+                await WriteAsync(request, token).ConfigureAwait(false);
+            }
+            catch
+            {
+                _broken = true;
+                // Nobody will await this reply after the write failed. Cancel it,
+                // or observe a reader fault that won the race, before closing.
+                pending.Reply.TrySetCanceled(token);
+                _ = pending.Reply.Task.Exception;
+                try { _pipe?.Dispose(); } catch (IOException) { }
+                throw;
+            }
 
             return await pending.Reply.Task.WaitAsync(token).ConfigureAwait(false);
         }

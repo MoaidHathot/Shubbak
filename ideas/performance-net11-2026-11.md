@@ -162,3 +162,20 @@ The framework migration is a separately reproducible foundation, **not yet the
 accepted final performance configuration**. The next steps must resolve the IPC
 and source-disposal regressions and complete unlocked desktop comparisons. The
 full correctness suite passes; runtime and resource acceptance remain open.
+
+## Subscribed write cancellation
+
+A real pipe with a 4 KiB input buffer accepts a subscription, then stops reading.
+Cancelling a 128 KiB write reproduces the defect on **both .NET 10 and .NET 11**:
+the next request tries to flush the abandoned buffer instead of failing promptly.
+The new regression failed with a two-second timeout on both targets.
+
+Failed subscribed writes now mark the connection broken and close it. The check is
+under the request semaphore, so a queued request cannot inspect another in-flight
+request's temporary state. Cancelling only a queued request or an already-written
+request's reply wait still preserves the connection. Those controls pass as well.
+All **59 IPC cases pass on each target**. No additional async wrapper or work is
+introduced on the successful write path.
+
+**Step review:** this is a reproduced correctness fix needed before changing async
+lowering and buffer lifetime. It is not claimed as a throughput optimization.

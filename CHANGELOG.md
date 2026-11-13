@@ -43,6 +43,10 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **A cancelled IPC write now reconnects cleanly.** A subscribed connection could
+  reuse a partially sent request, stalling later commands or corrupting their
+  framing. Interrupted writes now end that connection; cancelling a queued request
+  or only its reply wait still preserves a healthy subscription.
 - **A language change during Ctrl+Right-Alt is honoured by the next key.** AltGr
   classification samples the current foreground layout for that pair, rather than
   retaining the layout from modifier-down. Cached translation remains off the hook
