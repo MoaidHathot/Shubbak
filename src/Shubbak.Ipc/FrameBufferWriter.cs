@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace Shubbak.Ipc;
 
@@ -40,11 +41,17 @@ internal sealed class FrameBufferWriter : IBufferWriter<byte>
         return _buffer.AsSpan(_written);
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void Ensure(int sizeHint)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sizeHint);
         sizeHint = Math.Max(sizeHint, 1);
         if (sizeHint <= _buffer.Length - _written) return;
+        Grow(sizeHint);
+    }
+
+    private void Grow(int sizeHint)
+    {
         int required = checked(_written + sizeHint);
         int doubled = (int)Math.Min((long)_buffer.Length * 2, Array.MaxLength);
         int capacity = Math.Max(required, doubled);

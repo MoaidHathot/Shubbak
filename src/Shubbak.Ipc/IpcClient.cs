@@ -216,8 +216,8 @@ public sealed class IpcClient : IAsyncDisposable
         if (_writer is null || _reader is null)
             throw new InvalidOperationException("Not connected.");
 
-        using var timeout = new CancellationTokenSource(ResponseTimeout);
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, timeout.Token);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
+        linked.CancelAfter(ResponseTimeout);
 
         // The wait is inside the timeout, so a caller queued behind a wedged request
         // fails on its own deadline rather than inheriting an unbounded one.
@@ -247,7 +247,7 @@ public sealed class IpcClient : IAsyncDisposable
 
             return response;
         }
-        catch (OperationCanceledException) when (timeout.IsCancellationRequested && !token.IsCancellationRequested)
+        catch (OperationCanceledException) when (linked.IsCancellationRequested && !token.IsCancellationRequested)
         {
             throw new TimeoutException(
                 $"The window manager did not answer '{method}' within {ResponseTimeout.TotalSeconds:F0} s.");

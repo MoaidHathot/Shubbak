@@ -288,3 +288,34 @@ IPC as faster. Native stack/GC evidence is retained in `native-writer-escaped-pr
 
 **Step review:** retain the large allocation reduction provisionally and verify the
 combined plain/escaped workload and resident-memory effect before delivery.
+
+A follow-up uses one linked cancellation source with its own deadline, rather than
+a timeout source linked through a second source, and separates the buffer's inline
+capacity check from growth. All 61 IPC cases per target still pass. Plain exchanges
+drop another **~215 B/op** (35,622-35,627 -> 35,406-35,412), and escaped exchanges
+drop to ~87,095 B/op. Three plain pairs have equal/lower CPU, while one candidate
+row is slower (0.1087 vs 0.0908 ms/op); it is retained for the final paired rerun.
+The change is justified as an allocation reduction, not a universal CPU speedup.
+
+## NativeAOT speed preference experiment
+
+`OptimizationPreference=Speed` was compared with the balanced default, with
+different native hashes and identical workloads. It grows the probe from
+7,972,352 to 8,492,032 bytes (**+6.5%**). Four pairs of 1M-operation layouts improve
+0.948-0.961 -> 0.846-0.863 s. Inverse resize usually improves, but one speed row is
+slower; plain IPC CPU ranges overlap, and escaped IPC has only two pairs with a
+small elapsed improvement.
+
+Keep the balanced default. The clear gain is in a sub-microsecond pure-layout
+operation already allocating zero; it does not demonstrate enough whole-process
+benefit to justify broadly growing resident code. No JIT-only/dynamic-PGO result
+is attributed to the NativeAOT binaries.
+
+## Keyboard upgrade qualification
+
+After unlocking, the framework-only comparison completed **200,000 measured
+application edges** in reversed order, with no missing, duplicate, reordered or
+wrong-edge input. Per-run p99 ranges (milliseconds): idle 1.348-1.490 -> 1.349-1.372,
+animation 3.745-3.778 -> 3.694-3.710, IPC 1.572-1.595 -> 1.578-1.752, CPU pressure
+1.643-1.744 -> 1.641-1.651. The IPC tail is higher in one candidate row; this remains
+in the evidence. These preliminary runs do not replace the final combined matrix.
