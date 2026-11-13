@@ -57,12 +57,19 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
-- **`shubbak restore` no longer reveals a hidden helper belonging to the same application.**
-  Recovery requires the recorded window handle and application identity; title and
-  process-name guesses remain available for placing visible, restarted applications.
+- **Blank Teams/helper windows no longer appear after restart or suspend/resume.**
+  Startup and `shubbak restore` require the recorded window handle and application
+  identity before claiming concealment. Surviving windows keep their saved placements
+  before new visible windows can borrow a placement hint.
+- **Resume reconciles the live desktop.** Closed and tray-hidden windows are released;
+  windows shown while suspended become manageable again. The current workspace,
+  foreground, titles, native minimise/maximise state and floating positions are
+  reconciled without replaying an old session. Recovered hidden or shell-cloaked
+  windows retain their concealment ownership across another resume and clean exit.
 - **Periodic session saves track replacement windows.** A new handle or owning
   process is now saved even when the application's workspace and other placement
-  settings are unchanged.
+  settings are unchanged. Empty sessions are saved too, so dismissing the last
+  window to the tray does not leave a stale recovery entry.
 - **Disposing a source twice is harmless.** The disposal guard now runs before
   source-specific cleanup, avoiding cancellation against an already-disposed token
   source during repeated cleanup.

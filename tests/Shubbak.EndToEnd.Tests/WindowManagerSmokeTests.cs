@@ -50,7 +50,7 @@ namespace Shubbak.EndToEnd.Tests;
 /// </remarks>
 [Collection("the desktop")]
 [Trait("Requires", "Foreground")]
-public sealed class WindowManagerSmokeTests : IDisposable
+public sealed partial class WindowManagerSmokeTests : IDisposable
 {
     private static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(20);
     private static readonly TimeSpan ManageTimeout = TimeSpan.FromSeconds(15);
@@ -686,10 +686,13 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
     private static string Beside(string file)
     {
-        string path = Path.Combine(AppContext.BaseDirectory, file);
+        // The same desktop scenarios can qualify the actual NativeAOT executables.
+        // Isolation still comes from Isolate; only the two executable paths change.
+        string directory = Environment.GetEnvironmentVariable("SHUBBAK_E2E_BINARY_DIR") ?? AppContext.BaseDirectory;
+        string path = Path.Combine(directory, file);
 
         if (!File.Exists(path))
-            throw new FileNotFoundException($"{file} is not beside the tests; the project references that should put it there are missing.", path);
+            throw new FileNotFoundException($"{file} is not in {directory}; build the project references or check SHUBBAK_E2E_BINARY_DIR.", path);
 
         return path;
     }
@@ -988,10 +991,22 @@ public sealed class WindowManagerSmokeTests : IDisposable
 
     public void Dispose()
     {
+        // Ask our isolated daemon to give back what it concealed before the kill
+        // fallback. Recovering every cloaked window on the desktop also revealed
+        // windows belonging to other Windows virtual desktops and applications.
+        try
+        {
+            if (IpcClient.IsServerRunning(_pipe)) _ = RunCli("stop", StopTimeout);
+        }
+        catch (Exception)
+        {
+            // End below is still bounded if the daemon no longer answers.
+        }
+
         // Whatever the test did or failed to do, nothing it started outlives it. The
-        // daemon first, in the order started, so a window manager left mid-scenario does
+        // daemon first, even when helpers started before it, so a manager mid-scenario does
         // not go on arranging the desktop; then the window it was managing.
-        foreach (Process process in _started)
+        foreach (Process process in _started.OrderByDescending(p => s_ownDaemons.ContainsKey(p.Id)))
         {
             End(process);
 
@@ -1002,12 +1017,12 @@ public sealed class WindowManagerSmokeTests : IDisposable
             process.Dispose();
         }
 
-        // Anything the killed daemon left concealed is given back by the same code the
-        // command line's `restore` runs, so a failed test does not strand a window.
+        // The fallback is restricted to this test's saved session. A blanket scan
+        // cannot tell the test's cloak from the shell's or an application's own.
         try
         {
-            List<WindowRecovery.Candidate> cloaked = WindowRecovery.FindCloaked();
-            if (cloaked.Count > 0) WindowRecovery.Revive(cloaked);
+            if (Core.Wm.SessionStore.Load(Path.Combine(_state, "session.json")) is { } session)
+                WindowRecovery.Revive(WindowRecovery.FindRemembered(session));
         }
         catch (Exception)
         {

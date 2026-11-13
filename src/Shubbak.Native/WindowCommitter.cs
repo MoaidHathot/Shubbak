@@ -1617,6 +1617,23 @@ public sealed class WindowCommitter
         lock (_lastCommitted) return _concealed.ContainsKey(handle);
     }
 
+    /// <summary>Records concealment inherited from an earlier run, without revealing it.</summary>
+    /// <remarks>
+    /// The caller must first identify the window through the saved session. A tree
+    /// node alone is not enough: a recovered SW_HIDE window is already invisible, so
+    /// Hide does nothing and never records ownership. Resume would then mistake it
+    /// for an application's tray hide, and RestoreAll would have nothing to undo.
+    /// An application-level cloak remains the application's to lift, as in Show.
+    /// </remarks>
+    public void AdoptConcealment(nint handle)
+    {
+        if (handle == 0 || !Win32Window.Exists(handle)) return;
+
+        if (!Win32Window.IsVisible(handle)) Record(handle, ConcealMethod.Hidden);
+        else if (Win32Window.GetCloakState(handle) == Win32Window.CloakState.Shell)
+            Record(handle, ConcealMethod.Cloaked);
+    }
+
     /// <summary>
     /// Brings a window back that some earlier run left concealed.
     /// </summary>

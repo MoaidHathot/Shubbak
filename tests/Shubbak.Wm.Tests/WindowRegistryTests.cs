@@ -202,6 +202,26 @@ public sealed class WindowRegistryTests
         Assert.False(registry.IsExcluded(0x1));
     }
 
+    [Fact]
+    public void ResumeForgetsMissingVerdictsButKeepsLiveExclusionsAndManagedWindows()
+    {
+        var registry = new WindowRegistry();
+        registry.Adopt(1, Node(1));
+        registry.Exclude(2);
+        registry.Exclude(3);
+        registry.SetAside(4);
+        registry.SetAside(5);
+
+        registry.ForgetMissingVerdicts(new HashSet<nint> { 1, 2, 4 });
+        registry.NoLongerSetAside(4);
+
+        Assert.True(registry.IsManaged(1));
+        Assert.True(registry.IsExcluded(2));
+        Assert.False(registry.AlreadyDecided(3));
+        Assert.False(registry.AlreadyDecided(4));
+        Assert.False(registry.AlreadyDecided(5));
+    }
+
     // ---- reloading ---------------------------------------------------------
 
     [Fact]

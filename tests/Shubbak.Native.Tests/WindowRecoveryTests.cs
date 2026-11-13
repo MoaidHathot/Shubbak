@@ -81,6 +81,32 @@ public sealed class WindowRecoveryTests
     }
 
     [Fact]
+    public void ARecoveredHiddenWindowIsOwnedAndRestoredWithoutBeingShownDuringAdoption()
+    {
+        using var window = new TestWindow(visible: false);
+        var committer = new WindowCommitter();
+
+        committer.AdoptConcealment(window.Handle);
+        Assert.True(committer.IsConcealing(window.Handle));
+        Assert.False(window.IsVisible);
+        Assert.Equal(1, committer.RestoreAll());
+        TestWindow.PumpUntil(() => window.IsVisible);
+        Assert.True(window.IsVisible);
+    }
+
+    [Fact]
+    public void AdoptingAVisibleWindowDoesNotInventConcealment()
+    {
+        using var window = new TestWindow();
+        var committer = new WindowCommitter();
+
+        committer.AdoptConcealment(window.Handle);
+        Assert.False(committer.IsConcealing(window.Handle));
+        Assert.True(window.IsVisible);
+        Assert.Equal(0, committer.RestoreAll());
+    }
+
+    [Fact]
     public void AHiddenWindowIsSeenAsConcealed()
     {
         using var window = new TestWindow();

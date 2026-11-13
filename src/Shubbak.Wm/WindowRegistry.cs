@@ -151,6 +151,13 @@ internal sealed class WindowRegistry
     /// </remarks>
     public void NoLongerSetAside(nint handle) => _setAside.Remove(handle);
 
+    /// <summary>Forgets verdicts whose destroy notifications were missed during suspension.</summary>
+    public void ForgetMissingVerdicts(IReadOnlySet<nint> existing)
+    {
+        _excluded.RemoveWhere(handle => !existing.Contains(handle));
+        _setAside.RemoveWhere(handle => !existing.Contains(handle));
+    }
+
     /// <summary>
     /// Whether this window is being placed for the first time, clearing the mark.
     /// </summary>

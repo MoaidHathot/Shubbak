@@ -3,6 +3,7 @@ CreateWindowEx
 DefWindowProc
 DestroyWindow
 ShowWindow
+SetWindowText
 GetMessage
 TranslateMessage
 DispatchMessage

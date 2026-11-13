@@ -26,8 +26,9 @@ internal static class Program
             Thread.Sleep(TimeSpan.FromSeconds(90));
             return 0;
         }
+        bool withHiddenHelper = args is ["--test-window", "--hidden-helper"];
         if (args is ["--test-window", "--geometry-output", var path]) s_geometry = new GeometryTrace(path);
-        else if (args is not ["--test-window"]) return 1;
+        else if (args is not ["--test-window"] && !withHiddenHelper) return 1;
 
         fixed (char* name = ClassName)
         {
@@ -48,10 +49,21 @@ internal static class Program
 
         if (window.IsNull) return 3;
 
+        HWND helper = HWND.Null;
         try
         {
+            if (withHiddenHelper)
+            {
+                helper = PInvoke.CreateWindowEx(
+                    0, ClassName, "Shubbak controlled test window",
+                    WINDOW_STYLE.WS_OVERLAPPEDWINDOW,
+                    100, 100, 320, 240, HWND.Null, (SafeHandle?)null, (SafeHandle?)null, null);
+                if (helper.IsNull) return 3;
+            }
+
             PInvoke.ShowWindow(window, SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE);
             Console.WriteLine(((nint)window.Value).ToString(CultureInfo.InvariantCulture));
+            if (withHiddenHelper) Console.WriteLine(((nint)helper.Value).ToString(CultureInfo.InvariantCulture));
 
             while (PInvoke.GetMessage(out MSG message, default, 0, 0))
             {
@@ -73,12 +85,27 @@ internal static class Program
                     continue;
                 }
 
+                if (message.message == PInvoke.WM_APP + 3)
+                {
+                    bool visible = message.wParam.Value != 0;
+                    PInvoke.ShowWindow(message.hwnd, visible ? SHOW_WINDOW_CMD.SW_SHOWNOACTIVATE : SHOW_WINDOW_CMD.SW_HIDE);
+                    Console.WriteLine(visible ? "shown" : "hidden");
+                    continue;
+                }
+
+                if (message.message == PInvoke.WM_APP + 4)
+                {
+                    Console.WriteLine(PInvoke.SetWindowText(message.hwnd, ControlledWindow.RenamedTitle) ? "renamed" : "rename failed");
+                    continue;
+                }
+
                 PInvoke.TranslateMessage(in message);
                 PInvoke.DispatchMessage(in message);
             }
         }
         finally
         {
+            if (!helper.IsNull) PInvoke.DestroyWindow(helper);
             PInvoke.DestroyWindow(window);
             s_geometry?.Save();
         }

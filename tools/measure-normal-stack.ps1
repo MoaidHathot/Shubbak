@@ -41,7 +41,7 @@ function Stop-Stack {
 }
 function Window-Signature {
     $windows = & $cli query windows | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) { throw 'Could not query the idle desktop.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Could not query the managed window set.' }
     return (@($windows | ForEach-Object handle | Sort-Object) -join ',')
 }
 function Start-Stack([string] $version) {
@@ -113,6 +113,7 @@ try {
             finally { $palette.Dispose() }
             if ($LASTEXITCODE -ne 0) { throw "Palette activation failed: $paletteResult" }
             [IO.File]::WriteAllText((Join-Path $case 'palette.json'),($paletteResult -join "`n"))
+            $windowsBeforeReloads = Window-Signature
             Save (Join-Path $case 'before-reloads.json') @((Counters).Values | Where-Object Name -in @('shubbak-wm','taj','dalil','ayn'))
             foreach ($batch in 1..4) {
                 foreach ($i in 1..10) {
@@ -123,6 +124,9 @@ try {
                 Start-Sleep -Seconds 2
                 Save (Join-Path $case "reloads-$($batch*10).json") @((Counters).Values | Where-Object Name -in @('shubbak-wm','taj','dalil','ayn'))
             }
+            $windowsBeforeSuspend = Window-Signature
+            Save (Join-Path $case 'reload-window-set.json') @{Before=$windowsBeforeReloads;After=$windowsBeforeSuspend}
+            if ($windowsBeforeReloads -ne $windowsBeforeSuspend) { throw 'The managed window set changed during configuration reloads.' }
             & $cli wm-suspend *> $null
             if ($LASTEXITCODE -ne 0) { throw 'Suspend failed.' }
             $suspendedBefore=Counters
@@ -140,6 +144,9 @@ try {
             [IO.File]::WriteAllText((Join-Path $case 'suspended-input.json'),($suspendedInput -join "`n"))
             & $cli wm-resume *> $null
             if ($LASTEXITCODE -ne 0) { throw 'Resume failed.' }
+            $windowsAfterResume = Window-Signature
+            Save (Join-Path $case 'resume-window-set.json') @{Before=$windowsBeforeSuspend;After=$windowsAfterResume}
+            if ($windowsBeforeSuspend -ne $windowsAfterResume) { throw 'The managed window set changed across suspend/resume.' }
             $resumedInput=& $Probe receive --samples 4000 --warmup 0 --label "resumed-$version-r$round"
             if ($LASTEXITCODE -ne 0) { throw "Resumed input failed: $resumedInput" }
             [IO.File]::WriteAllText((Join-Path $case 'resumed-input.json'),($resumedInput -join "`n"))

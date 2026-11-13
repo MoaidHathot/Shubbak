@@ -546,7 +546,10 @@ public sealed class WmDaemon : IDisposable
 
         // A clean shutdown is the one chance to record the arrangement exactly as
         // the user left it, rather than as it was up to thirty seconds earlier.
-        if (_windows.ManagedCount > 0) SessionStore.Save(_wm.Root, _sessionPath, focusedMonitor: _wm.FocusedMonitor);
+        // Hooks were off during suspension: a tray window dismissed then must not
+        // be saved as ours and resurrected by the next start.
+        if (_suspended) ReleaseDepartedWindows();
+        SessionStore.Save(_wm.Root, _sessionPath, focusedMonitor: _wm.FocusedMonitor);
 
         RestoreConcealedWindows();
 
@@ -1463,7 +1466,7 @@ public sealed class WmDaemon : IDisposable
         // Gone for good.
         if (!Win32Window.Exists(handle))
         {
-            TryUnmanage(handle);
+            TryUnmanage(handle, windowGone: true);
             return;
         }
 
@@ -1539,7 +1542,7 @@ public sealed class WmDaemon : IDisposable
                 break;
 
             case WinEventKind.Destroyed:
-                TryUnmanage(handle);
+                TryUnmanage(handle, windowGone: true);
                 break;
 
             case WinEventKind.Cloaked:
@@ -1772,7 +1775,7 @@ public sealed class WmDaemon : IDisposable
 
     // ---- window lifecycle --------------------------------------------------
 
-    private void TryManage(nint handle, bool forced = false)
+    private void TryManage(nint handle, bool forced = false, bool exactSessionMatch = false)
     {
         // Already ours, whoever asked. Everything below assumes the window is not in
         // the tree yet.
@@ -1804,9 +1807,16 @@ public sealed class WmDaemon : IDisposable
         // A saved session wins during the initial adoption pass, so a restart puts
         // windows back where they were rather than piling them onto whichever
         // workspace happens to be active.
-        WorkspaceNode? remembered = _restoring ? RestoredWorkspaceFor(window) : null;
+        bool concealed = _restoring && WindowCommitter.IsConcealed(handle);
+        WorkspaceNode? remembered = _restoring
+            ? RestoredWorkspaceFor(window, requireHandleMatch: concealed || exactSessionMatch)
+            : null;
 
-        if (!ClaimIfConcealed(handle, window, remembered)) return;
+        // The first startup pass reserves surviving windows' own entries before any
+        // newly opened window can borrow one through the visible-placement fallback.
+        if (exactSessionMatch && remembered is null) return;
+
+        if (!ClaimIfConcealed(handle, window, remembered, concealed)) return;
 
         WorkspaceNode? workspace = remembered ?? WorkspaceFor(handle);
 
@@ -1981,11 +1991,11 @@ public sealed class WmDaemon : IDisposable
     /// Decides what becomes of a window that is still concealed as it is adopted.
     /// </summary>
     /// <returns>Whether adoption should continue.</returns>
-    private bool ClaimIfConcealed(nint handle, WindowNode window, WorkspaceNode? remembered)
+    private bool ClaimIfConcealed(nint handle, WindowNode window, WorkspaceNode? remembered, bool concealed)
     {
         ConcealedVerdict verdict = JudgeConcealed(
             restoring: _restoring,
-            concealed: _restoring && WindowCommitter.IsConcealed(handle),
+            concealed: concealed,
             claimedBySession: remembered is not null,
             revived: _revived,
             revivalBudget: _revivalBudget);
@@ -2021,8 +2031,9 @@ public sealed class WmDaemon : IDisposable
                 // Un-cloaking it now put every remembered window on the desktop at once,
                 // stacked at whatever positions they had last run, until that first pass
                 // hid the ones belonging to other workspaces again. Leaving it concealed
-                // costs nothing: Show already reverses a concealment it did not perform,
-                // which is the path this window takes the moment its workspace is shown.
+                // avoids that flash. Ownership is recorded now so resume and shutdown
+                // can still recognise and undo it before the workspace is ever shown.
+                _committer.AdoptConcealment(handle);
                 _revived++;
 
                 Log.Info(LogCategory.Window,
@@ -2102,7 +2113,11 @@ public sealed class WmDaemon : IDisposable
     /// first would be undone here - and the two callers that want it used to have to
     /// remember that for themselves.
     /// </param>
-    private void TryUnmanage(nint handle, bool thenExclude = false)
+    /// <param name="windowGone">
+    /// True for a destroyed window or a handle that now names another process's
+    /// window. Forget the old bookkeeping without restoring or decorating its successor.
+    /// </param>
+    private void TryUnmanage(nint handle, bool thenExclude = false, bool windowGone = false)
     {
         if (_windows.Release(handle, thenExclude) is not { } window) return;
 
@@ -2112,7 +2127,7 @@ public sealed class WmDaemon : IDisposable
         // without clearing it leaves Shubbak's mark on something it no longer controls.
         // It stayed lit for the life of the window, which is precisely the opposite of
         // the signal it exists to give.
-        if (_config.Effects.Enabled && Win32Window.Exists(handle))
+        if (!windowGone && _config.Effects.Enabled && Win32Window.Exists(handle))
             WindowActions.ClearBorderColour(handle);
 
         // Brought back into view before it is forgotten, undoing what concealed it. A
@@ -2126,9 +2141,10 @@ public sealed class WmDaemon : IDisposable
         // window is doing, minimised included, and nothing happens to a window this
         // instance did not conceal - one its application hid itself, to the tray, say,
         // is released without being fought over.
-        _ = _committer.Restore(handle);
+        if (!windowGone) _ = _committer.Restore(handle);
 
         _committer.Forget(handle);
+        _settling.Remove(handle);
         _maximiseGrace.Remove(handle);
         _noFocusArrivals.Remove(handle);
         _animation.Remove(window.Handle);
@@ -2504,11 +2520,12 @@ public sealed class WmDaemon : IDisposable
     /// it later would mean a window opened an hour into a session could be yanked
     /// onto a workspace the user was not looking at.
     /// </remarks>
-    private WorkspaceNode? RestoredWorkspaceFor(WindowNode window)
+    private WorkspaceNode? RestoredWorkspaceFor(WindowNode window, bool requireHandleMatch)
     {
         if (_session is null) return null;
 
-        RememberedWindow? remembered = SessionStore.Match(_session, window.Identity, window.Handle, _claimedSessionEntries);
+        RememberedWindow? remembered = SessionStore.Match(
+            _session, window.Identity, window.Handle, _claimedSessionEntries, requireHandleMatch);
         if (remembered is null) return null;
 
         WorkspaceNode? workspace = _wm.Root.FindWorkspace(remembered.Workspace);
@@ -2518,7 +2535,13 @@ public sealed class WmDaemon : IDisposable
         window.IsSticky = remembered.Sticky;
 
         if (Enum.TryParse(remembered.State, out WindowState state) && state != WindowState.Minimised)
-            window.State = state;
+        {
+            // A native minimisation is current intent, not a stale placement hint.
+            // Overwriting it with saved Tiling left an empty tile until the user
+            // restored the window. Keep the saved base state for that eventual return.
+            if (window.State != WindowState.Minimised) window.State = state;
+            else if (state is WindowState.Tiling or WindowState.Floating) window.StateBeforeAway = state;
+        }
 
         Log.Debug(LogCategory.Window,
             $"restored \"{window.Identity.Title.Truncate(32)}\" to workspace {workspace.Name}");
@@ -2543,6 +2566,18 @@ public sealed class WmDaemon : IDisposable
 
         try
         {
+            // Match identities before guesses, irrespective of EnumWindows order.
+            // A new visible browser window must not consume the placement belonging
+            // to a surviving concealed one that happens to be enumerated later.
+            if (_session is not null)
+            {
+                foreach (RememberedWindow remembered in _session.Windows)
+                {
+                    if (remembered.Handle != 0)
+                        TryManage((nint)remembered.Handle, exactSessionMatch: true);
+                }
+            }
+
             foreach (nint handle in Win32Window.EnumerateTopLevel()) TryManage(handle);
         }
         finally
@@ -5072,7 +5107,7 @@ public sealed class WmDaemon : IDisposable
 
         // Whatever opened, closed or moved while nobody was looking.
         SyncMonitors();
-        AdoptExistingWindows();
+        ReconcileWindowsAfterResume();
 
         // The contexts were frozen with the hooks, and the windows their conditions watch
         // may have come or gone. Re-read, and let the next tick decide.
@@ -5084,6 +5119,101 @@ public sealed class WmDaemon : IDisposable
 
         Publish(new WmResult(true, [new SuspendChanged(false)]));
         _tray.SetTooltip(TrayTooltip());
+    }
+
+    /// <summary>Reconciles the desktop against the live tree after hooks were off.</summary>
+    private void ReconcileWindowsAfterResume()
+    {
+        // The disk session describes an earlier run, not this suspended one. Replaying
+        // it skipped already-managed windows before claiming their entries, allowing
+        // a hidden Teams helper to take the real window's saved Chat placement.
+        ReleaseDepartedWindows();
+
+        foreach (nint handle in _windows.HandlesSnapshot())
+        {
+            if (!_windows.TryGet(handle, out WindowNode? window)) continue;
+
+            string title = Win32Window.GetTitle(handle);
+            if (!string.Equals(title, window.Identity.Title, StringComparison.Ordinal))
+            {
+                Publish(_wm.UpdateTitle(window, title));
+                if (_rules.HasRulesFor(RuleTrigger.OnTitleChange))
+                    ApplyRules(window, ToAttributes(handle), RuleTrigger.OnTitleChange);
+                if (!_windows.IsManaged(handle)) continue;
+            }
+
+            // Our inactive workspaces and scratchpads remain ours. In particular,
+            // minimisation used as a concealment method is not a user state change.
+            if (_committer.IsConcealing(handle)) continue;
+
+            if (Win32Window.IsMinimised(handle))
+            {
+                if (window.State != WindowState.Minimised)
+                    Publish(_wm.SetWindowState(window, WindowState.Minimised));
+            }
+            else
+            {
+                if (window.State == WindowState.Minimised) Publish(_wm.RestoreFromAway(window));
+                if (window.State == WindowState.Floating && !Win32Window.IsMaximised(handle) &&
+                    (window.Monitor is not { } monitor ||
+                     !NativeFullscreen.CoversMonitor(Win32Window.GetBounds(handle), monitor.Bounds)))
+                {
+                    Rect bounds = WindowCommitter.VisibleBounds(handle);
+                    if (!bounds.IsEmpty) window.FloatingRect = bounds;
+                }
+            }
+
+            // Positions can change while we are not watching. Preserve a floating
+            // window's new rectangle; let the next layout reassert a tile's target.
+            _committer.Forget(handle);
+            _maximiseGrace.Remove(handle);
+        }
+
+        // Observe native maximise/fullscreen changes before a layout can overwrite
+        // them. Their oversized rectangles must not replace a floating restore rect.
+        _ = DetectNativeFullscreen();
+
+        IReadOnlyList<nint> existing = Win32Window.EnumerateTopLevel();
+        _windows.ForgetMissingVerdicts(new HashSet<nint>(existing));
+
+        foreach (nint handle in existing)
+        {
+            // A tray window may have shown itself while the show hook was absent.
+            // Its temporary startup verdict expires; an explicit exclusion does not.
+            if (!WindowCommitter.IsConcealed(handle)) _windows.NoLongerSetAside(handle);
+            TryManage(handle);
+        }
+
+        // Follow where the user actually left the keyboard, rather than an old
+        // saved monitor view or whichever new window enumeration happened to end on.
+        nint foreground = Win32Window.GetForeground();
+        if (_windows.IsManaged(foreground) &&
+            !WindowCommitter.IsConcealed(foreground) && !Win32Window.IsMinimised(foreground))
+            HandleWindowEvent(new WinEventNotification(WinEventKind.Foreground, foreground));
+    }
+
+    /// <summary>Forgets departures missed while the window hooks were absent.</summary>
+    private void ReleaseDepartedWindows()
+    {
+        foreach (nint handle in _windows.HandlesSnapshot())
+        {
+            if (!_windows.TryGet(handle, out WindowNode? window)) continue;
+
+            if (!Win32Window.Exists(handle) ||
+                Win32Window.GetProcessId(handle) != (uint)window.Identity.ProcessId ||
+                !string.Equals(Win32Window.GetClassName(handle), window.Identity.ClassName, StringComparison.Ordinal))
+            {
+                TryUnmanage(handle, windowGone: true);
+                continue;
+            }
+
+            if (!_committer.IsConcealing(handle) && !Win32Window.IsMinimised(handle) &&
+                WindowCommitter.IsConcealed(handle))
+            {
+                TryUnmanage(handle);
+                _windows.SetAside(handle);
+            }
+        }
     }
 
     /// <summary>
@@ -5705,7 +5835,9 @@ public sealed class WmDaemon : IDisposable
         if (_animation.IsAnimating) return;
         if (!DueEvery(30_000, now, ref _lastSessionSaveTicks)) return;
 
-        if (_windows.ManagedCount > 0) SessionStore.Save(_wm.Root, _sessionPath, routine: true, focusedMonitor: _wm.FocusedMonitor);
+        // Empty is a real change too. Retaining the last nonempty session could
+        // resurrect a window its application had since dismissed to the tray.
+        SessionStore.Save(_wm.Root, _sessionPath, routine: true, focusedMonitor: _wm.FocusedMonitor);
     }
 
     /// <summary>Drives one frame of in-flight window motion.</summary>

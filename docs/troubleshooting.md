@@ -191,9 +191,15 @@ workspace "1" [active] layout=splith (4,26 3832x2130)
 
 ## "Everything scattered after a reboot"
 
-Session state lives in `%LOCALAPPDATA%\Shubbak\session.json`. Windows are matched by
-process, class and a title hash — deliberately tolerant, because a browser's title
-changes constantly.
+Session state lives in `%LOCALAPPDATA%\Shubbak\session.json`. Surviving window handles
+are matched first, with their process and class checked too. Visible windows from a
+restarted application can then use process, class and a title hash as placement
+hints — deliberately tolerant, because a browser's title changes constantly.
+
+Concealed-window recovery, including `shubbak restore`, requires the recorded handle
+and agreeing application identity (including the process id when the session has it).
+A hidden helper with the same title or class does not inherit another window's entry.
+Resume uses the live managed windows and current view rather than replaying this file.
 
 If restoration puts things in the wrong place, delete that file to start clean. If it
 puts *nothing* back, check the log for `session loaded` at startup.
