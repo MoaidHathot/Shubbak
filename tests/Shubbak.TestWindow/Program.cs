@@ -18,6 +18,13 @@ internal static class Program
 
     private static unsafe int Main(string[] args)
     {
+        if (args is ["--worker-owner"]) return WorkerOwner.Run();
+        if (args is ["--worker-leaf"])
+        {
+            Console.WriteLine(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+            Thread.Sleep(TimeSpan.FromSeconds(90));
+            return 0;
+        }
         if (args.Length != 1 || args[0] != "--test-window") return 1;
 
         fixed (char* name = ClassName)

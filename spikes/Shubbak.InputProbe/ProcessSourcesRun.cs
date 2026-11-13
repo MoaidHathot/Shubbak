@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using Shubbak.Native;
 using Taj.Core.Sources;
 
 namespace Shubbak.InputProbe;
@@ -24,6 +25,7 @@ internal static class ProcessSourcesRun
     {
         int count = Program.Number(args, "--sources", 16, 1, 32);
         int seconds = Program.Number(args, "--seconds", 15, 2, 120);
+        bool jobs = args.Contains("--job-processes", StringComparer.Ordinal);
         string child = Program.Text(args, "--child") ?? throw new ArgumentException("Supply a frozen --child binary.");
         if (!File.Exists(child)) throw new FileNotFoundException("Child binary is missing.", child);
         using Process process = Process.GetCurrentProcess();
@@ -41,7 +43,8 @@ internal static class ProcessSourcesRun
             {
                 var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
                 ready[i] = completion;
-                sources[i] = new ProcessSource($"probe-{i}", $"\"{child}\" source-child --seconds {seconds + 60}");
+                sources[i] = new ProcessSource($"probe-{i}", $"\"{child}\" source-child --seconds {seconds + 60}",
+                    startProcess: jobs ? Win32WorkerProcess.Start : null);
                 sources[i].Changed += source =>
                 {
                     if (int.TryParse(source.Value, CultureInfo.InvariantCulture, out int pid)) completion.TrySetResult(pid);
@@ -76,7 +79,7 @@ internal static class ProcessSourcesRun
         }
         int remaining = pids.Count(IsAlive);
         var report = new ProcessSourcesReport(!RuntimeFeature.IsDynamicCodeSupported, Environment.Version.ToString(),
-            count, pids.Count(p => p > 0), remaining, startupMs, idleSeconds, idleCpuMs, idleAllocated, disposeMs, before, idle, after);
+            count, pids.Count(p => p > 0), remaining, startupMs, idleSeconds, idleCpuMs, idleAllocated, disposeMs, before, idle, after, jobs);
         Console.WriteLine(JsonSerializer.Serialize(report, ProbeJson.Default.ProcessSourcesReport));
         return remaining == 0 ? 0 : 1;
     }
@@ -102,4 +105,4 @@ internal sealed record ProcessSourceSnapshot(double CpuMs, long PrivateBytes, lo
 
 internal sealed record ProcessSourcesReport(bool NativeAot, string Runtime, int Sources, int Ready, int ChildrenRemaining,
     double StartupMs, double IdleSeconds, double IdleCpuMs, long IdleAllocatedBytes, double DisposeMs,
-    ProcessSourceSnapshot Before, ProcessSourceSnapshot Idle, ProcessSourceSnapshot After);
+    ProcessSourceSnapshot Before, ProcessSourceSnapshot Idle, ProcessSourceSnapshot After, bool JobProcesses);

@@ -15,6 +15,14 @@ namespace Taj.Core.Tests;
 /// </remarks>
 public sealed class ProcessSourceTests
 {
+    [Fact]
+    public void RepeatedDisposalDoesNotCancelAnAlreadyDisposedTokenSource()
+    {
+        using var source = new ProcessSource("probe", "cmd.exe /c echo value");
+        source.Dispose();
+        source.Dispose();
+    }
+
     /// <summary>
     /// cmd.exe runs PowerShell, which prints its own pid and then sleeps.
     /// </summary>

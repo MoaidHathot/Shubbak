@@ -203,7 +203,7 @@ internal static class Program
         // the person has moved on.
         s_palette.ScriptRequested += (question, title) => _ = Task.Run(async () =>
         {
-            ScriptList.Result result = await ScriptList.RunAsync(question.CommandLine).ConfigureAwait(false);
+            ScriptList.Result result = await ScriptList.RunAsync(question.CommandLine, startProcess: Win32WorkerProcess.Start).ConfigureAwait(false);
 
             if (result.Failure is { } failure)
                 Log.Warn(LogCategory.Wm, $"action '{question.Macro.Name}': {question.CommandLine}: {failure}");

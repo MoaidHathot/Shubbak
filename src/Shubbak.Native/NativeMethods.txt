@@ -64,6 +64,13 @@ QueryFullProcessImageName
 PROCESS_NAME_FORMAT
 CloseHandle
 
+// Script workers own a process family. Closing one job replaces a machine-wide
+// process-tree scan on every source reload, and also cleans up on parent death.
+CreateJobObject
+SetInformationJobObject
+AssignProcessToJobObject
+JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+
 // ProcessIdentityCache keeps a process handle open so the id cannot be reused while
 // it is remembered. A zero-length wait on that handle is how it notices the process
 // has since exited and the entry may be collected.

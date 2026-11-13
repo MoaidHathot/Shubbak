@@ -1,4 +1,5 @@
 using Shubbak.Core.Diagnostics;
+using Shubbak.Core.Processes;
 
 namespace Taj.Core.Sources;
 
@@ -78,7 +79,7 @@ public abstract class SourceBase : ISource
 {
     private readonly Lock _publishGate = new();
     private string? _value;
-    private bool _disposed;
+    private int _disposed;
 
     protected SourceBase(string name) => Name = name;
 
@@ -151,12 +152,14 @@ public abstract class SourceBase : ISource
 
     protected virtual void Dispose(bool disposing)
     {
-        if (_disposed) return;
-        _disposed = true;
     }
 
     public void Dispose()
     {
+        // Guard before dispatching to an override. A guard only in the base
+        // implementation ran after ProcessSource had cancelled an already-disposed
+        // token source on the second call.
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         Dispose(true);
         GC.SuppressFinalize(this);
     }
@@ -576,12 +579,13 @@ public sealed class ProcessSource : SourceBase
     /// Whoever takes it out of this field is the one who stops it, if it needs
     /// stopping. Cancellation wakes the reader, so it is a race between the reader's
     /// finally and dispose, and either may win; the loser finds the field empty and
-    /// does nothing. One of them, never both: stopping a tree walks the process
-    /// table, which is tens of milliseconds on the bar's thread, and paying it twice
-    /// per source per reload would show.
+    /// does nothing. One of them, never both: the portable fallback walks the process
+    /// table, while a native host can close the worker's ownership handle. Neither
+    /// should race the reader disposing its process object.
     /// </para>
     /// </remarks>
-    private System.Diagnostics.Process? _process;
+    private WorkerProcess? _process;
+    private readonly Func<System.Diagnostics.ProcessStartInfo, WorkerProcess> _startProcess;
 
     /// <param name="name">The value's name.</param>
     /// <param name="commandLine">The program and its arguments.</param>
@@ -591,7 +595,9 @@ public sealed class ProcessSource : SourceBase
     /// long after it exits - the i3blocks shape, where a script is a function of the
     /// moment it runs. Without it the program is expected to stay and keep printing.
     /// </param>
-    public ProcessSource(string name, string commandLine, TimeSpan? restartDelay = null, TimeSpan? interval = null)
+    /// <param name="startProcess">The host's worker ownership policy, or the portable process-tree fallback.</param>
+    public ProcessSource(string name, string commandLine, TimeSpan? restartDelay = null, TimeSpan? interval = null,
+        Func<System.Diagnostics.ProcessStartInfo, WorkerProcess>? startProcess = null)
         : base(name)
     {
         ArgumentException.ThrowIfNullOrEmpty(commandLine);
@@ -600,6 +606,7 @@ public sealed class ProcessSource : SourceBase
         _restartDelay = restartDelay ?? TimeSpan.FromSeconds(5);
         _interval = interval is { } every && every > TimeSpan.Zero ? every : null;
         _backoff = _restartDelay;
+        _startProcess = startProcess ?? WorkerProcess.Start;
     }
 
     /// <summary>Whether the program is run on a schedule rather than kept running.</summary>
@@ -636,22 +643,23 @@ public sealed class ProcessSource : SourceBase
                 while (Polls && _stoodDown && !_shutdown.IsCancellationRequested)
                     await _standUp.WaitAsync(_shutdown.Token).ConfigureAwait(false);
 
-                using var process = new System.Diagnostics.Process();
-
-                process.StartInfo = new System.Diagnostics.ProcessStartInfo(_fileName, _arguments)
+                var startInfo = new System.Diagnostics.ProcessStartInfo(_fileName, _arguments)
                 {
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                 };
 
+                WorkerProcess owned;
                 lock (_gate)
                 {
                     if (_shutdown.IsCancellationRequested) return;
 
-                    process.Start();
-                    _process = process;
+                    owned = _startProcess(startInfo);
+                    _process = owned;
                 }
+                using var lifetime = owned;
+                System.Diagnostics.Process process = owned.Process;
 
                 try
                 {
@@ -685,7 +693,7 @@ public sealed class ProcessSource : SourceBase
                         if (_process is not null)
                         {
                             _process = null;
-                            if (_shutdown.IsCancellationRequested) Terminate(process);
+                            if (_shutdown.IsCancellationRequested) Terminate(owned);
                         }
                     }
                 }
@@ -773,11 +781,11 @@ public sealed class ProcessSource : SourceBase
     /// out or dispose on the bar's thread, and neither has anywhere for an exception to
     /// go but the log.
     /// </remarks>
-    private void Terminate(System.Diagnostics.Process process)
+    private void Terminate(WorkerProcess process)
     {
         try
         {
-            process.Kill(entireProcessTree: true);
+            process.Stop();
         }
         catch (Exception ex) when (ex is InvalidOperationException
                                     or System.ComponentModel.Win32Exception

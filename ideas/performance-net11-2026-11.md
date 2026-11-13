@@ -217,3 +217,42 @@ layout control row is retained rather than attributed to async lowering.
 and modest plain-IPC improvement justify it, while the much larger string/buffer
 cost remains the next target. No broad animation or resident-RAM gain is inferred
 from this async experiment alone.
+
+## Owned script workers
+
+The source-disposal profile identifies Process.Kill(entireProcessTree), repeated
+process enumeration, OpenProcess and start-time/parent checks. In .NET 11 those
+relationship checks do more queries, explaining the framework-only regression.
+
+The native host now supplies a worker factory to the portable Taj/Dalil logic.
+Each worker starts suspended using .NET 11, is assigned to its own kill-on-close
+Windows job, and is resumed only after assignment. Closing that job stops the
+family without discovering unrelated processes. The handle is non-inheritable;
+parent death closes it too. Ordinary application launching does not use this factory.
+
+Six native cases verify explicit stop/disposal, grandchildren, independent worker
+groups, suspended execution, failed-launch handle cleanup and abrupt owner death.
+Taj's real source and Dalil's output/error semantics have integration coverage.
+That work also reproduced an existing double-dispose exception in SourceBase;
+guarding before virtual cleanup fixes it, with a portable regression test.
+
+Four reversed-order native pairs with 16 sources, one frozen child binary and the
+same runtime-async probe (`worker-jobs`):
+
+| Observation | Process-tree scan | Job ownership |
+|---|---:|---:|
+| Dispose 16 sources | 528-553 ms | **1.29-1.75 ms** |
+| Total parent CPU for the cycle | 484-594 ms | **31-47 ms** |
+| Total parent allocation for the cycle | 31.97-32.52 MiB | **0.70-0.71 MiB** |
+| Private memory after disposal | 24.72-25.21 MiB | **6.41-6.81 MiB** |
+| Startup | 69.86-72.32 ms | 68.08-85.99 ms |
+
+Every child became ready and exited. The lifecycle totals include startup,
+15-second idle and cleanup, including observation overhead. Idle resources overlap:
+jobs add one handle per worker and the Windows pool retains varying free workers;
+this is not claimed as an idle-RAM improvement over the framework-only build.
+
+**Step review:** retain job ownership. It resolves the demonstrated .NET 11 cleanup
+regression, substantially reduces reload/exit work and retention in this workload,
+and strengthens the existing worker-lifetime contract. Keyboard and full-stack
+combined validation remain required.

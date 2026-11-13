@@ -73,6 +73,10 @@ parent startup, idle CPU/allocation, private memory, working set, threads, handl
 and disposal. It fails unless all children become ready and exit during cleanup.
 Children have a bounded lifetime even if their parent is interrupted. Compare with
 `tools/measure-process-sources.ps1`, which reverses order and retains ambient CPU.
+Use `--job-processes` (or the controller's `-JobProcesses`, applied to the candidate)
+to exercise the same Windows worker ownership policy as Taj and Dalil. It also
+records that policy in the result. The child executable remains identical on both
+sides.
 
 For a worktree, `measure-keyboard.ps1` accepts `-SessionDirectory` for the installed
 stack and `-TestWindow` for a frozen helper. It takes the same desktop lease as native

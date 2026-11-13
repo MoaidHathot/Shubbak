@@ -11,6 +11,7 @@ param(
     [Parameter(Mandatory)] [string] $Output,
     [ValidateRange(1, 10)] [int] $Rounds = 4,
     [ValidateRange(1, 32)] [int] $Sources = 16,
+    [switch] $JobProcesses,
     [ValidateRange(2, 120)] [int] $Seconds = 15
 )
 $ErrorActionPreference = 'Stop'
@@ -29,7 +30,7 @@ function Counters {
     return $values
 }
 Save (Join-Path $Output 'metadata.json') @{
-    StartedUtc=[DateTime]::UtcNow.ToString('O'); Sources=$Sources; Seconds=$Seconds
+    StartedUtc=[DateTime]::UtcNow.ToString('O'); Sources=$Sources; Seconds=$Seconds; CurrentJobProcesses=[bool]$JobProcesses
     Probe=(Get-FileHash $Probe).Hash; Previous=(Get-FileHash $Previous).Hash; Child=(Get-FileHash $Child).Hash
 }
 for ($round = 0; $round -lt $Rounds; $round++) {
@@ -38,11 +39,14 @@ for ($round = 0; $round -lt $Rounds; $round++) {
     foreach ($version in $versions) {
         $binary = if ($version -eq 'previous') { $Previous } else { $Probe }
         $before = Counters
-        $text = & $binary process-sources --sources $Sources --seconds $Seconds --child $Child
+        $arguments = @('process-sources','--sources',"$Sources",'--seconds',"$Seconds",'--child',$Child)
+        if ($JobProcesses -and $version -eq 'current') { $arguments += '--job-processes' }
+        $text = & $binary @arguments
         if ($LASTEXITCODE -ne 0) { throw "Invalid process-source run $version/r$round`: $text" }
         $after = Counters
         $result = $text | ConvertFrom-Json
         if (-not $result.NativeAot -or $result.Ready -ne $Sources -or $result.ChildrenRemaining -ne 0) { throw "Unqualified source measurement: $text" }
+        if ($JobProcesses -and $version -eq 'current' -and -not $result.JobProcesses) { throw 'The candidate did not exercise the native worker policy.' }
         $ambient = foreach ($id in $after.Keys) {
             if ($before.ContainsKey($id)) {
                 $cpu = $after[$id].CpuMs - $before[$id].CpuMs

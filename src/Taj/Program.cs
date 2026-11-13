@@ -183,7 +183,7 @@ internal static class Program
             s_config = config;
             s_problems = problems;
 
-            s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
+            s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current, Win32WorkerProcess.Start));
 
             // The bar watches the file itself, as the window manager does. The window
             // manager announces its own reloads and the bar follows those; this is for
@@ -613,7 +613,7 @@ internal static class Program
         // Once, for every bar. Sources hold timers and processes, so the old set is
         // disposed rather than dropped; this used to happen per bar, which for a
         // command source meant its script killed and restarted once per display.
-        s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current));
+        s_sources.Replace(TajConfigLoader.CreateSources(config.Sources, KeyboardLanguage.Current, Win32WorkerProcess.Start));
 
         // A reload that added the file's first signal source, or removed its last,
         // changes what each bar's connection should be subscribed to; the subscription

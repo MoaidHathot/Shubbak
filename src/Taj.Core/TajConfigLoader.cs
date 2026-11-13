@@ -1643,6 +1643,7 @@ public static class TajConfigLoader
     /// <param name="keyboardLanguage">
     /// Reads the current input language, supplied by the host.
     /// </param>
+    /// <param name="startProcess">The host's script worker ownership policy.</param>
     /// <remarks>
     /// The keyboard language cannot be read without Win32, and this assembly is
     /// deliberately free of it - it is the part that can be tested without a desktop.
@@ -1650,7 +1651,8 @@ public static class TajConfigLoader
     /// kinds of source exist.
     /// </remarks>
     public static IEnumerable<ISource> CreateSources(
-        IReadOnlyList<SourceSpec> specs, Func<string>? keyboardLanguage = null)
+        IReadOnlyList<SourceSpec> specs, Func<string>? keyboardLanguage = null,
+        Func<System.Diagnostics.ProcessStartInfo, Shubbak.Core.Processes.WorkerProcess>? startProcess = null)
     {
         ArgumentNullException.ThrowIfNull(specs);
 
@@ -1670,7 +1672,7 @@ public static class TajConfigLoader
                     // its last line is the value; without one it is kept running and
                     // every line it prints is.
                     if (spec.Argument.Length > 0)
-                        source = new ProcessSource(spec.Name, spec.Argument, interval: spec.IntervalWasWritten ? spec.Interval : null);
+                        source = new ProcessSource(spec.Name, spec.Argument, interval: spec.IntervalWasWritten ? spec.Interval : null, startProcess: startProcess);
                     break;
 
                 case "keyboard":

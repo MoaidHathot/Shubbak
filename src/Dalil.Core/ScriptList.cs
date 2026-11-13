@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Shubbak.Core.Processes;
 
 namespace Dalil.Core;
 
@@ -44,15 +45,19 @@ public static class ScriptList
     /// <param name="commandLine">The program and its arguments, the program quoted if its path has a space.</param>
     /// <param name="timeout">How long to wait, or null for <see cref="DefaultTimeout"/>.</param>
     /// <param name="token">Cancels the wait; the program is stopped.</param>
-    public static async Task<Result> RunAsync(string commandLine, TimeSpan? timeout = null, CancellationToken token = default)
+    public static Task<Result> RunAsync(string commandLine, TimeSpan? timeout = null, CancellationToken token = default) =>
+        RunAsync(commandLine, WorkerProcess.Start, timeout, token);
+
+    /// <summary>Runs a script with the host's worker ownership policy.</summary>
+    public static async Task<Result> RunAsync(string commandLine, Func<ProcessStartInfo, WorkerProcess> startProcess,
+        TimeSpan? timeout = null, CancellationToken token = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(commandLine);
+        ArgumentNullException.ThrowIfNull(startProcess);
 
         (string file, string arguments) = Split(commandLine);
 
-        using var process = new Process();
-
-        process.StartInfo = new ProcessStartInfo(file, arguments)
+        var startInfo = new ProcessStartInfo(file, arguments)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -60,14 +65,17 @@ public static class ScriptList
             CreateNoWindow = true,
         };
 
+        WorkerProcess owned;
         try
         {
-            process.Start();
+            owned = startProcess(startInfo);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException)
         {
             return new Result([], $"could not start '{file}': {ex.Message}");
         }
+        using var lifetime = owned;
+        Process process = owned.Process;
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(timeout ?? DefaultTimeout);
@@ -93,7 +101,7 @@ public static class ScriptList
         }
         catch (OperationCanceledException)
         {
-            Stop(process);
+            Stop(owned);
 
             return new Result(
                 lines,
@@ -161,11 +169,11 @@ public static class ScriptList
     /// script is nearly always <c>pwsh -File</c> something, and ending the shell alone
     /// leaves its children running.
     /// </summary>
-    private static void Stop(Process process)
+    private static void Stop(WorkerProcess process)
     {
         try
         {
-            process.Kill(entireProcessTree: true);
+            process.Stop();
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException)
         {

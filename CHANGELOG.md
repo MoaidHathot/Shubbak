@@ -17,6 +17,10 @@ schedule and breaking either is a different kind of event:
 
 ### Changed
 
+- **Script workers stop promptly on reload and exit.** Taj's command sources and
+  Dalil's script prompts use per-worker Windows jobs, with suspended starts ensuring
+  descendants are included from the beginning. Shutdown no longer scans every
+  process on the machine, and a crashed companion releases its worker families.
 - **.NET 11 NativeAOT builds with runtime-native async.** The bundled programs use
   the new runtime while the IPC package continues to support .NET 10 clients.
   Native comparisons and their limits are recorded in `ideas/performance-net11-2026-11.md`.
@@ -46,6 +50,9 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Disposing a source twice is harmless.** The disposal guard now runs before
+  source-specific cleanup, avoiding cancellation against an already-disposed token
+  source during repeated cleanup.
 - **A cancelled IPC write now reconnects cleanly.** A subscribed connection could
   reuse a partially sent request, stalling later commands or corrupting their
   framing. Interrupted writes now end that connection; cancelling a queued request
