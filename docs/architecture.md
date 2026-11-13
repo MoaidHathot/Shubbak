@@ -114,6 +114,11 @@ ships for ARM64 as well; the numbers there have not been taken yet.
 
 ## Building
 
+Use the .NET 11 SDK selected by `global.json`. Native publishing also requires the
+Visual C++ build tools for the target architecture. `Shubbak.Ipc` targets both
+.NET 10 and .NET 11; its tests run on both, and the .NET 10 examples exercise the
+compatibility asset. The bundled programs use .NET 11.
+
 ```
 dotnet build
 dotnet test

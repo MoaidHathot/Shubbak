@@ -126,8 +126,8 @@ public static class HoldCommand
         // silently waiting for one would be a puzzle rather than a message.
         if (!IpcClient.IsServerRunning(pipe))
         {
-            await error.WriteLineAsync("shubbak: no window manager is running.").ConfigureAwait(false);
-            await error.WriteLineAsync("hint: start it with shubbak-wm").ConfigureAwait(false);
+            await error.WriteLineAsync("shubbak: no window manager is running.", CancellationToken.None).ConfigureAwait(false);
+            await error.WriteLineAsync("hint: start it with shubbak-wm", CancellationToken.None).ConfigureAwait(false);
             return 2;
         }
 
@@ -148,7 +148,7 @@ public static class HoldCommand
                 {
                     await output.WriteLineAsync(heldOnce
                         ? $"holding \"{hold.Context}\" again; the window manager is back"
-                        : $"holding \"{hold.Context}\"; Ctrl+C, or end this process, to let go").ConfigureAwait(false);
+                        : $"holding \"{hold.Context}\"; Ctrl+C, or end this process, to let go", token).ConfigureAwait(false);
 
                     heldOnce = true;
                     return;
@@ -160,12 +160,12 @@ public static class HoldCommand
                 // which the next reload may change back; said, and waited out.
                 if (!heldOnce)
                 {
-                    await error.WriteLineAsync($"shubbak: {response.Error}").ConfigureAwait(false);
+                    await error.WriteLineAsync($"shubbak: {response.Error}", token).ConfigureAwait(false);
                     ended.TrySetResult(1);
                     return;
                 }
 
-                await error.WriteLineAsync($"shubbak: \"{hold.Context}\" was refused when asked again: {response.Error}").ConfigureAwait(false);
+                await error.WriteLineAsync($"shubbak: \"{hold.Context}\" was refused when asked again: {response.Error}", token).ConfigureAwait(false);
             },
 
             Event = async (connection, notification, token) =>
@@ -183,17 +183,17 @@ public static class HoldCommand
                         IpcResponse response = await connection.Events.SendAsync("command", hold.Command, token).ConfigureAwait(false);
 
                         if (!response.Ok)
-                            await error.WriteLineAsync($"shubbak: after a reload, \"{hold.Context}\" was refused: {response.Error}").ConfigureAwait(false);
+                            await error.WriteLineAsync($"shubbak: after a reload, \"{hold.Context}\" was refused: {response.Error}", token).ConfigureAwait(false);
 
                         break;
 
                     case IpcProtocol.ShutdownTopic when ShutdownNotice.IsForEveryone(notification.Data):
-                        await output.WriteLineAsync("the window manager is shutting everything down; letting go").ConfigureAwait(false);
+                        await output.WriteLineAsync("the window manager is shutting everything down; letting go", token).ConfigureAwait(false);
                         ended.TrySetResult(0);
                         break;
 
                     case IpcProtocol.ShutdownTopic:
-                        await output.WriteLineAsync("the window manager is restarting; the pin will be held again when it is back").ConfigureAwait(false);
+                        await output.WriteLineAsync("the window manager is restarting; the pin will be held again when it is back", token).ConfigureAwait(false);
                         break;
                 }
             },

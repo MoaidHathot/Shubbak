@@ -79,7 +79,7 @@ I liked about them and changes what kept getting in my way:
 
 ## Install
 
-Windows 10 version 2004 or later, x64 or ARM64; a few looks - the focused-window
+Windows 10 version 2004 or later, x64 (x86-64-v2 or newer) or ARM64; a few looks - the focused-window
 border, the bar's acrylic - need Windows 11 and are quietly left out on 10. With winget:
 
 ```
@@ -219,6 +219,8 @@ attach it. [CHANGELOG.md](CHANGELOG.md) says what changed between releases;
 [SECURITY.md](SECURITY.md) says what the pipe does and does not let a process do.
 
 ## Building
+
+Requires the .NET 11 SDK. The IPC NuGet package also supports .NET 10 clients.
 
 ```
 dotnet build

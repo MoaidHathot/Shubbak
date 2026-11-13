@@ -57,7 +57,9 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: '10.0.x'
+          dotnet-version: |
+            10.0.x
+            11.0.x
 
       # The version the binaries will report comes from Directory.Build.props, and the
       # tag is written by a human at a different moment. When they disagree, the
@@ -162,7 +164,7 @@ jobs:
       # The one assembly that ships as a NuGet package, signed where it was built so
       # the package carries a signed assembly. Only this one: the other libraries are
       # linked into the executables above and have no life of their own.
-      - name: Sign the Shubbak.Ipc assembly
+      - name: Sign the Shubbak.Ipc compatibility assembly
         if: env.SIGNING_ENABLED == 'true'
         uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
         with:
@@ -177,10 +179,25 @@ jobs:
           timestamp-digest: SHA256
           exclude-environment-credential: true
 
+      - name: Sign the Shubbak.Ipc .NET 11 assembly
+        if: env.SIGNING_ENABLED == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.SIGNING_CERTIFICATE_PROFILE }}
+          files-folder: ${{ github.workspace }}\src\Shubbak.Ipc\bin\Release\net11.0
+          files-folder-filter: dll
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+
       - name: Check the signature on the Shubbak.Ipc assembly
         if: env.SIGNING_ENABLED == 'true'
         shell: pwsh
-        run: ./tools/check-signatures.ps1 (Get-ChildItem src/Shubbak.Ipc/bin/Release/net10.0 -Filter Shubbak.Ipc.dll).FullName
+        run: ./tools/check-signatures.ps1 (Get-ChildItem src/Shubbak.Ipc/bin/Release/net10.0, src/Shubbak.Ipc/bin/Release/net11.0 -Filter Shubbak.Ipc.dll).FullName
 
       # The zips are packed from the signed binaries, and the MSIs are built from them,
       # so all of them contain exactly what was checked above. ICE validation runs on

@@ -8,12 +8,12 @@
     IpcServer and real IpcClients over a named pipe with an isolated name, so they run
     on a desktop that is using Shubbak at the time.
 
-    Shubbak.Core is referenced for one test that walks every WmEvent to check the
-    protocol names each of them; the pipe itself depends on nothing.
+    Both package targets are exercised without a dependency on the window manager.
+    Shubbak.Wm.Tests checks that every WmEvent has a declared protocol topic.
   -->
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
@@ -27,7 +27,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Shubbak.Ipc\Shubbak.Ipc.csproj" />
-    <ProjectReference Include="..\..\src\Shubbak.Core\Shubbak.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>

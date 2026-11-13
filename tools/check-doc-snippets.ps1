@@ -44,7 +44,7 @@ if (-not $Cli) {
     # the artifacts directory is the one place a runnable shubbak.exe is certain to be.
     $candidates = @(
         (Join-Path $root "artifacts\publish\$rid\Shubbak.Cli\shubbak.exe"),
-        (Join-Path $root "src\Shubbak.Cli\bin\Release\net10.0-windows10.0.19041.0\$rid\shubbak.exe")
+        (Join-Path $root "src\Shubbak.Cli\bin\Release\net11.0-windows10.0.19041.0\$rid\shubbak.exe")
     )
     $Cli = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 

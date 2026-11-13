@@ -91,3 +91,74 @@ Layout and inverse resize retained zero warmed allocation and identical checksum
 **Step review:** the baseline validates the existing behavior and identifies useful
 IPC and process-source workloads. It does not yet establish a product improvement.
 The next comparisons isolate the .NET 11 upgrade and application Runtime Async.
+
+## Framework upgrade qualification
+
+The framework-only candidate targets .NET 11, with application Runtime Async still
+off. The IPC package retains `net10.0` and adds `net11.0`; its transport tests run
+on both. The cross-layer event-topic completeness check moved to the daemon tests
+so the compatibility suite does not depend on the .NET 11 core. Packaging validates
+both assets, their XML documentation and exact assembly hashes; release signing
+covers both. The two example clients still target .NET 10.
+
+The full suite passed **3,840 cases with coverage** (55 additional compatibility
+cases), with zero warnings during build and zero failures/skips. All five programs
+published for x64 and ARM64. ARM64 is cross-built locally; it is not executable on
+this x64 machine. All 39 documentation snippets and 30 example checks passed, and
+the dual-target NuGet package validated. New analyzer findings were resolved by
+appending diagnostic text without intermediate strings and forwarding cancellation
+to the new TextWriter overload where the hold is still running.
+
+The first native-size result is a cost, not a saving:
+
+| Program | .NET 10 bytes | .NET 11 bytes | Change |
+|---|---:|---:|---:|
+| Window manager | 7,126,528 | 7,225,856 | +1.39% |
+| CLI | 6,007,296 | 6,134,784 | +2.12% |
+| Taj | 5,972,992 | 6,102,016 | +2.16% |
+| Dalil | 6,119,424 | 6,230,528 | +1.82% |
+| Ayn | 5,298,688 | 5,422,592 | +2.34% |
+
+Runtime comparisons determine whether that trade is justified. Later application
+async and code optimizations are measured against this separate framework variant.
+
+### Profile attribution
+
+Native EventPipe stacks resolve against captured ASLR module bases and the matching
+PDBs. The escaped workload shows buffer clearing/copying and UTF-8/JSON processing
+alongside the pipe and worker waits. All NativeAOT samples are classified External
+by this sampler, so they are not treated as kernel CPU percentages. A separate
+GC-verbose native trace records collections and suspension durations; this runtime
+does not provide allocation type identities in that trace.
+
+A matched-source CoreCLR allocation trace supplies type attribution: strings and
+byte arrays dominate, with smaller constructor-metadata, cancellation and async
+objects. Its GC thresholds and thread pool differ from NativeAOT, so its timings
+and collection count are not substituted for the native comparisons. The native
+equal-work counters independently establish the bytes/exchange in the baseline.
+Collection logs, traces, module maps, PDB/binary hashes and summaries are retained.
+
+### Framework-only comparison and step review
+
+Four reversed-order native pairs (`upgrade-*`):
+
+- Plain IPC allocation is essentially unchanged (36,470-36,471 -> 36,430-36,432 B/op).
+  CPU is **higher**, 0.0872-0.0927 -> 0.0911-0.1005 ms/op; this is a regression to
+  resolve before selecting the final build.
+- Escaped IPC CPU is 0.2500-0.2680 -> 0.2402-0.2622 ms/op, and allocation falls only
+  about 430 B/op. These small framework savings leave the large buffers/strings.
+- Layout still allocates zero and has overlapping elapsed ranges. Inverse resizing
+  also keeps zero allocation, with 1M-operation elapsed 2.156-2.190 -> 2.104-2.113 s.
+- Sixteen quiet sources use **12-21 rather than 23 parent threads**, and
+  **6.60-7.01 rather than 7.32-7.38 MiB private memory**. Idle CPU remains near the
+  counter's quantum. Disposal regresses **416-432 -> 694-706 ms**, with higher CPU.
+  Upstream source inspection identifies changed process-tree relationship checks;
+  each source still enumerates the whole machine when it is stopped.
+- The desktop auto-locked before the keyboard comparison. The first, stopped-daemon
+  foreground prerequisite failed and produced **no accepted keyboard row**. The
+  failure is retained, not counted as either an input regression or a pass.
+
+The framework migration is a separately reproducible foundation, **not yet the
+accepted final performance configuration**. The next steps must resolve the IPC
+and source-disposal regressions and complete unlocked desktop comparisons. The
+full correctness suite passes; runtime and resource acceptance remain open.

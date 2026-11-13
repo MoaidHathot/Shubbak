@@ -18,7 +18,7 @@
       flash and the exact process tree an antivirus heuristic is built to distrust.
     -->
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
     <AssemblyName>shubbak-wm</AssemblyName>
     <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
     <AssemblyTitle>Shubbak Window Manager</AssemblyTitle>

@@ -243,9 +243,11 @@ function Test-FinishActions([string] $msi) {
     Write-Output "  Finish runs $($command.Argument) through $(($launched | ForEach-Object { $_.Argument }) -join ', '), a DLL call"
 }
 
-# The assembly dotnet pack puts in the package, where the workflow signs it before
-# packing. Architecture-neutral, so one copy under the plain target framework.
-function Get-IpcAssemblyDir { Join-Path $root "src\Shubbak.Ipc\bin\$Configuration\net10.0" }
+# The assemblies dotnet pack puts in the package, signed before packing. Read the
+# declared frameworks so a compatibility asset cannot silently miss validation.
+$ipcProject = [xml](Get-Content (Join-Path $root 'src\Shubbak.Ipc\Shubbak.Ipc.csproj'))
+$ipcFrameworks = $ipcProject.SelectSingleNode('/Project/PropertyGroup/TargetFrameworks').InnerText -split ';'
+function Get-IpcAssemblyDir([string] $framework) { Join-Path $root "src\Shubbak.Ipc\bin\$Configuration\$framework" }
 
 $version = Get-Version
 Write-Output "Shubbak $version for $($Rids -join ', ')"
@@ -463,8 +465,8 @@ if ($Nuget) {
     # workflow signed between the build and this stage is the one in the package. A
     # pack that rebuilt would overwrite the signature with an unsigned assembly and
     # nothing would say so.
-    $assembly = Join-Path (Get-IpcAssemblyDir) 'Shubbak.Ipc.dll'
-    if (-not (Test-Path $assembly)) {
+    $missing = @($ipcFrameworks | Where-Object { -not (Test-Path (Join-Path (Get-IpcAssemblyDir $_) 'Shubbak.Ipc.dll')) })
+    if ($missing.Count -gt 0) {
         Invoke-Checked 'build Shubbak.Ipc' {
             dotnet build (Join-Path $root 'src\Shubbak.Ipc') --configuration $Configuration --nologo -v q
         }
@@ -501,8 +503,13 @@ if ($Nuget) {
         if ($packageVersion -ne $version) { throw "The package says it is version $packageVersion; the tree says $version." }
         $dependencies = $nuspec.SelectNodes('//n:dependency', $namespaces)
         if ($dependencies.Count -gt 0) { throw "The package depends on $($dependencies.Count) package(s); it is meant to depend on nothing." }
-        if (-not (Test-Path (Join-Path $inspect 'lib\net10.0\Shubbak.Ipc.dll'))) { throw 'The package has no assembly in it.' }
-        if (-not (Test-Path (Join-Path $inspect 'lib\net10.0\Shubbak.Ipc.xml'))) { throw 'The package has no XML documentation in it.' }
+        foreach ($framework in $ipcFrameworks) {
+            $packed = Join-Path $inspect "lib\$framework\Shubbak.Ipc.dll"
+            if (-not (Test-Path $packed)) { throw "The package has no $framework assembly." }
+            if (-not (Test-Path (Join-Path $inspect "lib\$framework\Shubbak.Ipc.xml"))) { throw "The package has no $framework XML documentation." }
+            $built = Join-Path (Get-IpcAssemblyDir $framework) 'Shubbak.Ipc.dll'
+            if ((Get-FileHash $packed).Hash -ne (Get-FileHash $built).Hash) { throw "The packaged $framework assembly differs from the signed/build input." }
+        }
         if (-not (Test-Path (Join-Path $inspect 'README.md'))) { throw 'The package has no README in it.' }
     }
     finally {

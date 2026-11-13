@@ -106,7 +106,7 @@ public sealed record Diagnostic(
 
             caret.Append('^', Math.Max(1, Math.Min(Span.Length, Math.Max(1, line.Length - Span.Start.Column + 1))));
 
-            output.Append("  ").Append(new string(' ', gutter.Length)).Append(" | ").AppendLine(caret.ToString());
+            output.Append("  ").Append(' ', gutter.Length).Append(" | ").Append(caret).AppendLine();
         }
 
         if (Hint is not null) output.Append("  hint: ").AppendLine(Hint);

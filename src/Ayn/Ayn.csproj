@@ -23,7 +23,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net11.0-windows10.0.19041.0</TargetFramework>
     <AssemblyName>ayn</AssemblyName>
     <!-- The name Task Manager shows. See the note in Directory.Build.props. -->
     <AssemblyTitle>Shubbak Ayn</AssemblyTitle>

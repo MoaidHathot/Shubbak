@@ -41,7 +41,7 @@ $Current = [IO.Path]::GetFullPath($Current)
 $Output = [IO.Path]::GetFullPath($Output)
 $SessionDirectory = [IO.Path]::GetFullPath($SessionDirectory)
 $cli = Join-Path $SessionDirectory 'shubbak.exe'
-$window = if ($TestWindow) { [IO.Path]::GetFullPath($TestWindow) } else { Join-Path $root 'tests/Shubbak.TestWindow/bin/Release/net10.0-windows10.0.19041.0/win-x64/Shubbak.TestWindow.exe' }
+$window = if ($TestWindow) { [IO.Path]::GetFullPath($TestWindow) } else { Join-Path $root 'tests/Shubbak.TestWindow/bin/Release/net11.0-windows10.0.19041.0/win-x64/Shubbak.TestWindow.exe' }
 foreach ($file in @($Probe, $Current, $cli, $window)) {
     if (-not (Test-Path -LiteralPath $file)) { throw "Required binary missing: $file" }
 }
