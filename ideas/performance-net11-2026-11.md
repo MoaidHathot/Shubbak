@@ -179,3 +179,41 @@ introduced on the successful write path.
 
 **Step review:** this is a reproduced correctness fix needed before changing async
 lowering and buffer lifetime. It is not claimed as a throughput optimization.
+
+## Runtime Async measurement qualification
+
+The first `runtime-async-*` comparison is **excluded as an async A/B experiment**:
+both executables had SHA-256
+`F8667118775675CB60BFBE39464ED405A8214339C82F847BB4AEEE66897ED787`.
+Roslyn's incremental inputs did not notice the changed compiler Features property.
+The nearly identical allocation counts therefore measured the same lowering.
+
+The build now records compiler features in a write-only-when-different intermediate
+input. Changing the switch invalidates compilation, while repeating the same build
+does not. Subsequent comparisons must verify method implementation flags and state
+machine counts as well as native hashes. Existing .NET 10 compatibility builds keep
+compiler-generated async regardless of the switch.
+
+The qualified builds have **20 vs 2** IPC state-machine types, and ConnectAsync's
+implementation flags are **0x0 vs 0x2000**. The .NET 10 asset remains at 20 / 0x0.
+Native hashes differ; the probe is 8,014,848 vs 7,971,328 bytes. Both variants use
+the same source, including the cancellation correction and worker abstraction; the
+IPC workload does not start workers. All nine selected async/companion suites pass
+with the verified lowering.
+
+Four reversed-order 100,000-exchange pairs (`qualified-async-*`):
+
+| Work | Compiler async B/op | Runtime Async B/op | Compiler CPU ms/op | Runtime CPU ms/op |
+|---|---:|---:|---:|---:|
+| Plain IPC | 36,430-36,432 | 35,860-35,866 | 0.0827-0.0878 | 0.0797-0.0850 |
+| Escaped IPC | 167,695-167,704 | 167,150-167,153 | 0.2238-0.2339 | 0.2247-0.2272 |
+
+Plain IPC elapsed was 6.545-6.649 vs 6.434-6.511 seconds; its CPU was lower in
+each pair. Escaped CPU/elapsed ranges overlap, with one pair slightly slower.
+Layout/resize keep zero allocation and matching geometry. An isolated slower
+layout control row is retained rather than attributed to async lowering.
+
+**Step review:** enable Runtime Async on .NET 11. Its reproducible allocation saving
+and modest plain-IPC improvement justify it, while the much larger string/buffer
+cost remains the next target. No broad animation or resident-RAM gain is inferred
+from this async experiment alone.

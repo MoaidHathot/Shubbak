@@ -119,6 +119,11 @@ Visual C++ build tools for the target architecture. `Shubbak.Ipc` targets both
 .NET 10 and .NET 11; its tests run on both, and the .NET 10 examples exercise the
 compatibility asset. The bundled programs use .NET 11.
 
+Application Runtime Async is enabled for .NET 11 targets. For a comparison build,
+`-p:ShubbakRuntimeAsync=false` selects compiler-generated async. Compiler features
+are tracked as build inputs so toggling the setting really recompiles the code.
+See [the native performance evidence](../ideas/performance-net11-2026-11.md).
+
 ```
 dotnet build
 dotnet test

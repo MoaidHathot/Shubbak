@@ -17,6 +17,9 @@ schedule and breaking either is a different kind of event:
 
 ### Changed
 
+- **.NET 11 NativeAOT builds with runtime-native async.** The bundled programs use
+  the new runtime while the IPC package continues to support .NET 10 clients.
+  Native comparisons and their limits are recorded in `ideas/performance-net11-2026-11.md`.
 - **Shortcuts can distinguish left/right modifiers and explicitly bind AltGr.**
   Sided combinations are expanded when loading the config, preserving one lookup
   per fresh key press. Generic modifiers remain fallbacks; context disarming and

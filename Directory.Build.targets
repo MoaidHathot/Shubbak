@@ -32,4 +32,22 @@
     <EnableSingleFileAnalyzer Condition="'$(IsTestProject)' != 'true'">true</EnableSingleFileAnalyzer>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <!-- Kept selectable for native A/B measurements. The compatibility IPC asset
+         must retain compiler async because .NET 10 cannot execute runtime async. -->
+    <ShubbakRuntimeAsync Condition="'$(ShubbakRuntimeAsync)' == ''">true</ShubbakRuntimeAsync>
+    <Features Condition="'$(ShubbakRuntimeAsync)' == 'true' and $([System.String]::Copy('$(TargetFramework)').StartsWith('net11.0'))">$(Features);runtime-async=on</Features>
+  </PropertyGroup>
+
+  <!-- Roslyn's incremental inputs do not include Features. Without this, changing
+       the async switch can publish the previous lowering under the new setting. -->
+  <Target Name="TrackShubbakCompilerFeatures" BeforeTargets="CoreCompile">
+    <WriteLinesToFile File="$(IntermediateOutputPath)Shubbak.CompilerFeatures.cache"
+                      Lines="$(Features)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <CustomAdditionalCompileInputs Include="$(IntermediateOutputPath)Shubbak.CompilerFeatures.cache" />
+      <FileWrites Include="$(IntermediateOutputPath)Shubbak.CompilerFeatures.cache" />
+    </ItemGroup>
+  </Target>
+
 </Project>
