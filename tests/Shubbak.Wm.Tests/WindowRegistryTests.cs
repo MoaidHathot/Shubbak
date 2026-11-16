@@ -1,3 +1,4 @@
+using Shubbak.Core.Commands;
 using Shubbak.Core.Tree;
 using Shubbak.Wm;
 
@@ -78,7 +79,8 @@ public sealed class WindowRegistryTests
         var registry = new WindowRegistry();
         registry.Adopt(0x1, Node());
 
-        registry.Release(0x1, thenExclude: true);
+        registry.SetOverride(0x1, WindowManagementMode.Unmanaged);
+        registry.Release(0x1, forgetOverride: false);
 
         Assert.False(registry.IsManaged(0x1));
         Assert.True(registry.IsExcluded(0x1));
@@ -256,6 +258,57 @@ public sealed class WindowRegistryTests
 
         Assert.True(registry.IsManaged(0x1));
         Assert.Equal(1, registry.ManagedCount);
+    }
+
+    [Fact]
+    public void ReloadKeepsExplicitChoicesWhileForgettingCachedRefusals()
+    {
+        var registry = new WindowRegistry();
+        registry.SetOverride(1, WindowManagementMode.Managed);
+        registry.Adopt(1, Node(1));
+        registry.SetOverride(2, WindowManagementMode.Unmanaged);
+        registry.Exclude(3);
+
+        Assert.Equal(1, registry.ForgetVerdicts());
+        Assert.Equal(WindowManagementMode.Managed, registry.OverrideFor(1));
+        Assert.Equal(WindowManagementMode.Unmanaged, registry.OverrideFor(2));
+        Assert.True(registry.AlreadyDecided(2));
+        Assert.False(registry.AlreadyDecided(3));
+
+        registry.SetOverride(2, WindowManagementMode.Default);
+        Assert.False(registry.AlreadyDecided(2));
+    }
+
+    [Fact]
+    public void ARequestedWindowThatCannotBeReadoptedExplainsTheFailureRatherThanSayingManageable()
+    {
+        var registry = new WindowRegistry();
+        registry.SetOverride(42, WindowManagementMode.Managed);
+        registry.Exclude(42, new WindowExclusion("No workspace is available.", "adoption failed"));
+
+        Shubbak.Ipc.WindowManagementInfo management = registry.DescribeManagement(42, Shubbak.Native.ManageDecision.Yes);
+        Assert.Contains("No workspace", management.Reason, StringComparison.Ordinal);
+        Assert.DoesNotContain("manageable", management.Reason, StringComparison.Ordinal);
+        Assert.Null(management.Rule);
+    }
+
+    [Theory]
+    [InlineData(WindowManagementMode.Managed)]
+    [InlineData(WindowManagementMode.Unmanaged)]
+    public void HidingKeepsTheChoiceButDestructionAndMissingWindowsForgetIt(WindowManagementMode mode)
+    {
+        var registry = new WindowRegistry();
+        registry.SetOverride(1, mode);
+        registry.SetOverride(2, mode);
+
+        registry.Release(1, forgetOverride: false);
+        registry.ForgetMissingVerdicts(new HashSet<nint> { 1 });
+        Assert.Equal(mode, registry.OverrideFor(1));
+        Assert.Equal(WindowManagementMode.Default, registry.OverrideFor(2));
+
+        registry.Release(1);
+        Assert.Equal(WindowManagementMode.Default, registry.OverrideFor(1));
+        Assert.False(registry.AlreadyDecided(1));
     }
 
     // ---- iteration ---------------------------------------------------------

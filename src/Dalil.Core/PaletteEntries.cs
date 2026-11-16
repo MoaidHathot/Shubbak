@@ -257,7 +257,7 @@ public static class PaletteEntries
     /// only the first two are worth looking at first.
     /// </remarks>
     private static long Actionable(WindowCandidate window) =>
-        Reason(window) switch
+        window.Management is { Mode: "unmanaged" } or { Rule: not null } ? 2 : Reason(window) switch
         {
             "excluded by a rule" => 2,
             "not adopted yet" => 1,
@@ -1122,16 +1122,32 @@ public static class PaletteEntries
             Explains: null,
             Expands: $"{label}  {value}"));
 
-        // First, because it is the thing somebody reading this report is on their way
-        // to doing. Everything below explains why the window behaves as it does; this
-        // is what changes it - as a list of the rules that could, each complete, best
-        // first, decided by the very facts the rest of the report lays out.
+        // The answer comes before the native attributes. In particular, passing the
+        // filter does not mean a window is managed, and a manual release is not a rule.
+        Add("managed", report.Managed ? "yes" : report.Management is { } management
+            ? $"no - {management.Summary}"
+            : report.ExcludedByRule ? "no - excluded or released manually" : "no");
+
+        if (report.Management is { } decision)
+            Add("why", decision.Reason);
+
+        foreach (PaletteEntry action in PaletteActions.AsEntries(PaletteActions.ForManagement(report.Handle, report.Managed)))
+            entries.Add(action with { Rank = -entries.Count });
+
+        if (report.Management?.Rule is { } excluding)
+        {
+            Add("excluding rule", $"{excluding.Name}  ignore  (line {excluding.Line})", ForRuleRow(excluding, report.Handle));
+
+            if (report.Rules.Any(r => r.Name == excluding.Name && r.Line == excluding.Line && !r.Matched))
+                Add("rule decision", "This rule matched when the window was excluded, but no longer matches its current attributes. Restore default management re-evaluates it.");
+        }
+
         entries.Add(new PaletteEntry(
             "Write a rule for it\u2026",
             "compose",
             ["\u21B5 choose"],
             string.Empty,
-            Rank: 1,
+            Rank: -entries.Count,
             SwitchesTo: null,
             Actions: PaletteActions.RuleChoices(report, focusedWorkspace, workspaces),
             Explains: null,
@@ -1162,7 +1178,6 @@ public static class PaletteEntries
 
         if (report.Node is { } node)
         {
-            Add("managed", "yes");
             Add("node", $"#{node.Id}");
             Add("state", node.State);
             Add("workspace", node.Workspace);
@@ -1174,11 +1189,6 @@ public static class PaletteEntries
 
             if (node.Scratchpad is { Length: > 0 } slot) Add("scratchpad", slot);
         }
-        else
-        {
-            Add("managed", report.ExcludedByRule ? "no - excluded by a rule" : "no");
-        }
-
         // Only the rules, not a heading followed by them. A heading is a row you can
         // select and land on that says nothing, and the label column already carries
         // the word "rule" on every line beneath it.

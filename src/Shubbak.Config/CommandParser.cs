@@ -322,6 +322,39 @@ public static class CommandParser
                 command = new ToggleManagedCommand();
                 return true;
 
+            case "set-managed":
+            {
+                WindowManagementMode? mode = rest.Length > 0 ? rest[0].ToLowerInvariant() switch
+                {
+                    "managed" => WindowManagementMode.Managed,
+                    "unmanaged" => WindowManagementMode.Unmanaged,
+                    "default" => WindowManagementMode.Default,
+                    _ => null,
+                } : null;
+
+                long? handle = null;
+                bool valid = mode is not null && rest.Length == 1;
+
+                if (mode is not null && rest.Length == 3 && rest[1] == "--handle" &&
+                    TryHandle(rest[2], out long target) && target > 0)
+                {
+                    handle = target;
+                    valid = true;
+                }
+
+                if (!valid)
+                {
+                    diagnostic = Diagnostic.Error(
+                        "SHB0326", $"'{text}' does not specify a management choice and an optional window handle.", span,
+                        "Use set-managed managed, set-managed unmanaged, or set-managed default; " +
+                        "add --handle 0x1D0076 to act on a particular window.");
+                    return false;
+                }
+
+                command = new SetManagedCommand(mode!.Value, handle);
+                return true;
+            }
+
             case "wm-enable-binding-mode":
             {
                 string? mode = Value(rest, "--name") ?? Positional(rest);

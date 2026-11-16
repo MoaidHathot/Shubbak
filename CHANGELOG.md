@@ -57,6 +57,13 @@ schedule and breaking either is a different kind of event:
 
 ### Fixed
 
+- **Dalil explains exclusions and offers direct management overrides.** Manually
+  released windows now say “released by you”; rule exclusions name the actual rule
+  and its line, even after the window's title changes. Window actions and inspection
+  reports offer Manage, Stop managing, and Restore default management. Choices
+  target the selected window directly, survive config reloads, and report failures
+  in the palette. `set-managed managed|unmanaged|default --handle <hwnd>` exposes the
+  same controls to scripts; overrides end on reset, window closure or a WM restart.
 - **Blank Teams/helper windows no longer appear after restart or suspend/resume.**
   Startup and `shubbak restore` require the recorded window handle and application
   identity before claiming concealment. Surviving windows keep their saved placements

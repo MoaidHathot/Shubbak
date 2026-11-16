@@ -62,6 +62,14 @@ shubbak context --set meeting --ttl 10s
 
 The [commands](configuration.md#commands) page lists the verbs.
 
+For per-window management, `set-managed managed|unmanaged|default --handle <hwnd>`
+targets the handle directly. `all-windows`, `every-window`, the palette snapshots,
+and `inspect` include an optional `management` object: `mode` is the current override
+(`default`, `managed`, or `unmanaged`), `reason` and `summary` explain the decision,
+and `rule`, when present, identifies the rule that actually excluded the window.
+Older daemons omit this object and their `excluded_by_rule` flag also covers manual
+releases; clients should not infer an excluding rule from that legacy flag alone.
+
 Over the pipe itself, a request is one JSON line with a `method` and a `payload`.
 The CLI covers `command`, `query`, `inspect` (a window handle; the report `shubbak
 inspect` prints), `window-icon`, `add-rule` and `remove-rule` (what the palette's

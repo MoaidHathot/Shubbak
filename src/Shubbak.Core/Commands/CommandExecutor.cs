@@ -30,6 +30,9 @@ public enum HostAction
     /// </remarks>
     ToggleManaged,
 
+    /// <summary>Set or clear a window's management override.</summary>
+    SetManaged,
+
     /// <summary>Run <see cref="ShellExecCommand.CommandLine"/>.</summary>
     ShellExecute,
 
@@ -242,6 +245,7 @@ public sealed class CommandExecutor
             NoFocusCommand => Rejected(command, "'no-focus' is only valid in a window rule."),
 
             ToggleManagedCommand => Host(HostAction.ToggleManaged),
+            SetManagedCommand c => Host(HostAction.SetManaged, Encode(c)),
 
             _ => Rejected(command, $"Command '{command.Name}' is not implemented."),
         };
@@ -338,4 +342,26 @@ public sealed class CommandExecutor
 
     private static CommandOutcome Rejected(WmCommand command, string reason) =>
         new(new WmResult(false, [new CommandRejected(command.Name, reason)]));
+
+    /// <summary>Flattens a management command into a host-action payload.</summary>
+    public static string Encode(SetManagedCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+
+        return command.Mode.ToString() + '\t' + command.Handle?.ToString(CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Reads a management command back out of a host-action payload.</summary>
+    public static SetManagedCommand DecodeManagement(string payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+
+        string[] parts = payload.Split('\t');
+
+        if (parts.Length != 2 || !Enum.TryParse(parts[0], out WindowManagementMode mode) || !Enum.IsDefined(mode))
+            throw new FormatException($"Not a management payload: '{payload}'.");
+
+        return new SetManagedCommand(mode,
+            parts[1].Length > 0 ? long.Parse(parts[1], CultureInfo.InvariantCulture) : null);
+    }
 }

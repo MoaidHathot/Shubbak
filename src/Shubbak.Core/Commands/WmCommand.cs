@@ -107,6 +107,10 @@ public abstract record WmCommand
         // who genuinely pressed it repeatedly.
         SignalCommand or
 
+        // Releasing the foreground window hands focus to its neighbour; a held key
+        // must not release that neighbour too.
+        SetManagedCommand or
+
         // Commands that take the focused window off this workspace, which is the same
         // trap as close and was missed because the consequence is recoverable rather
         // than final. Once the window is gone, focus falls to whatever was next to it,
@@ -721,4 +725,21 @@ public sealed record ManageCommand : WmCommand
 public sealed record ToggleManagedCommand : WmCommand
 {
     public override string Name => "toggle-managed";
+}
+
+/// <summary>A per-window choice, or the rules and filter's default decision.</summary>
+public enum WindowManagementMode
+{
+    Default,
+    Managed,
+    Unmanaged,
+}
+
+/// <summary>
+/// <c>set-managed managed|unmanaged|default [--handle hwnd]</c> - sets management
+/// explicitly, without relying on a focus change or toggling a stale palette snapshot.
+/// </summary>
+public sealed record SetManagedCommand(WindowManagementMode Mode, long? Handle = null) : WmCommand
+{
+    public override string Name => "set-managed";
 }

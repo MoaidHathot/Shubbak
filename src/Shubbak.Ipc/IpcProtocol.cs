@@ -154,6 +154,7 @@ public sealed record MonitorInfoDto(
 /// heuristics, false for its facts, null when the verdict was yes or from a daemon that
 /// predates the field.
 /// </param>
+/// <param name="Management">The current override and the actual management decision, when known.</param>
 public sealed record WindowCandidate(
     long Handle,
     string Title,
@@ -185,7 +186,18 @@ public sealed record WindowCandidate(
     // for the same reason as the three above: a client composing a `manage` rule
     // needs to know whether the rule would do anything.
     bool? Manageable = null,
-    bool? Overridable = null);
+    bool? Overridable = null,
+    WindowManagementInfo? Management = null);
+
+/// <summary>The choice for this window and why it is or is not managed.</summary>
+/// <param name="Mode">The per-window choice: default, managed, or unmanaged.</param>
+/// <param name="Reason">The decision in full, for inspection.</param>
+/// <param name="Summary">The same decision in a few words, for a list.</param>
+/// <param name="Rule">
+/// The rule that actually excluded the window. Recorded when it ran, so a later
+/// title change does not erase the explanation. Null for manual releases and filters.
+/// </param>
+public sealed record WindowManagementInfo(string Mode, string Reason, string Summary, RuleReport? Rule = null);
 
 /// <summary>A command verb, as described to clients.</summary>
 /// <remarks>
@@ -246,7 +258,7 @@ public sealed record BindingInfo(
 /// <param name="Verdict">That verdict in a sentence, whichever way it went.</param>
 /// <param name="VerdictSummary">The same in a few words, for a list rather than a report.</param>
 /// <param name="Managed">Whether the window is in the tree right now.</param>
-/// <param name="ExcludedByRule">Whether a rule or a release by hand is why it is not.</param>
+/// <param name="ExcludedByRule">Whether a rule excluded it. Older daemons also counted manual releases.</param>
 /// <param name="Node">What the tree knows, when it is managed. Null when it is not.</param>
 /// <param name="Rules">Every configured rule, and whether it matched this window.</param>
 /// <param name="Apps">Every configured app definition, and why it did not match.</param>
@@ -255,6 +267,7 @@ public sealed record BindingInfo(
 /// Appended and optional. True for the filter's heuristics and false for its facts;
 /// null when the window is manageable anyway, or from a daemon that predates the field.
 /// </param>
+/// <param name="Management">The current override and the actual management decision, when known.</param>
 public sealed record WindowReport(
     long Handle,
     string Title,
@@ -278,7 +291,8 @@ public sealed record WindowReport(
     ManagedWindowReport? Node,
     IReadOnlyList<RuleReport> Rules,
     IReadOnlyList<AppReport> Apps,
-    bool? Overridable = null);
+    bool? Overridable = null,
+    WindowManagementInfo? Management = null);
 
 /// <summary>What the tree knows about a window it manages.</summary>
 /// <param name="Id">Node id, as the tree numbers it.</param>

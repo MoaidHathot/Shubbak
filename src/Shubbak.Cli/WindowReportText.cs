@@ -77,7 +77,13 @@ internal static class WindowReportText
         }
         else
         {
-            text.AppendLine($"managed      no{(report.ExcludedByRule ? " (excluded by a rule)" : "")}");
+            text.AppendLine($"managed      no{(report.Management is { } management ? $" ({management.Summary})" : report.ExcludedByRule ? " (excluded or released manually)" : "")}");
+        }
+
+        if (report.Management is { } decision)
+        {
+            text.AppendLine($"management   {decision.Mode}");
+            text.AppendLine($"reason       {decision.Reason}");
         }
 
         text.AppendLine();

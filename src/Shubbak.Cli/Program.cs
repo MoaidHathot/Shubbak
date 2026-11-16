@@ -1356,6 +1356,20 @@ internal static class Program
           ones, with the reason each unmanaged window was passed over. It is the
           place to look for a window that has gone missing.
 
+        WINDOW MANAGEMENT
+          set-managed <mode>   Set the foreground window's management choice:
+                               managed | unmanaged | default
+            --handle <hwnd>    Target a window directly, without focusing it first.
+                               Handles may be decimal or hex.
+          toggle-managed       Manage the foreground window, or release it.
+
+          Managed/unmanaged choices override rules for this window and survive
+          config reloads. They end on reset, window closure or a Shubbak restart.
+          default clears the override and re-evaluates the current rules and filter.
+
+            shubbak set-managed managed --handle 0x1D0076
+            shubbak set-managed default --handle 0x1D0076
+
         CONTEXTS
           context --set <name>      Hold a context on, whatever its conditions say.
           context --clear <name>    Hold it off.

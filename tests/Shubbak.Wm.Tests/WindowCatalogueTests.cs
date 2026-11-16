@@ -1,3 +1,5 @@
+using Shubbak.Config;
+using Shubbak.Core.Commands;
 using Shubbak.Core.Geometry;
 using Shubbak.Core.Tree;
 using Shubbak.Core.Wm;
@@ -209,7 +211,12 @@ public sealed class WindowCatalogueTests
         WindowManager wm = WithOneWorkspace();
         var registry = new WindowRegistry();
 
-        registry.Exclude(0x700);
+        WindowRule rule = Assert.Single(ConfigLoader.Load("""
+            rules {
+                rule "leave Teams alone" { match { process "ms-teams" } do { ignore } }
+            }
+            """).Config.Rules);
+        registry.Exclude(0x700, WindowExclusion.ByRule(rule));
 
         IReadOnlyList<WindowCandidate> described =
             WindowCatalogue.Join([Seen(0x700, decision: ManageDecision.Yes)], wm, registry);
@@ -218,7 +225,48 @@ public sealed class WindowCatalogueTests
 
         // The registry knows what the filter cannot: this window passes every test
         // and is absent because somebody said so.
-        Assert.Contains("toggle-managed", only.ExclusionReason!, StringComparison.Ordinal);
+        Assert.Contains("leave Teams alone", only.ExclusionSummary!, StringComparison.Ordinal);
+        Assert.Contains("line 2", only.ExclusionSummary!, StringComparison.Ordinal);
+        Assert.Contains("Manage it", only.ExclusionReason!, StringComparison.Ordinal);
+        Assert.Equal("leave Teams alone", only.Management?.Rule?.Name);
+    }
+
+    [Fact]
+    public void AManualReleaseIsNotMisreportedAsARule()
+    {
+        var registry = new WindowRegistry();
+        registry.SetOverride(42, WindowManagementMode.Unmanaged);
+
+        WindowCandidate window = Assert.Single(WindowCatalogue.Join(
+            [Seen(42, "Recap | Microsoft Teams", ManageDecision.Yes)], WithOneWorkspace(), registry));
+
+        Assert.False(window.Managed);
+        Assert.Equal(true, window.Manageable);
+        Assert.Equal("released by you", window.ExclusionSummary);
+        Assert.Equal("unmanaged", window.Management?.Mode);
+        Assert.Null(window.Management?.Rule);
+        Assert.DoesNotContain("excluded by a rule", window.ExclusionReason!, StringComparison.Ordinal);
+        Assert.Contains("Restore default management", window.ExclusionReason!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TheRuleThatExcludedAWindowIsRememberedEvenAfterItsTitleChanges()
+    {
+        var engine = new RuleEngine();
+        engine.Load(ConfigLoader.Load("""
+            rules { rule "ignore loading" { match { title "Loading" } do { ignore } } }
+            """).Config);
+        var attributes = new WindowAttributes("Loading", "TeamsWebView", "ms-teams", null);
+        var registry = new WindowRegistry();
+        registry.Exclude(42, WindowExclusion.ByRule(engine.IgnoringRule(attributes)!));
+
+        Assert.Null(engine.IgnoringRule(attributes with { Title = "Recap" }));
+        WindowCandidate window = Assert.Single(WindowCatalogue.Join(
+            [Seen(42, "Recap", ManageDecision.Yes)], WithOneWorkspace(), registry));
+        Assert.Equal("ignore loading", window.Management?.Rule?.Name);
+
+        registry.ForgetVerdicts();
+        Assert.Null(registry.DescribeManagement(42, ManageDecision.Yes).Rule);
     }
 
     [Fact]

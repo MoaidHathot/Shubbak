@@ -268,7 +268,7 @@ internal static class Program
     {
         if (!PaletteEntries.IsBuiltin(command))
         {
-            _ = s_connection!.SendAsync(command);
+            _ = s_connection!.SendAsync(command, reason => Post(() => ShowFailure("command", reason)));
             return;
         }
 
@@ -447,7 +447,7 @@ internal static class Program
 
         if (path is not { Length: > 0 })
         {
-            Complain("No configuration file was found to open. `shubbak config init` writes one.");
+            ShowFailure("open config", "No configuration file was found to open. `shubbak config init` writes one.");
             return;
         }
 
@@ -458,18 +458,17 @@ internal static class Program
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or Win32Exception or InvalidOperationException)
         {
             Log.Error(LogCategory.Config, $"could not open the configuration file {path}", ex);
-            Complain($"Windows could not open {path}: {ex.Message}");
+            ShowFailure("open config", $"Windows could not open {path}: {ex.Message}");
         }
+    }
 
-        // Where the request was made, not where nobody is looking. The palette closed
-        // when the row was chosen, so it has to be brought back to carry the answer.
-        static void Complain(string reason)
-        {
-            if (s_palette is not { } showing) return;
+    // The palette closed when the row was chosen, so bring the answer back there.
+    private static void ShowFailure(string title, string reason)
+    {
+        if (s_palette is not { } showing) return;
 
-            showing.Open(PaletteMode.Commands);
-            showing.ShowReportFailure("open config", reason);
-        }
+        showing.Open(PaletteMode.Commands);
+        showing.ShowReportFailure(title, reason);
     }
 
     /// <summary>

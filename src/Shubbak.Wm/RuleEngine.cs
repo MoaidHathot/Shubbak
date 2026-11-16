@@ -98,7 +98,11 @@ internal sealed class RuleEngine
 
     /// <summary>Whether a rule asks for this window to be left alone.</summary>
     public bool ShouldIgnore(WindowAttributes attributes) =>
-        HasAdoptionRule<IgnoreCommand>(attributes);
+        IgnoringRule(attributes) is not null;
+
+    /// <summary>The rule responsible for a refusal, rather than only a yes/no verdict.</summary>
+    public WindowRule? IgnoringRule(WindowAttributes attributes) =>
+        AdoptionRule<IgnoreCommand>(attributes);
 
     /// <summary>Whether a rule asks for a window the built-in filter passed over.</summary>
     public bool ShouldForceManage(WindowAttributes attributes) =>
@@ -117,6 +121,9 @@ internal sealed class RuleEngine
     /// later triggers have not reached yet.
     /// </remarks>
     private bool HasAdoptionRule<TCommand>(WindowAttributes attributes)
+        where TCommand : WmCommand => AdoptionRule<TCommand>(attributes) is not null;
+
+    private WindowRule? AdoptionRule<TCommand>(WindowAttributes attributes)
         where TCommand : WmCommand
     {
         for (int i = 0; i < _onManage.Count; i++)
@@ -126,9 +133,9 @@ internal sealed class RuleEngine
             if (!rule.Matches(attributes, _apps)) continue;
 
             foreach (WmCommand command in rule.Commands)
-                if (command is TCommand) return true;
+                if (command is TCommand) return rule;
         }
 
-        return false;
+        return null;
     }
 }

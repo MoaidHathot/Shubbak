@@ -49,11 +49,12 @@ public sealed class WmDaemon : IDisposable
     /// Which windows Shubbak manages, and which it has decided not to.
     /// </summary>
     /// <remarks>
-    /// Four sets that have to agree with one another, kept together with the
+    /// Sets that have to agree with one another, kept together with the
     /// operations that move a window between them. Nearly every window-lifecycle bug
     /// this program has had lived in their interplay rather than in any one of them.
     /// </remarks>
     private readonly WindowRegistry _windows = new();
+    private readonly WindowManagementController _management;
 
     /// <summary>
     /// Which contexts hold, and why.
@@ -402,6 +403,8 @@ public sealed class WmDaemon : IDisposable
         _arrangements.Load();
         _wm = new WindowManager();
         _executor = new CommandExecutor(_wm);
+        _management = new WindowManagementController(_windows, Win32Window.Exists,
+            handle => TryManage(handle, forced: true), handle => TryUnmanage(handle), RestoreDefaultManagement);
 
         // The one thing the sink cannot work out for itself: which window had the
         // foreground before it. The hook records every change the system reports,
@@ -1775,31 +1778,36 @@ public sealed class WmDaemon : IDisposable
 
     // ---- window lifecycle --------------------------------------------------
 
-    private void TryManage(nint handle, bool forced = false, bool exactSessionMatch = false)
+    private string? TryManage(nint handle, bool forced = false, bool exactSessionMatch = false)
     {
         // Already ours, whoever asked. Everything below assumes the window is not in
         // the tree yet.
-        if (_windows.IsManaged(handle)) return;
+        if (_windows.IsManaged(handle)) return null;
+
+        forced |= _windows.OverrideFor(handle) == WindowManagementMode.Managed;
 
         // A verdict already reached - refused by a rule, or set aside at startup - is
         // not revisited on every one of the many events a window raises. Asking by
         // hand overrules it, which is the whole point of toggle-managed.
-        if (!forced && _windows.AlreadyDecided(handle)) return;
+        if (!forced && _windows.AlreadyDecided(handle))
+            return _windows.ExclusionFor(handle)?.Reason ?? "This window has been left unmanaged.";
 
-        if (!PassesFilter(handle, forced)) return;
+        if (!PassesFilter(handle, forced, out string? refusal)) return refusal;
 
         WindowAttributes attributes = ToAttributes(handle);
 
-        if (!forced && _rules.ShouldIgnore(attributes))
+        if (!forced && _rules.IgnoringRule(attributes) is { } ignoring)
         {
             // Remembered, so the same window is not re-evaluated on every one of the
             // many events it will generate over its lifetime.
-            _windows.Exclude(handle);
+            WindowExclusion exclusion = WindowExclusion.ByRule(ignoring);
+            _windows.Exclude(handle, exclusion);
 
             Log.Debug(LogCategory.Rule,
-                $"ignoring 0x{handle:X} \"{attributes.Title.Truncate(40)}\" ({attributes.ProcessName})");
+                $"ignoring 0x{handle:X} \"{attributes.Title.Truncate(40)}\" ({attributes.ProcessName}): " +
+                $"rule \"{ignoring.Name}\" (line {ignoring.Span.Start.Line})");
 
-            return;
+            return exclusion.Reason;
         }
 
         WindowNode window = BuildNode(handle);
@@ -1814,9 +1822,10 @@ public sealed class WmDaemon : IDisposable
 
         // The first startup pass reserves surviving windows' own entries before any
         // newly opened window can borrow one through the visible-placement fallback.
-        if (exactSessionMatch && remembered is null) return;
+        if (exactSessionMatch && remembered is null) return "No exact session entry claims this window.";
 
-        if (!ClaimIfConcealed(handle, window, remembered, concealed)) return;
+        if (!ClaimIfConcealed(handle, window, remembered, concealed))
+            return "The concealed window could not be claimed from the saved session.";
 
         WorkspaceNode? workspace = remembered ?? WorkspaceFor(handle);
 
@@ -1840,8 +1849,9 @@ public sealed class WmDaemon : IDisposable
                 $"not managing 0x{handle:X} \"{attributes.Title.Truncate(40)}\": " +
                 $"{adoption.RejectionReason ?? "no workspace available"}");
 
-            _windows.Exclude(handle);
-            return;
+            string reason = adoption.RejectionReason ?? "No workspace is available.";
+            _windows.Exclude(handle, new WindowExclusion(reason, "adoption failed"));
+            return reason;
         }
 
         _windows.Adopt(handle, window);
@@ -1875,14 +1885,16 @@ public sealed class WmDaemon : IDisposable
         }
 
         _layoutDirty = true;
+        return null;
     }
 
     /// <summary>
     /// Whether the built-in filter, and any rule allowed to overrule it, let this
     /// window through.
     /// </summary>
-    private bool PassesFilter(nint handle, bool forced)
+    private bool PassesFilter(nint handle, bool forced, out string? refusal)
     {
+        refusal = null;
         // Concealed windows are considered only during the initial adoption pass, and
         // even then only to be reconciled against the session below.
         ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: _restoring);
@@ -1896,6 +1908,7 @@ public sealed class WmDaemon : IDisposable
             if (WindowFilter.CanBeOverridden(decision.Reason)) return true;
 
             Log.Warn(LogCategory.Window, $"refusing to manage 0x{handle:X}: {decision.Explain()}");
+            refusal = decision.Explain();
             return false;
         }
 
@@ -1950,6 +1963,7 @@ public sealed class WmDaemon : IDisposable
                 $"[{Win32Window.GetClassName(handle)}]: {decision.Explain()}");
         }
 
+        refusal = decision.Explain();
         return false;
     }
 
@@ -2019,7 +2033,9 @@ public sealed class WmDaemon : IDisposable
                     $"refusing to revive 0x{handle:X}: already revived {_revived} window(s) " +
                     $"for a session of {_revivalBudget}. This is a bug - please report it.");
 
-                _windows.Exclude(handle);
+                _windows.Exclude(handle, new WindowExclusion(
+                    "Startup recovery reached the number of windows claimed by the saved session.",
+                    "recovery limit reached"));
                 return false;
 
             case ConcealedVerdict.Revive:
@@ -2106,20 +2122,17 @@ public sealed class WmDaemon : IDisposable
     /// Lets go of a window.
     /// </summary>
     /// <param name="handle">The window.</param>
-    /// <param name="thenExclude">
-    /// Whether to refuse it afterwards, for a release the user or a rule asked for
-    /// rather than one the window brought on itself by closing. Passed through rather
-    /// than done by the caller because releasing forgets every verdict, so excluding
-    /// first would be undone here - and the two callers that want it used to have to
-    /// remember that for themselves.
+    /// <param name="exclusion">
+    /// The rule responsible for a release, when there is one. Manual overrides are
+    /// kept separately and survive temporary hiding as well as a release.
     /// </param>
     /// <param name="windowGone">
     /// True for a destroyed window or a handle that now names another process's
     /// window. Forget the old bookkeeping without restoring or decorating its successor.
     /// </param>
-    private void TryUnmanage(nint handle, bool thenExclude = false, bool windowGone = false)
+    private void TryUnmanage(nint handle, WindowExclusion? exclusion = null, bool windowGone = false)
     {
-        if (_windows.Release(handle, thenExclude) is not { } window) return;
+        if (_windows.Release(handle, exclusion, forgetOverride: windowGone) is not { } window) return;
 
         if (ReferenceEquals(_borderedWindow, window)) _borderedWindow = null;
 
@@ -2873,7 +2886,7 @@ public sealed class WmDaemon : IDisposable
 
         if (_config.UnmanagedWindowCommands == UnmanagedWindowCommands.Adopt)
         {
-            TryManage(foreground, forced: true);
+            _ = SetManaged(new SetManagedCommand(WindowManagementMode.Managed, foreground));
 
             if (_windows.TryGet(foreground, out WindowNode? adopted))
             {
@@ -3086,6 +3099,12 @@ public sealed class WmDaemon : IDisposable
             if (outcome.Action == HostAction.Arrangement && outcome.Payload is { } arrangement)
                 outcome = ArrangeWorkspace(CommandExecutor.DecodeArrangement(arrangement));
 
+            if (outcome.Action == HostAction.SetManaged && outcome.Payload is { } management)
+                outcome = SetManaged(CommandExecutor.DecodeManagement(management));
+
+            if (outcome.Action == HostAction.ToggleManaged)
+                outcome = ToggleManaged();
+
             Publish(outcome.Result);
             PerformHostAction(outcome);
 
@@ -3178,7 +3197,7 @@ public sealed class WmDaemon : IDisposable
             decision.Explain(),
             decision.Summarise(),
             window is not null,
-            window is null && _windows.IsExcluded(handle),
+            window is null && _windows.ExclusionFor(handle)?.Rule is not null,
             window is null ? null : new ManagedWindowReport(
                 window.Id.Value,
                 window.State.ToString(),
@@ -3203,7 +3222,8 @@ public sealed class WmDaemon : IDisposable
 
             // Whether a rule could change the verdict, when the verdict is no. This is
             // what lets a client offer "manage it" only where the offer is honest.
-            decision.Manageable ? null : WindowFilter.CanBeOverridden(decision.Reason));
+            decision.Manageable ? null : WindowFilter.CanBeOverridden(decision.Reason),
+            _windows.DescribeManagement(handle, decision));
     }
 
     /// <summary>A trigger as the config spells it, for reports and the rule list.</summary>
@@ -3262,7 +3282,7 @@ public sealed class WmDaemon : IDisposable
     /// - so letting go would last a fraction of a second.
     /// </para>
     /// </remarks>
-    private void ToggleManaged()
+    private CommandOutcome ToggleManaged()
     {
         // The window in front, not the one the tree thinks is focused. Written the
         // other way round it was useless for the one job it has: focus sitting on an
@@ -3272,33 +3292,48 @@ public sealed class WmDaemon : IDisposable
 
         if (handle == 0 && _wm.FocusedWindow is { } focused) handle = (nint)focused.Handle;
 
-        if (handle == 0)
+        return SetManaged(new SetManagedCommand(
+            _windows.IsManaged(handle) ? WindowManagementMode.Unmanaged : WindowManagementMode.Managed,
+            handle), "toggle-managed");
+    }
+
+    /// <summary>A per-window override, applied to the handle the caller actually selected.</summary>
+    private CommandOutcome SetManaged(SetManagedCommand command, string verb = "set-managed")
+    {
+        nint handle = command.Handle is { } target ? (nint)target : Win32Window.GetForeground();
+        if (handle == 0 && command.Handle is null && _wm.FocusedWindow is { } focused)
+            handle = (nint)focused.Handle;
+
+        if (_management.Set(handle, command.Mode) is { } refusal)
+            return new(new WmResult(false, [new CommandRejected(verb, $"Window 0x{handle:X}: {refusal}")]));
+
+        Log.Info(LogCategory.Window,
+            $"management of 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\" set to {command.Mode.ToString().ToLowerInvariant()}");
+        return new(new WmResult(true, []));
+    }
+
+    /// <summary>Re-evaluates this window without disrupting an existing placement that remains eligible.</summary>
+    private void RestoreDefaultManagement(nint handle)
+    {
+        if (!_windows.IsManaged(handle))
         {
-            Log.Warn(LogCategory.Window, "toggle-managed: no window in front to act on.");
+            TryManage(handle);
             return;
         }
 
-        if (_windows.IsManaged(handle))
+        WindowAttributes attributes = ToAttributes(handle);
+        if (_rules.IgnoringRule(attributes) is { } ignoring)
         {
-            string title = Win32Window.GetTitle(handle).Truncate(40);
-
-            // Excluded as part of the release rather than after it. Releasing forgets
-            // every verdict about a window, so marking it separately beforehand would
-            // be wiped, and the window would be taken straight back by the very next
-            // event it raised.
-            TryUnmanage(handle, thenExclude: true);
-
-            Log.Info(LogCategory.Window, $"released 0x{handle:X} \"{title}\" - now unmanaged");
+            TryUnmanage(handle, WindowExclusion.ByRule(ignoring));
             return;
         }
 
-        _windows.Reconsider(handle);
-        TryManage(handle, forced: true);
-
-        if (_windows.IsManaged(handle))
+        // Our own cloak is not a reason to release a window on another workspace.
+        ManageDecision decision = WindowFilter.Evaluate(handle, concealedAreEligible: _committer.IsConcealing(handle));
+        if (!decision.Manageable &&
+            !(WindowFilter.CanBeOverridden(decision.Reason) && _rules.ShouldForceManage(attributes)))
         {
-            Log.Info(LogCategory.Window,
-                $"took on 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\"");
+            TryUnmanage(handle);
         }
     }
 
@@ -3321,10 +3356,6 @@ public sealed class WmDaemon : IDisposable
                     WindowActions.Close((nint)window.Handle);
                 }
 
-                break;
-
-            case HostAction.ToggleManaged:
-                ToggleManaged();
                 break;
 
             case HostAction.ShellExecute:
@@ -3391,6 +3422,8 @@ public sealed class WmDaemon : IDisposable
 
             case HostAction.Context:
             case HostAction.Arrangement:
+            case HostAction.ToggleManaged:
+            case HostAction.SetManaged:
                 // Already handled in RunCommand, which needed the answer.
                 break;
 
@@ -6451,9 +6484,8 @@ public sealed class WmDaemon : IDisposable
             // until the window was closed and reopened, which reads as the reload not
             // working.
             //
-            // Windows released by hand are re-examined too. That is the honest reading
-            // of a reload, and toggle-managed is one key away for anything that should
-            // go back.
+            // Per-window overrides are choices rather than cached rule decisions and
+            // survive until the user restores default management.
             int forgotten = _windows.ForgetVerdicts();
 
             // The remembered process paths go with them. A reload can change which
@@ -6754,6 +6786,10 @@ public sealed class WmDaemon : IDisposable
         {
             (true, false) => $"{name} was released.",
             (false, true) => $"{name} was adopted.",
+            (true, true) when _windows.OverrideFor(handle) == WindowManagementMode.Managed =>
+                $"{name} is still managed by its per-window override; Restore default management lets the rules decide again.",
+            (false, false) when _windows.OverrideFor(handle) == WindowManagementMode.Unmanaged =>
+                $"{name} is still unmanaged by its per-window override; Restore default management lets the rules decide again.",
             (true, true) => $"{name} is still managed.",
             _ => $"{name} is still unmanaged.",
         };
@@ -6783,13 +6819,14 @@ public sealed class WmDaemon : IDisposable
         foreach (nint handle in _windows.HandlesSnapshot())
         {
             if (!Win32Window.Exists(handle)) continue;
-            if (!_rules.ShouldIgnore(ToAttributes(handle))) continue;
+            if (_windows.OverrideFor(handle) == WindowManagementMode.Managed) continue;
+            if (_rules.IgnoringRule(ToAttributes(handle)) is not { } ignoring) continue;
 
             Log.Info(LogCategory.Rule,
                 $"releasing 0x{handle:X} \"{Win32Window.GetTitle(handle).Truncate(40)}\": " +
-                "a rule now excludes it");
+                $"rule \"{ignoring.Name}\" (line {ignoring.Span.Start.Line}) now excludes it");
 
-            TryUnmanage(handle, thenExclude: true);
+            TryUnmanage(handle, WindowExclusion.ByRule(ignoring));
         }
 
         foreach (nint handle in Win32Window.EnumerateTopLevel())

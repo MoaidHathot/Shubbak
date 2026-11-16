@@ -134,14 +134,17 @@ public sealed record RuleToRemove(string Name, int Line, long? Handle);
 /// format changes.
 /// </para>
 /// <para>
-/// Every action is a sequence beginning with <c>focus-window</c>, sent as one
+/// Most actions are a sequence beginning with <c>focus-window</c>, sent as one
 /// newline-separated message. That is what the multi-command pipe is for: the two
 /// halves cannot be separated by anything that moves focus in between, which is
 /// exactly the race that "focus it, then close it" would otherwise have.
+/// Management choices name their handle directly: native activation is asynchronous,
+/// and reading the foreground immediately after requesting focus can target another window.
 /// </para>
 /// <para>
 /// State-aware, because an action list that offers to minimise a minimised window is
-/// a list nobody trusts. The verbs are toggles underneath; only the wording changes.
+/// a list nobody trusts. Management uses explicit states so a stale row cannot undo
+/// the choice it advertises; the other state actions use toggles.
 /// </para>
 /// </remarks>
 public static class PaletteActions
@@ -208,6 +211,8 @@ public static class PaletteActions
                 $"Bring it back from the {window.Scratchpad} slot",
                 focus));
         }
+
+        actions.AddRange(ForManagement(window.Handle, window.Managed));
 
         // Not offered for a stashed window: summoning already lands it on whichever
         // workspace is focused, which is what "here" means. Offering it would be the
@@ -315,16 +320,6 @@ public static class PaletteActions
                 Children: TagChoices(window, focus, workspaces)));
         }
 
-        // Reversible, and therefore not destructive. It was marked so for years and
-        // sorted to the bottom beside closing, which is the one action here that
-        // genuinely cannot be undone - `toggle-managed` is a toggle, and pressing it
-        // twice leaves the desktop exactly as it was found.
-        actions.Add(window.Managed
-            ? new PaletteAction("Stop managing it", "Leave it where it is and stop tiling it",
-                $"{focus}\ntoggle-managed", Chord: "Ctrl+Shift+A")
-            : new PaletteAction("Manage it", "Take it under management and tile it",
-                $"{focus}\ntoggle-managed", Chord: "Ctrl+Shift+A"));
-
         // What `shubbak inspect` hands you and then leaves you to type out. The window
         // manager has always known the class and the process; the user has always had
         // to transcribe them into KDL by hand, which is a transcription job with one
@@ -364,6 +359,32 @@ public static class PaletteActions
             Explains: window.Handle));
 
         return actions;
+    }
+
+    /// <summary>Explicit, reversible choices for one window, including the way back to its rules.</summary>
+    public static IReadOnlyList<PaletteAction> ForManagement(long handle, bool managed)
+    {
+        string target = $"--handle {handle.ToString(CultureInfo.InvariantCulture)}";
+        var manage = new PaletteAction(
+            managed ? "Keep managing it" : "Manage it",
+            "Override exclusions for this window; lasts until reset, closure or a Shubbak restart",
+            $"set-managed managed {target}",
+            Chord: managed ? null : "Ctrl+Shift+A");
+        var release = new PaletteAction(
+            managed ? "Stop managing it" : "Keep it unmanaged",
+            "Keep this window unmanaged across reloads; lasts until reset, closure or a Shubbak restart",
+            $"set-managed unmanaged {target}",
+            Chord: managed ? "Ctrl+Shift+A" : null);
+
+        return
+        [
+            managed ? release : manage,
+            new PaletteAction(
+                "Restore default management",
+                "Remove this window's override and let the current rules and built-in filter decide again",
+                $"set-managed default {target}"),
+            managed ? manage : release,
+        ];
     }
 
     /// <summary>
@@ -589,17 +610,18 @@ public static class PaletteActions
         {
             bool floating = string.Equals(report.Node?.State, "Floating", StringComparison.OrdinalIgnoreCase);
 
-            // Managed although the filter says no: forced, by a rule or by hand. A rule
-            // is what makes the forcing outlast a reload - unless one already does.
+            // A rule extends the per-window choice to future windows and restarts.
             if (!report.Manageable && forcing.Count == 0 && overridable)
             {
                 choices.Add(Choice(
                     "Manage it",
-                    $"Keep managing it across reloads - the filter would turn it down: {verdict}",
+                    $"Manage matching windows after a restart too - the filter would turn them down: {verdict}",
                     "manage"));
             }
 
-            choices.Add(Ignore("Never tile this window - it is released on the next reload and left alone after that"));
+            choices.Add(Ignore(report.Management?.Mode == "managed"
+                ? "Ignore matching windows by default; Restore default management applies it to this window's override"
+                : "Never tile this window - it is released on the next reload and left alone after that"));
 
             choices.Add(floating
                 ? Choice("Keep it floating", "Float it every time it appears, rather than only until it is closed", "float")
@@ -618,11 +640,10 @@ public static class PaletteActions
                     Children: [.. sendTo.Select(w => Choice(w, $"Open {subject} on {w} from now on", $"move --workspace \"{RuleComposer.Escape(w)}\""))]));
             }
         }
-        else if (report.ExcludedByRule && ignoring.Count == 0)
+        else if (ignoring.Count == 0 && (report.Management?.Mode == "unmanaged" ||
+            (report.Management is null && report.ExcludedByRule)))
         {
-            // Released by hand, and a reload would take it back. This is what makes the
-            // release stick, and it is the row this list exists for.
-            choices.Add(Ignore("Make the release stick - a reload would otherwise take it back"));
+            choices.Add(Ignore("Leave matching windows unmanaged after a restart too; the per-window choice applies only to this window"));
         }
         else if (report.Manageable)
         {

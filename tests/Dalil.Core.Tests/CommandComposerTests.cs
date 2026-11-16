@@ -253,6 +253,17 @@ public sealed class CommandComposerTests
     }
 
     [Fact]
+    public void ManagementCompletesTheThreeChoicesButNeverGuessesAHandle()
+    {
+        IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose("set-managed ");
+        Assert.Contains(rows, r => r.Command == "set-managed managed");
+        Assert.Contains(rows, r => r.Command == "set-managed unmanaged");
+        Assert.Contains(rows, r => r.Command == "set-managed default");
+        Assert.DoesNotContain(CommandComposer.Compose("set-managed managed --handle "),
+            r => r.Secondary.StartsWith("complete", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void WorkspacesAreOfferedByName()
     {
         IReadOnlyList<PaletteEntry> rows = CommandComposer.Compose("move --workspace ", Sources());

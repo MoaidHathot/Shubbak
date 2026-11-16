@@ -161,15 +161,27 @@ public class WindowReportTextTests
     }
 
     [Fact]
-    public void AnUnmanagedWindowSaysWhetherARuleIsWhy()
+    public void ALegacyExclusionDoesNotPretendToKnowWhetherItWasManual()
     {
         // Two answers with two different fixes: a rule is something the user wrote and
         // can unwrite, and everything else is not.
         Assert.Equal(
-            "managed      no (excluded by a rule)",
+            "managed      no (excluded or released manually)",
             Line(Report(excludedByRule: true), "managed"));
 
         Assert.Equal("managed      no", Line(Report(), "managed"));
+    }
+
+    [Fact]
+    public void AManualReleasePrintsItsActualSourceAndChoice()
+    {
+        WindowReport report = Report() with
+        {
+            Management = new WindowManagementInfo("unmanaged", "Released by a per-window override.", "released by you"),
+        };
+        Assert.Equal("managed      no (released by you)", Line(report, "managed "));
+        Assert.Equal("management   unmanaged", Line(report, "management "));
+        Assert.Equal("reason       Released by a per-window override.", Line(report, "reason "));
     }
 
     [Fact]

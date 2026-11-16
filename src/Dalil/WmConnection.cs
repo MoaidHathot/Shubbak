@@ -87,7 +87,7 @@ public sealed class WmConnection : IAsyncDisposable
     }
 
     /// <summary>Asks the window manager to run a command.</summary>
-    public async Task SendAsync(string command)
+    public async Task SendAsync(string command, Action<string>? failure = null)
     {
         try
         {
@@ -98,11 +98,15 @@ public sealed class WmConnection : IAsyncDisposable
                 .SendAsync("command", command, _stopping.Token).ConfigureAwait(false);
 
             if (!response.Ok)
+            {
                 Log.Warn(LogCategory.Ipc, $"'{command}' was refused: {response.Error}");
+                failure?.Invoke(response.Error ?? "The window manager refused the command.");
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Log.Warn(LogCategory.Ipc, $"could not send '{command}': {ex.Message}");
+            failure?.Invoke($"Could not ask the window manager: {ex.Message}");
         }
     }
 

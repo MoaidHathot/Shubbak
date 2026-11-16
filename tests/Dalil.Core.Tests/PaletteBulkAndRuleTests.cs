@@ -387,8 +387,7 @@ public sealed class PaletteBulkAndRuleTests
     [Fact]
     public void AWindowManagedDespiteTheFilterIsOfferedTheRuleThatKeepsItSo()
     {
-        // Forced, by hand or by a rule that is not there: toggle-managed is forgotten
-        // on reload, and this is the row that makes it stick.
+        // A per-window choice can also be made a rule for future windows and restarts.
         Assert.Equal("Manage it", Names(Managed(manageable: false))[0]);
     }
 
@@ -451,13 +450,16 @@ public sealed class PaletteBulkAndRuleTests
     }
 
     [Fact]
-    public void AWindowReleasedByHandIsOfferedTheRuleThatMakesItStick()
+    public void AWindowReleasedByHandCanExtendTheChoiceToFutureWindows()
     {
-        // Excluded, and no rule says so: toggle-managed did, and a reload takes it back.
-        PaletteAction ignore = PaletteActions.RuleChoices(Report(excludedByRule: true), "1", ["1"])[0];
+        WindowReport report = Report() with
+        {
+            Management = new WindowManagementInfo("unmanaged", "Released by a per-window override.", "released by you"),
+        };
+        PaletteAction ignore = PaletteActions.RuleChoices(report, "1", ["1"])[0];
 
         Assert.Equal("Ignore it", ignore.Name);
-        Assert.Contains("reload would otherwise take it back", ignore.Description, StringComparison.Ordinal);
+        Assert.Contains("after a restart", ignore.Description, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -478,6 +480,9 @@ public sealed class PaletteBulkAndRuleTests
         // Not offered twice, and the rule that did not match is not offered for removal.
         Assert.DoesNotContain(choices, c => c.Name == "Ignore it");
         Assert.DoesNotContain(choices, c => c.Removes?.Name == "unrelated");
+
+        WindowReport released = report with { Management = new WindowManagementInfo("unmanaged", "Released manually.", "released by you") };
+        Assert.DoesNotContain(PaletteActions.RuleChoices(released, "1", ["1"]), c => c.Name == "Ignore it");
     }
 
     [Fact]

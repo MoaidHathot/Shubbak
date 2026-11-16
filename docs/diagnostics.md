@@ -64,6 +64,7 @@ code, not the page.
 | `SHB0323` | Error | '{text}' does not say which way to swap. |
 | `SHB0324` | Error | '{masters}' is not a master count. |
 | `SHB0325` | Error | '{text}' has an option gaps does not take: {unknown}. |
+| `SHB0326` | Error | '{text}' does not specify a management choice and an optional window handle. |
 | `SHB0400` | Error | Config file not found: {path} |
 | `SHB0401` | Error | Unknown initial window state '{text}'. |
 | `SHB0402` | Error | A workspace must be given a name. |

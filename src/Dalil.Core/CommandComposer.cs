@@ -228,6 +228,7 @@ public static class CommandComposer
                 "--direction" => CommandArgument.Direction,
                 "--name" => CommandArgument.BindingMode,
                 "--monitor" => CommandArgument.MonitorName,
+                "--handle" => CommandArgument.WindowHandle,
 
                 // The context verb's four ways of naming what to do with a context;
                 // each is followed by the name.
@@ -259,6 +260,7 @@ public static class CommandComposer
             CommandArgument.MonitorName => sources.Monitors ?? [],
             CommandArgument.ContextName => sources.Contexts ?? [],
             CommandArgument.ArrangementName => sources.Arrangements ?? [],
+            CommandArgument.ManagementMode => ["managed", "unmanaged", "default"],
 
             // An axis, an amount, a window handle, a signal name, a command line:
             // nothing finite to offer, and a guess would be worse than silence.

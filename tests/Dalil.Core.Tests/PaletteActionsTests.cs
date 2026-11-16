@@ -28,7 +28,7 @@ public sealed class PaletteActionsTests
         actions.First(a => a.Name.StartsWith(startsWith, StringComparison.OrdinalIgnoreCase));
 
     [Fact]
-    public void EveryActionThatActsFocusesTheWindowFirst()
+    public void FocusBasedActionsStillNameTheirTargetFirst()
     {
         IReadOnlyList<PaletteAction> actions = PaletteActions.For(Window(handle: 0x1D0076), "2");
 
@@ -39,7 +39,7 @@ public sealed class PaletteActionsTests
         // Actions that act, which is not all of them: explaining a window asks about
         // it and touches nothing, and focusing it first would be a side effect nobody
         // asked for - moving you to another workspace merely to read a report.
-        foreach (PaletteAction action in actions.Where(a => a.Command.Length > 0))
+        foreach (PaletteAction action in actions.Where(a => a.Command.Length > 0 && !a.Command.StartsWith("set-managed ", StringComparison.Ordinal)))
             Assert.StartsWith("focus-window 1900662", action.Command, StringComparison.Ordinal);
     }
 
@@ -443,7 +443,9 @@ public sealed class PaletteActionsTests
 
             // The palette's own commands aim at nothing: opening the config file is
             // not done to the window, so it has no business starting with the slot.
-            if (action.Command.Length > 0 && !PaletteEntries.IsBuiltin(action.Command))
+            if (action.Command.StartsWith("set-managed ", StringComparison.Ordinal))
+                Assert.EndsWith("--handle 2305", action.Command, StringComparison.Ordinal);
+            else if (action.Command.Length > 0 && !PaletteEntries.IsBuiltin(action.Command))
                 Assert.StartsWith("scratchpad notes", action.Command, StringComparison.Ordinal);
         }
     }

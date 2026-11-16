@@ -159,6 +159,7 @@ public sealed class CommandCatalogueTests
             "tag" => "tag 3",
             "scratchpad" => "scratchpad notes",
             "focus-window" => "focus-window 0x1234",
+            "set-managed" => "set-managed default --handle 0x1234",
             "signal" => "signal palette",
             "shell-exec" => "shell-exec pwsh",
             "wm-enable-binding-mode" => "wm-enable-binding-mode resize",

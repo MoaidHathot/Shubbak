@@ -629,12 +629,12 @@ public sealed class PaletteEntriesTests
     }
 
     [Fact]
-    public void AnUnmanagedWindowSaysWhetherARuleIsWhy()
+    public void ALegacyExclusionDoesNotPretendToKnowWhetherItWasManual()
     {
         // Two different answers with two different fixes: a rule is something the user
         // wrote and can unwrite, and everything else is not.
         Assert.Equal(
-            "no - excluded by a rule",
+            "no - excluded or released manually",
             PaletteEntries.ForReport(Report(excludedByRule: true))
                 .First(e => e.Secondary == "managed").Primary);
 
@@ -704,14 +704,14 @@ public sealed class PaletteEntriesTests
     }
 
     [Fact]
-    public void AReportRowDoesNothingWhenChosen()
+    public void ReportFactsDoNothingWhenChosenAndManagementChoicesAreExplicit()
     {
         // It is something to read, not something to run. Choosing one opens it rather
         // than sending anything, which is why Expands carries the text and Command
         // stays empty.
         Assert.All(
-            PaletteEntries.ForReport(Report()),
-            e => Assert.Equal(string.Empty, e.Command));
+            PaletteEntries.ForReport(Report()).Where(e => e.Command.Length > 0),
+            e => Assert.StartsWith("set-managed ", e.Command, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -721,7 +721,7 @@ public sealed class PaletteEntriesTests
         // report for - a path, the sentence about elevation - are the long ones. Every
         // fact, that is: the rule row at the top opens a list rather than a text.
         Assert.All(
-            PaletteEntries.ForReport(Report()).Where(e => e.Secondary != "compose"),
+            PaletteEntries.ForReport(Report()).Where(e => e.Secondary != "compose" && e.Command.Length == 0),
             e => Assert.False(string.IsNullOrEmpty(e.Expands)));
     }
 

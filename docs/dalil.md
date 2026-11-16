@@ -94,11 +94,28 @@ keybindings is six rounds of find-it, focus-it, move-it, with the focus landing
 somewhere different after each one. This is the thing a palette is genuinely *for*.
 
 **`shubbak inspect`, without leaving the palette.** Press **Ctrl+Shift+I** on any
-window and you get the full report — attributes, verdict, which rules matched, which
-app definitions missed and on which matcher. Any line too long to fit opens in full
-with Enter, and Escape or Backspace steps back out. **Ctrl+C** copies the selected
-line; **Ctrl+Shift+C** copies the whole report, which is the version that belongs in
-a bug report.
+window and you get the full report. Its first rows explain the actual management
+decision: **released by you** for a manual override, or the excluding rule's **name
+and line number**. The rule that made the decision is remembered even if the title
+has since changed and the rule no longer matches. The built-in filter's verdict is
+shown separately: “manageable” means it passes the filter, not that it is currently
+managed. Attributes, matching rules and failed app matchers follow. Any line too long
+to fit opens in full with Enter, and Escape or Backspace steps back out. **Ctrl+C**
+copies the selected line; **Ctrl+Shift+C** copies the whole report, which is the
+version that belongs in a bug report.
+
+**Manage this window directly.** The window's **Ctrl+Enter** actions and the inspect
+report both offer **Manage it**, **Stop managing it**, and **Restore default
+management**. The first two set a per-window override, including for a window an
+`ignore` rule excludes. They survive config reloads until you reset the choice,
+close the window, or restart Shubbak. Restore default management removes the override
+and immediately re-evaluates the current rules and filter for that window. **Keep
+managing it** / **Keep it unmanaged** pins the state it already has. **Ctrl+Shift+A**
+chooses the opposite of the state shown on the window row.
+
+These actions name the selected window directly, so an asynchronous focus change
+cannot redirect them. They do not edit the config. If the window has closed or Windows
+prevents management, the palette shows the reason instead of silently dismissing.
 
 **And then it writes the rule for you — and adds it, if you say so.** "Write a rule
 for it…" opens the rules that could be written for the window, each complete and
@@ -129,9 +146,9 @@ terminal. See [Configuration](configuration.md#window-rules).
 
 **Every row has actions** (Ctrl+Enter): go to it, bring it here, send it to another
 workspace, float/tile, minimise/restore, make it sticky, edit its tags, write a rule
-for it, close it, start or stop managing it, and inspect it. Closing asks first —
-whichever route you reached it by, chord included — and nothing else does, because
-nothing else is irreversible.
+for it, close it, start or stop managing it, restore default management, and inspect
+it. Closing asks first — whichever route you reached it by, chord included — and
+nothing else does, because nothing else is irreversible.
 
 ## Your own actions
 

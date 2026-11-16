@@ -580,7 +580,8 @@ shubbak restore            # bring it back
 
 ## Commands
 
-36 verbs, all usable from a keybinding, a rule, the CLI, the palette, or over IPC.
+Commands are usable from keybindings, rules, the CLI, the palette, and IPC, except
+where a verb is explicitly limited to window rules.
 
 **Focus & movement** — `focus` `focus-window` `focus-recent-window` `move`
 `move-workspace` `resize` `equalise` `split` `toggle-tiling-direction`
@@ -590,7 +591,27 @@ shubbak restore            # bring it back
 
 **Workspaces & stashing** — `tag` `sticky` `scratchpad`
 
-**Management** — `ignore` `manage` `no-focus` `toggle-managed`
+**Management** — `ignore` `manage` `no-focus` (window rules only), `toggle-managed`,
+`set-managed`
+
+`toggle-managed` switches the foreground window between managed and unmanaged.
+`set-managed managed|unmanaged|default` makes an explicit choice; append
+`--handle <hwnd>` to target a window without first focusing it:
+
+```
+shubbak set-managed managed --handle 0x1D0076
+shubbak set-managed unmanaged --handle 0x1D0076
+shubbak set-managed default --handle 0x1D0076
+```
+
+Managed and unmanaged are per-window overrides. A managed override wins over an
+`ignore` rule and the filter's overridable heuristics; an unmanaged override keeps
+the window released even if it would otherwise be adopted. Overrides survive config
+reloads and temporary hiding, but end when the window closes or Shubbak restarts.
+`default` clears the override and immediately lets the current rules and filter
+decide again. It changes management only, preserving an eligible window's placement.
+These commands do not edit any rules. Dalil offers the same choices on window rows
+and in inspection reports.
 
 **Contexts** — `context` (`--set` `--clear` `--toggle` `--auto`, with `--ttl` and `--lease`; from the command line, `--hold` stays and holds the lease)
 

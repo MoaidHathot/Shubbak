@@ -35,6 +35,9 @@ public enum CommandArgument
     /// <summary>A native window handle, decimal or <c>0x</c>-prefixed.</summary>
     WindowHandle,
 
+    /// <summary>Managed, unmanaged, or default.</summary>
+    ManagementMode,
+
     /// <summary>An arbitrary name announced to subscribed clients.</summary>
     SignalName,
 
@@ -173,6 +176,8 @@ public static class CommandCatalogue
         Spec("manage", "Manage this window even if the filter would not (window rules only)"),
         Spec("no-focus", "Leave focus where it was when this window arrives (window rules only)"),
         Spec("toggle-managed", "Take on the foreground window, or release it"),
+        Spec("set-managed", "Manage a window, release it, or restore default management",
+            [CommandArgument.ManagementMode, CommandArgument.WindowHandle]),
 
         Spec("signal", "Announce a named gesture to connected clients", [CommandArgument.SignalName]),
         Spec("shell-exec", "Run an external program", [CommandArgument.CommandLine]),

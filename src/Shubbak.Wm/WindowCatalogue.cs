@@ -127,6 +127,7 @@ internal static class WindowCatalogue
             if (node is null && window.Concealment is "hidden") continue;
 
             WorkspaceNode? workspace = node?.Workspace;
+            WindowManagementInfo management = registry.DescribeManagement(window.Handle, window.Decision);
 
             candidates.Add(new WindowCandidate(
                 window.Handle,
@@ -136,7 +137,7 @@ internal static class WindowCatalogue
                 (int)window.ProcessId,
                 window.Elevated,
                 node is not null,
-                node is not null ? null : Explain(window, registry),
+                node is not null ? null : management.Reason,
                 node?.State.ToString().ToLowerInvariant(),
                 window.Concealment,
                 workspace?.Name,
@@ -147,53 +148,18 @@ internal static class WindowCatalogue
                 node?.FocusSequence ?? 0,
                 node?.ScratchpadName,
                 node is { } tagged && tagged.Tags.Count > 0 ? [.. tagged.Tags] : null,
-                node is not null ? null : Summarise(window, registry),
+                node is not null ? null : management.Summary,
 
                 // The filter's answer as it stands, and whether a rule could change it.
                 // A managed window on an inactive workspace is cloaked and reads as not
                 // manageable here; that is the honest reading of the filter, and Managed
                 // beside it says the rest.
                 window.Decision.Manageable,
-                window.Decision.Manageable ? null : WindowFilter.CanBeOverridden(window.Decision.Reason)));
+                window.Decision.Manageable ? null : WindowFilter.CanBeOverridden(window.Decision.Reason),
+                management));
         }
 
         return candidates;
-    }
-
-    /// <summary>
-    /// Why a window is not managed, in terms a person can act on.
-    /// </summary>
-    /// <remarks>
-    /// The filter's verdict alone is not always the answer, and saying so plainly
-    /// matters more here than anywhere else - this query exists to explain a window's
-    /// absence. A window that passes every test and is still not in the tree was
-    /// refused by a rule or released by hand, and reporting the filter's cheerful
-    /// "manageable" for it is worse than saying nothing.
-    /// </remarks>
-    private static string Explain(Discovered window, WindowRegistry registry)
-    {
-        if (registry.IsExcluded(window.Handle))
-            return "a rule excluded it, or it was released by hand - toggle-managed takes it back";
-
-        if (window.Decision.Manageable)
-            return "Shubbak has not adopted it yet";
-
-        return window.Decision.Explain();
-    }
-
-    /// <summary>The same answer in a few words, for a list rather than a report.</summary>
-    /// <remarks>
-    /// Mirrors <see cref="Explain"/> case for case, including the two answers the
-    /// filter cannot give on its own. A client showing the short form in a list and
-    /// the long one on demand must be describing the same window both times.
-    /// </remarks>
-    private static string Summarise(Discovered window, WindowRegistry registry)
-    {
-        if (registry.IsExcluded(window.Handle)) return "excluded by a rule";
-
-        if (window.Decision.Manageable) return "not adopted yet";
-
-        return window.Decision.Summarise();
     }
 
     /// <summary>
